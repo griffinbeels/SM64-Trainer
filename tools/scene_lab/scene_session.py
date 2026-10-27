@@ -34,8 +34,11 @@ scene state in the package) the picture is the recorded one and `reason` says wh
 
 A free-camera picture sends the host only the RDRAM words that differ from what the host
 already holds (HostImage): a drag changes a few KiB of the 8 MiB, the next frame tens of KiB.
-After a free-camera picture of a new frame, a second thread resolves the frames that follow it
-(evaluator.prepare; backward when stepping back), so playing or stepping finds states ready.
+After a free-camera picture of a new frame, the frames that follow it (backward when stepping
+back) are resolved ahead, so playing or stepping finds states ready: by the state resolvers'
+child processes (state_resolver.py, RESOLVED_AHEAD frames) once the package is whole and they
+are ready; before that by a second thread (evaluator.prepare, LOOK_AHEAD_FRAMES), whose work
+shares the server's Python lock with the views (Play with the camera moving lost frames to it).
 
 Ghosts (stage_ghosts.py): set_ghosts loads each added ghost's recording into the renderer once, and
 every picture after it, recorded or free camera, names the ghosts and each one's frame, so the
@@ -102,6 +105,7 @@ RUN_GAP_WORDS = 16            # changed words this close together travel to the 
 MAX_HOST_RUNS = 65536         # viewer_host.c's MAX_RUNS
 LOOK_AHEAD_STEP = 4           # a free picture this many frames before the last one is a step back
 LOOK_AHEAD_FRAMES = 3         # how many frames the look-ahead resolves (the evaluator caches 4 states)
+RESOLVED_AHEAD = 6            # how many the state resolvers' children resolve (each kept as one 8 MiB state)
 FIT_WAIT_SECONDS = 1.5        # how long an opening scene waits for its sound's fit (the renderer starts meanwhile)
 SOUND_SETTLE_SECONDS = 60.0   # how long a whole scene watches for the sound the cutter adds to it
 GHOST_WARM_PICTURES = 40      # pictures the renderer may take to set its ghost overlay up (it retries per list)
@@ -279,8 +283,8 @@ class GameCodeEvaluator:
     """The free camera's evaluator factory: evaluator.Evaluator over the open package, running
     SM64's own scene-graph code under Unicorn (a lab-only package, never a project dependency)."""
 
-    def __init__(self, map_path: Path | None, source: Path):
-        self.map_path, self.source = map_path, source
+    def __init__(self, map_path: Path | None, source: Path, rom_path: Path | None = None):
+        self.map_path, self.source, self.rom_path = map_path, source, rom_path
 
     def unavailable(self, package: scene_package.Package) -> str | None:
         if package.states is None:
@@ -297,6 +301,14 @@ class GameCodeEvaluator:
         import e2_georender
         import evaluator
         return evaluator.Evaluator(package, rom, e2_georender.load_map(self.map_path), source=self.source)
+
+    def resolvers(self, package: scene_package.Package, deliver):
+        """The state resolvers' children over a whole package's bytes (state_resolver.Resolvers),
+        or None without the ROM's path."""
+        if self.rom_path is None or not isinstance(package.data, bytes):
+            return None
+        import state_resolver
+        return state_resolver.Resolvers(package.data, self.rom_path, self.map_path, deliver)
 
 
 def _ms(since: float) -> float:
@@ -397,6 +409,8 @@ class SceneSession:
         self.image = HostImage() if getattr(host, "keeps_rdram", False) else None
         self._ahead: ThreadPoolExecutor | None = None    # the look-ahead thread, with the evaluator
         self._ahead_generation = 0                       # bumped by every free-camera request
+        self._resolvers = None                           # state_resolver.Resolvers once the package is whole
+        self._resolvers_tried = False
         self._last_free: int | None = None               # the frame of the last free-camera picture
         self._last_view = self._last_walk = None         # the newest view, and its list walked (_view)
         self._begun: deque[PendingPicture] = deque()     # sent to the host, not yet finished, oldest first
@@ -447,7 +461,7 @@ class SceneSession:
         frames = [index for index, outline in enumerate(outlines) if outline["vi"] is not None]
         if not frames:
             raise Refused("This scene package holds no picture the game showed.")
-        factory = evaluator_factory or GameCodeEvaluator(config.map, path)
+        factory = evaluator_factory or GameCodeEvaluator(config.map, path, config.rom)
         unavailable = getattr(factory, "unavailable", None)
         live_sound = _live_sound(package, outlines, frames, live, fitter)
         encoder = (encoder_factory or start_encoder)()      # starts beside the host's warm-up
@@ -666,10 +680,28 @@ class SceneSession:
         if self._ahead is None or step == 0:
             return
         direction = -1 if step is not None and -LOOK_AHEAD_STEP <= step < 0 else 1
-        targets = [self.frames[at] for at in range(frame + direction, frame + direction * (LOOK_AHEAD_FRAMES + 1),
+        targets = [self.frames[at] for at in range(frame + direction, frame + direction * (RESOLVED_AHEAD + 1),
                                                    direction) if 0 <= at < len(self.frames)]
-        if targets:
-            self._ahead.submit(self._prepare, targets, self._ahead_generation)
+        if targets and not self._resolve_ahead(targets):
+            self._ahead.submit(self._prepare, targets[:LOOK_AHEAD_FRAMES], self._ahead_generation)
+
+    def _resolve_ahead(self, targets: list[int]) -> bool:
+        """Hands `targets` to the state resolvers' children (state_resolver.py), started the first
+        time the package is whole; False while they cannot take them (an evaluator without them, a
+        growing package, children not ready yet or gone): the look-ahead thread resolves them."""
+        evaluator = self._evaluator
+        if not hasattr(evaluator, "attach"):
+            return False
+        if not self._resolvers_tried and self.growth is None:
+            self._resolvers_tried = True
+            start = getattr(self.evaluator_factory, "resolvers", None)
+            try:
+                self._resolvers = start(self.package, evaluator.delivered) if start else None
+            except (OSError, ValueError):                # the look-ahead thread goes on as before
+                self._resolvers = None
+            if self._resolvers is not None:
+                evaluator.attach(self._resolvers, RESOLVED_AHEAD)
+        return evaluator.ahead(targets)
 
     def _prepare(self, indices: list[int], generation: int) -> None:
         for index in indices:
@@ -959,6 +991,9 @@ class SceneSession:
         if ahead is not None:
             self._ahead_generation += 1                  # a running job stops after its frame
             ahead.shutdown(wait=True, cancel_futures=True)
+        resolvers, self._resolvers = self._resolvers, None
+        if resolvers is not None:
+            resolvers.close()
         self._evaluator = self._last_view = self._last_walk = None
         try:
             return self.host.close()

@@ -389,6 +389,70 @@ def test_free_pictures_moving_frame_by_frame_resolve_the_next_one_ahead(lab):
     assert not [thread for thread in threading.enumerate() if thread.name.startswith("scene-lab-ahead")]
 
 
+class ResolvedAhead(Evaluators):
+    """An evaluator factory with state resolvers (state_resolver.Resolvers' shape): the session
+    hands them the frames ahead once they are ready, and closes them with the scene."""
+
+    class Pool:
+        def __init__(self, package, deliver):
+            self.package, self.deliver, self.asked, self.ready, self.closed = package, deliver, [], False, False
+
+        def ahead(self, indices):
+            if self.ready:
+                self.asked.append(list(indices))
+            return self.ready
+
+        def close(self):
+            self.closed = True
+
+    class Evaluator(fake_viewer_host.FakeEvaluator):
+        resolvers = None
+
+        def attach(self, resolvers, ahead):
+            self.resolvers, self.kept_ahead = resolvers, ahead
+
+        def ahead(self, indices):
+            return self.resolvers is not None and self.resolvers.ahead(indices)
+
+        def delivered(self, index, answer, ram):
+            pass
+
+    def __call__(self, package, rom):
+        self.made.append(self.Evaluator(**self.options))
+        return self.made[-1]
+
+    def resolvers(self, package, deliver):
+        self.pools = [*getattr(self, "pools", []), self.Pool(package, deliver)]
+        return self.pools[-1]
+
+
+def test_free_pictures_hand_the_frames_ahead_to_the_state_resolvers_once_they_are_ready(lab):
+    evaluators = ResolvedAhead()
+    app, server = _app(lab, evaluators=evaluators)
+    camera = {"focus": [1.0, 2.0, 3.0], "position": [100.0, 200.0, 300.0]}
+    with TestClient(app) as client:
+        opened = client.post("/api/scene-lab/open", json={"package": "scene-a.sm64scene"}).json()
+        with client.websocket_connect("/api/scene-lab/ws") as socket:
+            def free(frame):
+                socket.send_json({"id": frame, "session": opened["session"], "frame": frame, "camera": camera,
+                                  "encoding": "raw"})
+                assert _reply(socket)["camera"] == "free"
+            free(0)                                       # the pool starts, not ready: the look-ahead thread
+            deadline = time.monotonic() + 10
+            while len(evaluators.made[0].prepared) < 3 and time.monotonic() < deadline:
+                time.sleep(0.01)
+            pool, made = evaluators.pools[0], evaluators.made[0]
+            assert [index for index, _thread in made.prepared] == SHOWN[1:4] and pool.asked == []
+            assert pool.package is server.session.package and pool.deliver == made.delivered
+            assert made.resolvers is pool and made.kept_ahead == scene_session.RESOLVED_AHEAD
+            pool.ready = True
+            free(1)
+            free(3)                                       # the frames after it, as many as there are
+            assert pool.asked == [SHOWN[2:], SHOWN[4:]] and len(made.prepared) == 3
+        client.post("/api/scene-lab/close")
+    assert len(evaluators.pools) == 1 and evaluators.pools[0].closed
+
+
 def test_quick_steps_replace_the_request_waiting_behind_two_slow_renders(lab, recording):
     app, server = _app(lab, delay_ms=300)
     with TestClient(app) as client:

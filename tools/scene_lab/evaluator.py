@@ -26,7 +26,10 @@ the next frames on a second thread (prepare) while it draws a view of this one. 
 work that fills them (package reads, assembly, the resolution sandboxes), so a view of a cached
 state never waits behind a resolution of another frame. Recent scenes and states stay cached
 (each holds several 8 MiB images), so a camera change re-runs only geo_process_root, and the
-next frame reuses the previous one.
+next frame reuses the previous one. A viewer may attach state resolvers (state_resolver.py):
+child processes with their own Evaluator over the same package, which resolve the frames it
+hands them (ahead) and deliver each state into this cache; state() then waits for a frame a
+child has rather than resolving it again, and resolves here what no child can.
 
 Imported packages stay untrusted: the package reader checks every record, and code runs only
 from this ROM (the package's code loads are rebuilt from it and refused on mismatch). A recorded
@@ -44,6 +47,7 @@ import time
 from collections import Counter, OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -125,6 +129,8 @@ class Evaluator:
         self._settled = threading.Condition(self.lock)
         self._scenes: OrderedDict[int, Scene] = OrderedDict()
         self._states: OrderedDict[int, object] = OrderedDict()
+        self.resolvers = None                      # state_resolver.Resolvers: states resolved in child processes
+        self.state_cache = cache                   # states kept (attach() makes room for the frames ahead)
 
     @classmethod
     def open(cls, package_path: Path, rom_path: Path, map_path: Path, **options) -> Evaluator:
@@ -148,7 +154,7 @@ class Evaluator:
         with self.lock:
             cache[index] = value
             cache.move_to_end(index)
-            while len(cache) > self.cache:
+            while len(cache) > (self.state_cache if cache is self._states else self.cache):
                 cache.popitem(last=False)
         return value
 
@@ -180,12 +186,17 @@ class Evaluator:
         and throwMatrix pointers put back (as the package recorded them when that checks out,
         else searched); status names why a task has none ("no scene", ...)."""
         with self.lock:
-            while index in self._pending:              # another thread is resolving this one: wait
-                self._settled.wait()                   # for it, not for whatever that thread does next
-            found = self._states.get(index)
-            if found is not None:
-                self._states.move_to_end(index)
-                return found
+            while True:
+                found = self._states.get(index)
+                if found is not None:
+                    self._states.move_to_end(index)
+                    return found
+                if index in self._pending:             # another thread is resolving this one: wait
+                    self._settled.wait()               # for it, not for whatever that thread does next
+                elif self.resolvers is not None and self.resolvers.take(index):
+                    self._settled.wait(1.0)            # a child resolves it (delivered); take() again
+                else:
+                    break
             self._pending.add(index)
         try:
             with self.resolving:
@@ -208,6 +219,51 @@ class Evaluator:
         calls this on a second thread for the frames it expects next)."""
         if 0 <= index < len(self):
             self.state(index)
+
+    def attach(self, resolvers, ahead: int) -> None:
+        """Resolve states in child processes from now on (state_resolver.Resolvers, made with
+        delivered as its deliver). The cache keeps room for the `ahead` frames they resolve ahead
+        and as many just drawn: a state read moves to the end of the cache, so with less room a
+        frame resolved ahead and not yet drawn was the oldest and went first."""
+        self.state_cache = self.cache + 2 * ahead
+        self.resolvers = resolvers
+
+    def ahead(self, indices: list[int]) -> bool:
+        """Hands the frames a viewer expects next to the child processes, without waiting; a frame
+        already resolved or being resolved here is left out. False without children ready: the
+        caller resolves ahead itself (prepare)."""
+        resolvers = self.resolvers
+        if resolvers is None:
+            return False
+        with self.lock:              # held while queueing: a state delivered meanwhile is not queued again
+            return resolvers.ahead([index for index in indices if 0 <= index < len(self)
+                                    and index not in self._states and index not in self._pending])
+
+    def delivered(self, index: int, answer: dict | None, ram: bytes | None) -> None:
+        """A state a child resolved (state_resolver: the state's small parts and its resolved
+        RDRAM), cached as if state() had resolved it here, when the child's package recorded the
+        same frame and scene state as this one's. None, or another frame: the waiting state()
+        resolves it here."""
+        resolved = None
+        if answer is not None and answer.get("digests") != [self.package.index.frames[index][4].hex(),
+                                                           self.package.states.rows[index][4].hex()]:
+            resolvers, self.resolvers = self.resolvers, None     # another package: resolve here from now on
+            if resolvers is not None:
+                resolvers.close()
+        elif answer is not None:
+            frame = None
+            if answer["status"] is None:
+                frame = self.e2.TapFrame(self.source, SimpleNamespace(task=tuple(answer["words"])), ram)
+            resolved = self.e2.Resolved(answer["entry"], None, answer["status"], frame, answer.get("layout"),
+                                        answer.get("result"), answer.get("notes") or {},
+                                        [tuple(span) for span in answer.get("restored", ())],
+                                        [tuple(pointer) for pointer in answer.get("pointers", ())],
+                                        bool(answer.get("recorded")))
+            self._remember(self._states, index, resolved)
+        with self.lock:
+            if resolved is not None:
+                self.recorded[answer["recorded_as"]] += 1
+            self._settled.notify_all()
 
     def pose(self, index: int) -> dict:
         """Frame `index`'s recorded camera (gLakituState's focus, position and screen roll, the
