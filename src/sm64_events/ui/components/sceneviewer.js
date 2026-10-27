@@ -434,7 +434,7 @@ export class SceneLink {
     const ready = this.ws && this.ws.readyState === WebSocket.OPEN && this.scene;
     if (this.inFlight.size >= PICTURES_IN_FLIGHT || !this.wanted || !ready) return;
     const play = this.playback, frame = this.wanted.frame ?? (play ? play.asked : this.frame);
-    const id = ++this.sequence, camera = this.cameraAsked();
+    const id = ++this.sequence, camera = this.cameraNow();
     this.inFlight.set(id, { ...this.wanted, id, frame, free: !!camera, sent: performance.now(), play,
       due: play ? play.dueOf(frame) : null });
     if (play && this.wanted.kind !== "play") play.moved = true;
@@ -445,8 +445,9 @@ export class SceneLink {
     this.changed();
   }
 
-  // The next picture's camera: the free camera's, a cinematic camera, a ghost's view, else the recorded one (null).
-  cameraAsked() {
+  // The camera the next picture asks for, as sent: the free camera's, a cinematic camera, a ghost's view, else the
+  // recorded one (null). The one reader of the camera mode (a recording reads it every display frame).
+  cameraNow() {
     if (this.free && this.orbit) return cameraOf(this.orbit);
     if (this.rig) return rigRequest(this.rig, sceneCameraTuning());
     return this.view ? { ghost: this.view } : null;
@@ -734,7 +735,7 @@ export class SceneLink {
       fov: camera.fov ?? null });
     if (!orbit) return;
     this.interrupt();
-    Object.assign(this, { free: true, view: null, orbit, entry: orbit, pending: [0, 0, false], picking: false,
+    Object.assign(this, { free: true, view: null, rig: null, orbit, entry: orbit, pending: [0, 0, false], picking: false,
       notice: null });
     this.want("input", time);
     this.flightOn(performance.now());

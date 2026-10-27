@@ -69,7 +69,8 @@ export function rigTuning(tuning = SCENE_CAMERA_DEFAULTS) {
     rigCloseDistance: tuning.rigCloseDistance, rigMediumDistance: tuning.rigMediumDistance,
     rigWideDistance: tuning.rigWideDistance, marioHeight: tuning.marioHeight, rigSmoothFrames: tuning.rigSmoothFrames,
     rigAimFrames: tuning.rigAimFrames, rigStillSpeed: tuning.rigStillSpeed, rigFov: tuning.rigFov,
-    rigSideLead: tuning.rigSideLead, rigSideHoldFrames: tuning.rigSideHoldFrames, rigWallStandoff: tuning.rigWallStandoff,
+    rigSideLead: tuning.rigSideLead, rigSideHoldFrames: tuning.rigSideHoldFrames,
+    rigSideStayFrames: tuning.rigSideStayFrames, rigWallStandoff: tuning.rigWallStandoff,
     rigPullFrames: tuning.rigPullFrames, rigCraneDistance: tuning.rigCraneDistance,
     rigOrbitRadius: tuning.rigOrbitRadius, rigOrbitSpeed: tuning.rigOrbitSpeed,
   };

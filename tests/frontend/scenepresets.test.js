@@ -390,6 +390,43 @@ test("a write the lab refuses shows its words, and the slots come back as the la
   await until(() => expect(names(strip)[1]).toBe("Low run"));
 });
 
+// ------------------------------------------------------------------ with a cinematic camera on (scenerigs.js)
+
+const RIG_CAMERA = { focus: [100, 220, -300], position: [100, 640, 160], roll: 0, fov: 45 };
+async function frontOn(page, socket) {
+  fireEvent.click(page.container.querySelector('[aria-label="Cinematic cameras"] button[title*="in front of him"]'));
+  await until(() => expect(socket.last().camera?.rig?.kind).toBe("front"));
+  await socket.picture(socket.last(), { camera: "free", camera_used: RIG_CAMERA,
+    rig: { kind: "front", target: "stage", shot: "medium", side: null, pulled: 1, raised: 30 } });
+}
+
+test("a preset cut ends a cinematic camera: the cut is a still free camera", async () => {
+  const { page, socket, strip, root } = await openScene();
+  await frontOn(page, socket);
+  expect(root.querySelector(".scene-lab-tag").textContent).toBe("Front · Mario");
+  key(root, "2");
+  await until(() => expect(socket.last().camera?.focus).toBeTruthy());
+  expect(socket.last().camera.rig).toBeUndefined();
+  expect(sameCamera(socket.last().camera, cutCamera(LOW))).toBe(true);
+  expect(root.querySelector(".scene-lab-tag").textContent).toBe("Free camera");
+  expect(root.querySelector('[aria-label="Cinematic cameras"] [aria-pressed="true"]')).toBeNull();
+  expect(root.querySelector('[aria-label="Cinematic camera settings"]')).toBeNull();
+  await socket.picture(socket.last());
+  fireEvent.click(page.getByRole("button", { name: "Forward 1" }));                     // and it stays still
+  await until(() => expect(socket.last().frame).toBe(1));
+  expect(sameCamera(socket.last().camera, cutCamera(LOW))).toBe(true);
+  expect(pressed(strip)).toEqual([2]);
+});
+
+test("a preset saved while a cinematic camera is on keeps the camera it drew (camera_used), not its request", async () => {
+  const { page, socket } = await openScene();
+  await frontOn(page, socket);
+  fireEvent.click(page.getByRole("button", { name: "Save current view in slot 9" }));
+  await until(() => expect(puts().length).toBe(1));
+  expect(puts()[0].slots.find((entry) => entry.slot === 9).camera).toEqual(RIG_CAMERA);
+  expect(socket.sent.some((message) => message.kind === "pose")).toBe(false);
+});
+
 test("without the free camera the slots are disabled and the strip says why, asking the lab nothing", async () => {
   const { strip } = await openScene({ free: false });
   await settled();

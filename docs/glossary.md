@@ -1457,7 +1457,7 @@ A [[scene viewer]] camera that follows Mario (the stage's, or a [[stage ghost]]
 chosen in Follow) along his path: **Front** rides in front of him, aimed at
 him, in a Close, Medium or Wide shot; **Side** tracks his profile on the side
 the stage's walls leave clear, cutting across only for a wall that would block
-it a while; **Orbit** circles him at the speed and radius you set, on the
+it a while, and staying a while after; **Orbit** circles him at the speed and radius you set, on the
 scene's own clock, so a pause holds it still. Each stands at his eye level
 until you raise or lower it, rides a smoothed copy of his path so his wobble
 from picture to picture never shakes it, and rises over a wall (then moves in)

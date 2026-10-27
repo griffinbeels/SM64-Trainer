@@ -158,6 +158,11 @@ export const SCENE_CAMERA_TUNABLES = {
     min: 1, max: 300, step: 1, unit: "frames",
     why: "The Side camera keeps its side until a wall would block it this many frames in a row and the other side is clear; a shorter block only pulls it in. Lower switches sooner, higher cuts across less often.",
   },
+  rigSideStayFrames: {
+    group: "Cinematic", label: "Stay on a side at least", value: 45,
+    min: 0, max: 300, step: 1, unit: "frames",
+    why: "After the Side camera cuts across, it stays on the new side at least this long (45 frames is 1.5 seconds), so walls close together never make it flick back and forth; meanwhile a wall only lifts or pulls it in.",
+  },
   rigWallStandoff: {
     group: "Cinematic", label: "Stop short of a wall by", value: 60,
     min: 0, max: 500, step: 5, unit: "units",

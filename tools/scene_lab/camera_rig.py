@@ -21,6 +21,8 @@ A rig is a pure function of (runner, frame, request): the camera rides a SMOOTHE
 runner's path, every picture's place the weighted mean of the pictures around it (Gaussian weights,
 `rigSmoothFrames` each side, never across a cut: another area, a warp, an unknown place), so the
 dolly glides through Mario's per-frame jitter without lagging him (it looks ahead as far as behind).
+The track is indexed by the picture (the scene's time), never by the nearest point of the path: on
+a path that loops or doubles back, a nearest point jumps a long way for a small step.
 Its aim stays on him: the lightly smoothed path (`rigAimFrames`) at his eye level (`marioHeight`,
 the same point Look at Mario turns to). "Front" is the smoothed path's direction of travel; below
 `rigStillSpeed` it turns smoothly toward the way he faces, so standing still keeps the camera in
@@ -63,7 +65,7 @@ SIDES = ("auto", "left", "right")
 SHOT_KEYS = {"close": "rigCloseDistance", "medium": "rigMediumDistance", "wide": "rigWideDistance"}
 # The tuning rows a rig reads (ui/scenecameratuning.js, which owns their defaults and ranges).
 TUNING_KEYS = ("rigCloseDistance", "rigMediumDistance", "rigWideDistance", "marioHeight", "rigSmoothFrames",
-               "rigAimFrames", "rigStillSpeed", "rigFov", "rigSideLead", "rigSideHoldFrames", "rigWallStandoff",
+               "rigAimFrames", "rigStillSpeed", "rigFov", "rigSideLead", "rigSideHoldFrames", "rigSideStayFrames", "rigWallStandoff",
                "rigPullFrames", "rigCraneDistance", "rigOrbitRadius", "rigOrbitSpeed")
 HEIGHT_RANGE = (0.0, 3000.0)       # units above his feet
 RADIUS_RANGE = (50.0, 20000.0)
@@ -553,7 +555,9 @@ def choose_sides(rig: Rig, track: Track, walls_at) -> np.ndarray:
     A fixed side is that side throughout. "auto" starts each run on the side clear for more of its
     first rigSideHoldFrames pictures (his right on a tie), and changes side only where the side it
     is on is blocked for the next rigSideHoldFrames pictures in a row and the other side is clear for
-    more of them: a short pillar is ridden through (pulled in), a long wall moves the shot across."""
+    more of them: a short pillar is ridden through (pulled in), a long wall moves the shot across.
+    After a change it stays at least rigSideStayFrames pictures, so two walls close together never
+    make it flicker from side to side."""
     runner, n = track.runner, len(track.runner)
     out = np.full(n, "", dtype=object)
     known = np.flatnonzero(runner.cuts >= 0)
@@ -574,20 +578,21 @@ def choose_sides(rig: Rig, track: Track, walls_at) -> np.ndarray:
         blocked[name] = flags
     other = {"left": "right", "right": "left"}
     runs = runner.cuts
-    current, run = None, None
+    stay = int(rig.value("rigSideStayFrames"))
+    current, run, since = None, None, 0
     for k in known.tolist():
         # A wall is judged rigPullFrames ahead: the cut lands as the pull would have begun, so the
         # camera never visibly moves in just before it cuts across.
         soon = max(j for j in range(k, min(n, k + lead + 1)) if runs[j] == runs[k])
         ahead = [j for j in range(soon, min(n, soon + hold)) if runs[j] == runs[k]]
         if runs[k] != run:
-            run = runs[k]
+            run, since = runs[k], k - stay                # a run's first side is no cut: it may change at once
             clear_left = sum(not blocked["left"][j] for j in ahead)
             clear_right = sum(not blocked["right"][j] for j in ahead)
             current = "left" if clear_left > clear_right else "right"
-        elif blocked[current][soon]:
+        elif blocked[current][soon] and k - since >= stay:
             stuck = all(blocked[current][j] for j in ahead) and len(ahead) == hold
             if stuck and sum(not blocked[other[current]][j] for j in ahead) > sum(not blocked[current][j] for j in ahead):
-                current = other[current]
+                current, since = other[current], k
         out[k] = current
     return out

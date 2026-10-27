@@ -44,7 +44,7 @@ from test_scene_lab_stage_ghosts import Loader, _picture_header  # noqa: E402
 SHIPPED = shipped_numbers("scenecamera", camera_rig.TUNING_KEYS)
 REFERENCE = {"rigCloseDistance": 200.0, "rigMediumDistance": 500.0, "rigWideDistance": 1000.0, "marioHeight": 100.0,
              "rigSmoothFrames": 6.0, "rigAimFrames": 0.0, "rigStillSpeed": 200.0, "rigFov": 50.0, "rigSideLead": 0.0,
-             "rigSideHoldFrames": 10.0, "rigWallStandoff": 50.0, "rigPullFrames": 3.0, "rigCraneDistance": 0.0,
+             "rigSideHoldFrames": 10.0, "rigSideStayFrames": 0.0, "rigWallStandoff": 50.0, "rigPullFrames": 3.0, "rigCraneDistance": 0.0,
              "rigOrbitRadius": 600.0, "rigOrbitSpeed": 45.0}
 
 
@@ -233,6 +233,19 @@ def test_a_wall_shorter_than_the_hold_never_flips_the_side():
     # Proven by the opposite: a hold of 1 frame does cut on those same walls.
     eager = shots(r, rig(kind="side", tuning={"rigSideHoldFrames": 1}), range(120), camera_rig.StaticWalls(flicker))
     assert "L" in sides_of(eager)
+
+
+def test_after_a_cut_the_side_stays_a_while_before_it_cuts_back():
+    """A wall on his right (frames 30 to 45), then one on his left (50 to 90): with no stay the shot cuts
+    left at 27 and back right 20 frames later; staying 30 frames, it cuts back only at 57 and rides
+    the left wall's first frames pulled in."""
+    r = run_along_z(n=120)
+    walls = camera_rig.StaticWalls(np.concatenate([wall_x(-300, 885, 1365), wall_x(300, 1485, 2715)]))
+    eager = shots(r, rig(kind="side", tuning={"rigSideStayFrames": 0}), range(120), walls)
+    assert sides_of(eager) == "R" * 27 + "L" * 20 + "R" * 73
+    steady = shots(r, rig(kind="side", tuning={"rigSideStayFrames": 30}), range(120), walls)
+    assert sides_of(steady) == "R" * 27 + "L" * 30 + "R" * 63
+    assert steady[52].pulled < 1 or steady[52].raised > 0
 
 
 def test_a_chosen_side_stays_put_and_only_pulls_in():

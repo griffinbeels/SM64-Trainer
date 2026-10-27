@@ -2202,7 +2202,7 @@ test("every movement reads its tuning: the shipped values when none is given, a 
     // The cinematic cameras' rows travel with every request: the lab draws what the panel shows
     // (their effect on the camera: tests/test_scene_lab_rigs.py).
     ...["rigCloseDistance", "rigMediumDistance", "rigWideDistance", "rigFov", "rigSmoothFrames", "rigAimFrames",
-      "rigStillSpeed", "rigSideLead", "rigSideHoldFrames", "rigWallStandoff", "rigPullFrames", "rigCraneDistance", "rigOrbitRadius",
+      "rigStillSpeed", "rigSideLead", "rigSideHoldFrames", "rigSideStayFrames", "rigWallStandoff", "rigPullFrames", "rigCraneDistance", "rigOrbitRadius",
       "rigOrbitSpeed"].map((key) => [key, (t) => rigRequest(startRig("orbit", null, t), t)]),
   ];
   expect(new Set(cases.map(([key]) => key))).toEqual(new Set(Object.keys(SCENE_CAMERA_DEFAULTS)));
