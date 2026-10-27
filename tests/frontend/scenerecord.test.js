@@ -195,3 +195,26 @@ test("Pause holds the play's clock: Play on that picture goes on from there, a s
     globalThis.requestAnimationFrame = animation;
   }
 });
+
+test("a preset cut while recording is in the timeline: the camera the page asks for from then on", () => {
+  const animation = globalThis.requestAnimationFrame;
+  globalThis.requestAnimationFrame = () => 0;
+  try {
+    const link = new SceneLink({ draw: () => 0, changed: () => {}, ended: () => {} });
+    link.scene = { session: 3, fps: 30, free_camera: { available: true },
+      frames: Array.from({ length: 4 }, (_, k) => ({ recorded_ms: k * 33.3 })) };
+    const recorder = new SceneRecorder({ animate: (step) => frames.push(step) });
+    recorder.start(link);
+    tick(0);
+    link.cutTo(POSE, 10);                          // key 3, say: a saved camera, cut to as a free camera
+    tick(16);
+    const [before, after] = recorder.entries;
+    expect(before.camera).toBe(null);
+    expect(after.camera).toEqual(link.cameraNow());
+    expect(after.camera.focus.map((value) => Math.round(value * 1000) / 1000)).toEqual(POSE.focus);
+    expect(after.camera.position.map((value) => Math.round(value * 1000) / 1000)).toEqual(POSE.position);
+    expect(after.camera.fov).toBeCloseTo(POSE.fov);
+  } finally {
+    globalThis.requestAnimationFrame = animation;
+  }
+});

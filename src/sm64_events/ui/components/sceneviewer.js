@@ -49,6 +49,10 @@
 // the lab finds for every picture, so it follows the ghost through Play, steps
 // and seeks. Free camera from a ghost's view starts at that camera.
 //
+// Under the camera controls, the Cameras strip (scenepresets.js) keeps named cameras in slots 1-9
+// for the course and area on screen: keys 1-9 or a click cut to one as a free camera (cutTo), and
+// Play keeps playing.
+//
 // Play stops only when the person pauses (Pause, Space, a step, the slider):
 // moving the camera, by any of the ways above, keeps it playing. Restart goes
 // to the first frame and keeps playing or stays paused; Loop plays on from the
@@ -70,6 +74,7 @@ import { cameraOf, dollied, flightSpeed, flown, flyToTarget, focusedOn, glideAt,
   orbitFromPose, slid, speedStepped, turned, worldPoint } from "./scenecamera.js";
 import { SceneSound, SoundBar } from "./sceneaudio.js";
 import { RecordBar } from "./scenerecord.js";
+import { CameraPresets, CameraSlots, placeKey, placeOf, presetCamera } from "./scenepresets.js";
 import { heardInto, pictureAt, playLength, recordedTimes } from "./sceneclock.js";
 
 const html = htm.bind(h);
@@ -301,7 +306,8 @@ export class SceneLink {
       readies: [], coldId: 0, autoplay: false, loop: savedLoop(), hud: savedHud(), ghosts: [], refusedGhosts: new Map(),
       view: null,
       asked: null, ghostPages: new Map(), ghostNote: null, ghostSerial: 0,
-      sound: new SceneSound({ changed: () => this.changed(), observe: (note) => this.observe(note) }) });
+      sound: new SceneSound({ changed: () => this.changed(), observe: (note) => this.observe(note) }),
+      presets: new CameraPresets({ changed: () => this.changed() }) });
     this.timings = new MovingTimings((summary) => { this.moving = summary; this.changed(); });
     this.onShared = (event) => this.sharedArrived(event);
   }
@@ -311,6 +317,9 @@ export class SceneLink {
   get sharedAvailable() { return !!this.scene?.shared_pictures && !!webview(); }
 
   get moved() { return this.free && !sameOrbit(this.orbit, this.entry); }
+
+  // Which course and area's camera presets apply: the place of the frame on screen ("9:1"), or null.
+  get presetKey() { return this.scene ? placeKey(placeOf(this.scene.frames, this.frame)) : null; }
 
   // `play`: Play starts from the first frame once its picture is drawn (the
   // Practice log's Ghost button), unless the person steps or plays first.
@@ -334,6 +343,7 @@ export class SceneLink {
       ghosts: keptFor(scene).ghosts, asked: null, refusedGhosts: new Map(), ghostNote: null, view: null });
     keep(scene, {});
     this.ghostPages = kept.pages;
+    this.presets.forget();
     if (this.sharedAvailable) {
       webview().addEventListener("sharedbufferreceived", this.onShared);
       this.encoding = "shared";
@@ -630,6 +640,7 @@ export class SceneLink {
   async readEntry() {
     const seen = this.viewOnScreen();
     const answer = seen ? { pose: seen } : await this.pose(this.frame);
+    if (this.free) return;                  // a cut to a saved camera got there first
     const pose = answer.pose, orbit = pose && orbitFromPose(pose.focus, pose.position, { roll: pose.roll ?? 0,
       fov: pose.fov ?? null });
     if (!orbit) return this.say(answer.reason || "The free camera is unavailable for this frame.");
@@ -665,6 +676,42 @@ export class SceneLink {
     Object.assign(this, { free: false, view: ref, notice: null, picking: false });
     this.want("input", time);
     this.changed();
+  }
+
+  // ---- camera presets (scenepresets.js): an instant cut to a saved camera, as a free camera that
+  // Play keeps playing under; Reset view then comes back to it. A movement key held through the cut
+  // flies on from there.
+  cutTo(camera, time) {
+    const orbit = this.freeAvailable && orbitFromPose(camera.focus, camera.position, { roll: camera.roll ?? 0,
+      fov: camera.fov ?? null });
+    if (!orbit) return;
+    this.interrupt();
+    Object.assign(this, { free: true, view: null, orbit, entry: orbit, pending: [0, 0, false], picking: false,
+      notice: null });
+    this.want("input", time);
+    this.flightOn(performance.now());
+    this.changed();
+  }
+
+  // Keys 1-9: the saved camera in that slot for the place on screen.
+  recallSlot(number, time) {
+    if (!this.freeAvailable) return;
+    const saved = this.presets.slot(this.presetKey, number);
+    if (saved) this.cutTo(saved.camera, time);
+    else this.sayBriefly(`No camera saved in slot ${number} here yet.`);
+  }
+
+  // The camera of the picture on screen, as a preset keeps it: the free camera's own, else the one
+  // the lab says it drew (any camera it worked out, a ghost's view among them), else the recorded
+  // camera's from a pose question; null, and the reason said, when there is none.
+  async cameraOnScreen() {
+    if (this.free && this.orbit) return presetCamera(cameraOf(this.orbit));
+    const drawn = this.shown?.camera !== "recorded" && (this.shown?.camera_used || this.viewOnScreen());
+    if (drawn) return presetCamera(drawn);
+    const answer = await this.pose(this.frame);
+    if (answer.pose) return presetCamera(answer.pose);
+    this.say(answer.reason || "This picture has no camera to save.");
+    return null;
   }
 
   resetView(time) {
@@ -1075,6 +1122,8 @@ const KEYS = {
   f: (link, event) => link.lookAtMario(event.timeStamp),
   r: (link, event) => link.recorded(event.timeStamp),
   m: (link) => link.sound.toggleMute(),
+  ...Object.fromEntries([1, 2, 3, 4, 5, 6, 7, 8, 9].map((slot) =>
+    [String(slot), (link, event) => link.recallSlot(slot, event.timeStamp)])),
 };
 
 // A control that is clicked rather than typed into, and the keys it acts on
@@ -1415,6 +1464,7 @@ function Player({ link, canvas, surface, ghosts }) {
     <${SoundBar} sound=${link.sound} frame=${link.frame} />
     <${RecordBar} link=${link} />
     <${CameraBar} link=${link} tuning=${tuning} setTuning=${setTuning} />
+    <${CameraSlots} link=${link} />
     <${Readout} link=${link} />
   </section>
   ${ghosts}
@@ -1504,9 +1554,10 @@ function useKeyboardOwner(link, surface, canvas) {
       onKey(link, event, canvas.current);
     },
     // A mouse click on one of the page's controls hands the keyboard back to the viewer, so Space
-    // plays after clicking Free camera; a control pressed from the keyboard (detail 0) keeps it.
+    // plays after clicking Free camera; a control pressed from the keyboard (detail 0) keeps it, and
+    // so does a field the click itself put the typing in (a saved camera's name, scenepresets.js).
     onclick: (event) => {
-      if (event.detail > 0 && !typesInto(event.target) && !inDialog(event.target)) back();
+      if (event.detail > 0 && !typesInto(event.target) && !inDialog(event.target) && !typesInto(document.activeElement)) back();
     },
     // A select's choice made with the mouse does the same (its letters would otherwise pick an
     // option by its first letter: E and S switch Pictures to "Exact..."); one reached with Tab
