@@ -2,7 +2,8 @@
 
     session = SceneSession.open(config, package_path)            # Refused names why it cannot
     header, payload = session.picture(frame, camera, "jpeg")       # camera None: the recorded camera;
-                                                                   #   {"ghost": ref}: that ghost's view
+                                                                   #   {"ghost": ref}: that ghost's view;
+                                                                   #   {"rig": {...}}: a cinematic camera
     pending = session.begin(frame, camera, "jpeg")                 # picture() in two halves: the host
     header, payload = session.finish(pending)                      #   draws while the next one begins
     session.pose(frame)                                            # the recorded camera and Mario
@@ -52,6 +53,17 @@ stage's world from the camera its own recording drew with at the row its drawing
 picture (stage_ghosts.GhostCameras), drawn through the free camera's path; the header's "view" says
 whose it is and which camera it drew (None: the recorded camera, and "reason" says why).
 
+A cinematic camera, {"rig": {"kind": "front"|"side"|"orbit", "target": "stage"|a ghost's ref, ...}}
+(camera_rig.py, round 6): a camera riding the runner's smoothed path, aimed at him, worked out from
+the whole path for each picture and drawn through the free camera's path. The stage's Mario is read
+from every frame's scene state once, the first time a rig follows him (16 bytes a frame,
+package.scene_bytes: ~1 s for an 800-frame take, measured 2026-10-27); a ghost's from its clip
+through the same frame count its drawing uses; the walls are the level's static collision in the
+scene state (camera_rig.static_walls, the symbol map's sSurfacePool). The header's "rig" says which
+and what it did ({"kind", "target", "shot", "side", "pulled", "raised"}). Every header's "camera_used" is the
+camera drawn whenever the server drew one (free, a ghost's view, a rig: {"focus", "position", "roll",
+"fov"}, roll and fov None where the frame's own applied), None for the recorded camera.
+
 The package's source-audio layer, when it has one, is the recording's sound mapped to these
 frames (scene_audio.py); describe() carries its table and audio_block serves its blocks. An
 attempt scene without one yet plays the recorder's own sound (scene_audio.LiveSound) until the
@@ -88,6 +100,7 @@ import numpy as np
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+import camera_rig  # noqa: E402
 import stage_ghosts  # noqa: E402
 import ghost_sound  # noqa: E402
 import gpu_gate  # noqa: E402
@@ -395,6 +408,8 @@ class PendingPicture:
     hud_reason: str | None = None   # why a picture asked for without the HUD still has it
     ghosts: bool = False         # the picture carried the scene's ghosts
     view: dict | None = None     # a ghost's view: {"ghost": ref, "camera": the camera drawn, or None}
+    rig: dict | None = None      # a cinematic camera: {"kind", "target", "shot", "side", "pulled", "raised"}
+    used: dict | None = None     # the camera drawn when the server drew one: {"focus", "position", "roll", "fov"}
 
 
 class SceneSession:
@@ -433,6 +448,11 @@ class SceneSession:
         self._ghost_problem: str | None = None           # why ghosts cannot draw ("" once set up)
         self._ghosts_warm = False                        # the renderer's ghost overlay has drawn a picture
         self.ghost_sounds = ghost_sound.SceneGhostSounds(map_path=getattr(evaluator_factory, "map_path", None))
+        self.rigs = camera_rig.Planner()                 # the cinematic cameras' kept work (camera_rig.py)
+        self._rig_tuning: dict | None = None             # the registry's rows a rig request may leave out
+        self._runners: dict = {}                         # target -> (what it was read from, camera_rig.Runner)
+        self._stage_reads: dict[int, tuple] = {}         # package frame -> the stage Mario's (position, yaw)
+        self._walls: dict = {}                           # (level, area) -> camera_rig.StaticWalls or None
 
     @classmethod
     def open(cls, config, path: Path, *, sidecar: Path | None = None, live=None, fitter=None, host_factory=None,
@@ -788,6 +808,7 @@ class SceneSession:
         if not isinstance(hud, bool):
             raise ValueError("hud is true or false")
         view, camera = self._ghost_view(index, camera)
+        rig, camera = self._rig_view(frame, camera)
         free = None if camera is None else world_camera(camera)
         if free is not None:
             self._ahead_generation += 1          # the look-ahead stops before its next frame
@@ -798,6 +819,11 @@ class SceneSession:
         drawn_free = host_frame is not None
         if view is not None:                 # the recorded camera when the ghost's could not be drawn
             view, reason = {"ghost": view["ghost"], "camera": camera if drawn_free else None}, reason or view["reason"]
+        if rig is not None:                  # the recorded camera when the rig had none or it could not be drawn
+            own = rig.pop("reason")
+            reason = reason or own
+        used =None if not drawn_free else {"focus": camera["focus"], "position": camera["position"],
+                                            "roll": camera.get("roll"), "fov": camera.get("fov")}
         if drawn_free:
             self._look_ahead(frame)          # resolves beside this picture's render and encode
         if host_frame is None:
@@ -809,7 +835,7 @@ class SceneSession:
         cut = cuts[-1] if cuts else None
         pending = PendingPicture(frame, encoding, "free" if drawn_free else "recorded", reason, timings, started,
                                  cut is None or cut.reason is not None, cut and cut.reason,
-                                 ghosts=host_frame.ghosts is not None, view=view)
+                                 ghosts=host_frame.ghosts is not None, view=view, rig=rig, used=used)
         self._begun.append(pending)
         return pending
 
@@ -852,9 +878,10 @@ class SceneSession:
                 "format": "image/jpeg" if encoding == "jpeg" else "bgr24-bottom-up",
                 "camera": pending.camera, "reason": pending.reason, "sha256": digest,
                 "hud": pending.hud, "hud_reason": pending.hud_reason,
-                "payload_bytes": len(payload), "timings": timings,
+                "payload_bytes": len(payload), "timings": timings, "camera_used": pending.used,
                 **({"ghosts": picture.ghosts} if pending.ghosts else {}),
-                **({"view": pending.view} if pending.view else {})}, payload
+                **({"view": pending.view} if pending.view else {}),
+                **({"rig": pending.rig} if pending.rig else {})}, payload
 
     def _jpeg(self, picture: viewer.Picture) -> tuple[bytes, str]:
         """The picture as JPEG and where it was made: by the encoder child from its slot, or here
@@ -997,6 +1024,110 @@ class SceneSession:
         except ValueError:
             found, reason = None, stage_ghosts.VIEW_NONE
         return {"ghost": ref, "reason": reason}, found
+
+    def _rig_view(self, frame: int, camera) -> tuple[dict | None, dict | None]:
+        """A picture's camera as begin() takes it: (None, camera) for any but a cinematic camera; for
+        {"rig": {...}} (camera_rig.py), what the header says of it ({"kind", "target", "shot", "side",
+        "pulled", "reason"}) and its camera at frame position `frame`, None when it has none: the
+        recorded camera, and the reason says why. ValueError for a malformed rig."""
+        if not (isinstance(camera, dict) and "rig" in camera):
+            return None, camera
+        if len(camera) != 1:
+            raise ValueError('a cinematic camera is {"rig": {...}} and nothing else')
+        if self._rig_tuning is None:
+            from sm64_events.server.tuning_api import shipped_numbers
+            self._rig_tuning = shipped_numbers("scenecamera", camera_rig.TUNING_KEYS)
+        rig = camera_rig.Rig.of(camera["rig"], self._rig_tuning)
+        said = {"kind": rig.kind, "target": rig.target, "shot": rig.shot, "side": None, "pulled": None, "raised": None}
+        if self.free_reason is not None:
+            return {**said, "reason": self.free_reason}, None
+        runner = self._runner(rig.target)
+        if isinstance(runner, str):
+            return {**said, "reason": runner}, None
+        shot = self.rigs.shot(rig, runner, frame, self._walls_at)
+        if shot.camera is not None:
+            said.update(side=shot.side, pulled=round(shot.pulled, 3), raised=round(shot.raised, 1))
+        return {**said, "reason": shot.reason}, shot.camera
+
+    def _clock(self) -> list[float]:
+        """Each frame position's time on the scene's own clock, seconds after the first picture: the
+        recorded times the page plays by (describe's recorded_ms), else one game frame each."""
+        times = [self.outlines[index]["present_us"] for index in self.frames]
+        if None not in times and all(a <= b for a, b in zip(times, times[1:], strict=False)):
+            return [(time_us - times[0]) / 1e6 for time_us in times]
+        return [position / FPS for position in range(len(self.frames))]
+
+    def _place(self, index: int) -> tuple | None:
+        identity = self.outlines[index]["identity"]
+        place = (identity.get("curr_level"), identity.get("curr_area"))
+        return None if None in place else place
+
+    def _runner(self, target: str):
+        """The runner a rig follows (camera_rig.Runner) over every frame position: the stage's Mario
+        ("stage") or a scene ghost, kept until the frames change; a sentence when there is none."""
+        if self.package.states is None:
+            return camera_rig.NO_STATE
+        if target != "stage":
+            rows = self.ghosts.rows(target)
+            if rows is None:
+                return stage_ghosts.VIEW_GONE
+            source = (target, rows, self.ghost_origin, tuple(self.frames))
+        else:
+            source = ("stage", tuple(self.frames), self.package)
+        kept = self._runners.get(target)
+        if kept is not None and kept[0] == source:
+            return kept[1]
+        places = [self._place(index) for index in self.frames]
+        if target == "stage":
+            poses = self._stage_poses()
+        else:
+            frames = [self._ghost_frame(index) for index in self.frames]
+            poses = [None if g is None else rows.pose(g, place) for g, place in zip(frames, places, strict=True)]
+        positions = [pose[0] if pose else [math.nan] * 3 for pose in poses]
+        yaws = [pose[1] if pose else math.nan for pose in poses]
+        runner = camera_rig.Runner(positions, yaws, [place if pose else None for place, pose in zip(places, poses, strict=True)],
+                                   self._clock(), camera_rig.NO_RUNNER if target == "stage" else camera_rig.GHOST_ELSEWHERE)
+        self._runners[target] = (source, runner)
+        return runner
+
+    def _stage_poses(self) -> list[tuple | None]:
+        """The stage's Mario in every frame position: (position, the game's s16 facing) read from
+        the frame's scene state (only those 16 bytes: package.scene_bytes), or None where his
+        position is not a place (a load's reset memory). Each package frame is read once."""
+        from sm64_events.memory.addresses import MARIO_POS_LIMIT, MARIO_POS_OFF, MARIO_YAW_OFF
+        from sm64_events.memory.layout import layout_for
+        try:
+            mario = layout_for({ord("E"): "us", ord("J"): "jp"}[self.rom[0x3E]]).mario_struct & 0x1FFFFFFF
+        except KeyError:
+            return [None] * len(self.frames)
+        yaw_word = (mario + MARIO_YAW_OFF) & ~3          # the yaw is the low half of its big-endian word
+        poses = []
+        for index in self.frames:
+            if index not in self._stage_reads:
+                where, facing = self.package.scene_bytes(index, [(mario + MARIO_POS_OFF, 12), (yaw_word, 4)])
+                position = list(struct.unpack("<3f", where))
+                yaw = struct.unpack("<h", struct.pack("<H", int.from_bytes(facing, "little") & 0xFFFF))[0]
+                usable = all(math.isfinite(value) and abs(value) < MARIO_POS_LIMIT for value in position)
+                self._stage_reads[index] = (position, yaw) if usable else None
+            poses.append(self._stage_reads[index])
+        return poses
+
+    def _walls_at(self, place: tuple):
+        """The level's static collision in `place` (camera_rig.static_walls), read once from the scene
+        state of that place's middle frame; None without the symbol map's two addresses."""
+        if place not in self._walls:
+            symbols = camera_rig.map_symbols(getattr(self.evaluator_factory, "map_path", None), camera_rig.WALL_SYMBOLS)
+            there = [index for index in self.frames if self._place(index) == place]
+            walls = None
+            if len(symbols) == len(camera_rig.WALL_SYMBOLS) and there and self.package.states is not None:
+                index = there[len(there) // 2]
+                try:
+                    walls = camera_rig.static_walls(lambda offset, size: self.package.scene_bytes(index, [(offset, size)])[0],
+                                                    symbols["sSurfacePool"], symbols["gNumStaticSurfaces"])
+                except ValueError:                      # a span outside RDRAM: no walls known
+                    walls = None
+            self._walls[place] = walls
+        return self._walls[place]
 
     def _stage_frame(self, index: int, timings: dict, cuts: list | None = None) -> viewer.Frame:
         """The recorded picture with the frame's scene state beside its closure (package.scene_state:

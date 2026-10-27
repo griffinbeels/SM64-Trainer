@@ -87,13 +87,22 @@ function rowAction(shown, wanted) {
 // "Your view" and its time, as the stage is usually a run of yours too; and when another ghost in the
 // scene has the same name, its time, so two runs by one player stay apart.
 export function viewName(ghosts, ref) {
-  const nameOf = (ghost) => ghost.player || ghost.label || "Ghost";
   const ghost = ghosts.find((each) => each.ref === ref);
   if (!ghost) return "A ghost's view";
   const name = nameOf(ghost), owner = name === "You" ? "Your view" : `${name}'s view`;
-  const shared = name === "You" || ghosts.filter((each) => nameOf(each) === name).length > 1;
-  return shared && ghost.time ? `${owner} · ${ghost.time}` : owner;
+  return timed(ghosts, ghost) ? `${owner} · ${ghost.time}` : owner;
 }
+
+// A ghost's own name the same way ("Sully", or "You · 11"33"): the cinematic cameras' Follow list.
+export function ghostName(ghosts, ref) {
+  const ghost = ghosts.find((each) => each.ref === ref);
+  if (!ghost) return "A ghost";
+  return timed(ghosts, ghost) ? `${nameOf(ghost)} · ${ghost.time}` : nameOf(ghost);
+}
+
+const nameOf = (ghost) => ghost.player || ghost.label || "Ghost";
+const timed = (ghosts, ghost) => !!ghost.time
+  && (nameOf(ghost) === "You" || ghosts.filter((each) => nameOf(each) === nameOf(ghost)).length > 1);
 
 // A ghost in the scene's row button for its view (the camera bar has one per ghost too).
 function TheirView({ link, ghostRef }) {

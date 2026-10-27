@@ -107,7 +107,81 @@ export const SCENE_CAMERA_TUNABLES = {
   marioHeight: {
     group: "Look at Mario", label: "Focus height above his feet", value: 120,
     min: 0, max: 300, step: 5, unit: "units",
-    why: "Where on Mario the focus point sits: 0 is his feet, about 160 the top of his cap.",
+    why: "Where on Mario the focus point sits: 0 is his feet, about 160 the top of his cap. The cinematic cameras aim here too, and stand at this height until you raise or lower them.",
+  },
+
+  // --- Cinematic cameras (Front, Side, Orbit) ---------------------------------
+  // The server reads these rows for a request that leaves them out
+  // (server/tuning_api.py shipped_numbers; tools/scene_lab/camera_rig.py).
+  rigCloseDistance: {
+    group: "Cinematic", label: "Close shot: distance from him", value: 220,
+    min: 60, max: 1500, step: 10, unit: "units",
+    why: "How far the Front and Side cameras stand from Mario for a close shot. Mario is about 160 units tall.",
+  },
+  rigMediumDistance: {
+    group: "Cinematic", label: "Medium shot: distance from him", value: 500,
+    min: 150, max: 4000, step: 10, unit: "units",
+    why: "How far the Front and Side cameras stand from Mario for a medium shot.",
+  },
+  rigWideDistance: {
+    group: "Cinematic", label: "Wide shot: distance from him", value: 1200,
+    min: 300, max: 10000, step: 50, unit: "units",
+    why: "How far the Front and Side cameras stand from Mario for a wide shot.",
+  },
+  rigFov: {
+    group: "Cinematic", label: "Field of view", value: 45,
+    min: 15, max: 100, step: 1, unit: "deg",
+    why: "How wide the cinematic cameras see. The game draws most of a course at 45.",
+  },
+  rigSmoothFrames: {
+    group: "Cinematic", label: "Smooth his path over", value: 12,
+    min: 0, max: 60, step: 1, unit: "frames each side",
+    why: "The camera rides a smoothed copy of his path, looking this many frames ahead and behind, so it glides instead of copying every hop and wobble. More is smoother but cuts corners wider; 0 follows him exactly.",
+  },
+  rigAimFrames: {
+    group: "Cinematic", label: "Smooth the aim over", value: 2,
+    min: 0, max: 30, step: 1, unit: "frames each side",
+    why: "The camera aims at him, smoothed over this many frames each side. 0 keeps him dead center; more lets him drift in the frame on a jump.",
+  },
+  rigStillSpeed: {
+    group: "Cinematic", label: "Below this speed, front is where he faces", value: 200,
+    min: 0, max: 2000, step: 10, unit: "units/s",
+    why: "Front is the way he travels. Slower than this (standing, turning on the spot) it eases over to the way he faces, so the Front camera stays in front of his face. Mario runs at about 960 units a second.",
+  },
+  rigSideLead: {
+    group: "Cinematic", label: "Side camera sits ahead of him by", value: 0,
+    min: -2000, max: 2000, step: 10, unit: "units",
+    why: "Moves the Side camera along his path: ahead of him he runs into the shot, behind him he runs away from it. 0 is a straight profile.",
+  },
+  rigSideHoldFrames: {
+    group: "Cinematic", label: "Switch sides for a wall lasting", value: 20,
+    min: 1, max: 300, step: 1, unit: "frames",
+    why: "The Side camera keeps its side until a wall would block it this many frames in a row and the other side is clear; a shorter block only pulls it in. Lower switches sooner, higher cuts across less often.",
+  },
+  rigWallStandoff: {
+    group: "Cinematic", label: "Stop short of a wall by", value: 60,
+    min: 0, max: 500, step: 5, unit: "units",
+    why: "When a wall stands between Mario and a cinematic camera, the camera moves in along that line and stops this far in front of the wall.",
+  },
+  rigCraneDistance: {
+    group: "Cinematic", label: "Rise over a wall closer than", value: 250,
+    min: 0, max: 3000, step: 10, unit: "units",
+    why: "When a wall would leave a cinematic camera nearer Mario than this, the camera rises over it (looking down at him) before it moves in. The game draws nothing within 100 units of its camera, so a camera pulled in that close loses him. 0 never rises.",
+  },
+  rigPullFrames: {
+    group: "Cinematic", label: "Ease a wall's rise and pull over", value: 8,
+    min: 0, max: 60, step: 1, unit: "frames each side",
+    why: "A camera a wall makes rise or move in starts this many frames before the wall reaches it and eases back as long after, instead of jumping. 0 jumps.",
+  },
+  rigOrbitRadius: {
+    group: "Cinematic", label: "Orbit: radius to start with", value: 700,
+    min: 50, max: 20000, step: 10, unit: "units",
+    why: "How far the Orbit camera circles from Mario when you first choose it; the Radius control changes it from there.",
+  },
+  rigOrbitSpeed: {
+    group: "Cinematic", label: "Orbit: speed to start with", value: 30,
+    min: -720, max: 720, step: 1, unit: "deg/s",
+    why: "How fast the Orbit camera circles when you first choose it, on the scene's own clock (paused, it stays put). Negative goes the other way.",
   },
 };
 

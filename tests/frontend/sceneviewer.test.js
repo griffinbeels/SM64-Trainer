@@ -13,8 +13,9 @@ import { DRAG_DEAD_ZONE, HUD_PREFERENCE, LOCK_NOTES, LOOP_PREFERENCE, MOVING_WIN
 } from "../../src/sm64_events/ui/components/sceneviewer.js";
 import { cameraOf, dollied, easeInOut, flightSpeed, flown, flyToTarget, glideAt, lookingAt, looked, orbitFromPose, slid,
   speedStepped, turned, worldPoint } from "../../src/sm64_events/ui/components/scenecamera.js";
-import { SCENE_CAMERA_DEFAULTS, setSceneCameraTuning } from "../../src/sm64_events/ui/scenecameratuning.js";
+import { SCENE_CAMERA_DEFAULTS, sceneCameraTuning, setSceneCameraTuning } from "../../src/sm64_events/ui/scenecameratuning.js";
 import { stageDefault, targetQuery } from "../../src/sm64_events/ui/components/scenestage.js";
+import { rigRequest, rigTuning, startRig } from "../../src/sm64_events/ui/components/scenerigs.js";
 import { SEARCH_WAIT, viewName } from "../../src/sm64_events/ui/components/sceneghosts.js";
 
 const REFERENCE = { orbitPerPixel: 0.01, steepestDegrees: 80, levelPerPixel: 0.1, panPerPixel: 0.002,
@@ -1993,6 +1994,139 @@ test("without the free camera the view buttons stay, disabled, with the reason",
   expect(socket.pictures().length).toBe(sent);
 });
 
+// His words (round 6, item 1): a dolly "right in front of mario, aimed at him (...) with close ups /
+// wideshots / medium", "off to the side for a side profile shot", "a rotating microwave effect".
+// The lab draws each rig's camera (tests/test_scene_lab_rigs.py); the page asks for it whole.
+const RIG_CAMERA = { focus: [100, 220, -300], position: [100, 220, 200], roll: 0, fov: 45 };
+const rigBar = (page) => within(page.container.querySelector('[aria-label="Cinematic cameras"]'));
+const rigOptions = (page) => within(page.container.querySelector('[aria-label="Cinematic camera settings"]'));
+const rigAsked = (socket) => socket.pictures().at(-1).camera?.rig;
+// The lab's answer to the newest rig request: drawn from RIG_CAMERA (the page keeps two in flight).
+const rigDrawn = (socket) => socket.picture(socket.pictures().at(-1), { camera: "free", camera_used: RIG_CAMERA,
+  rig: { kind: rigAsked(socket).kind, target: rigAsked(socket).target, shot: rigAsked(socket).shot, side: null, pulled: 1 } });
+
+test("a cinematic camera is one request the lab draws: Front, its shot and height, through steps, into Free camera", async () => {
+  const { page, socket } = await openScene();
+  await socket.picture(socket.sent[0]);
+  const front = rigBar(page).getByRole("button", { name: "Front" });
+  fireEvent.click(front);
+  await until(() => expect(rigAsked(socket)).toBeTruthy());
+  const tuning = sceneCameraTuning();
+  expect(socket.pictures().at(-1).camera).toEqual({ rig: { kind: "front", target: "stage", shot: "medium",
+    height: tuning.marioHeight, radius: tuning.rigOrbitRadius, speed: tuning.rigOrbitSpeed, phase: 0, side: "auto",
+    tuning: rigTuning(tuning) } });
+  const camera = within(page.container.querySelector('[aria-label="Camera"]'));
+  expect([pressed(front), pressed(camera.getByRole("button", { name: "Recorded camera" })), tag(page)])
+    .toEqual(["true", "false", "Front · Mario"]);
+  await socket.picture(socket.pictures().at(-1), { camera: "free", camera_used: RIG_CAMERA,
+    rig: { kind: "front", target: "stage", shot: "medium", side: null, pulled: 1 } });
+
+  fireEvent.click(rigOptions(page).getByRole("button", { name: "Wide" }));
+  await until(() => expect(rigAsked(socket).shot).toBe("wide"));
+  await rigDrawn(socket);
+  fireEvent.input(rigOptions(page).getByRole("slider", { name: "Height" }), { target: { value: "400" } });
+  await until(() => expect(rigAsked(socket).height).toBe(400));
+  await rigDrawn(socket);
+  fireEvent.click(rigOptions(page).getByRole("button", { name: "Eye level" }));
+  await until(() => expect(rigAsked(socket).height).toBe(tuning.marioHeight));
+  await rigDrawn(socket);
+  fireEvent.click(page.getByRole("button", { name: "Forward 1" }));
+  await until(() => expect(socket.pictures().at(-1)).toMatchObject({ frame: 1, camera: { rig: { kind: "front", shot: "wide" } } }));
+  await socket.picture(socket.pictures().at(-1), { camera: "free", camera_used: RIG_CAMERA,
+    rig: { kind: "front", target: "stage", shot: "wide", side: null, pulled: 1 } });
+
+  // Free camera starts where the rig's camera is, with no pose asked: no jump.
+  const before = socket.sent.length;
+  fireEvent.click(camera.getByRole("button", { name: "Free camera" }));
+  await until(() => expect(socket.pictures().at(-1).camera?.position).toBeTruthy());
+  expect(socket.sent.slice(before).some((message) => message.kind === "pose")).toBe(false);
+  const free = socket.pictures().at(-1).camera;
+  close(free.position, RIG_CAMERA.position);
+  close(free.focus, RIG_CAMERA.focus);
+  expect([free.roll, free.fov, tag(page), pressed(front)]).toEqual([0, 45, "Free camera", "false"]);
+  await socket.picture(socket.pictures().at(-1));
+
+  // Side has its own choice of side; R goes back to the recorded camera.
+  fireEvent.click(rigBar(page).getByRole("button", { name: "Side" }));
+  await until(() => expect(rigAsked(socket)?.kind).toBe("side"));
+  expect(rigAsked(socket).shot).toBe("wide");                                  // the shot carries over
+  await rigDrawn(socket);
+  fireEvent.change(rigOptions(page).getByRole("combobox"), { target: { value: "left" } });
+  await until(() => expect(rigAsked(socket).side).toBe("left"));
+  fireEvent.keyDown(document.body, { key: "r" });
+  await until(() => expect(socket.pictures().at(-1).camera).toBeNull());
+  expect(page.container.querySelector('[aria-label="Cinematic camera settings"]')).toBeNull();
+});
+
+test("Orbit starts where the camera on screen stands and keeps its angle when its speed changes", async () => {
+  const { page, socket } = await openScene();
+  await socket.picture(socket.sent[0]);
+  fireEvent.click(page.getByRole("button", { name: "Forward 1" }));
+  fireEvent.click(page.getByRole("button", { name: "Forward 1" }));
+  await until(() => expect(socket.pictures().at(-1).frame).toBe(2));
+  fireEvent.click(rigBar(page).getByRole("button", { name: "Front" }));
+  await until(() => expect(rigAsked(socket)).toBeTruthy());
+  await socket.picture(socket.pictures().at(-1), { camera: "free", camera_used: RIG_CAMERA,
+    rig: { kind: "front", target: "stage", shot: "medium", side: null, pulled: 1 } });
+  // The lab's angle at a picture is phase + speed x its time (FRAMES carry no times: frame / fps).
+  const angleAt = (rig, frame) => ((rig.phase + rig.speed * frame / 30) % 360 + 360) % 360;
+  fireEvent.click(rigBar(page).getByRole("button", { name: "Orbit" }));
+  await until(() => expect(rigAsked(socket)?.kind).toBe("orbit"));
+  const start = rigAsked(socket);
+  // RIG_CAMERA stands 500 units on Mario's +z side: the lab's angle 0.
+  expect(angleAt(start, 2)).toBeCloseTo(0, 6);
+  expect(socket.sent.some((message) => message.kind === "pose")).toBe(false);
+  await rigDrawn(socket);
+  fireEvent.input(rigOptions(page).getByRole("slider", { name: "Speed" }), { target: { value: "-90" } });
+  await until(() => expect(rigAsked(socket).speed).toBe(-90));
+  expect(angleAt(rigAsked(socket), 2)).toBeCloseTo(angleAt(start, 2), 6);
+  await rigDrawn(socket);
+  fireEvent.input(rigOptions(page).getByRole("slider", { name: "Radius" }), { target: { value: "1500" } });
+  await until(() => expect(rigAsked(socket).radius).toBe(1500));
+  await rigDrawn(socket);
+
+  // From the recorded camera, Orbit asks the recorded pose and starts at its camera, seen from Mario.
+  fireEvent.keyDown(document.body, { key: "r" });
+  await until(() => expect(socket.pictures().at(-1).camera).toBeNull());
+  await socket.picture(socket.pictures().at(-1));
+  fireEvent.click(rigBar(page).getByRole("button", { name: "Orbit" }));
+  await until(() => expect(socket.last()).toMatchObject({ kind: "pose", frame: 2 }));
+  socket.text({ id: socket.last().id, kind: "pose", pose: POSE, reason: null });
+  await until(() => expect(rigAsked(socket)?.kind).toBe("orbit"));
+  const bearing = Math.atan2(POSE.position[0] - POSE.mario[0], POSE.position[2] - POSE.mario[2]) * 180 / Math.PI;
+  expect(angleAt(rigAsked(socket), 2)).toBeCloseTo((bearing + 360) % 360, 6);
+});
+
+test("the cinematic cameras follow a ghost in the scene, and Mario again once it leaves", async () => {
+  ghostRoutes();
+  const page = arrive();
+  const socket = await sceneUp(1);
+  await twoGhostsIn(page, socket);
+  const follow = rigBar(page).getByRole("combobox");
+  expect([...follow.options].map((option) => option.textContent)).toEqual(["Mario", "Player 1", "Player 2"]);
+  fireEvent.change(follow, { target: { value: "top-Single Jump-1" } });
+  fireEvent.click(rigBar(page).getByRole("button", { name: "Front" }));
+  await until(() => expect(rigAsked(socket)?.target).toBe("top-Single Jump-1"));
+  expect(tag(page)).toBe("Front · Player 2");
+  await socket.picture(socket.pictures().at(-1), { camera: "free", camera_used: RIG_CAMERA,
+    rig: { kind: "front", target: "top-Single Jump-1", shot: "medium", side: null, pulled: 1 } });
+  fireEvent.click(within(ghostRow(page, "top-Single Jump-1")).getByRole("button", { name: /^Remove/ }));
+  socket.text({ id: ghostsSent(socket).at(-1).id, kind: "ghosts", shown: ["top-Single Jump-0"], refused: [] });
+  await until(() => expect(rigAsked(socket)?.target).toBe("stage"));
+  expect([follow.value, tag(page)]).toEqual(["stage", "Front · Mario"]);
+});
+
+test("without the free camera the cinematic cameras stay, disabled, with the reason", async () => {
+  opened = { ...opened, free_camera: { available: false, reason: "The lab config names no symbol map." } };
+  const { page, socket } = await openScene();
+  const front = rigBar(page).getByRole("button", { name: "Front" });
+  expect([front.disabled, front.title]).toEqual([true, "The lab config names no symbol map."]);
+  const sent = socket.pictures().length;
+  fireEvent.click(front);
+  await settled();
+  expect(socket.pictures().length).toBe(sent);
+});
+
 test("the same scene left and come back to draws its ghosts again; a new stage starts with none", async () => {
   ghostRoutes();
   const first = arrive();
@@ -2065,6 +2199,11 @@ test("every movement reads its tuning: the shipped values when none is given, a 
     ["marioHeight", (t) => lookingAt(orbit, [0, 0, 0], t)],
     ["flyToStandoff", (t) => flyToTarget(orbit, [100, 0, -200], [0, 0, 0], t)],
     ["flyToMs", (t) => glideAt(orbit, lookingAt(orbit, [0, 0, 0]), 150, t)],
+    // The cinematic cameras' rows travel with every request: the lab draws what the panel shows
+    // (their effect on the camera: tests/test_scene_lab_rigs.py).
+    ...["rigCloseDistance", "rigMediumDistance", "rigWideDistance", "rigFov", "rigSmoothFrames", "rigAimFrames",
+      "rigStillSpeed", "rigSideLead", "rigSideHoldFrames", "rigWallStandoff", "rigPullFrames", "rigCraneDistance", "rigOrbitRadius",
+      "rigOrbitSpeed"].map((key) => [key, (t) => rigRequest(startRig("orbit", null, t), t)]),
   ];
   expect(new Set(cases.map(([key]) => key))).toEqual(new Set(Object.keys(SCENE_CAMERA_DEFAULTS)));
   for (const [key, run] of cases) {
