@@ -53,8 +53,10 @@ sound late. 404 for no sound or no such block, 409 for a scene no longer open, 4
 that fails its hash.
 
 Socket protocol. The page sends JSON: {"id", "session", "frame", "camera": null or {"focus":
-xyz, "position": xyz[, "roll", "fov"]}, "encoding": "jpeg"|"raw"|"shared"[, "hud": false]} for a
-picture (hud false: without the game's HUD, tools/scene_lab/hud.py; "shared":
+xyz, "position": xyz[, "roll", "fov"]} or {"ghost": ref}, "encoding": "jpeg"|"raw"|"shared"[, "hud":
+false]} for a picture ({"ghost": ref}: that scene ghost's own recorded camera at this picture, its
+header's "view" {"ghost", "camera"} the camera drawn; scene_session.py; hud false: without the
+game's HUD, tools/scene_lab/hud.py; "shared":
 the desktop window's page only, once attach_window gave the scene its window; the exact pixels
 go through WebView2 shared memory and the binary reply is the header alone, or a JPEG when the
 post failed, as its header's encoding says), {"id",

@@ -1328,7 +1328,8 @@ picture on screen); hold the right button to look around with the mouse, the
 wheel or the flight speed control then setting the speed; drag to turn around
 the focus point, Shift-drag or a middle-button drag to slide, the wheel to move
 closer; **double-click** a surface to fly to just in front of it and look at
-Mario (an eased flight any input stops); F looks at Mario; **Set focus** then a
+Mario (an eased flight any input stops); F (**Look at Mario**) turns the camera to face Mario
+where it stands, its place, tilt and field of view kept; **Set focus** then a
 click puts the focus point where the picture drew that pixel; one button puts
 the view back where Free camera began; R returns to the recorded camera. A tilted view levels as you turn or fly, never on entry.
 Moving the camera never pauses Play; only Pause, Space, a step or the slider do. **Restart** goes to the
@@ -1407,7 +1408,7 @@ you can tell them apart. Its first
 where that [[attempt]] did), and it follows the game's clock from there, so
 lag [[frame]]s keep it in step. At its end one with its [[star]] dance holds
 its last pose and fades; any other one is gone. The race's own fades,
-[[corner inputs]], path and sound stay off.
+[[corner inputs]], path and sound stay off. Each one in the scene has a [[ghost's view]].
 
 - **Lives** -- the set, its alignment and its look
   (`tools/scene_lab/stage_ghosts.py`); the scene's set
@@ -1415,6 +1416,25 @@ its last pose and fades; any other one is gone. The race's own fades,
   [[renderer]] (`plugin/gfxwrap/ghost_viewer.cpp`), drawn by the same code as
   a race's (`plugin/gfxwrap/ghost_figure.h`)
 - **Not** -- the [[ghost set]], which picks who races you in the game
+
+### Ghost's view
+
+The [[scene viewer]]'s stage seen from a [[stage ghost]]'s own camera: the
+camera that [[ghost]]'s game drew with where its figure stands in that
+picture, from its recording, so it follows that [[ghost]] through Play, steps
+and seeks. One button per [[stage ghost]] ("Sully's view", beside Recorded
+camera; Their view on its row), the picture's corner names whose it is, and
+Free camera from it starts at that camera. The world stays the stage's: its
+objects, its Mario, its Lakitu and its counters. Where the recording has no
+camera there in the stage's area (a gap, before its start, after its end,
+another area), the view holds its nearest one and says why.
+
+- **Lives** -- which camera (`tools/scene_lab/stage_ghosts.py`, from each
+  record's camera in `src/sm64_events/ghost/clip.py`); drawn through the free
+  camera (`tools/scene_lab/scene_session.py`); the buttons
+  (`src/sm64_events/ui/components/sceneviewer.js`,
+  `src/sm64_events/ui/components/sceneghosts.js`)
+- **Not** -- the recorded camera, the stage's own view
 
 ### Ghost button
 

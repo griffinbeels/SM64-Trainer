@@ -31,12 +31,23 @@ name boxes and their box, and the inputs over the name. The live race's own effe
 fade where a ghost overlaps or hides live Mario (the stage's runner is not live Mario here), the
 corner input stack, the path and the ghost's sound.
 
+A ghost's view (round 5, item 5, his words: "one button per active ghost in the scene to follow
+their recorded POV"): the stage's world from the camera that ghost's own game drew with (its clip's
+camera, Frame.camera), at the same row its drawing shows for the picture (ghost_frame's count, the
+row ghost_viewer.cpp chooses). The stage's world is the only world, so a camera recorded in another
+level or area than the stage's frame does not apply there. Where its own row has no camera that
+applies (a gap in the recording, before its start, after its end, another area), the view is the
+nearest one that does, the last before the row first, with a plain reason; with none at all, the
+recorded camera and why. Only the screen roll and the field of view travel: the look-at roll the
+game leaves at 0 in play is not one the free camera can set (camera_state.place).
+
 `load_ghost(ref)` is the clip loader (interface C: {"clip", "player", "frames", "label"} and,
 optionally, "time": the bare run time; or LookupError with a plain sentence). The catalog's (server/scene_ghosts.py) serves the page; until
 it is wired, LocalGhosts reads the player's own attempts from the replay store's native folder.
 """
 from __future__ import annotations
 
+import bisect
 import json
 import sys
 from dataclasses import dataclass
@@ -60,6 +71,16 @@ REFUSALS = {-2: "The renderer could not build the ghost's model from the ROM.",
             -4: "There is not enough memory to load this ghost.",
             -5: "The renderer refused the ghost capture layout."}
 LOADER_FAILED = "This ghost could not be loaded."
+# Why a ghost's view is not its own row's camera (its view): the cause, then which view it shows.
+VIEW_BEFORE = "This ghost's run has not started yet"
+VIEW_ENDED = "This ghost's recording has ended"
+VIEW_GAP = "This ghost's recording has no camera for this moment"
+VIEW_ELSEWHERE = "This ghost is in another area of the level here"
+VIEW_LAST, VIEW_NEXT, VIEW_FIRST = (", so this is the last view it had.", ", so this is the next view it has.",
+                                    ", so this is its first view.")
+VIEW_NONE = "This ghost's recording has no camera in this area, so this shows the recorded camera."
+VIEW_GONE = "That ghost is no longer in the scene, so this shows the recorded camera."
+VIEW_NO_CLOCK = "This picture has no game clock to find the ghost's moment by, so it shows the recorded camera."
 LABEL_FIT = 28                # characters a name box shows before it cuts the end (180 layout px)
 TIME_CHARACTERS = frozenset("0123456789'\"")
 
@@ -142,6 +163,62 @@ class Shown:
     base: str = ""               # the game's label for it (label_text)
     time: str | None = None      # its bare run time, when the loader or the page knows it
     clip: bytes = b""            # its recording, kept to load again under a new label
+    views: GhostCameras | None = None   # its cameras, read from the clip the first time its view is asked
+
+
+class GhostCameras:
+    """One ghost's recorded cameras, row by row as its playback indexes them (Clip.indexed_rows):
+    each row's coordinate, level and area, and its camera as the free camera takes it
+    ({"focus", "position", "roll": the screen roll, "fov"}; None where the row has none)."""
+
+    def __init__(self, clip: bytes):
+        from sm64_events.ghost import clip as ghost_clip
+        try:
+            rows = ghost_clip.decode_clip(clip).indexed_rows()
+        except (ValueError, LookupError):
+            rows = []
+        self.coordinates = [coordinate for coordinate, _frame in rows]
+        self.places = [(frame.level, frame.area) for _coordinate, frame in rows]
+        self.cameras = [self._free(frame.camera) for _coordinate, frame in rows]
+
+    @staticmethod
+    def _free(camera: dict | None) -> dict | None:
+        if camera is None:
+            return None
+        return {"focus": camera["focus"], "position": camera["position"], "roll": camera["screen_roll"],
+                "fov": camera["fov"]}
+
+    def at(self, frame: int, place: tuple | None) -> tuple[dict | None, str | None]:
+        """(camera, reason) for the scene picture `frame` game frames after the ghost's first
+        (ghost_frame) in the stage's `place` ((level, area); None: unknown, any applies). Its own
+        row is the one its drawing shows (ghost_viewer.cpp choose: the first before its start, the
+        one whose coordinate is the first's plus `frame`, none past its last); where that row has
+        no camera in this place, the nearest earlier row's that has, else the nearest later's, with
+        the reason; (None, VIEW_NONE) when no row has one."""
+        count = len(self.coordinates)
+        if not count:
+            return None, VIEW_NONE
+
+        def usable(row: int) -> bool:
+            return self.cameras[row] is not None and (place is None or self.places[row] == place)
+        target = self.coordinates[0] + max(0, frame)
+        if frame < 0:
+            row, own, cause = 0, None, VIEW_BEFORE
+        elif target > self.coordinates[-1]:
+            row, own, cause = count, None, VIEW_ENDED
+        else:
+            row = bisect.bisect_left(self.coordinates, target)
+            own = row if row < count and self.coordinates[row] == target else None
+            if own is not None and usable(own):
+                return self.cameras[own], None
+            cause = VIEW_ELSEWHERE if own is not None and self.cameras[own] is not None else VIEW_GAP
+        before = next((at for at in range(row - 1, -1, -1) if usable(at)), None)
+        if before is not None:
+            return self.cameras[before], cause + VIEW_LAST
+        after = next((at for at in range(row if own is None else own + 1, count) if usable(at)), None)
+        if after is not None:
+            return self.cameras[after], cause + (VIEW_FIRST if frame < 0 else VIEW_NEXT)
+        return None, VIEW_NONE
 
 
 class StageGhosts:
@@ -188,6 +265,16 @@ class StageGhosts:
         for ghost, label in zip(shown, distinct_labels([(g.base, g.time) for g in shown]), strict=True):
             if label != ghost.label and not host.ghost_load(ghost.slot, ghost.clip, label):
                 ghost.label = label
+
+    def view(self, ref: str, frame: int, place: tuple | None) -> tuple[dict | None, str | None]:
+        """Ghost `ref`'s view at `frame` game frames since the stage's first (GhostCameras.at), its
+        cameras read from its clip the first time; (None, VIEW_GONE) for a ghost not in the set."""
+        ghost = next((ghost for ghost in self.shown if ghost.ref == ref), None)
+        if ghost is None:
+            return None, VIEW_GONE
+        if ghost.views is None:
+            ghost.views = GhostCameras(ghost.clip)
+        return ghost.views.at(frame, place)
 
     def clear(self, host) -> None:
         for ghost in self.shown:

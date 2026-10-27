@@ -44,6 +44,10 @@
 //
 // Above the player, the stage picker (scenestage.js) chooses which recording
 // is the stage; below it, the ghost panel (sceneghosts.js) adds ghosts into it.
+// Each ghost in the scene gets a view button beside Recorded camera (and Their
+// view on its row): the stage seen from that ghost's own recorded camera, which
+// the lab finds for every picture, so it follows the ghost through Play, steps
+// and seeks. Free camera from a ghost's view starts at that camera.
 //
 // Play stops only when the person pauses (Pause, Space, a step, the slider):
 // moving the camera, by any of the ways above, keeps it playing. Restart goes
@@ -56,7 +60,7 @@ import htm from "htm";
 import { Icon } from "./icons.js";
 import { getJSON, send } from "../api.js";
 import { displayName } from "../entitysection.js";
-import { GhostPanel } from "./sceneghosts.js";
+import { GhostPanel, viewName } from "./sceneghosts.js";
 import { StagePicker, attemptIn, stageDefault, targetKey, targetQuery, useStrategies } from "./scenestage.js";
 import { ControlGroups } from "../tunecontrols.js";
 import { postObservation } from "../uilog.js";
@@ -294,6 +298,7 @@ export class SceneLink {
       entering: null, arrived: 0, drawnSeq: 0, looking: null, flight: idleFlight(), speed: 1, picking: false,
       finding: false, glide: null, serial: 0, noticeTimer: null, moving: null, shared: new Map(), playback: null,
       readies: [], coldId: 0, autoplay: false, loop: savedLoop(), hud: savedHud(), ghosts: [], refusedGhosts: new Map(),
+      view: null,
       asked: null, ghostPages: new Map(), ghostNote: null, ghostSerial: 0,
       sound: new SceneSound({ changed: () => this.changed() }) });
     this.timings = new MovingTimings((summary) => { this.moving = summary; this.changed(); });
@@ -325,7 +330,7 @@ export class SceneLink {
     // A new scene starts with no ghosts.
     Object.assign(this, { ws, scene, frame: 0, free: false, orbit: null, entry: null, inFlight: new Map(),
       wanted: null, notice: null, error: null, speed: 1, moving: null, readies: [], coldId: this.sequence + 1,
-      ghosts: keptFor(scene).ghosts, asked: null, refusedGhosts: new Map(), ghostNote: null });
+      ghosts: keptFor(scene).ghosts, asked: null, refusedGhosts: new Map(), ghostNote: null, view: null });
     keep(scene, {});
     this.ghostPages = kept.pages;
     if (this.sharedAvailable) {
@@ -414,7 +419,8 @@ export class SceneLink {
     const ready = this.ws && this.ws.readyState === WebSocket.OPEN && this.scene;
     if (this.inFlight.size >= PICTURES_IN_FLIGHT || !this.wanted || !ready) return;
     const play = this.playback, frame = this.wanted.frame ?? (play ? play.asked : this.frame);
-    const id = ++this.sequence, camera = this.free && this.orbit ? cameraOf(this.orbit) : null;
+    const id = ++this.sequence, camera = this.free && this.orbit ? cameraOf(this.orbit)
+      : this.view ? { ghost: this.view } : null;
     this.inFlight.set(id, { ...this.wanted, id, frame, free: !!camera, sent: performance.now(), play,
       due: play ? play.dueOf(frame) : null });
     if (play && this.wanted.kind !== "play") play.moved = true;
@@ -564,6 +570,7 @@ export class SceneLink {
   async setGhosts(list) {
     const serial = ++this.ghostSerial;
     Object.assign(this, { asked: list, ghostNote: null });
+    if (this.view && !list.some((ghost) => ghost.ref === this.view)) this.recorded();     // its ghost left
     this.changed();
     const answer = await this.ask("ghosts", { set: list.map(({ ref, label }) => ({ ref, label })) });
     if (serial !== this.ghostSerial) return;
@@ -577,6 +584,7 @@ export class SceneLink {
     for (const ghost of list) refused.delete(ghost.ref);
     for (const { ref, reason } of answer.refused || []) refused.set(ref, reason);
     Object.assign(this, { ghosts: list.filter((ghost) => shown.has(ghost.ref)), refusedGhosts: refused });
+    if (this.view && !shown.has(this.view)) this.view = null;
     keep(this.scene, { ghosts: this.ghosts });
     this.want("input");
     this.changed();
@@ -610,23 +618,43 @@ export class SceneLink {
   }
 
   async readEntry() {
-    const answer = await this.pose(this.frame);
+    const seen = this.viewOnScreen();
+    const answer = seen ? { pose: seen } : await this.pose(this.frame);
     const pose = answer.pose, orbit = pose && orbitFromPose(pose.focus, pose.position, { roll: pose.roll ?? 0,
       fov: pose.fov ?? null });
     if (!orbit) return this.say(answer.reason || "The free camera is unavailable for this frame.");
     const [dx, dy, sliding] = this.pending, tuning = sceneCameraTuning();
-    Object.assign(this, { pending: [0, 0, false], free: true, entry: orbit,
+    Object.assign(this, { pending: [0, 0, false], free: true, view: null, entry: orbit,
       orbit: dx || dy ? (sliding ? slid : turned)(orbit, dx, dy, tuning) : orbit });
     this.want(dx || dy ? "move" : "input");
     this.flightOn(performance.now());       // a movement key held through the entry moves from here
+  }
+
+  // The camera of the ghost's view on screen (its picture's header names the camera it was drawn
+  // from), or null when no ghost's view is.
+  viewOnScreen() {
+    return this.view && this.shown?.view?.ghost === this.view ? this.shown.view.camera : null;
   }
 
   recorded(time) {
     this.interrupt();
     this.stopLook("recorded camera");
     this.releaseKeys();
-    Object.assign(this, { free: false, notice: null, picking: false });
+    Object.assign(this, { free: false, view: null, notice: null, picking: false });
     this.want("input", time);
+  }
+
+  // A ghost's view: the stage from that ghost's own recorded camera, following it as the scene
+  // plays, steps and seeks (the lab finds its camera for each picture). Free camera from here
+  // starts at that camera; R or Recorded camera goes back to the stage's own view.
+  theirView(ref, time) {
+    if (!this.freeAvailable || !this.ghosts.some((ghost) => ghost.ref === ref)) return;
+    this.interrupt();
+    this.stopLook("a ghost's view");
+    this.releaseKeys();
+    Object.assign(this, { free: false, view: ref, notice: null, picking: false });
+    this.want("input", time);
+    this.changed();
   }
 
   resetView(time) {
@@ -1219,6 +1247,7 @@ export function hintFor(link) {
   if (link.picking) return "Click a surface in the picture to turn around it. Esc cancels.";
   if (link.looking) return "Move the mouse to look around. W A S D move, Q and E go down and up, Shift is faster, Alt slower, the wheel sets the speed. Let go of the right button to stop looking.";
   if (link.free) return "W A S D move, Q and E go down and up, Shift is faster, Alt slower; hold the right button to look around. Drag to turn around the focus point, Shift-drag or middle-drag to slide, the wheel moves closer, double-click a surface to fly there. F looks at Mario, R returns to the recorded camera.";
+  if (link.view) return "The stage seen from this ghost's own camera as it plays. Moving the camera starts Free camera from here; R returns to the recorded camera.";
   return "W A S D move the camera from this picture, Q and E go down and up; dragging, scrolling, double-clicking or holding the right button move it too. Left and Right (or , and .) step one frame, Space plays.";
 }
 
@@ -1246,8 +1275,12 @@ function SpeedControl({ link }) {
 function CameraBar({ link, tuning, setTuning }) {
   const available = link.freeAvailable, reason = link.scene.free_camera.reason;
   return html`<div class="scene-lab-bar" aria-label="Camera">
-    <button type="button" aria-pressed=${!link.free} onclick=${(event) => link.recorded(event.timeStamp)}
+    <button type="button" aria-pressed=${!link.free && !link.view} onclick=${(event) => link.recorded(event.timeStamp)}
         title="Show what the player saw (R)">Recorded camera</button>
+    ${link.ghosts.map((ghost) => html`<button type="button" key=${ghost.ref} class="scene-lab-view"
+        aria-pressed=${!link.free && link.view === ghost.ref} disabled=${!available}
+        title=${available ? "See the stage from this ghost's own camera, following it as the scene plays" : reason}
+        onclick=${(event) => link.theirView(ghost.ref, event.timeStamp)}>${viewName(link.ghosts, ghost.ref)}</button>`)}
     <button type="button" aria-pressed=${link.free} disabled=${!available}
         title=${available ? "Move the camera yourself, starting from the picture on screen" : reason}
         onclick=${() => link.enterFree()}>Free camera</button>
@@ -1353,7 +1386,8 @@ function Player({ link, canvas, surface, ghosts }) {
     <div class="scene-lab-stage">
       <canvas ref=${canvas} width="640" height="480" class=${classes.filter(Boolean).join(" ")}
         aria-label="The recording's picture" ...${pointerHandlers(link, surface)}></canvas>
-      <span class=${`scene-lab-tag ${link.free ? "is-free" : ""}`}>${link.free ? "Free camera" : "Recorded camera"}</span>
+      <span class=${`scene-lab-tag ${link.free ? "is-free" : link.view ? "is-view" : ""}`}>${link.free ? "Free camera"
+        : link.view ? viewName(link.ghosts, link.view) : "Recorded camera"}</span>
       ${link.drawing && html`<span class="scene-lab-busy">Drawing...</span>`}
       ${cueFor(link) && html`<p class="scene-lab-cue" aria-hidden="true">${cueFor(link)}</p>`}
     </div>

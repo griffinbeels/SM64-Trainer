@@ -1,7 +1,8 @@
 """The Trainer's scene viewer session (M4 E3, lab only): one package, one renderer host, one evaluator.
 
     session = SceneSession.open(config, package_path)            # Refused names why it cannot
-    header, payload = session.picture(frame, camera, "jpeg")       # camera None: the recorded camera
+    header, payload = session.picture(frame, camera, "jpeg")       # camera None: the recorded camera;
+                                                                   #   {"ghost": ref}: that ghost's view
     pending = session.begin(frame, camera, "jpeg")                 # picture() in two halves: the host
     header, payload = session.finish(pending)                      #   draws while the next one begins
     session.pose(frame)                                            # the recorded camera and Mario
@@ -43,7 +44,10 @@ renderer draws them into the stage with the in-game ghost's look and name boxes,
 walls. A recorded picture with ghosts sends the frame's scene state beside its closure: the
 in-game ghost reads the stage's camera, level and area from the game's RAM, as it does live. A
 picture without ghosts is sent exactly as before. Pick and pose read the stage alone: a ghost never
-changes what Set focus hits.
+changes what Set focus hits. A picture's camera may also be {"ghost": ref}: that ghost's view, the
+stage's world from the camera its own recording drew with at the row its drawing shows in that
+picture (stage_ghosts.GhostCameras), drawn through the free camera's path; the header's "view" says
+whose it is and which camera it drew (None: the recorded camera, and "reason" says why).
 
 The package's source-audio layer, when it has one, is the recording's sound mapped to these
 frames (scene_audio.py); describe() carries its table and audio_block serves its blocks. An
@@ -377,6 +381,7 @@ class PendingPicture:
     hud: bool = True             # the picture has the game's HUD (hud.py): False once it was cut
     hud_reason: str | None = None   # why a picture asked for without the HUD still has it
     ghosts: bool = False         # the picture carried the scene's ghosts
+    view: dict | None = None     # a ghost's view: {"ghost": ref, "camera": the camera drawn, or None}
 
 
 class SceneSession:
@@ -739,6 +744,7 @@ class SceneSession:
             raise ValueError("unknown encoding")
         if not isinstance(hud, bool):
             raise ValueError("hud is true or false")
+        view, camera = self._ghost_view(index, camera)
         free = None if camera is None else world_camera(camera)
         if free is not None:
             self._ahead_generation += 1          # the look-ahead stops before its next frame
@@ -747,6 +753,8 @@ class SceneSession:
         cuts = None if hud else []               # the HUD cut's outcome (hud.Cut) for the frame sent
         host_frame, reason = (None, None) if free is None else self._free_frame(index, free, timings, cuts)
         drawn_free = host_frame is not None
+        if view is not None:                 # the recorded camera when the ghost's could not be drawn
+            view, reason = {"ghost": view["ghost"], "camera": camera if drawn_free else None}, reason or view["reason"]
         if drawn_free:
             self._look_ahead(frame)          # resolves beside this picture's render and encode
         if host_frame is None:
@@ -758,7 +766,7 @@ class SceneSession:
         cut = cuts[-1] if cuts else None
         pending = PendingPicture(frame, encoding, "free" if drawn_free else "recorded", reason, timings, started,
                                  cut is None or cut.reason is not None, cut and cut.reason,
-                                 ghosts=host_frame.ghosts is not None)
+                                 ghosts=host_frame.ghosts is not None, view=view)
         self._begun.append(pending)
         return pending
 
@@ -802,7 +810,8 @@ class SceneSession:
                 "camera": pending.camera, "reason": pending.reason, "sha256": digest,
                 "hud": pending.hud, "hud_reason": pending.hud_reason,
                 "payload_bytes": len(payload), "timings": timings,
-                **({"ghosts": picture.ghosts} if pending.ghosts else {})}, payload
+                **({"ghosts": picture.ghosts} if pending.ghosts else {}),
+                **({"view": pending.view} if pending.view else {})}, payload
 
     def _jpeg(self, picture: viewer.Picture) -> tuple[bytes, str]:
         """The picture as JPEG and where it was made: by the encoder child from its slot, or here
@@ -913,11 +922,38 @@ class SceneSession:
         first frame, by the tap's global_timer: lag frames and held pictures stay in step."""
         if not self.ghosts:
             return None
+        frame = self._ghost_frame(index)
+        return None if frame is None else self.ghosts.block(self.ghost_look, frame)
+
+    def _ghost_frame(self, index: int) -> int | None:
+        """Game frames from the ghosts' first frame to package frame `index` (stage_ghosts.ghost_frame),
+        None when either has no tap clock."""
         timer = self.outlines[index]["identity"].get("global_timer")
         origin = self.outlines[self.ghost_origin]["identity"].get("global_timer")
-        if timer is None or origin is None:
-            return None
-        return self.ghosts.block(self.ghost_look, stage_ghosts.ghost_frame(timer, origin))
+        return None if timer is None or origin is None else stage_ghosts.ghost_frame(timer, origin)
+
+    def _ghost_view(self, index: int, camera) -> tuple[dict | None, dict | None]:
+        """A picture's camera as begin() takes it: (None, camera) for the recorded camera or a free
+        one; for {"ghost": ref}, that ghost's view ({"ghost", "reason"}) and its camera at the row its
+        drawing shows in this picture, in the stage's level and area (stage_ghosts.StageGhosts.view),
+        None when it has none: the recorded camera, and the reason says why."""
+        if not (isinstance(camera, dict) and "ghost" in camera):
+            return None, camera
+        ref = camera["ghost"]
+        if len(camera) != 1 or not isinstance(ref, str) or not ref or len(ref) > 512:
+            raise ValueError('a ghost\'s view is {"ghost": ref}, a ghost in the scene')
+        frame = self._ghost_frame(index)
+        if frame is None:
+            return {"ghost": ref, "reason": stage_ghosts.VIEW_NO_CLOCK}, None
+        identity = self.outlines[index]["identity"]
+        place = (identity.get("curr_level"), identity.get("curr_area"))
+        found, reason = self.ghosts.view(ref, frame, None if None in place else place)
+        try:
+            if found is not None:
+                world_camera(found)                  # a recorded camera the evaluator cannot place
+        except ValueError:
+            found, reason = None, stage_ghosts.VIEW_NONE
+        return {"ghost": ref, "reason": reason}, found
 
     def _stage_frame(self, index: int, timings: dict, cuts: list | None = None) -> viewer.Frame:
         """The recorded picture with the frame's scene state beside its closure (package.scene_state:

@@ -2205,6 +2205,16 @@ picture publishes that picture's ghosts and each one's frame (`picture`).
   detaches it, the renderer's first call adopts it. In Project64 `setup` never
   runs, so every renderer call answers "nothing" and the game's ghosts draw as
   before.
+- **A ghost's view** (round 5): the stage's world from a ghost's own
+  recorded camera (`Frame.camera`: the area graph camera's position and focus,
+  its screen roll, the perspective's field of view) at the row its figure
+  shows, found in Python (`stage_ghosts.GhostCameras`, the same coordinate
+  rule as `choose`) and drawn through the free camera. Measured 2026-10-27 on
+  his HMC runs 505 (stage), 524 and 553: each view's camera equals that run's
+  own scene's recorded camera to the last bit at ghost frames 0, 260 and 520;
+  run 505 added as a ghost of its own scene draws its recorded camera exactly
+  (0 pixels apart from the free camera of the recorded pose). The look-at roll
+  (0 in play) is not carried.
 - **Cost** (his WF attempt scene, two of his own runs, recorded camera,
   RTX 5090, 2026-10-27): the renderer's time per picture p50 0.39 ms with no
   ghost, 2.0 ms with one, 2.2 ms with two, 2.6 ms with five; the scene state a
