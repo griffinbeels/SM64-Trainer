@@ -1,12 +1,20 @@
 """Which recorded pictures make an attempt's scene (M4 B4, lab only): the span rule.
 
     mark = AttemptMark.of(attempt)                        # a completed tracking Attempt
-    found = span(mark, spool.tasks(since), boundaries, spool.health())
-    # Cut(first, last, end, why) | Waiting(first, reason) | Unavailable(reason)
+    found = span(mark, spool.tasks(since), boundaries, spool.health(), marios)
+    # Cut(first, last, end, why) | Waiting(first, reason, through, end) | Unavailable(reason)
+    reader = MarioReader.of(source.identity)              # Mario in a task's scene state
+    found = dance(end_index, {index: reader.read(regions, global_timer), ...})   # Dance(last, seen) | None
 
 Griffin, 2026-10-26: "The ghost scene should start when the attempt starts; it should end
 during fade out." Read as: the attempt's first frame through the last picture of the fade-out
 after its end, stopping before the next place or the next attempt appears.
+
+Griffin, 2026-10-27, on his Hazy Maze Cave star: "the last actual frame of the ghost should be
+~622 or so but then mario remains frozen there for over 200 additional frames ... We don't
+even need to store anything after the star dance, because from there, the user cannot take any
+actions." So an end that Mario's star dance follows (a star, a key, a segment ending on one)
+stops on the dance's last frame; every other end keeps the rule above.
 
 First: the task whose global_timer (the tap's identity extra, gGlobalTimer when the game
 dispatched the task) equals the attempt's anchor frame (the journal's frame for the anchor
@@ -22,8 +30,25 @@ Last: the earliest of
   - the task before the game clock stops counting by one after the end (a load or console
     reset the journal did not report);
   - the task before the next attempt's anchor (`boundaries`: anchors seen after the start);
+  - the star dance's last frame (dance()), when Mario grabbed a star at the end;
   - CAP_FRAMES after the end, when nothing else comes;
   - the newest recorded task, once the recording has stopped.
+
+The dance: Mario's action, actionTimer and sDelayedWarpOp come from each task's scene state
+(the tap's task regions hold gMarioStates and the warp; MarioReader), which only the take
+following the attempt reads, as it writes each frame (`marios`, by task index). The end is a
+star grab when Mario is in a grab or dance action (addresses.STAR_GRAB_ACTIONS: the midair
+fall, then the dance) at the end or within DANCE_ENTRY_FRAMES after it. The dance's last
+frame is then the earliest of
+  - the frame the game starts the exit fade (sDelayedWarpOp set: actionTimer 80 of an exit
+    dance, the game's own level_trigger_warp);
+  - the frame before Mario's action leaves the grab and dance actions;
+  - the frame before the game stops: in a dance actionTimer counts by exactly one each game
+    frame (n64decomp general_star_dance_handler), so a frame where it holds while the game
+    frame moves on is his pause, or the no-exit dance's save dialog stopping time.
+Until the take's states reach the dance's end (or an earlier stop), the span waits. Without a
+take (`marios` None: a take cut from behind the recording) the rule above decides, and that
+take stops itself at the dance's end as it reads it (attempt_cutter.Take).
 
 Evidence, his BoB minute (tap-20261025-184022, measured 2026-10-26 from the tap's pictures and
 Mario's action in the task regions): after the star grab at task 2105
@@ -36,20 +61,46 @@ by exactly one across all 2609 tasks, level loads included. The cap leaves room 
 grab's fall and dance and a death's animation; an attempt whose end brings no load (he stands
 still, or the practice ROM keeps him in the level) shows CAP_FRAMES after its end.
 
+Evidence for the dance, his three Hazy Maze Cave "WK Over Wall" stars (2026-10-27 17:00-17:02
+UTC, attempts 505, 524, 553; their takes read frame by frame, measured 2026-10-27): each closed
+at x-cam on the dance's first frame (actionTimer 0, ACT_STAR_DANCE_EXIT after
+ACT_FALL_AFTER_STAR_GRAB), and the exit fade began 80 frames later (sDelayedWarpOp 17,
+WARP_OP_STAR_EXIT, its timer 31 counting down). Then he paused: actionTimer and the warp's
+timer stopped while the game frame ran on, at actionTimer 80 (attempt 505), 92 (553, his
+"Frame 622 of 830", game frame 4790) and 100 (524, for 19 frames before his reset). With no
+load after it, the old rule ran 505 and 553 to the cap: 841 and 830 shown frames, 220 and 208
+of them frozen. Read again through MarioReader and dance() (Mario found on every frame of all
+nine takes), they end where the fade begins: 505 at 621 shown frames, 524 at 613 (was 655),
+553 at 610; his six resets keep their ends. The BoB grab above now ends at task 2207, its
+dance's actionTimer 80, 33 frames before the iris's black picture.
+
 Limits: the journal's anchor frame and the tap's global_timer are both gGlobalTimer, but at
-different moments of the game frame (the poller's read, the task's dispatch); the BoB minute
-had no journal attempts, so a one-frame offset between them is untested until his live play.
+different moments of the game frame (the poller's read, the task's dispatch); on his live play
+(2026-10-27) every take began on its anchor's game frame, and each star's closing frame was its
+dance's first (actionTimer 0).
 """
 from __future__ import annotations
 
+import sys
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import tap  # noqa: E402
+# A close timed at x-cam may precede the first recorded grab or dance frame by this many.
+from sm64_events.ghost.archive import DANCE_ENTRY_FRAMES  # noqa: E402
+from sm64_events.memory.addresses import (  # noqa: E402
+    MARIO_ACTION_OFF, MARIO_ACTION_TIMER_OFF, STAR_DANCE_ACTIONS, STAR_GRAB_ACTIONS)
+from sm64_events.memory.layout import VERSIONS, layout_for  # noqa: E402
 
 FPS = 30
 CAP_FRAMES = 10 * FPS                 # a scene runs at most 10 s past its end
 MAX_SCENE_FRAMES = 10 * 60 * FPS      # 10 minutes: a scene's disk and cut time stay bounded
 MATCH_SECONDS = 3.0                   # how far a task's time may lie from the journal's for one frame
 CLOSED_BY_NEXT_START = ("reset", "loaded", "hard_reset")
+DANCING = "Waiting for the end of the star dance."
 
 NO_ANCHOR = "This attempt has no recorded start frame, so it has no scene."
 BEFORE_RECORDING = "The scene recording started after this attempt began."
@@ -114,11 +165,89 @@ class Waiting:
     first: object | None              # known once the start is recorded: a take may already be writing it
     reason: str
     through: object | None = None     # the newest task already known to lie inside the span, past its end
+    end: object | None = None         # the closing event's task, once recorded (a take watches its dance)
 
 
 @dataclass(frozen=True)
 class Unavailable:
     reason: str
+
+
+@dataclass(frozen=True)
+class Mario:
+    """Mario in one recorded task, as the dance rule reads him."""
+    global_timer: int
+    action: int
+    timer: int                        # actionTimer
+    warp: int                         # sDelayedWarpOp: nonzero once a warp (and its fade) began
+
+
+class MarioReader:
+    """Mario's action, actionTimer and the pending warp in a task's scene state (its tap.Regions
+    of kind "task", which copy gMarioStates and sDelayedWarpOp with every task), at the layout
+    of the recording's version."""
+
+    def __init__(self, layout):
+        mario = layout.mario_struct & 0x1FFFFFFF
+        self.fields = ((mario + MARIO_ACTION_OFF, 4), (mario + MARIO_ACTION_TIMER_OFF, 2),
+                       (layout.pending_warp_op & 0x1FFFFFFF, 2))
+
+    @classmethod
+    def of(cls, identity) -> MarioReader | None:
+        """The reader for the version whose gGlobalTimer the recording's identity extras name
+        ((name, physical address, bytes), as tap.identity_spec gives them); None for none."""
+        timer = next((address for name, address, _size in identity if name == "global_timer"), None)
+        for version in VERSIONS:
+            layout = layout_for(version)
+            if timer is not None and layout.global_timer & 0x1FFFFFFF == timer and layout.mario_struct \
+                    and layout.pending_warp_op:
+                return cls(layout)
+        return None
+
+    def read(self, regions, global_timer: int | None) -> Mario | None:
+        """Mario in this task, or None when its regions do not hold him."""
+        if regions is None or global_timer is None:
+            return None
+        pieces, at = [], 0
+        view = memoryview(regions.data)
+        for begin, size in regions.spans:
+            pieces.append((begin, view[at:at + size]))
+            at += size
+        values = [tap.word_value(pieces, address, size) for address, size in self.fields]
+        return None if None in values else Mario(global_timer, *values)
+
+
+@dataclass(frozen=True)
+class Dance:
+    """The star dance after an attempt's end, as far as the states read show it."""
+    last: int | None                  # its last task index, once the states show it ended
+    seen: int                         # the newest task index the states reach
+
+
+def dance(end: int, marios: Mapping[int, Mario | None]) -> Dance | None:
+    """The star dance that follows the end task `end`, from Mario in each task after it (by task
+    index, in recording order; None where a task's state lacks him). None when no dance
+    follows: Mario is in no grab or dance action from the end through DANCE_ENTRY_FRAMES after
+    it. Dance(None, seen) while the states read so far reach no end of it."""
+    danced, previous, seen = False, None, end - 1
+    while seen + 1 in marios:
+        seen += 1
+        mario = marios[seen]
+        if not danced:
+            danced = mario is not None and mario.action in STAR_GRAB_ACTIONS
+            if not danced and seen >= end + DANCE_ENTRY_FRAMES:
+                return None
+        if mario is None or not danced:
+            continue
+        if mario.action not in STAR_GRAB_ACTIONS:
+            return Dance(seen - 1, seen)                        # the dance is over
+        if mario.warp:
+            return Dance(seen, seen)                            # the exit fade begins
+        if (previous is not None and mario.action in STAR_DANCE_ACTIONS and mario.action == previous.action
+                and mario.global_timer == previous.global_timer + 1 and mario.timer == previous.timer):
+            return Dance(seen - 1, seen)                        # the game stopped: a pause, a dialog
+        previous = mario
+    return Dance(None, seen)
 
 
 def find(tasks: list, frame: int, when: datetime, after: int = -1):
@@ -142,9 +271,11 @@ def lost_pictures(tasks: list, health: dict, first: int, last: int) -> int:
     return max(lost, gaps) + sum(bool(getattr(task, "refused", False)) for task in inside)
 
 
-def span(mark: AttemptMark, tasks: list, boundaries: list[Boundary], health: dict):
+def span(mark: AttemptMark, tasks: list, boundaries: list[Boundary], health: dict,
+         marios: Callable[[int], Mapping[int, Mario | None] | None] | None = None):
     """The attempt's scene in the recording's task indexes (oldest first), or why there is none
-    yet or none at all."""
+    yet or none at all. `marios(first index)`: Mario in each task the take following the
+    attempt from that task has read (by task index), or None when no take follows it."""
     if mark.anchor_frame is None:
         return Unavailable(NO_ANCHOR)
     recording = bool(health.get("recording"))
@@ -166,7 +297,7 @@ def span(mark: AttemptMark, tasks: list, boundaries: list[Boundary], health: dic
         if recording and (mark.ended_utc - newest.utc).total_seconds() > -MATCH_SECONDS:
             return Waiting(first, "Waiting for the recording of this attempt's end.")
         return Unavailable(NO_END)
-    found = _last(mark, tasks, boundaries, first, end, recording)
+    found = _last(mark, tasks, boundaries, first, end, recording, marios and marios(first.index))
     if isinstance(found, Waiting):
         return found
     last, why = found
@@ -180,21 +311,17 @@ def span(mark: AttemptMark, tasks: list, boundaries: list[Boundary], health: dic
     return Cut(first, last, end, why)
 
 
-def _last(mark: AttemptMark, tasks: list, boundaries: list[Boundary], first, end, recording: bool):
+def _last(mark: AttemptMark, tasks: list, boundaries: list[Boundary], first, end, recording: bool,
+          states: Mapping[int, Mario | None] | None):
     """(last task, why) or Waiting: the earliest stop after the end that the recording holds."""
     by_index = {task.index: task for task in tasks}
     if mark.outcome in CLOSED_BY_NEXT_START:
         before = by_index.get(end.index - 1)
         return (before, "next start") if before is not None else (end, "next start")
-    stops = []
-    for boundary in boundaries:
-        if boundary.utc <= mark.started_utc or (mark.ended_utc - boundary.utc).total_seconds() > MATCH_SECONDS:
-            continue                                              # its own anchor, or one inside it
-        task = find(tasks, boundary.frame, boundary.utc, end.index - 1)
-        if task is not None and task.index > first.index:
-            stops.append((task.index - 1, "next attempt"))
-        elif task is None and recording and (boundary.utc - tasks[-1].utc).total_seconds() > -MATCH_SECONDS:
-            return Waiting(first, "Waiting for the recording of the next attempt's start.")
+    stops = _next_attempts(mark, tasks, boundaries, first, end, recording)
+    if isinstance(stops, Waiting):
+        return stops
+    dancing = _dance_stop(None if states is None else dance(end.index, states), by_index, stops)
     cap = end.index + CAP_FRAMES
     previous = end
     for task in tasks:
@@ -215,9 +342,38 @@ def _last(mark: AttemptMark, tasks: list, boundaries: list[Boundary], first, end
             break
     if not stops:
         if recording:
-            return Waiting(first, "Waiting for the end of the fade-out.", previous)
+            return Waiting(first, DANCING if dancing is not None else "Waiting for the end of the fade-out.",
+                           previous, end)
         stops.append((tasks[-1].index, "recording"))
+    if dancing is not None and min(stops)[0] > dancing:
+        return Waiting(first, DANCING, previous, end)            # the dance may end before that stop
     index, why = min(stops)
     while index not in by_index and index > first.index:        # a hole: lost_pictures reports it
         index -= 1
     return by_index.get(index, end), why
+
+
+def _next_attempts(mark: AttemptMark, tasks: list, boundaries: list[Boundary], first, end, recording: bool):
+    """[(the task before a next attempt's anchor, "next attempt")], or Waiting while an anchor
+    after the end is not yet recorded."""
+    stops = []
+    for boundary in boundaries:
+        if boundary.utc <= mark.started_utc or (mark.ended_utc - boundary.utc).total_seconds() > MATCH_SECONDS:
+            continue                                              # its own anchor, or one inside it
+        task = find(tasks, boundary.frame, boundary.utc, end.index - 1)
+        if task is not None and task.index > first.index:
+            stops.append((task.index - 1, "next attempt"))
+        elif task is None and recording and (boundary.utc - tasks[-1].utc).total_seconds() > -MATCH_SECONDS:
+            return Waiting(first, "Waiting for the recording of the next attempt's start.", end=end)
+    return stops
+
+
+def _dance_stop(star: Dance | None, by_index: dict, stops: list) -> int | None:
+    """Adds the dance's last task to `stops` once the recording's tasks hold it. While the dance
+    goes on past what the states show, the newest task index they reach: a later stop waits."""
+    if star is None:
+        return None
+    if star.last is not None and star.last in by_index:
+        stops.append((star.last, "dance"))
+        return None
+    return star.seen
