@@ -8,7 +8,7 @@
 import { h } from "preact";
 import { render, cleanup, fireEvent, waitFor, within } from "@testing-library/preact";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { DRAG_DEAD_ZONE, LOCK_NOTES, LOOP_PREFERENCE, MOVING_WINDOW, PICTURES_IN_FLIGHT, SHARED_WAIT, STILL_MS,
+import { DRAG_DEAD_ZONE, HUD_PREFERENCE, LOCK_NOTES, LOOP_PREFERENCE, MOVING_WINDOW, PICTURES_IN_FLIGHT, SHARED_WAIT, STILL_MS,
   STAGE_WORDS, SceneViewer, hintFor, movingSummary, pictureFraction, sceneTitle, speedWords, throttledNotes,
 } from "../../src/sm64_events/ui/components/sceneviewer.js";
 import { cameraOf, dollied, easeInOut, flightSpeed, flown, flyToTarget, glideAt, lookingAt, looked, orbitFromPose, slid,
@@ -58,6 +58,7 @@ function respond(body, status = 200) {
 
 beforeEach(() => {
   localStorage.removeItem(LOOP_PREFERENCE);
+  localStorage.removeItem(HUD_PREFERENCE);
   clock.now = 1000;
   vi.spyOn(performance, "now").mockImplementation(() => clock.now);
   sockets = [];
@@ -616,6 +617,35 @@ test(", and . step one frame like the arrows; a slider reached with Tab gives th
   }
   await settled();
   expect(socket.sent.length).toBe(sent);
+});
+
+// His round 4, item 9: "We should have a toggle for enabling / disabling the HUD."
+test("HUD off asks for every picture without the HUD, the one on screen at once, and stays off for the next scene", async () => {
+  const { page, socket, root } = await openScene();
+  await socket.picture(socket.sent[0]);
+  expect(socket.sent[0]).not.toHaveProperty("hud");                               // on: the server's own default
+  const hud = page.getByRole("button", { name: "HUD" });
+  expect(hud.getAttribute("aria-pressed")).toBe("true");
+  fireEvent.click(hud);
+  await until(() => expect(socket.pictures().length).toBe(2));
+  expect(socket.pictures()[1]).toMatchObject({ frame: 0, hud: false });
+  expect(hud.getAttribute("aria-pressed")).toBe("false");
+  expect(localStorage.getItem(HUD_PREFERENCE)).toBe("off");
+  await socket.picture(socket.pictures()[1], { hud: true, hud_reason: "This picture's HUD could not be left out." });
+  await until(() => expect(page.container.textContent).toContain("This picture's HUD could not be left out."));
+  fireEvent.keyDown(root, { key: "ArrowRight" });
+  await until(() => expect(socket.pictures().at(-1)).toMatchObject({ frame: 1, hud: false }));
+  await socket.picture(socket.pictures().at(-1), { hud: false });
+  await until(() => expect(page.container.textContent).not.toContain("could not be left out"));
+  cleanup();
+  sockets = [];
+  const again = await openScene();
+  expect(again.socket.sent[0]).toMatchObject({ frame: 0, hud: false });          // remembered
+  await again.socket.picture(again.socket.sent[0]);
+  fireEvent.click(again.page.getByRole("button", { name: "HUD" }));
+  await until(() => expect(again.socket.pictures().length).toBe(2));
+  expect(again.socket.pictures()[1]).not.toHaveProperty("hud");
+  expect(localStorage.getItem(HUD_PREFERENCE)).toBe("on");
 });
 
 test("the header names the scene, never its file: the server's title, else the attempt the Practice log shows, else Recording", async () => {
@@ -1662,7 +1692,7 @@ test("the ghost panel pages and sorts your ghosts, the stage's own run is the st
   expect(ghostRow(page, "yours-0").textContent).toContain("The stage");
   expect(ghostRow(page, "yours-0").querySelector("button")).toBeNull();
   const yours = page.getByRole("region", { name: "Your ghosts" });
-  expect(yours.textContent).toContain("Page 1 of 3");
+  expect(yours.textContent).toContain("Page 1");
   fireEvent.click(within(yours).getByRole("button", { name: "Next" }));
   await until(() => expect(yours.querySelector("li").dataset.ref).toBe("yours-10"));
   expect(asked("yours").at(-1)).toMatchObject({ page: "2", sort: "fastest" });
@@ -1680,7 +1710,63 @@ test("the ghost panel pages and sorts your ghosts, the stage's own run is the st
   expect(queries("/api/scene-lab/stage").length).toBe(1);
 });
 
-test("Find a player asks once typing stops, lists each player's best, and more opens their slower ghosts", async () => {
+// His rule for this round (event d8d7a140): keep database interactions cheap. The panel asks for a
+// page only when he changes something, and each page once in a scene's life.
+test("each page is asked once in a scene's life: paging back, sorting back, another strategy and back, and coming back ask nothing", async () => {
+  ghostRoutes();
+  const first = arrive();
+  await sceneUp(1);
+  await until(() => expect(ghostRow(first, "yours-1")).not.toBeNull());
+  await until(() => expect(asked("top").length).toBe(1));
+  const yours = first.getByRole("region", { name: "Your ghosts" });
+  fireEvent.click(within(yours).getByRole("button", { name: "Next" }));
+  await until(() => expect(yours.querySelector("li").dataset.ref).toBe("yours-10"));
+  fireEvent.click(within(yours).getByRole("button", { name: "Previous" }));
+  await until(() => expect(yours.querySelector("li").dataset.ref).toBe("yours-0"));
+  const sort = within(yours).getByRole("combobox", { name: "Sort your ghosts" });
+  fireEvent.change(sort, { target: { value: "newest" } });
+  await until(() => expect(yours.querySelector("li").dataset.ref).toBe("yours-22"));
+  fireEvent.change(sort, { target: { value: "fastest" } });
+  await until(() => expect(yours.querySelector("li").dataset.ref).toBe("yours-0"));
+  const top = first.getByRole("region", { name: "Top ghosts" }), strategy = within(top).getByRole("combobox");
+  fireEvent.change(strategy, { target: { value: "TJ Owlless" } });
+  await until(() => expect(top.querySelector("li").dataset.ref).toBe("top-TJ Owlless-0"));
+  fireEvent.change(within(top).getByRole("combobox"), { target: { value: "Single Jump" } });
+  await until(() => expect(top.querySelector("li").dataset.ref).toBe("top-Single Jump-0"));
+  expect(asked("yours").map((query) => [query.sort, query.page])).toEqual([["fastest", "1"], ["fastest", "2"], ["newest", "1"]]);
+  expect(asked("top").map((query) => query.strat)).toEqual(["Single Jump", "TJ Owlless"]);
+  const before = asked("yours").length + asked("top").length;
+  await tick(clock.now + 60000);                                                     // nothing asks on a timer
+  await settled();
+  expect(asked("yours").length + asked("top").length).toBe(before);
+
+  const scene = { ...opened, session: sessionSerial, attempt: 40 };
+  cleanup();
+  routes.set("/api/scene-lab/status", () => respond({ ready: true, problems: [], hold: null, session: scene, ended: null,
+    packages: [] }));
+  const again = render(h(SceneViewer, { t: { view: VIEW } }));                      // the same scene, come back to
+  await until(() => expect(sockets.length).toBe(2));
+  sockets[1].open();
+  await until(() => expect(ghostRow(again, "yours-1")).not.toBeNull());
+  await settled();
+  expect(asked("yours").length + asked("top").length).toBe(before);
+});
+
+test("the lab's note on a list is one quiet line above it, and its own ghosts still list", async () => {
+  ghostRoutes();
+  const lists = routes.get("/api/scene-lab/ghosts");
+  routes.set("/api/scene-lab/ghosts", async (url, options) => {
+    const answer = await (await lists(url, options)).json();
+    return respond({ ...answer, note: "Sign in to see other players' ghosts." });
+  });
+  const page = arrive();
+  await sceneUp(1);
+  const top = await until(() => page.getByRole("region", { name: "Top ghosts" }));
+  await until(() => expect(within(top).getByRole("note").textContent).toBe("Sign in to see other players' ghosts."));
+  expect(top.querySelectorAll("li").length).toBe(10);
+});
+
+test("Find a player asks once typing stops or on Enter, lists each player's best, and more opens their slower ghosts", async () => {
   ghostRoutes();
   const page = arrive();
   await sceneUp(1);
@@ -1689,6 +1775,14 @@ test("Find a player asks once typing stops, lists each player's best, and more o
   for (const typed of ["s", "su", "sul"]) fireEvent.input(find, { target: { value: typed } });
   await until(() => expect(ghostRow(page, "best-sully")).not.toBeNull());
   expect(asked("search").map((query) => query.q)).toEqual(["sul"]);
+  SEARCH_WAIT.ms = 60000;
+  fireEvent.input(find, { target: { value: "sully" } });
+  fireEvent.keyDown(find, { key: "Enter" });                                         // Enter asks at once
+  await until(() => expect(asked("search").map((query) => query.q)).toEqual(["sul", "sully"]));
+  fireEvent.input(find, { target: { value: "sul" } });
+  fireEvent.keyDown(find, { key: "Enter" });
+  await settled();
+  expect(asked("search").length).toBe(2);                                            // a name asked before costs nothing
   expect(asked("search")[0]).toMatchObject({ course: "2", star: "1", strat: "Single Jump", page: "1" });
   fireEvent.click(within(ghostRow(page, "best-sully")).getByRole("button", { name: "2 more" }));
   await until(() => expect(ghostRow(page, "SullyLikesBigChungus-2")).not.toBeNull());
@@ -1706,7 +1800,9 @@ test("Add and Remove send the whole list; the lab's answer selects rows, gives a
   fireEvent.click(within(ghostRow(page, "top-Single Jump-0")).getByRole("button", { name: /^Add/ }));
   await until(() => expect(ghostsSent(socket).length).toBe(1));
   expect(ghostsSent(socket)[0]).toMatchObject({ session: sessionSerial, set: [{ ref: "top-Single Jump-0", label: "Player 1" }] });
-  expect(ghostRow(page, "top-Single Jump-0").classList.contains("is-shown")).toBe(true);   // as asked, until answered
+  const adding = within(ghostRow(page, "top-Single Jump-0")).getByRole("button");         // loading until answered
+  expect([adding.textContent.trim(), adding.disabled]).toEqual(["Adding...", true]);
+  expect(ghostRow(page, "top-Single Jump-0").classList.contains("is-shown")).toBe(false);
   await settled();
   expect(socket.pictures().length).toBe(pictures);                                       // nothing redrawn before
   socket.text({ id: ghostsSent(socket)[0].id, kind: "ghosts", shown: ["top-Single Jump-0"], refused: [] });
