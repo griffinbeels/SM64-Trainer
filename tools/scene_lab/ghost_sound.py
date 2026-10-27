@@ -39,7 +39,11 @@ changes a gain within 64 samples. Mixing on the server instead would cost a new 
 mute. Measured 2026-10-27 on his 655-frame HMC attempt scene with one of his own runs: 1.37 s for
 the first block (the stage's camera and Mario, 110 scene-state reads: 1.0 s; the engine, 656
 ticks and 51 cues: 88 ms; laying it on 1.2 M samples: 0.26 s), every later block 0.05 ms, 4.8 MB
-held per ghost. The stage's own sound is "as heard" (scene_audio.SOUND_SHIFT_MS 0): on that scene
+held per ghost. The stage reads now take only the 36 bytes they need of each state (package.scene_bytes),
+not the whole 8 MiB state: on his 830-frame HMC take 0.66-0.77 s a track instead of 1.32-1.40 s, the same
+samples (2026-10-27). The render runs on a server thread and shares Python's lock with the pictures, so a
+Play started while tracks are still being made hitches for about half a second; made at the ghost's add
+(the page asks then), it is over before Play. The stage's own sound is "as heard" (scene_audio.SOUND_SHIFT_MS 0): on that scene
 it lands 148 ms after its picture, Project64's audio delay; a ghost's lands on its picture.
 """
 from __future__ import annotations
@@ -375,19 +379,21 @@ class SceneGhostSounds:
             if self.twin is None or self.twin.data is not package.data:
                 self.twin = scene_package.Package(package.data, package.rom, checked=package.index)
 
-            def vector(ram, address):
-                if address is None:
-                    return None
-                at = address & 0x1FFFFFFF
-                values = struct.unpack_from("<3f", ram, at)
+            # Only these three vectors of each state are read (package.scene_bytes): building the
+            # whole 8 MiB state for them cost ~1 s a track on the server's Python lock, and the
+            # free camera's pictures waited for it (round 5, measured 2026-10-27).
+            addresses = [None if lakitu is None else lakitu + LAKITU_POS, None if lakitu is None else lakitu + LAKITU_FOCUS,
+                         None if mario_struct is None else mario_struct + MARIO_POS_OFF]
+            wanted = [(address & 0x1FFFFFFF, 12) for address in addresses if address is not None]
+
+            def vector(data):
+                values = struct.unpack("<3f", data)
                 return values if all(math.isfinite(value) and abs(value) < 1e6 for value in values) else None
             for position, (k, _sample, g) in enumerate(knots_at):
                 if position % PLACE_EVERY and position != len(knots_at) - 1:
                     continue
-                _task, _regions, ram, _known = self.twin.scene_state(scene.frames[k])
-                camera = vector(ram, None if lakitu is None else lakitu + LAKITU_POS)
-                focus = vector(ram, None if lakitu is None else lakitu + LAKITU_FOCUS)
-                mario = vector(ram, None if mario_struct is None else mario_struct + MARIO_POS_OFF)
+                found = iter(self.twin.scene_bytes(scene.frames[k], wanted))
+                camera, focus, mario = (None if address is None else vector(next(found)) for address in addresses)
                 reads.append((g, (camera, focus, mario)))
         identity = {g: scene.outlines[scene.frames[k]]["identity"] for k, _s, g in knots_at}
         gs = [g for g, _ in reads]

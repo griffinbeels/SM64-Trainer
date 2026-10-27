@@ -491,18 +491,44 @@ class SceneState:
             self.level_known[begin:begin + size] = True
             at += size
 
+    @staticmethod
+    def _layers(task: Task, regions: Regions | None) -> list:
+        """What lies over the level regions, in order: the task's regions, then its closure."""
+        layers = [] if regions is None else [(regions.spans, regions.data)]
+        layers.append(([(begin, end - begin) for begin, end in task.runs], task.run_bytes))
+        return layers
+
     def task_ram(self, task: Task, regions: Regions | None, pattern: int = 0x5A):
         ram = np.where(self.level_known, self.level, np.uint8(pattern))
         known = self.level_known.copy()
-        layers = [] if regions is None else [(regions.spans, regions.data)]
-        layers.append(([(begin, end - begin) for begin, end in task.runs], task.run_bytes))
-        for spans, data in layers:
+        for spans, data in self._layers(task, regions):
             at = 0
             for begin, size in spans:
                 ram[begin:begin + size] = np.frombuffer(data, np.uint8, size, at)
                 known[begin:begin + size] = True
                 at += size
         return ram, known
+
+    def task_bytes(self, task: Task, regions: Regions | None, wanted, pattern: int = 0x5A) -> list[bytes]:
+        """task_ram's RDRAM at each (offset, size) of `wanted` only, without building all of it:
+        a few words of a task's state cost well under a millisecond instead of two 8 MiB passes
+        (ghost_sound.py reads the stage's camera and Mario every few frames)."""
+        layers = []
+        for spans, data in self._layers(task, regions):
+            begins = np.array([begin for begin, _size in spans], np.int64)
+            sizes = np.array([size for _begin, size in spans], np.int64)
+            layers.append((begins, sizes, np.cumsum(sizes) - sizes, data))
+        pieces = []
+        for offset, size in wanted:
+            if not (0 <= offset and 0 <= size and offset + size <= self.level.size):
+                raise ValueError("a span outside RDRAM")
+            piece = np.where(self.level_known[offset:offset + size], self.level[offset:offset + size], np.uint8(pattern))
+            for begins, sizes, ats, data in layers:
+                for at in np.flatnonzero((begins < offset + size) & (begins + sizes > offset)).tolist():
+                    lo, hi = max(int(begins[at]), offset), min(int(begins[at] + sizes[at]), offset + size)
+                    piece[lo - offset:hi - offset] = np.frombuffer(data, np.uint8, hi - lo, int(ats[at]) + lo - int(begins[at]))
+            pieces.append(piece.tobytes())
+        return pieces
 
 
 def scene_states(records, rdram_size: int):
