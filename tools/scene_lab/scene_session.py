@@ -895,11 +895,13 @@ class SceneSession:
         return self._ghost_problem or None
 
     def _warm_ghosts(self) -> None:
-        """Draws the stage's first frame with the set (pictures nobody sees, answered to this
-        thread: host.call) until the renderer's ghost overlay reaches them: it sets itself up on
-        its own lists, retrying a refused step a bounded number of lists later."""
-        frame = self._stage_frame(self.ghost_origin, {})
-        frame.ghosts = self._ghost_block(self.ghost_origin)
+        """Draws the stage's first shown picture with the set (pictures nobody sees, answered to
+        this thread: host.call) until the renderer's ghost overlay reaches them: it sets itself up
+        on its own lists, retrying a refused step a bounded number of lists later. A shown one: an
+        attempt scene's first task may be one no present showed, and it has no VI registers."""
+        index = next((at for at in self.frames if at >= self.ghost_origin), self.frames[0])
+        frame = self._stage_frame(index, {})
+        frame.ghosts = self._ghost_block(index)
         for _ in range(GHOST_WARM_PICTURES):
             if not self.host.call(frame).ghosts["pending"]:
                 self._ghosts_warm = True
@@ -920,7 +922,7 @@ class SceneSession:
         """The recorded picture with the frame's scene state beside its closure (package.scene_state:
         the regions the tap recorded, closure included, in Project64's word order): where the
         in-game ghost reads the stage's camera, level and area. Without scene state, the closure.
-        `cuts` as for _recorded_frame: the HUD's commands blanked in the closure the state carries."""
+        `cuts` as _recorded_frame's: the HUD's commands skipped (hud.py)."""
         if self.package.states is None:
             return self._recorded_frame(index, timings, cuts)
         started = time.perf_counter()
@@ -929,12 +931,12 @@ class SceneSession:
         edges = np.flatnonzero(present[1:] != present[:-1]) * 4
         runs = list(zip(edges[0::2].tolist(), edges[1::2].tolist(), strict=True))
         data = b"".join(ram[begin:end].tobytes() for begin, end in runs)
-        timings["decode_ms"] = _ms(started)
         if cuts is not None:
-            data = hud_cut.blank_closure(runs, data, self._hud_cut(hud_cut.closure_words(runs, data), task.task,
-                                                                   timings, cuts))
+            blanked = self._hud_cut(hud_cut.closure_words(runs, data), task.task, timings, cuts)
+            data = hud_cut.blank_closure(runs, data, blanked)
         if self.image is not None:
             self.image.recorded(runs, data)
+        timings["decode_ms"] = _ms(started)
         return viewer.Frame(f"frame {index} stage", tuple(task.task), self.outlines[index]["vi"],
                             struct.pack(f"<{2 * len(runs)}I", *(edge for run in runs for edge in run)), data)
 

@@ -64,7 +64,7 @@ and down; Set focus), and {"id", "session", "kind": "ghosts", "set": [{"ref", "l
 a frame]} for the ghosts every later picture draws (the whole set, replacing the last; [] removes
 them), answered {"id", "kind": "ghosts", "shown": [refs], "refused": [{"ref", "reason"}]} once
 each new ghost's recording is in the renderer (scene_session.set_ghosts; clips come from the
-ghost catalog's load_ghost, server/scene_ghosts.py, else `ghost_loader`). A picture of a scene
+ghost catalog's load_ghost, server/scene_ghosts.py, unless `ghost_loader` replaces it). A picture of a scene
 with ghosts carries "ghosts" in its header ({"asked", "chosen", "drawn", "displayed",
 "pending", "refused"}). A picture comes back as one binary message, [u32 little-endian header
 length][header JSON][picture]; everything else is JSON text: a pose, a pick, a ghosts answer,
@@ -251,8 +251,8 @@ class SceneLab:
         the UI fixture or e3_measure.py never arms the wrapper's tap). Tests replace the lease
         (lease_factory(lab_root)), the cutter (cutter_factory(folder, on_event)) or the cutter
         child's spool (cutter_options: attempt_cutter.CutterProcess's spool_factory, extra_path).
-        ghost_loader(ref) loads a ghost's clip where the lab has no ghost catalog (interface C's
-        shape; default: the player's own runs in the replay store, stage_ghosts.LocalGhosts)."""
+        ghost_loader(ref) loads a ghost's clip in place of the ghost catalog's (interface C's
+        shape; without either, the player's own runs in the replay store, stage_ghosts.LocalGhosts)."""
         self.config_path = Path(config_path)
         self.session_options = session_options or {}
         self.live_on, self.lease_factory, self.cutter_options = live, lease_factory, cutter_options or {}
@@ -650,11 +650,10 @@ class SceneLab:
         return {"id": message.get("id"), "kind": "ghosts", **answer}
 
     def _load_ghost(self, ref) -> dict:
-        """Interface C: a ghost_loader the lab was given (a test's, a tool's) first, else the
-        ghost catalog's load_ghost (server/scene_ghosts.py), else the player's own runs in the
-        replay store."""
-        catalog = getattr(self, "ghosts", None)
-        loader = self.ghost_loader or getattr(catalog, "load_ghost", None)
+        """Interface C: ghost_loader when one was given (tests, measurements), else the ghost
+        catalog's load_ghost (server/scene_ghosts.py), else the player's own runs in the replay store.
+        Blocking: it runs on the session's worker (set_ghosts)."""
+        loader = self.ghost_loader or getattr(getattr(self, "ghosts", None), "load_ghost", None)
         if loader is None:
             from sm64_events.core.paths import replays_root
             loader = self.ghost_loader = _lab_module("stage_ghosts").LocalGhosts(replays_root() / "native")
