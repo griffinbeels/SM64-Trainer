@@ -270,6 +270,7 @@ def test_hud_off_reaches_the_lab_on_every_picture_and_is_remembered(tmp_path, mo
             huds = page.evaluate("window.__huds")
             assert huds["asked"][asked:] == [False, False], huds
             assert all(drawn[0] is False or drawn[1] for drawn in huds["drawn"][asked:]), huds   # cut, or why not
+            _shoot(page, tmp_path, "hud-off")
             page.locator('.nav-item[title="Practice"]:visible').click()
             page.locator('.nav-item[title="Scene viewer"]:visible').click()
             page.wait_for_function(DRAWN, timeout=20000)

@@ -29,7 +29,8 @@ REFUSED = "top-refused"
 REFUSAL = "This ghost was recorded on another version of the course."
 LONG_STRAT = "Owlless Triple Jump into Backwards Long Jump, Cannonless"
 PLAYERS = ["SullyLikesBigChungusTheSecond", "WaterproofTeabag_", "Runner One", "Kz_Speedruns_Backwards_Long",
-           "minikori", "Run&Jump:1", "W" * 20, "Tester Seven", "EightIsGreat", "NineLives"]
+           "minikori", "Run&Jump:1", "W" * 20, "MarioSpeedrunsWWW", "EightIsGreat", "Kz_Speedruns_BLJ18"]
+WHOLE = 18                     # a typical speedrunner name this long shows whole at 1280 (the lead's rule)
 
 
 def _time(hundredths: int) -> str:
@@ -279,6 +280,15 @@ def _row(page, section: str, ref: str):
     return page.locator(f"{SECTION.format(section)} li[data-ref='{ref}']")
 
 
+def _names_show_whole(page) -> None:
+    """Every player name up to WHOLE characters shows whole; every name, cut or not, is its own tooltip."""
+    names = page.evaluate("""[...document.querySelectorAll('.scene-lab-ghost-player')].map((name) => ({
+      text: name.firstChild.textContent, title: name.title, cut: name.scrollWidth > name.clientWidth }))""")
+    assert names and all(name["title"] == name["text"] for name in names), names
+    cut = [name["text"] for name in names if name["cut"] and len(name["text"]) <= WHOLE]
+    assert not cut, cut
+
+
 def _ghost_rows_align(page) -> None:
     """Every row's time and action button share one column down a list (his weight rule)."""
     for section in ("Your ghosts", "Top ghosts"):
@@ -348,10 +358,12 @@ def test_the_ghost_panel_pages_sorts_searches_and_adds_ghosts_into_the_scene(tmp
             assert page.locator(SECTION.format("Your ghosts")).get_by_text("Page 1", exact=True).is_visible()
             top = _rows(page, "Top ghosts")
             assert len(top) == 10 and top[0]["ref"] == first and top[2]["ref"] == REFUSED
-            for width in (850, 1280):
+            for width in (850, 1280, 1440, 1500, 1600):
                 page.set_viewport_size({"width": width, "height": 1000})
                 page.wait_for_timeout(100)
                 _ghost_rows_align(page)
+                if width >= 1280:
+                    _names_show_whole(page)
             page.set_viewport_size({"width": 1280, "height": 1000})
 
             _ghosts_added_removed_and_refused(page, seen, first)

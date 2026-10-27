@@ -100,7 +100,11 @@
 .scene-lab-ghost-note { margin: 0; color: var(--muted); font-size: .8rem; line-height: 1.5; }
 .scene-lab-ghost-note.is-bad { color: var(--coral); }
 .scene-lab-ghost-pager { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--muted); font-size: .8rem; }
-@container (max-width: 900px) {
+/* Three lists side by side only where each row still shows an 18-character player name whole (a
+   1280-wide window cut them to about 11). Measured 2026-10-27: such a name in bold with wide letters
+   is 166px and a row's rank, time, button and gaps take 222px, so three need about 1200px of panel;
+   below that, Your and Top ghosts share the row and Find a player takes the next. */
+@container (max-width: 1219px) {
   .scene-lab-ghost-sections { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .scene-lab-ghost-section[aria-label="Find a player"] { grid-column: 1 / -1; }
 }
