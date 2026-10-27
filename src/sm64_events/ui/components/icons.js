@@ -25,6 +25,7 @@ const PATHS = {
   speakerMuted: "M3 9h4l5-4v14l-5-4H3V9z",
   speed: "M20.5 9a9 9 0 1 0 .4 4M12 12l8-7M8 5l1 2M4 11h2m1 6 1.5-1.5",
   restart: "M20 7v5h-5M4 17v-5h5M6.1 8a7 7 0 0 1 11.3-2.2L20 9M4 15l2.6 3.2A7 7 0 0 0 17.9 16",
+  loop: "M17 2l3 3-3 3M20 5H8a4 4 0 0 0-4 4v1M7 22l-3-3 3-3M4 19h12a4 4 0 0 0 4-4v-1",
   updates: "M12 3v12m0 0-4-4m4 4 4-4M5 19h14",
   plus: "M12 5v14M5 12h14",
   minus: "M5 12h14",

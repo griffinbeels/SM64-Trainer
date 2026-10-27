@@ -8,8 +8,9 @@
 import { h } from "preact";
 import { render, cleanup, fireEvent, waitFor } from "@testing-library/preact";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { DRAG_DEAD_ZONE, LOCK_NOTES, MOVING_WINDOW, PICTURES_IN_FLIGHT, SHARED_WAIT, STILL_MS, SceneViewer, hintFor,
-  movingSummary, pictureFraction, speedWords, throttledNotes } from "../../src/sm64_events/ui/components/sceneviewer.js";
+import { DRAG_DEAD_ZONE, LOCK_NOTES, LOOP_PREFERENCE, MOVING_WINDOW, PICTURES_IN_FLIGHT, SHARED_WAIT, STILL_MS,
+  SceneViewer, hintFor, movingSummary, pictureFraction, sceneTitle, speedWords, throttledNotes,
+} from "../../src/sm64_events/ui/components/sceneviewer.js";
 import { cameraOf, dollied, easeInOut, flightSpeed, flown, flyToTarget, glideAt, lookingAt, looked, orbitFromPose, slid,
   speedStepped, turned, worldPoint } from "../../src/sm64_events/ui/components/scenecamera.js";
 import { SCENE_CAMERA_DEFAULTS, setSceneCameraTuning } from "../../src/sm64_events/ui/scenecameratuning.js";
@@ -52,6 +53,7 @@ function respond(body, status = 200) {
 }
 
 beforeEach(() => {
+  localStorage.removeItem(LOOP_PREFERENCE);
   clock.now = 1000;
   vi.spyOn(performance, "now").mockImplementation(() => clock.now);
   sockets = [];
@@ -394,6 +396,242 @@ test("a picture a play asked for ahead is never shown once the play has stopped"
   await settled();
   expect(drawn.length).toBe(2);
   expect(page.container.textContent).toContain("Frame 1 of 5");
+});
+
+// ------------------------------------------------------------------ Restart, Loop, , and ., and the camera never pausing
+// His round 4 (2026-10-27), items 4-7: "a loop button (when enabled, the gameplay loops)"; "a restart
+// button ... if the playback is actively playing, then restarting also immediately starts from the
+// beginning; if it's paused, then we go to the beginning frame but don't start"; "It should not pause
+// the gameplay when I adjust the camera, unless I explicitly paused"; "If I press "." it should move the
+// frames forward by one. "," should move it backwards by one frame."
+
+// Every picture asked for and not yet answered arrives (a play's waits for its due frame).
+const answerAll = async (socket) => {
+  for (const request of socket.pictures().filter((r) => !r.answered)) {
+    request.answered = true;
+    socket.picture(request);
+  }
+  await settled();
+};
+// The display frames from `from` to `to`, every picture answered as it is asked.
+async function playThrough(socket, from, to) {
+  for (let at = from; at <= to; at += 16.7) {
+    await tick(at);
+    await answerAll(socket);
+  }
+}
+const playing = (page) => !!page.queryByRole("button", { name: "Pause" });
+const frameText = (page) => page.container.querySelector(".scene-lab-frame").textContent.match(/Frame \d+ of \d+/)[0];
+
+test("Restart goes to the first frame: paused it stays paused there, playing it plays on from there at once", async () => {
+  const { page, socket, root } = await openScene();
+  await socket.picture(socket.sent[0]);
+  for (let i = 0; i < 3; i++) {
+    fireEvent.keyDown(root, { key: "ArrowRight" });
+    await until(() => expect(socket.last().frame).toBe(i + 1));
+    await answerAll(socket);
+  }
+  await until(() => expect(frameText(page)).toBe("Frame 4 of 5"));
+  fireEvent.click(page.getByRole("button", { name: "Restart" }));
+  await until(() => expect(socket.last()).toMatchObject({ frame: 0, camera: null }));
+  await answerAll(socket);
+  await tick(2000);
+  expect(playing(page)).toBe(false);                               // paused: it stays paused
+  expect(frameText(page)).toBe("Frame 1 of 5");
+  expect(socket.pictures().at(-1).frame).toBe(0);                  // and asks for nothing more
+
+  clock.now = 10000;
+  fireEvent.click(page.getByRole("button", { name: "Play" }));
+  await playThrough(socket, 10000, 10090);
+  const before = socket.pictures().length;
+  expect(Math.max(...socket.pictures().map((request) => request.frame))).toBeGreaterThanOrEqual(2);
+  fireEvent.click(page.getByRole("button", { name: "Restart" }));  // playing: from the first frame, at once
+  expect(playing(page)).toBe(true);
+  await until(() => expect(socket.last().frame).toBe(0));
+  await playThrough(socket, clock.now, clock.now + 60);
+  const after = socket.pictures().slice(before).map((request) => request.frame);
+  expect(after[0]).toBe(0);
+  expect(after.at(-1)).toBeGreaterThan(0);                         // and goes on playing from there
+  expect(playing(page)).toBe(true);
+  fireEvent.click(page.getByRole("button", { name: "Pause" }));
+});
+
+test("Loop plays on from the first frame after the last, and off again Play stops on the last", async () => {
+  const { page, socket } = await openScene();
+  await socket.picture(socket.sent[0]);
+  const loop = page.getByRole("button", { name: "Loop" });
+  expect(loop.getAttribute("aria-pressed")).toBe("false");
+  fireEvent.click(loop);
+  expect(loop.getAttribute("aria-pressed")).toBe("true");
+  clock.now = 10000;
+  fireEvent.click(page.getByRole("button", { name: "Play" }));
+  await playThrough(socket, 10000, 10400);                         // the five frames last 167 ms
+  const asked = socket.pictures().map((request) => request.frame);
+  const last = asked.indexOf(4);
+  expect(last).toBeGreaterThan(0);
+  expect(asked.slice(last)).toContain(0);                          // after the last frame, the first again
+  expect(asked.slice(asked.indexOf(0, last))).toContain(4);        // and it played through once more
+  expect(playing(page)).toBe(true);
+  fireEvent.click(loop);                                           // off: this pass ends on the last frame
+  await playThrough(socket, 10417, 10800);
+  expect(playing(page)).toBe(false);
+  expect(frameText(page)).toBe("Frame 5 of 5");
+});
+
+test("Loop stays as it was left for the next scene", async () => {
+  const first = await openScene();
+  fireEvent.click(first.page.getByRole("button", { name: "Loop" }));
+  expect(localStorage.getItem(LOOP_PREFERENCE)).toBe("on");
+  cleanup();
+  sockets = [];
+  const second = await openScene();
+  expect(second.page.getByRole("button", { name: "Loop" }).getAttribute("aria-pressed")).toBe("true");
+});
+
+test("on a scene still being written, Loop waits at the newest picture and loops only once the scene is whole", async () => {
+  opened = { ...opened, frames: FRAMES.slice(0, 3), growing: true };
+  const { page, socket } = await openScene();
+  await socket.picture(socket.sent[0]);
+  fireEvent.click(page.getByRole("button", { name: "Loop" }));
+  clock.now = 10000;
+  fireEvent.click(page.getByRole("button", { name: "Play" }));
+  await playThrough(socket, 10000, 10400);
+  expect(playing(page)).toBe(true);                                // waiting at frame 3 of 3 so far
+  const waiting = socket.pictures().map((request) => request.frame);
+  expect(waiting.slice(waiting.indexOf(2))).not.toContain(0);      // never back to the start while it grows
+  socket.text({ kind: "grown", session: 1, from: 3, frames: FRAMES.slice(3), growing: false });
+  await playThrough(socket, 10417, 10700);
+  const asked = socket.pictures().map((request) => request.frame);
+  expect(asked.slice(asked.indexOf(4))).toContain(0);              // whole: on from the first frame
+  expect(playing(page)).toBe(true);
+  fireEvent.click(page.getByRole("button", { name: "Pause" }));
+});
+
+// Two seconds of frames: long enough to play through every move below.
+const LONG = Array.from({ length: 60 }, (_, i) => ({ level: 9, area: 1, game_frame: 1000 + i }));
+
+test("moving the camera never pauses Play: a drag from the recorded camera, a slide, the wheel and a fly-to", async () => {
+  opened = { ...opened, frames: LONG };
+  const { page, socket, canvas } = await openScene();
+  await socket.picture(socket.sent[0]);
+  clock.now = 10000;
+  fireEvent.click(page.getByRole("button", { name: "Play" }));
+  await playThrough(socket, 10000, 10040);
+  // A left drag in the recorded camera: the free camera starts from the picture on screen.
+  fireEvent.pointerDown(canvas, { button: 0, buttons: 1, pointerId: 1, clientX: 300, clientY: 200 });
+  move(canvas, { pointerId: 1, buttons: 1, clientX: 330, clientY: 200 });
+  await until(() => expect(socket.last()).toMatchObject({ kind: "pose" }));
+  socket.text({ id: socket.last().id, kind: "pose", pose: POSE, reason: null });
+  await until(() => expect(socket.last().camera).toBeTruthy());
+  fireEvent.pointerUp(canvas, { button: 0, buttons: 0, pointerId: 1 });
+  expect(playing(page)).toBe(true);
+  await playThrough(socket, 10057, 10090);
+  const moves = [
+    () => {                                                        // Shift-drag slides
+      fireEvent.pointerDown(canvas, { button: 0, buttons: 1, pointerId: 2, clientX: 300, clientY: 200 });
+      move(canvas, { pointerId: 2, buttons: 1, clientX: 340, clientY: 210, shiftKey: true });
+      fireEvent.pointerUp(canvas, { button: 0, buttons: 0, pointerId: 2 });
+    },
+    () => {                                                        // a middle drag slides too
+      fireEvent.pointerDown(canvas, { button: 1, buttons: 4, pointerId: 3, clientX: 300, clientY: 200 });
+      move(canvas, { pointerId: 3, buttons: 4, clientX: 280, clientY: 220 });
+      fireEvent.pointerUp(canvas, { button: 1, buttons: 0, pointerId: 3 });
+    },
+    () => fireEvent.wheel(canvas, { deltaY: -120, deltaMode: 0 }),
+  ];
+  for (const moved of moves) {
+    const camera = socket.pictures().at(-1).camera;
+    moved();
+    await until(() => expect(socket.pictures().at(-1).camera).not.toEqual(camera));
+    expect(playing(page)).toBe(true);
+    await playThrough(socket, clock.now + 16.7, clock.now + 34);
+  }
+  const before = socket.pictures().at(-1).camera;                  // a double-click flies there
+  fireEvent.dblClick(canvas, { button: 0, clientX: 320, clientY: 240 });
+  await until(() => expect(socket.last()).toMatchObject({ kind: "pick" }));
+  socket.text({ id: socket.last().id, kind: "pick", point: [0, 0, -900], mario: [40, 80, -60], reason: null });
+  await until(() => expect(socket.pictures().at(-1).camera).not.toEqual(before));
+  await playThrough(socket, clock.now + 16.7, clock.now + 250);
+  expect(playing(page)).toBe(true);
+  const frames = socket.pictures().map((request) => request.frame);
+  expect(Math.max(...frames)).toBeGreaterThan(10);                 // the play went on through every move
+  fireEvent.click(page.getByRole("button", { name: "Pause" }));
+});
+
+test("pausing while the camera moved asks for the camera again at the frame on screen", async () => {
+  opened = { ...opened, frames: LONG };
+  const { page, socket, canvas } = await openScene();
+  const entry = await enterFree(page, socket);
+  clock.now = 10000;
+  fireEvent.click(page.getByRole("button", { name: "Play" }));
+  await playThrough(socket, 10000, 10040);
+  await tick(10050);                                               // frame 2 asked for, not drawn yet
+  await until(() => expect(socket.pictures().at(-1).frame).toBe(2));
+  fireEvent.pointerDown(canvas, { button: 0, buttons: 1, pointerId: 1, clientX: 300, clientY: 200 });
+  move(canvas, { pointerId: 1, buttons: 1, clientX: 330, clientY: 200 });
+  fireEvent.pointerUp(canvas, { button: 0, buttons: 0, pointerId: 1 });
+  await until(() => expect(socket.pictures().at(-1).camera).not.toEqual(entry));
+  const moved = socket.pictures().at(-1);
+  expect(moved.frame).toBe(2);                                     // the move asked for the play's next frame
+  fireEvent.click(page.getByRole("button", { name: "Pause" }));
+  await answerAll(socket);
+  expect(frameText(page)).toBe("Frame 2 of 60");                   // which a paused play never shows
+  await until(() => expect(socket.pictures().at(-1)).toMatchObject({ frame: 1, camera: moved.camera }));
+});
+
+test(", and . step one frame like the arrows; a slider reached with Tab gives them to the viewer, a field that types keeps them", async () => {
+  const { page, socket, root } = await openScene();
+  await socket.picture(socket.sent[0]);
+  for (const [key, code, frame] of [[".", "Period", 1], [".", "Period", 2], [",", "Comma", 1]]) {
+    expect(fireEvent.keyDown(root, { key, code })).toBe(false);
+    await until(() => expect(socket.last().frame).toBe(frame));
+    await answerAll(socket);
+  }
+  await until(() => expect(frameText(page)).toBe("Frame 2 of 5"));
+  clock.now = 10000;
+  fireEvent.click(page.getByRole("button", { name: "Play" }));     // while playing, . pauses and steps, as Right does
+  await playThrough(socket, 10000, 10040);
+  fireEvent.keyDown(root, { key: ".", code: "Period" });
+  expect(playing(page)).toBe(false);
+  await answerAll(socket);
+  const slider = page.getByRole("slider", { name: "Frame" });
+  slider.focus();                                                  // reached with Tab
+  const at = socket.last().frame;
+  expect(fireEvent.keyDown(slider, { key: "ArrowRight", code: "ArrowRight" })).toBe(true);   // the slider's own
+  expect(fireEvent.keyDown(slider, { key: ".", code: "Period" })).toBe(false);               // the viewer's
+  await until(() => expect(socket.last().frame).toBe(at + 1));
+  await answerAll(socket);
+  fireEvent.click(page.getByRole("button", { name: "Tune controls" }));
+  const field = page.getByRole("region", { name: "Tune controls" }).querySelector("#flightSpeed");
+  field.focus();
+  const sent = socket.sent.length;
+  for (const [key, code] of [[".", "Period"], [",", "Comma"]]) {
+    expect(fireEvent.keyDown(field, { key, code })).toBe(true);    // typed, not taken
+  }
+  await settled();
+  expect(socket.sent.length).toBe(sent);
+});
+
+test("the header names the scene, never its file: the server's title, else the attempt the Practice log shows, else Recording", async () => {
+  const lab = await openScene();
+  await lab.socket.picture(lab.socket.sent[0]);
+  const title = () => lab.page.container.querySelector(".scene-lab-title")?.textContent;
+  await until(() => expect(title()).toBe("Recording"));
+  expect(lab.page.container.querySelector(".workshop-hero").textContent).not.toContain("sm64scene");
+  cleanup();
+  sockets = [];
+  opened = { ...opened, attempt: 12 };
+  const view = { catalog: { courses: [] }, segments: [], stars: [{ course_name: "Whomp's Fortress",
+    star_name: "Shoot into the Wild Blue", attempts: [{ id: 11, igt: "12\"40" },
+      { id: 12, igt: "11\"03", rta: "11\"60", strat_tag: "Single Jump" }] }] };
+  const fallback = render(h(SceneViewer, { t: { ...fromGhostButton(12).t, view } }));
+  await until(() => expect(sockets.length).toBe(1));
+  await until(() => expect(fallback.container.querySelector(".scene-lab-title")?.textContent)
+    .toBe("Whomp's Fortress · Shoot into the Wild Blue · Single Jump · 11\"03"));
+  expect(sceneTitle({ name: "take-9731-46.sm64scene", attempt: 12, title: "Lab recording" }, view)).toBe("Lab recording");
+  expect(sceneTitle({ name: "take-9731-46.sm64scene", attempt: 99 }, view)).toBe("Recording");   // not in the log
+  expect(sceneTitle({ name: "take-9731-46.sm64scene", attempt: 5 }, { segments: [{ id: 3, kind: "segment", name: "LBLJ",
+    attempts: [{ id: 5, segment_id: 3, rta: "4\"20", igt: null }] }] })).toBe("Segment · LBLJ · 4\"20");
 });
 
 // ------------------------------------------------------------------ the desktop window's shared memory
