@@ -1324,6 +1324,17 @@ closer; **double-click** a surface to fly to just in front of it and look at
 Mario (an eased flight any input stops); F looks at Mario; **Set focus** then a
 click puts the focus point where the picture drew that pixel; one button puts
 the view back where Free camera began; R returns to the recorded camera. A tilted view levels as you turn or fly, never on entry.
+Moving the camera never pauses Play; only Pause, Space, a step or the slider do. **Restart** goes to the
+first [[frame]] and keeps playing or stays paused; **Loop** (kept per viewer) plays on from the first
+[[frame]] after the last, and a scene the lab is still writing loops once it is whole; , and . step
+like the arrows. The heading names the scene's [[attempt]] (course, [[star]], [[strategy]], time),
+never a file. The **stage picker** (Practice's own course grid and [[strategy]] dropdown) chooses the
+**stage**: your fastest [[attempt]] of that course, [[star]] and [[strategy]] with a saved scene,
+which opens, or the lab's reason why there is none. It starts on the scene you opened, else on
+Practice's [[target]]. Below the player, the [[ghost]] panel lists **Your [[ghost]]s** (fastest or newest
+first), **Top [[ghost]]s** (each player's best for a [[strategy]], with its place) and **Find a player**
+(each player's best; "more" opens their slower ones), a page at a time; Add draws that [[ghost]]
+into the stage from the next picture, and a [[ghost]] the lab cannot draw shows its reason.
 The page takes the keyboard when you arrive (the sidebar or the [[ghost button]])
 and after a mouse click on its controls; a field that types keeps its keys, and
 Esc, leaving the window or the page lets go of every key.
@@ -1353,7 +1364,9 @@ so. A package without one says it has no sound.
 - **Lives** -- the routes and lifetime (`src/sm64_events/server/scene_lab_api.py`,
   mounted by `src/sm64_events/main.py`); one open scene
   (`tools/scene_lab/scene_session.py`) and its sound (`tools/scene_lab/scene_audio.py`);
-  the page (`src/sm64_events/ui/components/sceneviewer.js`), the recording's
+  the page (`src/sm64_events/ui/components/sceneviewer.js`), its stage picker
+  (`src/sm64_events/ui/components/scenestage.js`) and [[ghost]] panel
+  (`src/sm64_events/ui/components/sceneghosts.js`), the recording's
   own clock its Play keeps (`src/sm64_events/ui/components/sceneclock.js`) and its sound
   (`src/sm64_events/ui/components/sceneaudio.js`, rendered by
   `src/sm64_events/ui/components/sceneaudioworklet.js`);
