@@ -895,11 +895,13 @@ class SceneSession:
         return self._ghost_problem or None
 
     def _warm_ghosts(self) -> None:
-        """Draws the stage's first frame with the set (pictures nobody sees, answered to this
-        thread: host.call) until the renderer's ghost overlay reaches them: it sets itself up on
-        its own lists, retrying a refused step a bounded number of lists later."""
-        frame = self._stage_frame(self.ghost_origin, {})
-        frame.ghosts = self._ghost_block(self.ghost_origin)
+        """Draws the stage's first shown picture with the set (pictures nobody sees, answered to
+        this thread: host.call) until the renderer's ghost overlay reaches them: it sets itself up
+        on its own lists, retrying a refused step a bounded number of lists later. A shown one: an
+        attempt scene's first task may be one no present showed, and it has no VI registers."""
+        index = next((at for at in self.frames if at >= self.ghost_origin), self.frames[0])
+        frame = self._stage_frame(index, {})
+        frame.ghosts = self._ghost_block(index)
         for _ in range(GHOST_WARM_PICTURES):
             if not self.host.call(frame).ghosts["pending"]:
                 self._ghosts_warm = True

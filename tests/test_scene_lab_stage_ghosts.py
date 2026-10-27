@@ -102,6 +102,21 @@ def test_each_ghost_frame_counts_game_frames_from_the_stage_first_frame(config, 
         session.close()
 
 
+def test_a_scene_whose_first_task_was_never_shown_still_takes_ghosts(config, recording):
+    """An attempt scene starts at its anchor's task, which no present may have shown: it is still
+    every ghost's first frame, and the renderer's set-up pictures use the first one shown."""
+    session = _open(config, recording)
+    try:
+        session.outlines[0] = {**session.outlines[0], "vi": None}       # as a task no present showed
+        session.frames = session.frames[1:]
+        answer = session.set_ghosts([{"ref": "a", "label": "x"}], Loader({"a": (CLIP, "x")}))
+        assert answer == {"shown": ["a"], "refused": []}
+        _look, entries = _decoded(session._ghost_block(session.frames[0]))
+        assert entries[0][1] == TIMERS[1] - TIMERS[0]                     # still counted from task 0
+    finally:
+        session.close()
+
+
 def test_pictures_carry_the_set_and_drop_it_exactly(config, recording):
     """A picture with ghosts names them to the host and says what it drew; one after the set is
     emptied is the very picture drawn before any ghost was added."""
