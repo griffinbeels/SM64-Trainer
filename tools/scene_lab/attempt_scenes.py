@@ -384,6 +384,12 @@ class AttemptScenes:
                     found[str(attempt_id)] = {"state": "unavailable", "reason": entry.get("reason")}
         return found
 
+    def ready_ids(self) -> list[int]:
+        """The attempts whose scene opens now (growing ones included), oldest first."""
+        with self.lock:
+            return [attempt_id for attempt_id, entry in sorted(self.entries.items(), key=lambda item: item[1]["ended"])
+                    if entry["state"] == "ready"]
+
     def path(self, attempt_id: int) -> tuple[Path, Path | None]:
         """(the scene's package, its growth sidecar while it is still being written, else None)."""
         with self.lock:

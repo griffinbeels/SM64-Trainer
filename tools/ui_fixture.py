@@ -1507,7 +1507,7 @@ def _fixture_runtime(database, scratch_path, capture_layer_status, capture_layer
                                                / "no-library.json.gz"))
     # The same lab switch the real app passes through: off, its one probe answers 204.
     from sm64_events.main import _mount_scene_lab
-    _mount_scene_lab(app)
+    _mount_scene_lab(app, ghost_sources={"tracker": service})
 
     return app, service
 
