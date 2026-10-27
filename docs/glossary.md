@@ -1348,7 +1348,9 @@ first), **Top [[ghost]]s** (each player's best for a [[strategy]], with its plac
 scene's life and a name only once typing stops or on Enter; Add draws that [[ghost]] into the stage
 from the next picture, and a [[ghost]] the lab cannot draw shows its reason. **HUD** (kept per
 viewer) leaves the game's on-screen counters and timer out of every picture, the one on screen at
-once. Under the camera controls, the **Cameras** strip keeps [[camera preset]]s in slots 1-9.
+once. The **Cinematic** row's [[cinematic camera]]s (Front, Side, Orbit) follow Mario or a [[stage
+ghost]] along his path. Under the camera controls, the **Cameras** strip keeps [[camera preset]]s in
+slots 1-9.
 The page takes the keyboard when you arrive (the sidebar or the [[ghost button]])
 and after a mouse click on its controls; a field that types keeps its keys, and
 Esc, leaving the window or the page lets go of every key.
@@ -1488,6 +1490,27 @@ another area), the view holds its nearest one and says why.
   (`src/sm64_events/ui/components/sceneviewer.js`,
   `src/sm64_events/ui/components/sceneghosts.js`)
 - **Not** -- the recorded camera, the stage's own view
+
+### Cinematic camera
+
+A [[scene viewer]] camera that follows Mario (the stage's, or a [[stage ghost]]
+chosen in Follow) along his path: **Front** rides in front of him, aimed at
+him, in a Close, Medium or Wide shot; **Side** tracks his profile on the side
+the stage's walls leave clear, cutting across only for a wall that would block
+it a while, and staying a while after; **Orbit** circles him at the speed and radius you set, on the
+scene's own clock, so a pause holds it still. Each stands at his eye level
+until you raise or lower it, rides a smoothed copy of his path so his wobble
+from picture to picture never shakes it, and rises over a wall (then moves in)
+instead of sitting behind it. The lab works out every picture's camera from the
+whole path, so stepping back, seeking and Play draw the same shot; Free camera
+from it starts at that camera. Its feel numbers are the Tune controls'
+Cinematic rows.
+
+- **Lives** -- the camera's math (`tools/scene_lab/camera_rig.py`); Mario's
+  path and the stage's walls (`tools/scene_lab/scene_session.py`, a ghost's
+  pose in `tools/scene_lab/stage_ghosts.py`); the controls
+  (`src/sm64_events/ui/components/scenerigs.js`)
+- **Not** -- the [[ghost's view]], which replays the camera that [[ghost]]'s own game drew
 
 ### Camera preset
 

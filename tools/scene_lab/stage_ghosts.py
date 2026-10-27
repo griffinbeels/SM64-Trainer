@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import bisect
 import json
+import struct
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -170,7 +171,8 @@ class Shown:
 class GhostCameras:
     """One ghost's recorded cameras, row by row as its playback indexes them (Clip.indexed_rows):
     each row's coordinate, level and area, and its camera as the free camera takes it
-    ({"focus", "position", "roll": the screen roll, "fov"}; None where the row has none)."""
+    ({"focus", "position", "roll": the screen roll, "fov"}; None where the row has none), and its
+    figure's root and facing (pose: what a cinematic camera follows; None where the row has none)."""
 
     def __init__(self, clip: bytes):
         from sm64_events.ghost import clip as ghost_clip
@@ -181,6 +183,27 @@ class GhostCameras:
         self.coordinates = [coordinate for coordinate, _frame in rows]
         self.places = [(frame.level, frame.area) for _coordinate, frame in rows]
         self.cameras = [self._free(frame.camera) for _coordinate, frame in rows]
+        self.poses = [self._pose(frame) for _coordinate, frame in rows]
+
+    @staticmethod
+    def _pose(frame) -> tuple | None:
+        """(root position, facing yaw: the game's s16) of a row's figure: gc_pose's position and
+        angles[1], 24 and 26 bytes past its 3 position and 3 scale floats."""
+        from sm64_events.ghost.native_layout import POSE_AT, VALID_POSE
+        if not frame.valid_fields & VALID_POSE:
+            return None
+        return list(struct.unpack_from("<3f", frame.raw, POSE_AT)), struct.unpack_from("<h", frame.raw, POSE_AT + 26)[0]
+
+    def pose(self, frame: int, place: tuple | None) -> tuple | None:
+        """(root, yaw) of the figure in the scene picture `frame` game frames after the ghost's
+        first, the row its drawing shows there (ghost_viewer.cpp choose: the first before its start,
+        the last past its end, a star ghost holding its last pose; in a gap, the last row before it),
+        or None where that row has no pose or stands in another place than the stage's `place`."""
+        if not self.coordinates:
+            return None
+        row = max(0, bisect.bisect_right(self.coordinates, self.coordinates[0] + max(0, frame)) - 1)
+        found = self.poses[row]
+        return found if found is not None and (place is None or self.places[row] == place) else None
 
     @staticmethod
     def _free(camera: dict | None) -> dict | None:
@@ -270,12 +293,18 @@ class StageGhosts:
     def view(self, ref: str, frame: int, place: tuple | None) -> tuple[dict | None, str | None]:
         """Ghost `ref`'s view at `frame` game frames since the stage's first (GhostCameras.at), its
         cameras read from its clip the first time; (None, VIEW_GONE) for a ghost not in the set."""
+        rows = self.rows(ref)
+        return (None, VIEW_GONE) if rows is None else rows.at(frame, place)
+
+    def rows(self, ref: str) -> GhostCameras | None:
+        """Ghost `ref`'s cameras and poses (GhostCameras), read from its clip the first time; None
+        for a ghost not in the set."""
         ghost = next((ghost for ghost in self.shown if ghost.ref == ref), None)
         if ghost is None:
-            return None, VIEW_GONE
+            return None
         if ghost.views is None:
             ghost.views = GhostCameras(ghost.clip)
-        return ghost.views.at(frame, place)
+        return ghost.views
 
     def clear(self, host) -> None:
         for ghost in self.shown:

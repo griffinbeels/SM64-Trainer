@@ -162,6 +162,74 @@ def test_the_picture_is_drawn_from_the_camera_the_server_drew_when_the_page_knew
     assert scene_export.picture_key(same) != scene_export.picture_key({**same, "hud": True})
 
 
+class _PathWaitingSession:
+    """A session whose Mario's path is read when the test says (the path reader's child stands in), and
+    which notes when each picture went out and from which camera."""
+
+    def __init__(self, fails: bool = False):
+        import threading
+        from concurrent.futures import Future
+        self.path, self.fails, self.asked, self.sent = Future(), fails, 0, []
+        self.sound, self.silence = None, "No sound here."
+        self.lock = threading.Lock()
+
+    def prepare_path(self):
+        self.asked += 1
+        return self.path
+
+    def answer(self):
+        if self.fails:
+            self.path.set_exception(LookupError("Mario's path could not be read."))
+        else:
+            self.path.set_result(None)
+
+    def begin(self, frame, camera, encoding, hud):
+        self.sent.append((self.path.done(), camera))
+        return (frame, json.dumps(camera, sort_keys=True))
+
+    def finish(self, pending):
+        pixels = json.dumps(pending).encode("utf-8").ljust(4 * 3 * 3, b" ")[:36]
+        return {"width": 4, "height": 3, "sha256": json.dumps(pending)}, pixels
+
+    def set_ghosts(self, entries, loader):
+        return {"shown": [], "refused": []}
+
+    def close(self):
+        return 0
+
+
+@pytest.mark.parametrize("fails", [False, True])
+def test_a_rig_without_its_pose_waits_for_marios_path_before_any_picture_goes_out(tmp_path, monkeypatch, fails):
+    """m6-rigs: an export's own session reads Mario's path in a child as it opens; a rig entry the page
+    saw before its path was read carries no pose (camera_used null), so the drawing waits for the path
+    and no rig picture goes out first. A path that cannot be read is one note, and the video is made."""
+    import threading
+    session = _PathWaitingSession(fails)
+    monkeypatch.setattr(scene_export, "_session", lambda job, folder: session)
+    rig = {"rig": {"kind": "front", "target": "stage"}}
+    pose = {"focus": [1.0, 2.0, 3.0], "position": [4.0, 5.0, 6.0], "roll": 0, "fov": 45.0}
+    timeline = [{**_good(scene_frame=k, t_ms=k * FRAME_MS), "camera": camera, "camera_used": used}
+                for k, (camera, used) in enumerate([(None, None), (rig, None), (rig, pose), (rig, None)])]
+    timer = threading.Timer(0.3, session.answer)
+    timer.start()
+    try:
+        stats = scene_export.run({"version": VERSION, "timeline": timeline, "fps": 30, "encoder": {"kind": "frames"},
+                                  "output": str(tmp_path / "clip.json")}, tmp_path, lambda event: None,
+                                 threading.Event())
+    finally:
+        timer.cancel()
+    assert session.asked == 1 and session.sent
+    assert all(ready for ready, camera in session.sent if camera == rig), session.sent
+    assert (scene_export.NO_RIG_PATH in stats["notes"]) is fails
+    # A recording whose rigs all came with their pose never waits for the path.
+    waited = _PathWaitingSession()
+    monkeypatch.setattr(scene_export, "_session", lambda job, folder: waited)
+    scene_export.run({"version": VERSION, "timeline": [{**entry, "camera_used": pose} for entry in timeline[1:]],
+                      "fps": 30, "encoder": {"kind": "frames"}, "output": str(tmp_path / "again.json")}, tmp_path,
+                     lambda event: None, threading.Event())
+    assert waited.asked == 0 and waited.sent
+
+
 # ---------------------------------------------------------------- the server's checks
 
 def _good(**changes):

@@ -23,7 +23,10 @@ from source_scan import strip_comments
 
 UI = Path(__file__).resolve().parents[1] / "src" / "sm64_events" / "ui"
 REGISTRY = UI / "scenecameratuning.js"
-CONSUMERS = [UI / "components" / "scenecamera.js", UI / "components" / "sceneviewer.js"]
+# scenerigs.js sends the cinematic cameras' rows with every request; the lab's reader of them
+# (tools/scene_lab/camera_rig.py) is held to the same list by tests/test_scene_lab_rigs.py.
+CONSUMERS = [UI / "components" / "scenecamera.js", UI / "components" / "sceneviewer.js",
+             UI / "components" / "scenerigs.js"]
 
 
 def _registry_keys(source: str) -> set[str]:

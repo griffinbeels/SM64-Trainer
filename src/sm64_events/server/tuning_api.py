@@ -103,6 +103,23 @@ def _numeric_bounds(body: str) -> tuple[float, float] | None:
     return float(low.group(1)), float(high.group(1))
 
 
+def shipped_numbers(registry: str, keys) -> dict[str, tuple[float, float, float]]:
+    """{key: (value, min, max)} of numeric rows `keys` as the registry file ships them: the server's
+    reading of the same rows SAVE writes (the scene viewer's cinematic cameras fill a request's
+    missing tuning from it), so the defaults and ranges have one home. ValueError for a key with no
+    single numeric row."""
+    source = TUNING_REGISTRIES[registry].read_text(encoding="utf-8")
+    rows = {}
+    for key in keys:
+        matches = list(_row_pattern(key).finditer(source))
+        found = _VALUE.search(matches[0].group("row")) if len(matches) == 1 else None
+        bounds = _numeric_bounds(matches[0].group("row")) if found else None
+        if bounds is None:
+            raise ValueError(f"{key!r} is not one numeric row of {registry}'s registry")
+        rows[key] = (float(found.group("value")), *bounds)
+    return rows
+
+
 def _format_number(wanted: float) -> str:
     """The one place a Python float becomes the text a `value:` field (or,
     via `_css_literal` below, a CSS fallback) carries.

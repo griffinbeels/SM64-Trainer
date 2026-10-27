@@ -57,9 +57,13 @@ sound late. 404 for no sound or no such block, 409 for a scene no longer open, 4
 that fails its hash.
 
 Socket protocol. The page sends JSON: {"id", "session", "frame", "camera": null or {"focus":
-xyz, "position": xyz[, "roll", "fov"]} or {"ghost": ref}, "encoding": "jpeg"|"raw"|"shared"[, "hud":
-false]} for a picture ({"ghost": ref}: that scene ghost's own recorded camera at this picture, its
-header's "view" {"ghost", "camera"} the camera drawn; scene_session.py; hud false: without the
+xyz, "position": xyz[, "roll", "fov"]} or {"ghost": ref} or {"rig": {...}}, "encoding":
+"jpeg"|"raw"|"shared"[, "hud": false]} for a picture ({"ghost": ref}: that scene ghost's own
+recorded camera at this picture, its header's "view" {"ghost", "camera"} the camera drawn; {"rig":
+{"kind", "target", "shot", "height", "radius", "speed", "phase", "side", "tuning"}}: a cinematic
+camera following the stage's Mario or a scene ghost, its header's "rig" what it did,
+tools/scene_lab/camera_rig.py; every header's "camera_used" is the camera the server drew, null for
+the recorded one; scene_session.py; hud false: without the
 game's HUD, tools/scene_lab/hud.py; "shared":
 the desktop window's page only, once attach_window gave the scene its window; the exact pixels
 go through WebView2 shared memory and the binary reply is the header alone, or a JPEG when the
@@ -69,7 +73,10 @@ post failed, as its header's encoding says), {"id",
 and down; Set focus), and {"id", "session", "kind": "ghosts", "set": [{"ref", "label"}][, "origin":
 a frame]} for the ghosts every later picture draws (the whole set, replacing the last; [] removes
 them), answered {"id", "kind": "ghosts", "shown": [refs], "refused": [{"ref", "reason"}]} once
-each new ghost's recording is in the renderer (scene_session.set_ghosts; clips come from the
+each new ghost's recording is in the renderer, and {"id", "session", "kind": "rig-path"} for the
+cinematic cameras' path of the stage's Mario, read in a child process and answered {"id", "kind":
+"rig-path", "ready", "reason"} once it is (a rig picture asked before then shows the recorded
+camera and says so) (scene_session.set_ghosts; clips come from the
 ghost catalog's load_ghost, server/scene_ghosts.py, unless `ghost_loader` replaces it). A set never
 holds up the page's pictures: its clips load on threads of their own (a community ghost may
 download for up to a minute) and sets apply in the order they came. A picture of a scene
@@ -643,6 +650,20 @@ class SceneLab:
             return {"id": message.get("id"), "error": str(error)}
         return {"id": message.get("id"), "kind": "pick", **picked}
 
+    async def rig_path_reply(self, message: dict) -> dict:
+        """Mario's path for the cinematic cameras, read in the path reader's child (scene_session
+        prepare_path): answered {"kind": "rig-path", "ready", "reason"} once it is read, on a task of
+        its own, so neither the pictures nor the other questions wait for it."""
+        try:
+            future = await self._run(message.get("session"), "prepare_path")
+            await asyncio.wrap_future(future)
+            ready, reason = True, None
+        except SceneClosed as closed:
+            return {"id": message.get("id"), "error": str(closed), "closed": True}
+        except (LookupError, RuntimeError, OSError, ValueError) as error:
+            ready, reason = False, str(error)
+        return {"id": message.get("id"), "kind": "rig-path", "ready": ready, "reason": reason}
+
     async def ghosts_reply(self, message: dict) -> dict:
         """The open scene's ghosts become the page's set (scene_session.set_ghosts), drawn with the
         player's ghost settings; every picture begun after this answer draws them. The clips of
@@ -737,7 +758,7 @@ class SceneLab:
                         and not isinstance(task.exception(), WebSocketDisconnect):
                     log.warning("scene viewer socket ended: %r", task.exception())
         finally:
-            tasks += page.ghost_sets
+            tasks += page.own_tasks
             for task in tasks:
                 task.cancel()
             self.pages.discard(page)
@@ -836,7 +857,7 @@ class _PageSocket:
         self.wake = asyncio.Event()                     # a request arrived, or a picture left
         self.begun = asyncio.Event()                    # a picture began
         self.uncompressed: bool | None = None       # set at the first send, after a message arrived
-        self.ghost_sets: list[asyncio.Task] = []         # ghost sets being loaded and applied
+        self.own_tasks: list[asyncio.Task] = []          # ghost sets being loaded, paths being read
 
     async def send(self, reply) -> None:
         if self.uncompressed is None:
@@ -859,7 +880,7 @@ class _PageSocket:
             if not isinstance(message, dict):
                 await self.send({"id": None, "error": "a request is one JSON object"})
                 continue
-            if message.get("kind") in ("pose", "pick", "ghosts"):
+            if message.get("kind") in ("pose", "pick", "ghosts", "rig-path"):
                 if len(self.questions) >= MAX_QUESTIONS_WAITING:
                     await self.send({"id": self.questions.popleft().get("id"), "superseded": True})
                 self.questions.append(message)
@@ -877,8 +898,8 @@ class _PageSocket:
             while self.questions or (self.picture is not None and len(self.drawing) < PICTURES_IN_FLIGHT):
                 if self.questions:
                     question = self.questions.popleft()
-                    if question.get("kind") == "ghosts":
-                        self._ghost_set(question)
+                    if question.get("kind") in ("ghosts", "rig-path"):
+                        self._on_own_task(question)
                         continue
                     reply = self.lab.pick_reply if question.get("kind") == "pick" else self.lab.pose_reply
                     await self.send(await reply(question))
@@ -887,13 +908,16 @@ class _PageSocket:
                     self.drawing.append(await self.lab.begin_picture(message))
                     self.begun.set()
 
-    def _ghost_set(self, question: dict) -> None:
-        """A ghost set answered on its own task: its clips may take a community download's minute
-        to load (scene_ghosts.load_ghost), and the page's pictures go on meanwhile."""
+    def _on_own_task(self, question: dict) -> None:
+        """A ghost set or a path to read answered on its own task: a set's clips may take a community
+        download's minute to load (scene_ghosts.load_ghost), Mario's path a second or two to read
+        (scene_session.prepare_path), and the page's pictures go on meanwhile."""
+        reply = self.lab.ghosts_reply if question.get("kind") == "ghosts" else self.lab.rig_path_reply
+
         async def answer():
-            await self.send(await self.lab.ghosts_reply(question))
+            await self.send(await reply(question))
         task = asyncio.create_task(answer())
-        self.ghost_sets = [*(other for other in self.ghost_sets if not other.done()), task]
+        self.own_tasks = [*(other for other in self.own_tasks if not other.done()), task]
 
     async def deliver(self) -> None:
         """Sends each begun picture's reply as it is ready, in the order they began."""

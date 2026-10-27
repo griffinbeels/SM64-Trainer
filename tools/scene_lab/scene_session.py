@@ -2,7 +2,8 @@
 
     session = SceneSession.open(config, package_path)            # Refused names why it cannot
     header, payload = session.picture(frame, camera, "jpeg")       # camera None: the recorded camera;
-                                                                   #   {"ghost": ref}: that ghost's view
+                                                                   #   {"ghost": ref}: that ghost's view;
+                                                                   #   {"rig": {...}}: a cinematic camera
     pending = session.begin(frame, camera, "jpeg")                 # picture() in two halves: the host
     header, payload = session.finish(pending)                      #   draws while the next one begins
     session.pose(frame)                                            # the recorded camera and Mario
@@ -52,6 +53,19 @@ stage's world from the camera its own recording drew with at the row its drawing
 picture (stage_ghosts.GhostCameras), drawn through the free camera's path; the header's "view" says
 whose it is and which camera it drew (None: the recorded camera, and "reason" says why).
 
+A cinematic camera, {"rig": {"kind": "front"|"side"|"orbit", "target": "stage"|a ghost's ref, ...}}
+(camera_rig.py, round 6): a camera riding the runner's smoothed path, aimed at him, worked out from
+the whole path for each picture and drawn through the free camera's path. The stage's Mario is read
+from every frame's scene state once, in the path reader's child process (rig_path.py: ~1 s for an
+800-frame take, measured 2026-10-27), started as the scene opens; a growing scene reads only the
+frames it gained, and a rig picture of a frame not read yet is the recorded one, saying so
+(camera_rig.PATH_PENDING), never a wait; a ghost's from its clip through the same frame count its
+drawing uses; the walls are the level's static collision in the
+scene state (camera_rig.static_walls, the symbol map's sSurfacePool). The header's "rig" says which
+and what it did ({"kind", "target", "shot", "side", "pulled", "raised"}). Every header's "camera_used" is the
+camera drawn whenever the server drew one (free, a ghost's view, a rig: {"focus", "position", "roll",
+"fov"}, roll and fov None where the frame's own applied), None for the recorded camera.
+
 The package's source-audio layer, when it has one, is the recording's sound mapped to these
 frames (scene_audio.py); describe() carries its table and audio_block serves its blocks. An
 attempt scene without one yet plays the recorder's own sound (scene_audio.LiveSound) until the
@@ -72,6 +86,7 @@ the GPU hold check; tests and e3_measure.py --fake inject fake_viewer_host.py's 
 from __future__ import annotations
 
 import importlib.util
+import logging
 import math
 import re
 import shutil
@@ -80,7 +95,7 @@ import sys
 import tempfile
 import time
 from collections import deque
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -88,6 +103,8 @@ import numpy as np
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+import camera_rig  # noqa: E402
+import rig_path  # noqa: E402
 import stage_ghosts  # noqa: E402
 import ghost_sound  # noqa: E402
 import gpu_gate  # noqa: E402
@@ -99,6 +116,7 @@ import replay  # noqa: E402
 import scene_audio  # noqa: E402
 import viewer  # noqa: E402
 
+log = logging.getLogger("sm64.scene_lab")
 FPS = 30                      # game frames per second; the viewer steps presented pictures
 ENCODINGS = ("jpeg", "raw", "shared")   # shared: the desktop window's shared memory (webview_pictures.py)
 JPEG_QUALITY = 90
@@ -395,6 +413,8 @@ class PendingPicture:
     hud_reason: str | None = None   # why a picture asked for without the HUD still has it
     ghosts: bool = False         # the picture carried the scene's ghosts
     view: dict | None = None     # a ghost's view: {"ghost": ref, "camera": the camera drawn, or None}
+    rig: dict | None = None      # a cinematic camera: {"kind", "target", "shot", "side", "pulled", "raised"}
+    used: dict | None = None     # the camera drawn when the server drew one: {"focus", "position", "roll", "fov"}
 
 
 class SceneSession:
@@ -433,11 +453,19 @@ class SceneSession:
         self._ghost_problem: str | None = None           # why ghosts cannot draw ("" once set up)
         self._ghosts_warm = False                        # the renderer's ghost overlay has drawn a picture
         self.ghost_sounds = ghost_sound.SceneGhostSounds(map_path=getattr(evaluator_factory, "map_path", None))
+        self.rigs = camera_rig.Planner()                 # the cinematic cameras' kept work (camera_rig.py)
+        self._rig_tuning: dict | None = None             # the registry's rows a rig request may leave out
+        self._runners: dict = {}                         # target -> (what it was read from, camera_rig.Runner)
+        self._stage_reads: dict[int, tuple] = {}         # package frame -> the stage Mario's (position, yaw)
+        self.path_reader_factory = rig_path.PathReader   # open() may name another (tests: InProcessReader)
+        self._path_reader = None                         # the reader of his path, once a rig asked for it
+        self._path_reading: tuple | None = None          # (future, the package frames it reads)
+        self._path_problem: str | None = None            # why his path could not be read
+        self._walls: dict = {}                           # (level, area) -> camera_rig.StaticWalls or None
 
     @classmethod
     def open(cls, config, path: Path, *, sidecar: Path | None = None, live=None, fitter=None, host_factory=None,
-             evaluator_factory=None,
-             encoder_factory=None) -> SceneSession:
+             evaluator_factory=None, encoder_factory=None, path_reader_factory=None) -> SceneSession:
         """Reads and checks the package against the configured ROM, then starts and warms the host.
         Refused carries the reason for every refusal: the GPU hold, a missing ROM, a package the
         reader refuses (another ROM, truncated, corrupt), a package with nothing shown, a renderer
@@ -481,6 +509,8 @@ class SceneSession:
         session = cls(path.name, package, rom, host, frames, outlines, factory,
                       unavailable(package) if unavailable else None, encoder)
         session.growth, session.path, session.live_sound = growth, path, live_sound
+        session.path_reader_factory = path_reader_factory or rig_path.PathReader
+        session._start_path()
         if growth is None:
             session.read_stat, session.whole_at = (stat.st_size, stat.st_mtime_ns), time.monotonic()
         try:
@@ -788,6 +818,7 @@ class SceneSession:
         if not isinstance(hud, bool):
             raise ValueError("hud is true or false")
         view, camera = self._ghost_view(index, camera)
+        rig, camera = self._rig_view(frame, camera)
         free = None if camera is None else world_camera(camera)
         if free is not None:
             self._ahead_generation += 1          # the look-ahead stops before its next frame
@@ -798,6 +829,11 @@ class SceneSession:
         drawn_free = host_frame is not None
         if view is not None:                 # the recorded camera when the ghost's could not be drawn
             view, reason = {"ghost": view["ghost"], "camera": camera if drawn_free else None}, reason or view["reason"]
+        if rig is not None:                  # the recorded camera when the rig had none or it could not be drawn
+            own = rig.pop("reason")
+            reason = reason or own
+        used =None if not drawn_free else {"focus": camera["focus"], "position": camera["position"],
+                                            "roll": camera.get("roll"), "fov": camera.get("fov")}
         if drawn_free:
             self._look_ahead(frame)          # resolves beside this picture's render and encode
         if host_frame is None:
@@ -809,7 +845,7 @@ class SceneSession:
         cut = cuts[-1] if cuts else None
         pending = PendingPicture(frame, encoding, "free" if drawn_free else "recorded", reason, timings, started,
                                  cut is None or cut.reason is not None, cut and cut.reason,
-                                 ghosts=host_frame.ghosts is not None, view=view)
+                                 ghosts=host_frame.ghosts is not None, view=view, rig=rig, used=used)
         self._begun.append(pending)
         return pending
 
@@ -852,9 +888,10 @@ class SceneSession:
                 "format": "image/jpeg" if encoding == "jpeg" else "bgr24-bottom-up",
                 "camera": pending.camera, "reason": pending.reason, "sha256": digest,
                 "hud": pending.hud, "hud_reason": pending.hud_reason,
-                "payload_bytes": len(payload), "timings": timings,
+                "payload_bytes": len(payload), "timings": timings, "camera_used": pending.used,
                 **({"ghosts": picture.ghosts} if pending.ghosts else {}),
-                **({"view": pending.view} if pending.view else {})}, payload
+                **({"view": pending.view} if pending.view else {}),
+                **({"rig": pending.rig} if pending.rig else {})}, payload
 
     def _jpeg(self, picture: viewer.Picture) -> tuple[bytes, str]:
         """The picture as JPEG and where it was made: by the encoder child from its slot, or here
@@ -998,6 +1035,176 @@ class SceneSession:
             found, reason = None, stage_ghosts.VIEW_NONE
         return {"ghost": ref, "reason": reason}, found
 
+    def _rig_view(self, frame: int, camera) -> tuple[dict | None, dict | None]:
+        """A picture's camera as begin() takes it: (None, camera) for any but a cinematic camera; for
+        {"rig": {...}} (camera_rig.py), what the header says of it ({"kind", "target", "shot", "side",
+        "pulled", "reason"}) and its camera at frame position `frame`, None when it has none: the
+        recorded camera, and the reason says why. ValueError for a malformed rig."""
+        if not (isinstance(camera, dict) and "rig" in camera):
+            return None, camera
+        if len(camera) != 1:
+            raise ValueError('a cinematic camera is {"rig": {...}} and nothing else')
+        if self._rig_tuning is None:
+            from sm64_events.server.tuning_api import shipped_numbers
+            self._rig_tuning = shipped_numbers("scenecamera", camera_rig.TUNING_KEYS)
+        rig = camera_rig.Rig.of(camera["rig"], self._rig_tuning)
+        said = {"kind": rig.kind, "target": rig.target, "shot": rig.shot, "side": None, "pulled": None, "raised": None}
+        if self.free_reason is not None:
+            return {**said, "reason": self.free_reason}, None
+        runner = self._runner(rig.target)
+        if isinstance(runner, str):
+            return {**said, "reason": runner}, None
+        if frame >= len(runner):                          # a growing scene's newest frames, still being read
+            return {**said, "reason": camera_rig.PATH_PENDING}, None
+        shot = self.rigs.shot(rig, runner, frame, self._walls_at)
+        if shot.camera is not None:
+            said.update(side=shot.side, pulled=round(shot.pulled, 3), raised=round(shot.raised, 1))
+        return {**said, "reason": shot.reason}, shot.camera
+
+    def _clock(self) -> list[float]:
+        """Each frame position's time on the scene's own clock, seconds after the first picture: the
+        recorded times the page plays by (describe's recorded_ms), else one game frame each."""
+        times = [self.outlines[index]["present_us"] for index in self.frames]
+        if None not in times and all(a <= b for a, b in zip(times, times[1:], strict=False)):
+            return [(time_us - times[0]) / 1e6 for time_us in times]
+        return [position / FPS for position in range(len(self.frames))]
+
+    def _place(self, index: int) -> tuple | None:
+        identity = self.outlines[index]["identity"]
+        place = (identity.get("curr_level"), identity.get("curr_area"))
+        return None if None in place else place
+
+    def _runner(self, target: str):
+        """The runner a rig follows (camera_rig.Runner): the stage's Mario ("stage") over the frame
+        positions his path has been read for, from the first (all of them once it is: prepare_path),
+        or a scene ghost over every one; kept until those frames change; a sentence when there is
+        none (yet)."""
+        if self.package.states is None:
+            return camera_rig.NO_STATE
+        if target != "stage":
+            rows = self.ghosts.rows(target)
+            if rows is None:
+                return stage_ghosts.VIEW_GONE
+            count, source = len(self.frames), (target, rows, self.ghost_origin, tuple(self.frames))
+        else:
+            poses = self._stage_poses()
+            if not poses:                                # not read yet, or it could not be
+                return self._path_problem or camera_rig.PATH_PENDING
+            count = len(poses)
+            source = ("stage", tuple(self.frames[:count]), self.package)
+        kept = self._runners.get(target)
+        if kept is not None and kept[0] == source:
+            return kept[1]
+        frames = self.frames[:count]
+        places = [self._place(index) for index in frames]
+        if target != "stage":
+            poses = [None if g is None else rows.pose(g, place)
+                     for g, place in zip(map(self._ghost_frame, frames), places, strict=True)]
+        positions = [pose[0] if pose else [math.nan] * 3 for pose in poses]
+        yaws = [pose[1] if pose else math.nan for pose in poses]
+        runner = camera_rig.Runner(positions, yaws, [place if pose else None for place, pose in zip(places, poses, strict=True)],
+                                   self._clock()[:count], camera_rig.NO_RUNNER if target == "stage" else camera_rig.GHOST_ELSEWHERE)
+        self._runners[target] = (source, runner)
+        return runner
+
+    def _stage_poses(self) -> list[tuple | None]:
+        """The stage's Mario in the frame positions read so far, from the first ((position, the game's
+        s16 facing), or None where his position is not a place): all of them once prepare_path's
+        reads are done, fewer while a growing scene's newest are read; [] before any is, or when his
+        path could not be read."""
+        self.prepare_path()
+        if self._path_problem:
+            return []
+        poses = []
+        for index in self.frames:
+            if index not in self._stage_reads:
+                break
+            poses.append(self._stage_reads[index])
+        return poses
+
+    def prepare_path(self) -> Future:
+        """Starts reading the stage Mario's place in the frames not read yet, in the path reader's
+        child process (rig_path.py: about 1.2 ms a frame, never on this thread), and returns the
+        future the read ends with: done at once when nothing is left to read, LookupError when his
+        path cannot be read. A growing scene reads only the frames it gained. On the worker, which
+        alone touches the reads; the reader's own thread only finishes the future."""
+        self._take_path()
+        if self._path_problem:
+            failed = Future()
+            failed.set_exception(LookupError(self._path_problem))
+            return failed
+        if self._path_reading is None:
+            mario = self._mario_offset()
+            missing = [index for index in self.frames if index not in self._stage_reads]
+            if missing and (mario is None or self.package.states is None):
+                self._stage_reads.update(dict.fromkeys(missing))       # no place to read: none
+                missing = []
+            if not missing:
+                done = Future()
+                done.set_result(None)
+                return done
+            if self._path_reader is None:
+                try:
+                    self._path_reader = self.path_reader_factory()
+                except OSError as error:          # the child could not start: read here, as before
+                    log.warning("scene viewer: the path reader could not start (%s); reading here", error)
+                    self._path_reader = rig_path.InProcessReader()
+            data = self.package.data
+            data = data if isinstance(data, bytes) else data[0:len(data)]
+            self._path_reading = (self._path_reader.read(data, self.rom, missing, mario), missing)
+        future = self._path_reading[0]
+        self._take_path()                          # a reader in this process is done already
+        return future
+
+    def _start_path(self) -> None:
+        """Mario's path for the cinematic cameras, read beside the opening scene (prepare_path) where
+        they can draw: the free camera's evaluator and its symbol map are there."""
+        map_path = getattr(self.evaluator_factory, "map_path", None)
+        if self.free_reason is None and map_path is not None and Path(map_path).is_file():
+            try:
+                self.prepare_path()
+            except Exception as error:  # noqa: BLE001 - the cameras ask again, and say why if it fails
+                log.warning("scene viewer: Mario's path could not start reading: %s", error)
+
+    def _take_path(self) -> None:
+        """A finished read's places, kept per package frame; its failure, said from then on."""
+        reading = self._path_reading
+        if reading is None or not reading[0].done():
+            return
+        self._path_reading = None
+        try:
+            rows = reading[0].result()
+        except Exception as error:  # noqa: BLE001 - the cinematic cameras say why they cannot follow him
+            self._path_problem = f"Mario's path could not be read, so this shows the recorded camera ({error})."
+            return
+        for index, row in zip(reading[1], rows, strict=True):
+            self._stage_reads[index] = None if np.isnan(row[0]) else ([float(v) for v in row[:3]], int(row[3]))
+
+    def _mario_offset(self) -> int | None:
+        """gMarioStates' RDRAM offset on this ROM (US or JP), None on another."""
+        from sm64_events.memory.layout import layout_for
+        try:
+            return layout_for({ord("E"): "us", ord("J"): "jp"}[self.rom[0x3E]]).mario_struct & 0x1FFFFFFF
+        except KeyError:
+            return None
+
+    def _walls_at(self, place: tuple):
+        """The level's static collision in `place` (camera_rig.static_walls), read once from the scene
+        state of that place's middle frame; None without the symbol map's two addresses."""
+        if place not in self._walls:
+            symbols = camera_rig.map_symbols(getattr(self.evaluator_factory, "map_path", None), camera_rig.WALL_SYMBOLS)
+            there = [index for index in self.frames if self._place(index) == place]
+            walls = None
+            if len(symbols) == len(camera_rig.WALL_SYMBOLS) and there and self.package.states is not None:
+                index = there[len(there) // 2]
+                try:
+                    walls = camera_rig.static_walls(lambda offset, size: self.package.scene_bytes(index, [(offset, size)])[0],
+                                                    symbols["sSurfacePool"], symbols["gNumStaticSurfaces"])
+                except ValueError:                      # a span outside RDRAM: no walls known
+                    walls = None
+            self._walls[place] = walls
+        return self._walls[place]
+
     def _stage_frame(self, index: int, timings: dict, cuts: list | None = None) -> viewer.Frame:
         """The recorded picture with the frame's scene state beside its closure (package.scene_state:
         the regions the tap recorded, closure included, in Project64's word order): where the
@@ -1043,6 +1250,9 @@ class SceneSession:
             resolvers.close()
         self._evaluator = self._last_view = self._last_walk = None
         self.ghost_sounds.close()
+        reader, self._path_reader = self._path_reader, None
+        if reader is not None:
+            reader.close()
         try:
             return self.host.close()
         finally:

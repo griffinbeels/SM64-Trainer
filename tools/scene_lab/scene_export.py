@@ -23,7 +23,8 @@ Output frames: frame k shows the entry on screen at k / fps seconds (the last en
 come), so a pause is that picture held, and two output frames that would draw the same request
 (scene frame, camera, HUD, ghosts) reuse one picture. The camera sent is the entry's camera_used
 when it has one (the pose the server drew: a rig, a preset, a ghost's view), else the camera the
-page sent; either draws the same picture, so rigs and presets reproduce exactly.
+page sent; either draws the same picture, so rigs and presets reproduce exactly. A rig sent without
+its pose waits for Mario's path before any picture is drawn (_await_rig_path).
 
 Encoding follows the replay recorder's offline path (the saved clip's, replay/extract.py, and the
 failure compilation's, replay/compilation.py): an FFmpeg child, the codec the replay's own probe
@@ -62,6 +63,7 @@ FPS_CHOICES = (30, 60)
 TIMELINE_VERSION = 1
 OTHER_VERSION = ("This recording was made by another version of the Scene viewer, so it cannot be made "
                  "into a video here.")
+NO_RIG_PATH = "The cinematic camera's path could not be read, so its shots show the recorded camera."
 DISPLAY_MS = 1000 / 60            # a display frame, for a timeline whose last entry has no end
 GOP_SECONDS = 2.0                 # a key picture this often: the ring's segment length, quick seeks in an editor
 AUDIO_BITRATE = "160k"            # the ring's AAC (replay/ffmpeg_sink.py), which saved replays keep
@@ -276,6 +278,21 @@ def _sound(session, job: dict, entries: list[dict], total_ms: float, loader, not
     return export_sound.mix(entries, total_ms, layer.rate, runs, split, stage, tracks), layer.rate
 
 
+def _await_rig_path(session, entries: list[dict], notes: list, report) -> None:
+    """An entry whose cinematic camera came without the pose the page saw (its picture showed while
+    Mario's path was still being read) is drawn from his path, which this session reads in a child of
+    its own as it opens (scene_session.prepare_path): the drawing waits for it, so no such entry comes
+    out on the recorded camera. A path that cannot be read is one note, and those shots are the
+    recorded camera's. Entries with their pose never need it."""
+    if not any(isinstance(camera := picture_camera(entry), dict) and "rig" in camera for entry in entries):
+        return
+    report({"kind": "progress", "progress": SOUND_SHARE, "message": "Getting the cinematic camera's path ready..."})
+    try:
+        session.prepare_path().result()
+    except (LookupError, RuntimeError, OSError, ValueError):
+        notes.append(NO_RIG_PATH)
+
+
 def _write_wav(path: Path, pcm: np.ndarray, rate: int) -> None:
     with wave.open(str(path), "wb") as file:
         file.setnchannels(2)
@@ -319,6 +336,7 @@ def run(job: dict, folder: Path, report, cancelled: threading.Event) -> dict:
         _write_wav(folder / "sound.wav", pcm, rate)
         if cancelled.is_set():
             raise Cancelled
+        _await_rig_path(session, entries, notes, report)
         render_started = time.perf_counter()
         drawing = _Drawing(session, lambda width, height: _encoder(job, width, height, fps, folder / "sound.wav",
                                                                   rate, partial, report))
