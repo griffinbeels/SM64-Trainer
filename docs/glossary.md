@@ -1349,7 +1349,8 @@ scene's life and a name only once typing stops or on Enter; Add draws that [[gho
 from the next picture, and a [[ghost]] the lab cannot draw shows its reason. **HUD** (kept per
 viewer) leaves the game's on-screen counters and timer out of every picture, the one on screen at
 once. The **Cinematic** row's [[cinematic camera]]s (Front, Side, Orbit) follow Mario or a [[stage
-ghost]] along his path.
+ghost]] along his path. Under the camera controls, the **Cameras** strip keeps [[camera preset]]s in
+slots 1-9.
 The page takes the keyboard when you arrive (the sidebar or the [[ghost button]])
 and after a mouse click on its controls; a field that types keeps its keys, and
 Esc, leaving the window or the page lets go of every key.
@@ -1470,6 +1471,28 @@ Cinematic rows.
   pose in `tools/scene_lab/stage_ghosts.py`); the controls
   (`src/sm64_events/ui/components/scenerigs.js`)
 - **Not** -- the [[ghost's view]], which replays the camera that [[ghost]]'s own game drew
+
+### Camera preset
+
+A camera you saved in the [[scene viewer]]'s **Cameras** strip: a name and
+the camera's place, aim, screen roll and field of view, in one of nine slots.
+Each course and area keeps its own nine (a level's areas are separate worlds,
+so their coordinates differ), and the strip shows the set of the area the
+picture on screen is in, switching as the scene moves between areas. An empty
+slot saves the picture's camera, whichever it is, and asks for a name at once.
+Keys 1-9 or a click cut to one as the free camera, with no flight, and Play
+keeps playing; the slot looks pressed until the camera moves, and putting the
+view back returns to it. Rename and delete sit on the slot (Undo brings a
+deleted one back); dragging one onto another slot moves it, swapping with a
+filled one. The lab keeps them in one file in its folder, so they survive
+restarts; a file it cannot read shows an empty strip and says so.
+
+- **Lives** -- the file and its checks (`tools/scene_lab/camera_presets.py`,
+  served by `src/sm64_events/server/scene_lab_api.py`); the strip
+  (`src/sm64_events/ui/components/scenepresets.js`); the cut
+  (`src/sm64_events/ui/components/sceneviewer.js`)
+- **Not** -- a [[ghost's view]], which follows a [[stage ghost]]'s own camera
+  as it moves; a camera preset stands still where you saved it
 
 ### Ghost button
 

@@ -11,6 +11,8 @@ one reader, and without it this module is never imported and no route is added. 
                                   "title" and "target"); 409 with the reason
     GET  /api/scene-lab/stage?course=&star=&strat=   the stage for a target and strategy (scene_ghosts.py)
     GET  /api/scene-lab/ghosts?section=&...&page=    one page of the ghosts that could be drawn into it
+    GET  /api/scene-lab/camera-presets?level=&area=  the saved cameras of that level and area (slots 1-9);
+                                  PUT the same {slots} to replace them (tools/scene_lab/camera_presets.py)
     POST /api/scene-lab/close
     WS   /api/scene-lab/ws        pictures and poses of the open scene (protocol below)
     GET  /api/scene-lab/audio/{block}?session=N[&track=music|effects|ghost:<ref>]   one block of the open scene's sound
@@ -98,7 +100,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Query, Response, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field, model_validator
 
 log = logging.getLogger("sm64.scene_lab")
@@ -965,6 +967,38 @@ def _mount_ghost_routes(router: APIRouter, lab: SceneLab) -> None:
             raise HTTPException(422, str(error)) from None
 
 
+class PresetsBody(BaseModel):
+    slots: list = Field(max_length=9)
+
+
+def _mount_preset_routes(router: APIRouter, lab: SceneLab) -> None:
+    """GET and PUT /camera-presets?level=&area=: the camera presets of one level and area, in the lab
+    folder's camera-presets.json (tools/scene_lab/camera_presets.py owns the file and its checks).
+    Plain routes on the threadpool: a read or an atomic write of one small file."""
+    store = None
+
+    def presets():
+        nonlocal store
+        if store is None:
+            presets_module = _lab_module("camera_presets")
+            store = presets_module.CameraPresets(lab._lab_root() / presets_module.FILE_NAME)
+        return store
+
+    def place(level: int = Query(ge=0, le=999), area: int = Query(ge=0, le=999)) -> tuple[int, int]:
+        return level, area
+
+    @router.get("/camera-presets")
+    def camera_presets(where: tuple[int, int] = Depends(place)):
+        return presets().slots(*where)
+
+    @router.put("/camera-presets")
+    def replace_camera_presets(body: PresetsBody, where: tuple[int, int] = Depends(place)):
+        try:
+            return presets().replace(*where, body.slots)
+        except ValueError as refused:            # camera_presets.PresetError
+            raise HTTPException(422, str(refused)) from None
+
+
 def mount_scene_lab(app, config_path, **options) -> SceneLab:
     """Adds the scene viewer's routes to `app`, starts the live recording's lease and the attempt
     scenes when the app starts, and ends both and the open scene when it stops. `options` are
@@ -977,6 +1011,7 @@ def mount_scene_lab(app, config_path, **options) -> SceneLab:
                              ghost=sources.get("ghost"), community=sources.get("community"))
     router = APIRouter(prefix="/api/scene-lab")
     _mount_ghost_routes(router, lab)
+    _mount_preset_routes(router, lab)
 
     @router.get("")
     def probe():
