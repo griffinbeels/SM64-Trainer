@@ -50,7 +50,8 @@ sound late. 404 for no sound or no such block, 409 for a scene no longer open, 4
 that fails its hash.
 
 Socket protocol. The page sends JSON: {"id", "session", "frame", "camera": null or {"focus":
-xyz, "position": xyz[, "roll", "fov"]}, "encoding": "jpeg"|"raw"|"shared"} for a picture ("shared":
+xyz, "position": xyz[, "roll", "fov"]}, "encoding": "jpeg"|"raw"|"shared"[, "hud": false]} for a
+picture (hud false: without the game's HUD, tools/scene_lab/hud.py; "shared":
 the desktop window's page only, once attach_window gave the scene its window; the exact pixels
 go through WebView2 shared memory and the binary reply is the header alone, or a JPEG when the
 post failed, as its header's encoding says), {"id",
@@ -557,7 +558,7 @@ class SceneLab:
         loop = asyncio.get_running_loop()
         try:
             pending = await self._run(generation, "begin", message.get("frame"), message.get("camera"),
-                                      message.get("encoding", "jpeg"))
+                                      message.get("encoding", "jpeg"), message.get("hud", True))
         except SceneClosed as closed:
             return _answered({"id": ident, "error": str(closed), "closed": True})
         except ValueError as error:
