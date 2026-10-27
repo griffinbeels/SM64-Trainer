@@ -307,7 +307,7 @@ export class SceneLink {
       entering: null, arrived: 0, drawnSeq: 0, looking: null, flight: idleFlight(), speed: 1, picking: false,
       finding: false, glide: null, serial: 0, noticeTimer: null, moving: null, shared: new Map(), playback: null,
       readies: [], coldId: 0, autoplay: false, loop: savedLoop(), hud: savedHud(), ghosts: [], refusedGhosts: new Map(),
-      view: null, rig: null, lastRig: null, follow: "stage",
+      view: null, rig: null, lastRig: null, follow: "stage", rigPath: null,
       asked: null, ghostPages: new Map(), ghostNote: null, ghostSerial: 0,
       sound: new SceneSound({ changed: () => this.changed(), observe: (note) => this.observe(note) }),
       presets: new CameraPresets({ changed: () => this.changed() }) });
@@ -679,6 +679,7 @@ export class SceneLink {
     this.stopLook("a cinematic camera");
     this.releaseKeys();
     const serial = this.serial, next = startRig(kind, this.lastRig, sceneCameraTuning(), this.follow);
+    this.awaitRigPath();
     if (kind === "orbit" && this.rig?.kind !== "orbit") next.phase = await this.orbitStart(next);
     if (serial !== this.serial) return;               // another input came first
     Object.assign(this, { free: false, view: null, rig: next, lastRig: next, notice: null, picking: false });
@@ -709,6 +710,16 @@ export class SceneLink {
     const pose = seen.from && seen.target ? null : (await this.pose(this.frame)).pose;
     return orbitPhase(seen.from ?? pose?.position, seen.target ?? (rig.target === "stage" ? pose?.mario : null),
       rig.speed, this.secondsAt(this.frame));
+  }
+
+  // Mario's path: the lab starts reading it in a process of its own as the scene opens, and a cinematic
+  // picture asked before it is read comes back from the recorded camera, saying so. The first cinematic
+  // camera of a scene asks when the path is ready, and the picture on screen is asked for again then.
+  async awaitRigPath() {
+    if (this.rigPath === this.scene) return;
+    const scene = this.rigPath = this.scene;
+    const answer = await this.ask("rig-path", {});
+    if (this.scene === scene && answer.ready && this.rig && !this.playing) this.want("input");
   }
 
   // A Tune controls change: a cinematic camera on screen is drawn again with it.

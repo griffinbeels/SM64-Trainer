@@ -28,6 +28,7 @@ sys.path.insert(0, str(ROOT / "tests"))
 sys.path.insert(0, str(ROOT / "tools" / "scene_lab"))
 import camera_rig  # noqa: E402
 import fake_viewer_host  # noqa: E402
+import rig_path  # noqa: E402
 import gpu_gate  # noqa: E402
 import scene_attempt_fixture as fixture  # noqa: E402
 import scene_session  # noqa: E402
@@ -248,6 +249,44 @@ def test_after_a_cut_the_side_stays_a_while_before_it_cuts_back():
     assert steady[52].pulled < 1 or steady[52].raised > 0
 
 
+class CountingWalls(camera_rig.StaticWalls):
+    """Walls that count the lines tested against them."""
+
+    def __init__(self, triangles):
+        super().__init__(triangles)
+        self.lines = 0
+
+    def clearance(self, origins, ends):
+        self.lines += len(np.asarray(origins).reshape(-1, 3))
+        return super().clearance(origins, ends)
+
+
+def test_a_growing_scenes_side_tests_only_the_frames_it_gained():
+    """A scene still being written gains frames: the frames further from its old end than the smoothing
+    reaches (3 x 6 + 0 + 2 = 20 here) keep their wall tests, only the rest are tested again, and the
+    sides are the ones a fresh look at the whole path chooses."""
+    whole = run_along_z(n=120)
+    walls = CountingWalls(np.concatenate([wall_x(-300, 885, 2715), wall_x(300, 1485, 1605)]))
+    side = rig(kind="side")
+    first = runner(whole.positions[:80], whole.yaws[:80], seconds=whole.seconds[:80])
+    grown = runner(whole.positions, whole.yaws, seconds=whole.seconds)
+    planner = camera_rig.Planner()
+    planner.shot(side, first, 10, lambda place: walls)
+    carried = planner._carried(side, grown)
+    assert carried[1] == 60
+    walls.lines = 0
+    sides, _ = camera_rig.choose_sides(side, camera_rig.Track(grown, 6, 0, 200.0, 100.0), lambda place: walls, carried)
+    assert walls.lines == 2 * (120 - 60)
+    fresh, _ = camera_rig.choose_sides(side, camera_rig.Track(grown, 6, 0, 200.0, 100.0), lambda place: walls)
+    assert list(sides) == list(fresh)
+    got = {k: planner.shot(side, grown, k, lambda place: walls) for k in range(120)}
+    assert {k: shot.camera for k, shot in got.items()} == {k: shot.camera for k, shot in shots(grown, side, range(120), walls).items()}
+    # A path that changed before its end (not only grew) is tested again whole.
+    moved = runner(np.concatenate([whole.positions[:40] + [5.0, 0, 0], whole.positions[40:]]), whole.yaws,
+                   seconds=whole.seconds)
+    assert planner._carried(side, moved) is None
+
+
 def test_a_chosen_side_stays_put_and_only_pulls_in():
     r = run_along_z(n=120)
     walls = camera_rig.StaticWalls(wall_x(-300, 885, 2715))
@@ -340,10 +379,82 @@ class Evaluators:
         return self.made[-1]
 
 
-def _session(config, recording):
+def _session(config, recording, reader=rig_path.InProcessReader):
+    """A session over the fake host and evaluator; Mario's path read by `reader` (in this process
+    unless a test asks for the child)."""
     made = Evaluators(recording["map"])
     host = scene_session.command_host(fake_viewer_host.command())
-    return scene_session.SceneSession.open(config, recording["package"], host_factory=host, evaluator_factory=made), made
+    return scene_session.SceneSession.open(config, recording["package"], host_factory=host, evaluator_factory=made,
+                                           path_reader_factory=reader), made
+
+
+class HeldReader:
+    """A path reader whose reads finish when the test says (finish), in this process."""
+
+    def __init__(self):
+        self.asked = []
+
+    def read(self, data, rom, indices, mario):
+        from concurrent.futures import Future
+        self.asked.append((data, rom, list(indices), mario))
+        self.future = Future()
+        return self.future
+
+    def finish(self):
+        data, rom, indices, mario = self.asked[-1]
+        self.future.set_result(rig_path.InProcessReader().read(data, rom, indices, mario).result())
+
+    def close(self):
+        pass
+
+
+def test_a_rig_asked_before_marios_path_is_read_shows_the_recorded_camera_and_never_waits(config, recording):
+    """The lead's ask (round 6): the path read must never hold a picture. Until the reader answers,
+    a rig picture is the recorded one with one plain sentence, and the next one after it follows him."""
+    held = HeldReader()
+    session, _made = _session(config, recording, reader=lambda: held)
+    try:
+        front = {"rig": {"kind": "front", "tuning": {"marioHeight": 100, "rigAimFrames": 0}}}
+        waiting, _ = session.picture(2, front, "raw")
+        assert waiting["camera"] == "recorded" and waiting["reason"] == camera_rig.PATH_PENDING
+        assert waiting["camera_used"] is None and waiting["rig"]["kind"] == "front"
+        assert held.asked[0][2] == session.frames and len(held.asked) == 1
+        assert session.picture(3, front, "raw")[0]["reason"] == camera_rig.PATH_PENDING
+        assert len(held.asked) == 1                                       # one read, not one a picture
+        held.finish()
+        assert session.prepare_path().done()
+        drawn, _ = session.picture(2, front, "raw")
+        assert drawn["camera"] == "free" and drawn["camera_used"]["focus"] == pytest.approx([200.0, 150.0, -200.0])
+        # A growing scene's newest frame not read yet: the frames before it follow him meanwhile, that
+        # one says it is getting ready, and only it is read again.
+        newest = session.frames[-1]
+        del session._stage_reads[newest]
+        assert session.picture(len(session.frames) - 1, front, "raw")[0]["reason"] == camera_rig.PATH_PENDING
+        assert held.asked[-1][2] == [newest]
+        assert session.picture(2, front, "raw")[0]["camera"] == "free"
+        held.finish()
+        assert session.picture(len(session.frames) - 1, front, "raw")[0]["camera"] == "free"
+    finally:
+        session.close()
+
+
+def test_the_child_reads_the_same_path_as_this_process(recording):
+    """rig_path.PathReader's child (below normal priority, hidden) answers what read_poses gives here."""
+    import package as scene_package
+    data, rom = recording["package"].read_bytes(), recording["rom"].read_bytes()
+    package = scene_package.Package(data, rom)
+    indices = list(range(len(package)))
+    from sm64_events.memory.layout import layout_for
+    mario = layout_for("us").mario_struct & 0x1FFFFFFF
+    reader = rig_path.PathReader()
+    try:
+        poses = reader.read(data, rom, indices, mario).result(timeout=60)
+        again = reader.read(data, rom, indices[2:5], mario).result(timeout=60)          # the ROM went once
+    finally:
+        assert reader.close() == 0
+    here = rig_path.read_poses(package, indices, mario)
+    assert np.array_equal(poses, here, equal_nan=True) and np.array_equal(again, here[2:5], equal_nan=True)
+    assert poses[:, 0].tolist() == [x for x, _y, _z, _yaw in POSES]
 
 
 def test_a_rig_follows_the_stages_mario_from_the_scene_state_through_the_free_cameras_path(config, recording):
@@ -428,7 +539,8 @@ def test_without_mario_in_the_scene_state_a_rig_shows_the_recorded_camera(config
     package = tmp_path / "plain.sm64scene"
     fixture.pk.write_package(fixture.pk.tap_source(session_dir, "next", states=True), rom, package, fixture.pk.ZLIB)
     host = scene_session.command_host(fake_viewer_host.command())
-    session = scene_session.SceneSession.open(config, package, host_factory=host, evaluator_factory=Evaluators(None))
+    session = scene_session.SceneSession.open(config, package, host_factory=host, evaluator_factory=Evaluators(None),
+                                              path_reader_factory=rig_path.InProcessReader)
     try:
         header, _ = session.picture(1, {"rig": {"kind": "side"}}, "raw")
         assert header["camera"] == "recorded" and header["reason"] == camera_rig.NO_RUNNER
@@ -447,10 +559,13 @@ def test_the_socket_asks_for_a_rig_in_one_picture_request(config, recording, tmp
     app = FastAPI()
     scene_lab_api.mount_scene_lab(app, path, watch_seconds=0.05, ghost_loader=Loader({}), session_options={
         "host_factory": scene_session.command_host(fake_viewer_host.command()),
-        "evaluator_factory": Evaluators(recording["map"])})
+        "evaluator_factory": Evaluators(recording["map"])})          # Mario's path: the real child
     with TestClient(app) as client:
         opened = client.post("/api/scene-lab/open", json={"package": "scene.sm64scene"}).json()
         with client.websocket_connect("/api/scene-lab/ws") as socket:
+            # The page asks for the path as the scene opens; the answer comes once the child read it.
+            socket.send_json({"id": 9, "session": opened["session"], "kind": "rig-path"})
+            assert json.loads(socket.receive()["text"]) == {"id": 9, "kind": "rig-path", "ready": True, "reason": None}
             socket.send_json({"id": 1, "session": opened["session"], "frame": 3, "encoding": "raw",
                               "camera": {"rig": {"kind": "front", "shot": "close", "tuning": {"marioHeight": 100}}}})
             header = _picture_header(socket)

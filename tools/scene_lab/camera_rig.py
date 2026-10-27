@@ -81,6 +81,7 @@ MAX_TARGET = 512
 NO_RUNNER = "Mario's place is unknown in this picture (a level load or a menu), so it shows the recorded camera."
 GHOST_ELSEWHERE = "This ghost is not in this area of the level here, so this shows the recorded camera."
 NO_STATE = "This recording carries no scene state, so a cinematic camera has no path to follow."
+PATH_PENDING = "Getting the path ready for this camera, so this picture shows the recorded camera."
 
 
 def _number(value) -> bool:
@@ -415,6 +416,7 @@ class Planner:
         self.runner: Runner | None = None                     # whose sides, rises and pulls are kept
         self.rig: Rig | None = None
         self.sides: np.ndarray | None = None
+        self.blocked: tuple | None = None                     # an auto side's wall tests: (by side, frames valid)
         self.rises: dict[int, float] = {}                     # frame -> its own rise (radians)
         self.pulls: dict[int, float] = {}                     # frame -> its own pull along its eased line (units)
 
@@ -435,9 +437,11 @@ class Planner:
         if runner.cuts[frame] < 0 or not np.isfinite(track.feet[frame]).all():
             return Shot(None, reason=runner.reason)
         if self.runner is not runner or self.rig != rig:
+            carried = self._carried(rig, runner)
             self.runner, self.rig, self.sides, self.rises, self.pulls = runner, rig, None, {}, {}
+            self.blocked = carried
         if rig.kind == "side" and self.sides is None:
-            self.sides = choose_sides(rig, track, walls_at)
+            self.sides, self.blocked = choose_sides(rig, track, walls_at, self.blocked)
         aim = track.aim[frame]
         line = self._lines(rig, track, np.array([frame]), walls_at)[0]
         length = float(np.linalg.norm(line))
@@ -447,6 +451,17 @@ class Planner:
         return Shot({"focus": [float(v) for v in aim], "position": [float(v) for v in position], "roll": 0,
                      "fov": rig.value("rigFov")}, None if self.sides is None else str(self.sides[frame]), None,
                     share, math.degrees(self._eased(self.rises, self._own_rises, rig, track, frame, walls_at)))
+
+    def _carried(self, rig: Rig, runner: Runner) -> tuple | None:
+        """The last runner's wall tests that hold for `runner` too: when the same rig's runner only
+        gained frames (a scene still being written), every frame further than the smoothing reaches
+        from its old end tests the same, so only the rest is tested again."""
+        old, blocked = self.runner, self.blocked
+        if old is None or blocked is None or self.rig != rig or not extends(old, runner):
+            return None
+        reach = 3 * int(rig.value("rigSmoothFrames")) + int(rig.value("rigAimFrames")) + 2
+        stable = max(0, min(len(old) - reach, blocked[1]))
+        return {side: flags[:stable] for side, flags in blocked[0].items()}, stable
 
     def _block(self, track: Track, frame: int, reach: int) -> tuple[int, int]:
         """The pictures within `reach` of `frame` in one stretch with it: its run, and a side shot's side."""
@@ -550,31 +565,45 @@ def _kept(aims, cameras, runner: Runner, frames, walls_at, standoff: float) -> n
     return kept
 
 
-def choose_sides(rig: Rig, track: Track, walls_at) -> np.ndarray:
+def extends(old: Runner, new: Runner) -> bool:
+    """`new` is `old` with frames after its end, everything before them the same."""
+    n = len(old)
+    return len(new) >= n and old.places == new.places[:n] and np.array_equal(old.seconds, new.seconds[:n]) \
+        and np.array_equal(old.positions, new.positions[:n], equal_nan=True) \
+        and np.array_equal(old.yaws, new.yaws[:n], equal_nan=True)
+
+
+def choose_sides(rig: Rig, track: Track, walls_at, carried: tuple | None = None) -> tuple[np.ndarray, tuple | None]:
     """The side a side shot takes at every picture ("left"/"right"; "" where the runner is unknown).
     A fixed side is that side throughout. "auto" starts each run on the side clear for more of its
     first rigSideHoldFrames pictures (his right on a tie), and changes side only where the side it
     is on is blocked for the next rigSideHoldFrames pictures in a row and the other side is clear for
     more of them: a short pillar is ridden through (pulled in), a long wall moves the shot across.
     After a change it stays at least rigSideStayFrames pictures, so two walls close together never
-    make it flicker from side to side."""
+    make it flicker from side to side. Returns the sides and the wall tests ((by side, frames
+    valid), None for a fixed side); `carried`, tests of the frames before its count that still hold
+    (Planner._carried), are kept and only the frames after them are tested."""
     runner, n = track.runner, len(track.runner)
     out = np.full(n, "", dtype=object)
     known = np.flatnonzero(runner.cuts >= 0)
     if rig.side != "auto":
         out[known] = rig.side
-        return out
+        return out, None
     if not len(known):
-        return out
+        return out, None
     hold = max(1, int(rig.value("rigSideHoldFrames")))
     lead = int(rig.value("rigPullFrames"))
     standoff = rig.value("rigWallStandoff")
+    kept_flags, stable = carried if carried is not None else ({}, 0)
+    tested = known[known >= stable]
     blocked = {}
     for name in ("left", "right"):
-        cameras = raw_positions(rig, track, known, [name] * len(known))
-        kept = _kept(track.aim[known], cameras, runner, known, walls_at, standoff)
         flags = np.zeros(n, bool)
-        flags[known] = kept < BLOCKED * np.linalg.norm(cameras - track.aim[known], axis=1)
+        flags[:stable] = kept_flags.get(name, np.zeros(stable, bool))
+        if len(tested):
+            cameras = raw_positions(rig, track, tested, [name] * len(tested))
+            kept = _kept(track.aim[tested], cameras, runner, tested, walls_at, standoff)
+            flags[tested] = kept < BLOCKED * np.linalg.norm(cameras - track.aim[tested], axis=1)
         blocked[name] = flags
     other = {"left": "right", "right": "left"}
     runs = runner.cuts
@@ -595,4 +624,4 @@ def choose_sides(rig: Rig, track: Track, walls_at) -> np.ndarray:
             if stuck and sum(not blocked[other[current]][j] for j in ahead) > sum(not blocked[current][j] for j in ahead):
                 current, since = other[current], k
         out[k] = current
-    return out
+    return out, (blocked, n)

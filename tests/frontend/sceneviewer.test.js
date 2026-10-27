@@ -2116,6 +2116,26 @@ test("the cinematic cameras follow a ghost in the scene, and Mario again once it
   expect([follow.value, tag(page)]).toEqual(["stage", "Front · Mario"]);
 });
 
+test("a cinematic picture that came back before Mario's path was read is asked for again once it is", async () => {
+  const { page, socket } = await openScene();
+  await socket.picture(socket.sent[0]);
+  fireEvent.click(rigBar(page).getByRole("button", { name: "Front" }));
+  await until(() => expect(rigAsked(socket)).toBeTruthy());
+  const question = socket.sent.find((message) => message.kind === "rig-path");
+  expect(question).toMatchObject({ session: 1 });
+  const pending = "Getting the path ready for this camera, so this picture shows the recorded camera.";
+  await socket.picture(socket.pictures().at(-1), { camera: "recorded", reason: pending, camera_used: null,
+    rig: { kind: "front", target: "stage", shot: "medium", side: null, pulled: null, raised: null } });
+  await until(() => expect(page.container.querySelector(".scene-lab-reason").textContent).toBe(pending));
+  const asked = socket.pictures().length;
+  socket.text({ id: question.id, kind: "rig-path", ready: true, reason: null });
+  await until(() => expect(socket.pictures().length).toBe(asked + 1));
+  expect(socket.pictures().at(-1)).toMatchObject({ frame: 0, camera: { rig: { kind: "front" } } });
+  fireEvent.click(rigBar(page).getByRole("button", { name: "Side" }));              // asked once a scene
+  await until(() => expect(rigAsked(socket).kind).toBe("side"));
+  expect(socket.sent.filter((message) => message.kind === "rig-path").length).toBe(1);
+});
+
 test("without the free camera the cinematic cameras stay, disabled, with the reason", async () => {
   opened = { ...opened, free_camera: { available: false, reason: "The lab config names no symbol map." } };
   const { page, socket } = await openScene();
