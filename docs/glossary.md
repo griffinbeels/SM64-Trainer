@@ -1418,6 +1418,8 @@ its last pose and fades; any other one is gone. The race's own fades,
 (never music) beside the stage's sound, on the [[frame]]s that recorded them,
 placed and faded from the stage's recorded camera and Mario as the game does,
 at your [[ghost]] volume; each has a Mute of its own in the panel below the player.
+A child process makes each one's sound once, apart from the server, so adding
+one during Play never slows the pictures.
 Each one in the scene has a [[ghost's view]].
 
 - **Lives** -- the set, its alignment and its look

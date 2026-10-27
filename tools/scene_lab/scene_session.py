@@ -683,14 +683,21 @@ class SceneSession:
         step repeated: playback that fell behind once asks for the frame due next. A drag (the
         same frame again) predicts nothing new. A job stops before its next frame once another
         free-camera request arrives (_ahead_generation), so a request never waits for more than
-        the one frame being resolved, and the newest request's job runs next."""
+        the one frame being resolved, and the newest request's job runs next. With the state
+        resolvers' children running, a drag hands them the frames after it too: they cost the
+        server nothing, and a Play started from the dragged frame then finds its first states
+        ready (without, its first pictures waited ~100 ms for a cold seek, measured 2026-10-27)."""
         step = None if self._last_free is None else frame - self._last_free
         self._last_free = frame
-        if self._ahead is None or step == 0:
+        if self._ahead is None or (step == 0 and self._resolvers is None):
             return
         direction = -1 if step is not None and -LOOK_AHEAD_STEP <= step < 0 else 1
         targets = [self.frames[at] for at in range(frame + direction, frame + direction * (RESOLVED_AHEAD + 1),
                                                    direction) if 0 <= at < len(self.frames)]
+        if step == 0:
+            if targets:
+                self._resolve_ahead(targets)
+            return
         if targets and not self._resolve_ahead(targets):
             self._ahead.submit(self._prepare, targets[:LOOK_AHEAD_FRAMES], self._ahead_generation)
 

@@ -2209,8 +2209,11 @@ picture publishes that picture's ghosts and each one's frame (`picture`).
   its picture does. The track lies on the stage recording's own samples
   (scene frame k's picture sample is ghost frame g(k)'s tick start), so the
   page's worklet mixes it on the stage's clock with a gain per ghost (Mute).
-  The server renders it once, on the first block asked: on his 655-frame HMC
-  take 1.4 s (the stage's camera reads 1.0 s, the engine 88 ms). The stage's
+  It is made once, on the first block asked, in a below-normal child process
+  (`ghost_sound.TrackMaker`, one per open scene), so making it never takes
+  Python's lock from the scene's pictures: on his 830-frame HMC take about
+  0.8 s a ghost (the stage's camera reads, a few bytes of each state, 0.5 s;
+  the engine 10-60 ms; laying it on the samples 0.2 s). The stage's
   own sound plays on its pictures too where its stems fit measured
   Project64's audio delay (`scene_audio.measured_delay`): a coin and its own
   run's ghost's coin land 10 ms apart on a split scene (SM64's coin on both
