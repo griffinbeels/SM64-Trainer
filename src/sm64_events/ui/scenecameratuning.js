@@ -59,11 +59,11 @@ export const SCENE_CAMERA_TUNABLES = {
     why: "The wheel stops this far out. Bob-omb Battlefield is about 16000 units across.",
   },
 
-  // --- flying (hold the right button, WASD, Q/E) ---------------------------
+  // --- flying (W A S D, Q/E; the right button adds looking around) --------
   flightSpeed: {
     group: "Flight", label: "Flight speed at 1x", value: 1500,
     min: 100, max: 10000, step: 50, unit: "units/s",
-    why: "How fast W A S D and Q E move the camera at the speed control's 1x. Mario runs at about 960 units a second. No acceleration: it moves at this speed from the first frame a key is down and stops the frame it is let go.",
+    why: "How fast W A S D and Q E move the camera at the speed control's 1x, with or without the right button held. Mario runs at about 960 units a second. No acceleration: it moves at this speed from the first frame a key is down and stops the frame it is let go.",
   },
   lookPerPixel: {
     group: "Flight", label: "Look per pixel while flying", value: 0.003,
@@ -73,17 +73,17 @@ export const SCENE_CAMERA_TUNABLES = {
   fastMultiplier: {
     group: "Flight", label: "Shift: faster by", value: 4,
     min: 1, max: 20, step: 0.5, unit: "x",
-    why: "Holding Shift while flying multiplies the speed by this.",
+    why: "Holding Shift with W A S D or Q E multiplies the speed by this.",
   },
   slowMultiplier: {
     group: "Flight", label: "Alt: slower by", value: 0.25,
     min: 0.02, max: 1, step: 0.01, unit: "x",
-    why: "Holding Alt while flying multiplies the speed by this, for lining up on a ledge.",
+    why: "Holding Alt with W A S D or Q E multiplies the speed by this, for lining up on a ledge.",
   },
   speedPerNotch: {
     group: "Flight", label: "Wheel changes speed by", value: 1.25,
     min: 1.02, max: 3, step: 0.01, unit: "x",
-    why: "While flying, each wheel notch multiplies (up) or divides (down) the flight speed by this; the speed control's - and + buttons step by the same factor.",
+    why: "While the right button is held, each wheel notch multiplies (up) or divides (down) the flight speed by this; the speed control's - and + buttons step by the same factor.",
   },
   levelPerSecond: {
     group: "Flight", label: "Level a tilted view per second", value: 20,

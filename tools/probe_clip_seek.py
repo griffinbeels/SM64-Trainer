@@ -224,6 +224,8 @@ def main() -> int:
     except ImportError:
         print("playwright is not installed in this venv -- uilab's driver brings it")
         return 2
+    from browser_guard import install as guard_browsers
+    guard_browsers()                     # the browser below never reaches the real pointer lock
 
     slots = parse_slots(args.slots, max(len(frame_map), 2))
     handler = functools.partial(type("Bound", (ClipHandler,), {"clip": clip}))

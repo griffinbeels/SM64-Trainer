@@ -1314,14 +1314,19 @@ own pace (each picture stays up as long as the recording showed it, so a level
 load's held picture holds and its sound plays through), and a **Free
 camera** the [[scene evaluator]] redraws. Free camera starts from the picture
 on screen (the recorded camera's place, screen tilt and field of view) and owns
-all four after that, so steps and seeks never move or zoom it. Controls: drag to
-turn around the focus point, Shift-drag or a middle-button drag to slide, the
-wheel to move closer; hold the right button to fly (W A S D, Q and E down and
-up, Shift faster, Alt slower, the wheel or the flight speed control sets the
-speed); **double-click** a surface to fly to just in front of it and look at
+all four after that, so steps and seeks never move or zoom it. Controls: W A S D
+fly whenever the page has the keyboard, Q and E down and up, Shift faster, Alt
+slower (the first press in the recorded camera enters Free camera from the
+picture on screen); hold the right button to look around with the mouse, the
+wheel or the flight speed control then setting the speed; drag to turn around
+the focus point, Shift-drag or a middle-button drag to slide, the wheel to move
+closer; **double-click** a surface to fly to just in front of it and look at
 Mario (an eased flight any input stops); F looks at Mario; **Set focus** then a
 click puts the focus point where the picture drew that pixel; one button puts
 the view back where Free camera began; R returns to the recorded camera. A tilted view levels as you turn or fly, never on entry.
+The page takes the keyboard when you arrive (the sidebar or the [[ghost button]])
+and after a mouse click on its controls; a field that types keeps its keys, and
+Esc, leaving the window or the page lets go of every key.
 **Tune controls** opens the camera's tuning panel, whose SAVE writes the numbers
 as the shipped defaults. It is
 lab-only and off by default: it exists only when `SM64_SCENE_LAB` names a lab

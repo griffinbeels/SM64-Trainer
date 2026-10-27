@@ -24,7 +24,7 @@
   transform: translateX(-50%); border-radius: 6px; background: rgba(0,0,0,.66); color: var(--text); font-size: .78rem;
   text-align: center; pointer-events: none; }
 .scene-lab-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
-.scene-lab-bar input[type=range] { flex: 1 1 220px; min-width: 0; accent-color: var(--gold); }
+.scene-lab-bar input[type=range] { flex: 1 1 220px; min-width: 0; }
 .scene-lab-bar button[aria-pressed="true"] { border-color: var(--gold); color: var(--gold-soft); }
 .scene-lab-frame { min-width: 13ch; font-variant-numeric: tabular-nums; }
 .scene-lab-frame small { display: block; color: var(--muted); }
@@ -45,7 +45,7 @@
   margin-bottom: 8px; }
 .scene-lab-tune .tune-row > label { font-size: .78rem; cursor: help; }
 .scene-lab-tune .tune-row > input[type=number] { width: 100%; background: var(--surface); }
-.scene-lab-tune .tune-row > input[type=range] { grid-column: 1 / -1; width: 100%; margin: 0; accent-color: var(--gold); }
+.scene-lab-tune .tune-row > input[type=range] { grid-column: 1 / -1; width: 100%; margin: 0; }
 .scene-lab-tune .tune-row.is-changed > label { color: var(--gold-soft); font-weight: 600; }
 .scene-lab-readout { font-variant-numeric: tabular-nums; }
 /* The Sound row (components/sceneaudio.js): a short volume slider, then what this picture's sound is. */

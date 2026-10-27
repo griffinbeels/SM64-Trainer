@@ -325,10 +325,13 @@ MEASURE = """
       colours: row.querySelectorAll('.ghost-colour').length,
       hues: row.querySelectorAll('.ghost-hue').length,
       hueValue: hue ? hue.value : null,
-      // THE PAINT, not the class: the wheel is a gradient, and a gradient that
-      // failed to parse leaves the element a plain box with the class still on
-      // it. `none` is the answer for a background-image that is not there.
-      hueTrack: hue ? getComputedStyle(hue).backgroundImage : null,
+      // WHAT THE BROWSER ACCEPTED, not the class: the wheel is a gradient on the
+      // slider's track, and a gradient that failed to parse is dropped from the
+      // rule, leaving a plain track with the class still on the input. A track
+      // pseudo-element has no computed style to read, so its rule is read.
+      hueTrack: hue ? ([...document.styleSheets].flatMap((sheet) => [...sheet.cssRules])
+        .find((rule) => rule.selectorText === '.ghost-hue::-webkit-slider-runnable-track')
+        ?.style.backgroundImage || null) : null,
       hueBox: box(hue),
       colourChecked: colourSwitch ? colourSwitch.getAttribute('aria-checked') : null,
       colourNamed: colourSwitch ? colourSwitch.getAttribute('aria-label') : null,

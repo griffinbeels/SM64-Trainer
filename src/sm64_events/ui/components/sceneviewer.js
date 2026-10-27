@@ -24,17 +24,20 @@
 // The free camera (components/scenecamera.js owns its math) starts from the
 // picture on screen -- the recorded camera's place, screen tilt and field of
 // view -- and stays in the game's world coordinates while you step or seek.
-// Left drag turns around the focus point, Shift-drag or a middle-button drag
-// slides, the wheel moves closer; holding the right button flies (W A S D,
-// Q E, Shift faster, Alt slower, the wheel sets the speed). A double-click
-// flies to the surface under the pointer and looks at Mario. F looks at
-// Mario, Set focus turns to a point on the stage, Reset view goes back to
-// where Free camera began, R returns to the recorded camera. A press that
-// moves under DRAG_DEAD_ZONE pixels is a click, never a drag; any input stops
-// a double-click's flight where it is. One keyboard owner: the page's keys work
-// only while it has focus, and the flight keys only while the right button is
-// held. Nothing is captured by opening a scene; Esc, letting go, leaving the
-// window and Close each stop every movement and give the pointer back.
+// W A S D and Q E fly whenever the page has the keyboard (Shift faster, Alt
+// slower; the first press in the recorded camera enters the free camera from
+// the picture on screen); holding the right button adds looking around with
+// the mouse, and the wheel then sets the speed. Left drag turns around the
+// focus point, Shift-drag or a middle-button drag slides, the wheel moves
+// closer. A double-click flies to the surface under the pointer and looks at
+// Mario. F looks at Mario, Set focus turns to a point on the stage, Reset view
+// goes back to where Free camera began, R returns to the recorded camera. A
+// press that moves under DRAG_DEAD_ZONE pixels is a click, never a drag; any
+// input stops a double-click's flight where it is. One keyboard owner (onKey):
+// arriving on the page gives it the keyboard, a mouse click on its controls
+// hands it back, and a field that types keeps its keys. Opening a scene
+// captures no pointer; Esc, leaving the window or the page, and Close each stop
+// every movement, let go of every key and give the pointer back.
 //
 // The recording's sound (sceneaudio.js) follows the picture clock: SceneLink
 // tells it when Play starts, each picture it draws, and every stop.
@@ -68,6 +71,7 @@ const sameOrbit = (a, b) => !!a && !!b && a.yaw === b.yaw && a.pitch === b.pitch
 // The flight keys, by physical key so they sit under the left hand on any layout.
 export const FLIGHT_KEYS = { KeyW: ["forward", 1], KeyS: ["forward", -1], KeyD: ["right", 1], KeyA: ["right", -1],
   KeyE: ["up", 1], KeyQ: ["up", -1] };
+const idleFlight = () => ({ keys: new Set(), fast: false, slow: false, ticking: false, last: 0, input: null });
 function movementOf(keys) {
   const move = { forward: 0, right: 0, up: 0 };
   for (const code of keys) { const [axis, sign] = FLIGHT_KEYS[code]; move[axis] += sign; }
@@ -148,6 +152,22 @@ export class MovingTimings {
     Object.assign(this, { samples: [], skipped: 0, timer: null });
   }
 }
+
+// The pointer lock's records (SceneLink.noteLock, about four a right-button hold) reach the UI
+// log at most LOCK_NOTES.records per LOCK_NOTES.ms: a page caught granting and exiting cannot
+// flood it, and the next record that goes says how many did not.
+export const LOCK_NOTES = { records: 40, ms: 10000 };
+export function throttledNotes(post, now = () => performance.now()) {
+  let sent = [], dropped = 0;
+  return (record) => {
+    const at = now();
+    sent = sent.filter((time) => at - time < LOCK_NOTES.ms);
+    if (sent.length >= LOCK_NOTES.records) { dropped += 1; return; }
+    sent.push(at);
+    post(dropped ? { ...record, dropped } : record);
+    dropped = 0;
+  };
+}
 const ms = (value) => (value == null ? "-" : `${Math.round(value)} ms`);
 const megabytes = (bytes) => `${(bytes / 1048576).toFixed(1)} MB`;
 // Three figures, whole numbers with one place: 0.64x, 1.0x, 1.25x, 15.3x.
@@ -215,14 +235,15 @@ export const SHARED_WAIT = { ms: 2000 };
 // EARLIEST input so input-to-picture stays honest (until that picture is
 // drawn). `changed` re-renders the page.
 export class SceneLink {
-  constructor({ draw, changed, ended, animate = (step) => requestAnimationFrame(step) }) {
-    Object.assign(this, { draw, changed, ended, animate });
+  constructor({ draw, changed, ended, animate = (step) => requestAnimationFrame(step), observe = () => {} }) {
+    Object.assign(this, { draw, changed, ended, animate, observe });
+    Object.assign(this, { lockSerial: 0, lockTarget: null, lockPromised: null, lockExit: null });
     Object.assign(this, { scene: null, frame: 0, free: false, orbit: null, entry: null, encoding: "jpeg",
       playing: false, shown: null, notice: null, error: null, drawing: false, ws: null, inFlight: new Map(),
       wanted: null, sequence: 0, questions: new Map(), latencies: [], pending: [0, 0, false], drag: null,
-      entering: null, arrived: 0, drawnSeq: 0, fly: null, speed: 1, picking: false, finding: false, glide: null,
-      serial: 0, noticeTimer: null, moving: null, shared: new Map(), playback: null, readies: [], coldId: 0,
-      autoplay: false,
+      entering: null, arrived: 0, drawnSeq: 0, looking: null, flight: idleFlight(), speed: 1, picking: false,
+      finding: false, glide: null, serial: 0, noticeTimer: null, moving: null, shared: new Map(), playback: null,
+      readies: [], coldId: 0, autoplay: false,
       sound: new SceneSound({ changed: () => this.changed() }) });
     this.timings = new MovingTimings((summary) => { this.moving = summary; this.changed(); });
     this.onShared = (event) => this.sharedArrived(event);
@@ -270,7 +291,9 @@ export class SceneLink {
       if (waiting.buffer) webview()?.releaseBuffer(waiting.buffer);
       else { clearTimeout(waiting.timer); waiting.resolve(null); }
     }
-    Object.assign(this, { fly: null, picking: false, drag: null });
+    this.stopLook("scene closed");
+    Object.assign(this, { picking: false, drag: null });
+    this.releaseKeys();
     if (this.ws) { this.ws.onclose = null; this.ws.close(); this.ws = null; }
   }
 
@@ -501,12 +524,13 @@ export class SceneLink {
     Object.assign(this, { pending: [0, 0, false], free: true, entry: orbit,
       orbit: dx || dy ? (sliding ? slid : turned)(orbit, dx, dy, tuning) : orbit });
     this.want(dx || dy ? "move" : "input");
-    if (this.fly?.keys.size) this.flyOn(performance.now());
+    this.flightOn(performance.now());       // a movement key held through the entry moves from here
   }
 
   recorded(time) {
     this.interrupt();
-    this.stopFlight();
+    this.stopLook("recorded camera");
+    this.releaseKeys();
     Object.assign(this, { free: false, notice: null, picking: false });
     this.want("input", time);
   }
@@ -622,64 +646,153 @@ export class SceneLink {
     step(now);
   }
 
-  // ---- flight: only while the right button is held on the picture
-  async startFlight(time) {
-    if (!this.freeAvailable || this.fly) return;
-    this.interrupt();
-    Object.assign(this, { fly: { keys: new Set(), fast: false, slow: false, ticking: false, last: time, input: null },
-      picking: false });
-    this.changed();
-    await this.enterFree();
-    if (!this.free) this.stopFlight();
-  }
-
-  stopFlight() {
-    if (!this.fly) return;
-    this.fly = null;
-    this.changed();
-  }
-
-  // A flight key went down or up; false when the page is not flying (the key is not the camera's).
-  flyKey(event) {
-    const fly = this.fly;
-    if (!fly) return false;
-    Object.assign(fly, { fast: event.shiftKey, slow: event.altKey });
-    if (FLIGHT_KEYS[event.code]) {
-      if (event.type === "keydown") {
-        if (!fly.keys.has(event.code) && fly.input == null) fly.input = event.timeStamp;
-        fly.keys.add(event.code);
-        this.flyOn(performance.now());
-      } else {
-        fly.keys.delete(event.code);
-      }
+  // ---- flight: W A S D and Q E whenever the page has the keyboard
+  // A movement key (with Shift or Alt) went down or up: true when it is the
+  // camera's. The first press in the recorded camera enters the free camera
+  // from the picture on screen, and the key moves it once it is in. A key let
+  // go of by Esc, R or leaving the page stays still until pressed again: its
+  // held-down repeats never restart it.
+  moveKey(event) {
+    const flight = this.flight, code = event.code;
+    Object.assign(flight, { fast: event.shiftKey, slow: event.altKey });
+    if (!FLIGHT_KEYS[code]) return false;
+    if (event.type !== "keydown") {
+      flight.keys.delete(code);
+      return true;
     }
+    if (!this.scene || !this.freeAvailable) return false;
+    if (event.repeat) return true;
+    this.interrupt();
+    if (flight.input == null) flight.input = event.timeStamp;
+    flight.keys.add(code);
+    if (this.free) this.flightOn(performance.now());
+    else this.enterFree();
     return true;
   }
 
-  flyOn(time) {
-    const fly = this.fly;
-    if (!fly || fly.ticking || !this.free || !fly.keys.size) return;
-    Object.assign(fly, { ticking: true, last: time });
-    this.animate(this.flyTick);
-  }
+  releaseKeys() { this.flight = idleFlight(); }
 
   // One step of flight per animation frame, at a constant speed for the time
   // that passed (a stall moves at most a tenth of a second); stops the frame
-  // the last key is let go.
-  flyTick = (now) => {
-    const fly = this.fly;
-    if (!fly || !this.free || !fly.keys.size) { if (fly) fly.ticking = false; return; }
-    const seconds = clamp((now - fly.last) / 1000, 0, 0.1), tuning = sceneCameraTuning();
-    fly.last = now;
-    this.orbit = flown(this.orbit, movementOf(fly.keys), seconds,
-      flightSpeed(this.speed, fly, tuning), tuning);
-    this.want("move", Math.min(fly.input ?? now, performance.now()));
-    fly.input = null;
-    this.animate(this.flyTick);
-  };
+  // the last key is let go, or once releaseKeys has let go of this flight.
+  flightOn(time) {
+    const flight = this.flight;
+    if (flight.ticking || !this.free || !flight.keys.size) return;
+    Object.assign(flight, { ticking: true, last: time });
+    const tick = (now) => {
+      if (this.flight !== flight) return;
+      if (!this.free || !flight.keys.size) { flight.ticking = false; return; }
+      const seconds = clamp((now - flight.last) / 1000, 0, 0.1), tuning = sceneCameraTuning();
+      flight.last = now;
+      this.orbit = flown(this.orbit, movementOf(flight.keys), seconds, flightSpeed(this.speed, flight, tuning), tuning);
+      this.want("move", Math.min(flight.input ?? now, performance.now()));
+      flight.input = null;
+      this.animate(tick);
+    };
+    this.animate(tick);
+  }
+
+  // ---- looking around: only while the right button is held on the picture
+  async startLook() {
+    if (!this.freeAvailable || this.looking) return;
+    this.interrupt();
+    const look = { locked: false, token: null };
+    Object.assign(this, { looking: look, picking: false });
+    this.changed();
+    await this.enterFree();
+    if (!this.free && this.looking === look) this.stopLook("no free camera");
+  }
+
+  // Every way a look ends: `why` goes into the pointer lock's records.
+  stopLook(why) {
+    const was = this.looking;
+    this.looking = null;
+    if (was) this.noteLock("ended", why);
+    this.exitLock(why);
+    if (was) this.changed();
+  }
+
+  // ---- the pointer lock a look asks for. Chromium on Windows keeps the cursor
+  // inside the page while a lock is held, so a lock no look is using walls the
+  // cursor in (his report, 2026-10-26: "as if there's an invisible wall
+  // blocking its movement"). Each request carries a token: a lock stays only
+  // while the look that asked for it is in progress, the page shows and the
+  // window has focus, and is exited the moment it lands otherwise (released
+  // before the grant, a stale request, a hidden page, another window in front).
+  // Every end of a look exits the lock it holds, and a request still pending
+  // then has no look to land on. noteLock records each step in the UI log:
+  // requested, granted, ended (the look, and why), exited (and why: what asked,
+  // or the browser), error.
+  requestLock(canvas) {
+    const token = ++this.lockSerial;
+    if (this.looking) this.looking.token = token;
+    this.lockTarget = canvas;
+    this.noteLock("requested", null, token);
+    let asked;
+    try { asked = canvas.requestPointerLock?.(); } catch { return this.noteLock("error", "request threw", token); }
+    if (typeof asked?.then !== "function") return;
+    this.lockPromised = token;
+    asked.then(() => this.lockGranted(token), () => {});   // a refusal arrives as pointerlockerror
+  }
+
+  // Why a lock may not stay, or null: the look that asked is in progress, the page shows, the window has focus.
+  unwelcome(token = this.looking?.token) {
+    if (!this.looking) return "no look";
+    if (token !== this.looking.token) return "stale request";
+    if (document.hidden) return "page hidden";
+    if (!document.hasFocus()) return "window unfocused";
+    return null;
+  }
+
+  holdsLock() { return !!this.lockTarget && document.pointerLockElement === this.lockTarget; }
+
+  // Request `token` granted (its promise): kept, or exited at once.
+  lockGranted(token) {
+    if (!this.holdsLock()) return;
+    const why = this.unwelcome(token);
+    if (why) this.exitLock(why);
+    else this.lockKept(token);
+  }
+
+  lockKept(token) {
+    if (this.looking.locked) return;
+    this.looking.locked = true;
+    this.noteLock("granted", null, token);
+  }
+
+  // pointerlockchange. A lock landing with no look to use it is exited; one whose request
+  // promised an answer is judged by that answer (lockGranted), which knows its token. True
+  // when the browser itself ended a lock a look was using (its own Esc): every movement ends.
+  lockChanged() {
+    if (this.holdsLock()) {
+      const why = this.unwelcome();
+      if (why) this.exitLock(why);
+      else if (this.lockPromised !== this.looking.token) this.lockKept(this.looking.token);
+      return false;
+    }
+    const asked = this.lockExit, used = !!this.looking?.locked;
+    if (asked == null && !used) return false;
+    this.lockExit = null;
+    if (this.looking) this.looking.locked = false;
+    this.noteLock("exited", asked ?? "the browser");
+    return asked == null;
+  }
+
+  // Exits the lock this page holds, if it holds one; the browser's pointerlockchange confirms it.
+  exitLock(why) {
+    if (this.looking) this.looking.locked = false;
+    if (!this.holdsLock()) return;
+    this.lockExit = why;
+    document.exitPointerLock?.();
+  }
+
+  noteLock(event, why = null, request = this.lockSerial) {
+    this.observe({ surface: "scene_viewer", kind: "pointer_lock", event, why, request, look: !!this.looking,
+      focused: document.hasFocus(), hidden: document.hidden });
+  }
 
   look(dx, dy, time) {
-    if (!this.fly || !this.free || (!dx && !dy)) return;
+    if (!this.looking || !this.free || (!dx && !dy)) return;
     this.orbit = looked(this.orbit, dx, dy, sceneCameraTuning());
     this.want("move", time);
   }
@@ -688,11 +801,12 @@ export class SceneLink {
 
   resetSpeed() { this.speed = 1; this.changed(); }
 
-  // Esc, letting go of the window, Close: every movement stops.
-  release() {
+  // Esc, letting go of the window, leaving the page, Close: every movement stops and every key is let go.
+  release(why) {
     this.interrupt();
     Object.assign(this, { drag: null, picking: false });
-    this.stopFlight();
+    this.stopLook(why);
+    this.releaseKeys();
     this.changed();
   }
 
@@ -791,30 +905,48 @@ const KEYS = {
   m: (link) => link.sound.toggleMute(),
 };
 
-// The page's one keyboard owner (keydown and keyup on the viewer): flight keys
-// while flying, then the transport and camera keys. Typing in a field or
-// using a focused button's own keys stays theirs.
+// A control that is clicked rather than typed into, and the keys it acts on
+// itself while it has focus: Space and Enter press it, a slider's arrows move it.
+const PRESSED = new Set(["button", "submit", "reset", "checkbox", "radio"]);
+const SLIDER_KEYS = new Set(["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown"]);
+function ownKey(target, key) {
+  const type = target?.tagName === "INPUT" ? target.type : null;
+  if (target?.tagName === "BUTTON" || PRESSED.has(type)) return key === " " || key === "Enter";
+  return type === "range" && SLIDER_KEYS.has(key);
+}
+
+// A field that takes typing keeps every key: text and number fields, selects, contenteditable.
+export function typesInto(target) {
+  const tag = target?.tagName;
+  return !!target?.isContentEditable || tag === "TEXTAREA" || tag === "SELECT"
+    || (tag === "INPUT" && target.type !== "range" && !PRESSED.has(target.type));
+}
+
+// The page's one keyboard owner: each keydown on the viewer, or with nothing
+// on the page focused (SceneViewer). The movement keys first, then the
+// transport and camera keys. A field that types keeps every key, a focused
+// control the keys it acts on itself (a mouse click hands the keyboard back to
+// the viewer, so only a control reached with Tab keeps them), and Ctrl or Meta
+// combinations are the browser's: reload, copy, devtools. Keys are let go
+// wherever focus has gone since (useSceneLink).
 function onKey(link, event, canvas) {
-  const tag = event.target.tagName, key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
-  if (key === "Escape") return endFlight(link, canvas, true);
-  if (link.flyKey(event)) {
-    if (FLIGHT_KEYS[event.code] || key === "Alt") event.preventDefault();   // Alt alone would open the window menu
-    if (FLIGHT_KEYS[event.code]) return;
-  }
-  if (event.type !== "keydown") return;
+  if (event.ctrlKey || event.metaKey || typesInto(event.target)) return;
+  const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
+  if (key === "Escape") return endLook(link, canvas, "Esc", true);
+  if (link.moveKey(event)) return event.preventDefault();
+  if (key === "Alt" && link.freeAvailable) return event.preventDefault();   // Alt alone would open the window menu
   const action = KEYS[key];
-  const ownKey = tag === "BUTTON" && (key === " " || key === "Enter");
-  if (!action || !link.scene || tag === "SELECT" || tag === "INPUT" || ownKey) return;
+  if (!action || !link.scene || ownKey(event.target, key)) return;
   event.preventDefault();
   action(link, event);
 }
 
-// Stops flight (and a drag, and Set focus when `everything`) and gives the
-// pointer back: the pointer lock and the capture.
-function endFlight(link, canvas, everything = false) {
+// Stops looking around (and a drag; and Set focus and every key when
+// `everything`) and gives the pointer back: the pointer lock (stopLook) and
+// the capture. `why` goes into the pointer lock's record.
+function endLook(link, canvas, why, everything = false) {
   const drag = link.drag;
-  if (everything) link.release(); else { link.stopFlight(); link.drag = null; }
-  if (canvas && document.pointerLockElement === canvas) document.exitPointerLock?.();
+  if (everything) link.release(why); else { link.stopLook(why); link.drag = null; }
   for (const id of [drag?.id, link.capture].filter((value) => value != null)) {
     try { canvas?.releasePointerCapture(id); } catch { /* already released */ }
   }
@@ -832,15 +964,15 @@ const MOVE_EVENT = typeof window !== "undefined" && "onpointerrawupdate" in wind
 // among them), never a drag: the camera does not move until the pointer has.
 export const DRAG_DEAD_ZONE = 4;
 
-// Hold the right button: the viewer takes the pointer (lock, else capture) and flies.
+// Hold the right button: the viewer takes the pointer (lock, else capture) and the mouse looks around.
 function takeOff(link, surface, event) {
   const canvas = event.currentTarget;
   event.preventDefault();
   surface.current?.focus({ preventScroll: true });
   canvas.setPointerCapture(event.pointerId);
   link.capture = event.pointerId;
-  link.startFlight(event.timeStamp);
-  try { canvas.requestPointerLock?.()?.catch?.(() => {}); } catch { /* the browser refused: capture still holds */ }
+  link.startLook();
+  link.requestLock(canvas);          // refused, the capture still holds
 }
 
 function pointerHandlers(link, surface) {
@@ -850,7 +982,7 @@ function pointerHandlers(link, surface) {
       if (!movable()) return;
       const canvas = event.currentTarget;
       if (event.button === 2 && !link.drag) return takeOff(link, surface, event);
-      if ((event.button !== 0 && event.button !== 1) || link.fly) return;
+      if ((event.button !== 0 && event.button !== 1) || link.looking) return;
       if (event.button === 1) event.preventDefault();  // the middle button slides, never autoscrolls
       if (event.button === 0 && link.picking) {
         const at = pictureFraction(canvas, event.clientX, event.clientY);
@@ -862,8 +994,8 @@ function pointerHandlers(link, surface) {
         moving: false };
     },
     [MOVE_EVENT]: (event) => {
-      if (link.fly) {
-        if (!(event.buttons & 2)) return endFlight(link, event.currentTarget);
+      if (link.looking) {
+        if (!(event.buttons & 2)) return endLook(link, event.currentTarget, "button up elsewhere");
         return link.look(event.movementX, event.movementY, event.timeStamp);
       }
       const drag = link.drag;
@@ -876,21 +1008,21 @@ function pointerHandlers(link, surface) {
     onmousedown: (event) => { if (event.button === 1 && movable()) event.preventDefault(); },
     onauxclick: (event) => { if (event.button === 1 && movable()) event.preventDefault(); },
     ondblclick: (event) => {
-      if (!movable() || link.fly || event.button !== 0) return;
+      if (!movable() || link.looking || event.button !== 0) return;
       const at = pictureFraction(event.currentTarget, event.clientX, event.clientY);
       if (at) link.flyTo(at.u, at.v, event.timeStamp);
     },
     onpointerup: (event) => {
-      if (link.fly && !(event.buttons & 2)) endFlight(link, event.currentTarget);
+      if (link.looking && !(event.buttons & 2)) endLook(link, event.currentTarget, "button up");
       link.drag = null;
     },
-    onpointercancel: (event) => endFlight(link, event.currentTarget),
+    onpointercancel: (event) => endLook(link, event.currentTarget, "pointer cancelled"),
     onlostpointercapture: () => { link.drag = null; },
     oncontextmenu: (event) => { if (movable()) event.preventDefault(); },
     onwheel: (event) => {
       if (!movable()) return;
       event.preventDefault();
-      if (link.fly) link.stepSpeed(-wheelPixels(event) / WHEEL_NOTCH);
+      if (link.looking) link.stepSpeed(-wheelPixels(event) / WHEEL_NOTCH);
       else link.dolly(wheelPixels(event), event.timeStamp);
     },
   };
@@ -949,23 +1081,23 @@ function Transport({ link }) {
 export function hintFor(link) {
   if (!link.freeAvailable) return `Only the recorded camera is available: ${link.scene.free_camera.reason}`;
   if (link.picking) return "Click a surface in the picture to turn around it. Esc cancels.";
-  if (link.fly) return "W A S D move, Q and E go down and up. Shift is faster, Alt slower, the wheel sets the speed. Let go of the right button to stop.";
-  if (link.free) return "Drag to turn around the focus point, Shift-drag or middle-drag to slide, the wheel moves closer. Double-click a surface to fly there, or hold the right button to fly. F looks at Mario, R returns to the recorded camera.";
-  return "Drag, scroll, double-click or hold the right button to move the camera yourself. Left and Right step one frame, Space plays.";
+  if (link.looking) return "Move the mouse to look around. W A S D move, Q and E go down and up, Shift is faster, Alt slower, the wheel sets the speed. Let go of the right button to stop looking.";
+  if (link.free) return "W A S D move, Q and E go down and up, Shift is faster, Alt slower; hold the right button to look around. Drag to turn around the focus point, Shift-drag or middle-drag to slide, the wheel moves closer, double-click a surface to fly there. F looks at Mario, R returns to the recorded camera.";
+  return "W A S D move the camera from this picture, Q and E go down and up; dragging, scrolling, double-clicking or holding the right button move it too. Left and Right step one frame, Space plays.";
 }
 
 // The same lesson on the picture itself while it is what you are acting on:
-// flying, or choosing a point.
+// looking around with the right button, or choosing a point.
 export function cueFor(link) {
   if (link.picking) return "Click a surface to turn around it · Esc cancels";
-  if (link.fly) return `W A S D move · Q E down, up · Shift faster · Alt slower · wheel: speed ${speedWords(link.speed)}`;
+  if (link.looking) return `W A S D move · Q E down, up · Shift faster · Alt slower · wheel: speed ${speedWords(link.speed)}`;
   return null;
 }
 
 function SpeedControl({ link }) {
   const tuning = sceneCameraTuning(), unitsPerSecond = Math.round(flightSpeed(link.speed, {}, tuning));
   return html`<div class="scene-lab-speed" role="group" aria-label="Flight speed"
-      title=${`Flying moves ${unitsPerSecond} units a second; the wheel changes it while you fly`}>
+      title=${`W A S D move ${unitsPerSecond} units a second; the wheel changes it while you hold the right button`}>
     <span>Flight speed</span>
     <button type="button" aria-label="Slower" onclick=${() => link.stepSpeed(-1)}>−</button>
     <output aria-live="polite">${speedWords(link.speed)}</output>
@@ -1076,7 +1208,7 @@ export function TunePanel() {
 
 function Player({ link, canvas, surface }) {
   const [tuning, setTuning] = useState(false);
-  const classes = [link.freeAvailable && "is-movable", link.picking && "is-picking", link.fly && "is-flying"];
+  const classes = [link.freeAvailable && "is-movable", link.picking && "is-picking", link.looking && "is-flying"];
   return html`<section class="practice-card scene-lab-player">
     <div class="scene-lab-stage">
       <canvas ref=${canvas} width="640" height="480" class=${classes.filter(Boolean).join(" ")}
@@ -1100,23 +1232,32 @@ function useSceneLink(canvas, refresh) {
   if (!link.current) {
     link.current = new SceneLink({
       draw: (header, bytes, claim, ready) => paint(canvas.current, header, bytes, claim, ready),
-      changed: () => setRevision((revision) => revision + 1), ended: () => refresh.current() });
+      changed: () => setRevision((revision) => revision + 1), ended: () => refresh.current(),
+      observe: throttledNotes(postObservation) });
   }
   useEffect(() => {
-    const scene = link.current, release = () => endFlight(scene, canvas.current, true);
-    const hidden = () => { if (document.hidden) { scene.pause(); release(); } };
-    const lock = () => {   // the browser ended the pointer lock (Esc): flight ends with it
-      if (scene.fly && document.pointerLockElement !== canvas.current && scene.fly.locked) release();
-      if (scene.fly && document.pointerLockElement === canvas.current) scene.fly.locked = true;
+    const scene = link.current, release = (why) => endLook(scene, canvas.current, why, true);
+    const hidden = () => { if (document.hidden) { scene.pause(); release("window hidden"); } };
+    const blurred = () => release("window blur");
+    const lock = () => { if (scene.lockChanged()) release("the browser"); };
+    const refused = () => scene.noteLock("error");
+    // A key let go of anywhere is let go of: focus may have left the viewer since it went down.
+    const keyUp = (event) => {
+      scene.moveKey(event);
+      if (event.key === "Alt" && scene.freeAvailable && event.target.closest?.(".scene-lab")) event.preventDefault();
     };
     document.addEventListener("visibilitychange", hidden);
     document.addEventListener("pointerlockchange", lock);
-    window.addEventListener("blur", release);
+    document.addEventListener("pointerlockerror", refused);
+    window.addEventListener("blur", blurred);
+    window.addEventListener("keyup", keyUp);
     return () => {
+      release("left the page");
       document.removeEventListener("visibilitychange", hidden);
       document.removeEventListener("pointerlockchange", lock);
-      window.removeEventListener("blur", release);
-      release();
+      document.removeEventListener("pointerlockerror", refused);
+      window.removeEventListener("blur", blurred);
+      window.removeEventListener("keyup", keyUp);
       // The server frees the renderer once no page has shown the scene for a
       // little while, so a tab switch and back keeps it open.
       scene.disconnect();
@@ -1132,7 +1273,7 @@ export function SceneViewer({ t }) {
   const lab = t?.sceneLab, intent = lab?.intent;
   const [status, setStatus] = useState(null);
   const [opening, setOpening] = useState(false);
-  const canvas = useRef(null), surface = useRef(null), refresh = useRef(null);
+  const canvas = useRef(null), surface = useRef(null), refresh = useRef(null), pointed = useRef(null);
   const link = useSceneLink(canvas, refresh);
   refresh.current = async () => {
     try {
@@ -1150,6 +1291,14 @@ export function SceneViewer({ t }) {
     lab.clearIntent();
     open({ attempt: intent.attempt }, { play: true });
   }, [intent]);
+  // Arriving gives the viewer the keyboard (from the sidebar, or the Ghost button's open), and a
+  // key pressed while nothing on the page has focus (a clicked control went away) is its too.
+  useEffect(() => {
+    surface.current?.focus({ preventScroll: true });
+    const stray = (event) => { if (event.target === document.body) onKey(link, event, canvas.current); };
+    document.addEventListener("keydown", stray);
+    return () => document.removeEventListener("keydown", stray);
+  }, []);
   // One observation per summary, read off the page once it shows it. Not useUiLog: that runs on
   // every render, and this page renders every picture, which would claim the practice page's
   // latency marks (ui/latency.js) dozens of times a second.
@@ -1170,15 +1319,36 @@ export function SceneViewer({ t }) {
     refresh.current();
   }
   async function close() {
-    endFlight(link, canvas.current, true);
+    endLook(link, canvas.current, "closed", true);
     link.disconnect();
     link.scene = null;
     link.changed();
     try { await send("POST", `${ROOT}/close`); } catch (problem) { link.fail(problem.message); }
     refresh.current();
   }
-  const keys = (event) => onKey(link, event, canvas.current);
-  return html`<div class="workshop-page scene-lab" ref=${surface} tabindex="-1" onkeydown=${keys} onkeyup=${keys}>
+  const keys = (event) => {
+    pointed.current = null;          // a key reaching the page: whatever has focus is used from the keyboard
+    onKey(link, event, canvas.current);
+  };
+  // A mouse click on one of the page's controls hands the keyboard back to the viewer, so Space
+  // plays after clicking Free camera; a control pressed from the keyboard (detail 0) keeps it.
+  // A select's choice made with the mouse does the same (its letters would otherwise pick an
+  // option by its first letter: E and S switch Pictures to "Exact..."); one reached with Tab
+  // keeps its keys.
+  const clicked = (event) => {
+    if (event.detail > 0 && !typesInto(event.target)) surface.current?.focus({ preventScroll: true });
+  };
+  const pointedAt = (event) => { pointed.current = event.target; };
+  const chosen = (event) => {
+    if (event.target.tagName === "SELECT" && pointed.current === event.target) surface.current?.focus({ preventScroll: true });
+  };
+  // Focus leaving for the rest of the page, or for a field that types, lets go of every key.
+  const left = (event) => {
+    const next = event.relatedTarget;
+    if (!next || !surface.current?.contains(next) || typesInto(next)) link.releaseKeys();
+  };
+  return html`<div class="workshop-page scene-lab" ref=${surface} tabindex="-1" onkeydown=${keys}
+      onclick=${clicked} onpointerdown=${pointedAt} onchange=${chosen} onfocusout=${left}>
     <header class="practice-card workshop-hero">
       <div class="workshop-title">
         <span class="workshop-title-icon"><${Icon} name="ghost" size=${22} /></span>

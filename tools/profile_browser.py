@@ -16,6 +16,8 @@ from urllib.parse import urlsplit
 
 from playwright.sync_api import Error as PlaywrightError, sync_playwright
 
+from browser_guard import install as guard_browsers
+
 
 MODULE = Path(__file__).resolve().parents[1] / "src/sm64_events/ui/profiling.js"
 TRACE_LIMIT = 64 * 1024 * 1024
@@ -179,6 +181,7 @@ def main():
         parser.error("seconds must be between 1 and 300")
     actions = read_actions(args.actions)
     args.output.mkdir(parents=True, exist_ok=False)
+    guard_browsers()                     # a launched browser never reaches the real pointer lock
     with sync_playwright() as play:
         browser = (play.chromium.connect_over_cdp(args.cdp_url) if args.cdp_url
                    else play.chromium.launch(headless=True))

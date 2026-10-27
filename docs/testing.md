@@ -160,6 +160,15 @@ tripwire in `tests/conftest.py`); `tests/test_test_lanes.py` checks the
 classification against an independent token scan. A merge check whose radius
 holds browser tests refuses to start without uilab.
 
+No browser a test or tool launches may reach the operating system's pointer
+lock: on Windows it confines the real cursor to the test's viewport, which
+walled Griffin's mouse in while he played (2026-10-26). `tools/browser_guard.py`
+gives every Playwright context an in-page stand-in (installed by
+`tests/conftest.py`, by `tools/find_uilab.py`, and by any tool that imports
+Playwright itself); check `window.__pointerLockStandIn.armed()` before a
+right press. `tests/test_browser_guard.py` scans every launch path, and every
+browser-lane test fails, freeing the cursor, if it leaves the cursor clipped.
+
 ## One budget across worktrees
 
 A merge check (or `--all`) takes one of two OS-lock slots before creating any
