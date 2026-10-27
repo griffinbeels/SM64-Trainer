@@ -46,6 +46,8 @@ def lab(tmp_path, recording, monkeypatch):
     music = (pcm // 4).astype(np.int16)
     split = stems_layer.encode(package.audio, music, (pcm - music).astype(np.int16))
     (packages / "split.sm64scene").write_bytes(pk.with_stems(with_sound, recording["rom"], split))
+    refused = stems_layer.unavailable(stems_layer.DIFFERS, {"g1_checked": 28, "g1_differs": 22, "g1_snr_db": 4.25})
+    (packages / "refused.sm64scene").write_bytes(pk.with_stems(with_sound, recording["rom"], refused))
     (tmp_path / "rom.z64").write_bytes(recording["rom"])
     (tmp_path / "Plugin").mkdir()
     config = tmp_path / "lab.json"
@@ -106,6 +108,18 @@ def test_a_split_scene_serves_its_music_and_effects_on_the_recordings_blocks(lab
         assert opened["audio"]["stems"]["available"] is False
         assert client.get("/api/scene-lab/audio/1", params={"session": opened["session"],
                                                            "track": "music"}).status_code == 404
+
+
+def test_a_refused_split_says_one_plain_sentence_and_logs_why(lab, caplog):
+    """Round 5, item 4: "i have no idea what this sound error means". The row says what the player
+    can't do; the layer's own reason and numbers go to the page's log note and the server log."""
+    with TestClient(lab) as client, caplog.at_level("INFO", logger="sm64.scene_lab"):
+        opened = client.post("/api/scene-lab/open", json={"package": "refused.sm64scene"}).json()
+    stems = opened["audio"]["stems"]
+    assert stems["available"] is False and stems["reason"] == "This scene's music and sound effects can't be separated."
+    assert stems["detail"] == stems_layer.DIFFERS and stems["stats"]["g1_snr_db"] == 4.25
+    assert any(stems_layer.DIFFERS in record.getMessage() and "4.25" in record.getMessage()
+               for record in caplog.records)
 
 
 def test_a_recording_without_sound_says_so_and_serves_none(lab):

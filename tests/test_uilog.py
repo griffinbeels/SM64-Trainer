@@ -96,6 +96,22 @@ def test_a_scene_viewer_pointer_lock_record_keeps_its_step_and_why(log):
     assert uilog.record({"surface": "scene_viewer", "pictures": 5})["pictures"] == 5
 
 
+def test_a_scene_viewer_sound_not_split_record_keeps_why_and_its_numbers(log):
+    """The sound row says one plain sentence (sceneaudio.js load); the record keeps the stems
+    layer's own reason and its G1 numbers, nothing else, and reads back as one line."""
+    stored = uilog.record({"surface": "scene_viewer", "kind": "sound_not_split", "scene": "take-1659-5",
+                           "reason": "This scene's music and sound effects can't be separated.",
+                           "detail": "The stem renderer's sound differs from what Project64 played by more than rounding (G1).",
+                           "stats": {"g1_checked": 28, "g1_differs": 22, "g1_snr_db": 4.25, "rows": "x",
+                                     "evil": 1, "g1_max_abs": 1e12},
+                           "pictures": 4})
+    (read,) = uilog.read(log)
+    assert read == stored and "pictures" not in stored
+    assert stored["stats"] == {"g1_checked": 28, "g1_differs": 22, "g1_snr_db": 4.25}
+    line = uilog.render(stored)
+    assert "sound not split (take-1659-5)" in line and "more than rounding" in line and "g1_snr_db 4.25" in line
+
+
 def test_unknown_fields_never_reach_disk(log):
     uilog.record({**SELECTOR, "evil": "x" * 5000, "nested": {"deep": [1] * 900}})
     (stored,) = uilog.read(log)

@@ -412,6 +412,21 @@ test("a scene without the split shows the switches disabled and says why, once",
   expect(page.container.textContent).toContain("saved before music and sound effects could be split");
 });
 
+test("a refused split says the plain sentence; the stems layer's reason and numbers go to the log note", () => {
+  const notes = [];
+  const sound = new SceneSound({ observe: (note) => notes.push(note) });
+  sound.post = () => {};
+  const { times, samples } = recording(20);
+  const plain = "This scene's music and sound effects can't be separated.";
+  const detail = "The stem renderer's sound differs from what Project64 played by more than rounding (G1).";
+  sound.load({ name: "take-1659-5", session: 3, fps: FPS, frames: times.map((t) => ({ recorded_ms: t })),
+    audio: { available: true, rate: RATE, block_samples: 9216, total_samples: 9216, blocks: 1, codec: "stored",
+      shift_ms: 0, samples, lost: [], stems: { available: false, reason: plain, detail, stats: { g1_snr_db: 4.25 } } } });
+  expect(sound.splitReason).toBe(plain);
+  expect(notes).toEqual([{ surface: "scene_viewer", kind: "sound_not_split", scene: "take-1659-5", reason: plain,
+    detail, stats: { g1_snr_db: 4.25 } }]);
+});
+
 test("Music off plays the effects track from where the recording was, both off is silence, and the choice persists", async () => {
   opened.audio.stems = { available: true, tracks: ["music", "effects"], lost: [6] };
   const { page, socket } = await openScene();

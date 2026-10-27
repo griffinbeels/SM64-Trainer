@@ -101,10 +101,30 @@ def _scene_lock(body: dict) -> dict:
             "client_utc": sent[:MAX_TEXT] if isinstance(sent, str) else None}
 
 
+# A scene whose music and sound effects could not be separated (sceneaudio.js load): the sound row
+# says one plain sentence, and this record keeps why, in the stems layer's own words and numbers
+# (round 5, item 4: "i have no idea what this sound error means").
+SCENE_SPLIT_STATS = ("g1_checked", "g1_differs", "g1_max_abs", "g1_snr_db", "snr_db_median", "windows",
+                     "tasks", "missed", "lost_vis", "split_failed")
+
+
+def _scene_split(body: dict) -> dict:
+    def text(key):
+        value = body.get(key)
+        return value[:MAX_TEXT] if isinstance(value, str) else None
+    stats = body.get("stats") if isinstance(body.get("stats"), dict) else {}
+    numbers = {key: stats[key] for key in SCENE_SPLIT_STATS
+               if type(stats.get(key)) in (int, float) and abs(stats[key]) <= SCENE_VIEWER_LIMIT}
+    return {"surface": "scene_viewer", "kind": "sound_not_split", "scene": text("scene"),
+            "reason": text("reason"), "detail": text("detail"), "stats": numbers}
+
+
 def _scene_viewer(body: dict) -> dict:
     """A scene_viewer record keeps only its own numbers: anything else, or out of range, is null."""
     if body.get("kind") == "pointer_lock":
         return _scene_lock(body)
+    if body.get("kind") == "sound_not_split":
+        return _scene_split(body)
     entry = {"surface": "scene_viewer",
              "encoding": body.get("encoding") if body.get("encoding") in ("jpeg", "raw", "shared") else None}
     for key in SCENE_VIEWER_COUNTS:
@@ -262,6 +282,9 @@ def render(entry: dict) -> str:
         dropped = f", {entry.get('dropped')} lock records not logged before it" if entry.get("dropped") else ""
         return (f"scene viewer pointer lock {entry.get('event')}{why}: request {entry.get('request')}, look "
                 f"{entry.get('look')}, focused {entry.get('focused')}, hidden {entry.get('hidden')}{dropped}")
+    if entry.get("surface") == "scene_viewer" and entry.get("kind") == "sound_not_split":
+        numbers = ", ".join(f"{key} {value}" for key, value in (entry.get("stats") or {}).items())
+        return f"scene viewer sound not split ({entry.get('scene')}): {entry.get('detail')} [{numbers}]"
     if entry.get("surface") == "scene_viewer":
         def pair(key):
             value = entry.get(key) or {}

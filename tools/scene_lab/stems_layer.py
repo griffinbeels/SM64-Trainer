@@ -32,9 +32,24 @@ samples instead, the recording itself telling where each game sample was heard:
 
 It refuses (unavailable, with the reason) when the windows' median SNR stays under PASS_DB (the
 recording is not this output: another session, or Project64 played something else), when the
-renderer's sampled G1 saw the microcode differ from Project64, or when most of the scene has no
-split. "stats" records, per scene: the stems' sum against the game's output (G3, settled VIs),
-the windows' SNR, the delay, the drift, the gain, the pieces, the gaps and the time it took.
+renderer's sampled G1 saw the microcode's sound differ from Project64's by more than rounding
+(G1_PASS_DB), or when most of the scene has no split. "stats" records, per scene: the stems' sum
+against the game's output (G3, settled VIs), G1's checks, its largest difference and its SNR, the
+windows' SNR, the delay, the drift, the gain, the pieces, the gaps and the time it took. The
+reason is for the logs; the viewer says one plain sentence (scene_audio.NOT_SPLIT).
+
+Why G1 allows rounding (2026-10-27, round 5 item 4). Every take of his first live session was
+refused: the sampled G1 differed on 22 of 28 to 53 of 53 checks per take. His Project64 runs the
+audio microcode in its RSP plugin ("RSP emulation Plugin 1.6 by Jabo & Zilmar", which wermi's
+build ships inside PJ64Fixups), not by high-level emulation (Audio HLE 0), on its recompiler (CPU
+Core 1). That plugin, loaded offline on the same tasks as cxd4 (a savestate's live spool):
+its interpreter matches cxd4 on 300 of 300 tasks; its recompiler differs on 222 of 300, up to
+220 units, 35 dB SNR at the median task and 27 dB at the tenth percentile; a second savestate
+24 to 31 dB over 120-task stretches, up to 598 units. Carrying the reverb ring through each
+chain separately (as the stems do) costs at most 1.5 dB more. So the stems are the microcode as
+the RSP runs it (cxd4, bit for bit with the plugin's own interpreter), and differ from what a
+recompiler played by its rounding; a renderer that is wrong (another program, a misread state)
+lands near 0 dB, far below G1_PASS_DB.
 
 Format v1, little-endian: a 96-byte header, the reason or the tables, then the blocks.
 
@@ -104,6 +119,7 @@ FIT_MS = 1.0                    # windows this close to the line share a piece o
 MIN_RMS = 30.0                  # a window this quiet does not place itself
 FIRST_NCC = 0.3                 # pass one reads at the nominal rate, so drift blurs it: correlation only
 PASS_DB = 20.0                  # the recording is this output: a misplaced window scores near 0 dB
+G1_PASS_DB = 12.0               # the microcode made this output: a recompiler's rounding measured 24 dB and up
 MAX_GAP_FRACTION = 0.5          # a scene mostly without a split has none
 LEVEL = 5                       # FLAC compression level (audio_layer's own is 8, for one track)
 TYPICAL_TASK = 534              # samples a VI's task makes at 32006 Hz and 60 Hz (533 or 534)
@@ -112,7 +128,7 @@ NO_ROWS = "Music and sound effects were not being split when this scene was play
 SHORT = "This scene is too short to line its game sound up with its recording."
 QUIET = "This scene's game sound is too quiet to line up with its recording."
 MISMATCH = "This scene's recording does not match the game's own sound, so it cannot be split."
-DIFFERS = "The game's sound program, run again, did not make the sound Project64 played, so this scene is not split."
+DIFFERS = "The stem renderer's sound differs from what Project64 played by more than rounding (G1)."
 MOSTLY_GAPS = "Most of this scene's game sound could not be split."
 
 
@@ -147,9 +163,16 @@ def game_streams(rows: list[dict]) -> GameStreams:
     real, music, effects, heard, split, qpcs, firsts = [], [], [], [], [], [], []
     at, length, previous = 0, TYPICAL_TASK, None
     counts = {"rows": len(rows), "tasks": 0, "settled": 0, "split_failed": 0, "missed": 0, "lost_vis": 0,
-              "g1_checked": 0, "g1_differs": 0, "stem_sum_max_abs": 0}
+              "g1_checked": 0, "g1_differs": 0, "g1_max_abs": 0, "stem_sum_max_abs": 0}
+    g1_signal = g1_error = 0.0
     for row in rows:
         flags = row["flags"]
+        if flags & sl.CHECKED and row["real"] is not None:
+            values = row["real"].size
+            g1_signal += float(np.sum(row["real"].astype(np.float64) ** 2))
+            rms = row.get("g1_rms", 0) / 1000 or (row["g1"] if flags & sl.DIFFERS else 0)   # a row without it: the bound
+            g1_error += rms * rms * values
+            counts["g1_max_abs"] = max(counts["g1_max_abs"], row["g1"])
         lost = row["vi"] - previous - 1 if previous is not None and row["vi"] > previous + 1 else 0
         previous = row["vi"]
         counts["lost_vis"] += lost
@@ -182,6 +205,8 @@ def game_streams(rows: list[dict]) -> GameStreams:
                 row["music"].astype(np.int32) + row["effects"] - output).max()))
         at += samples
         length = samples or length
+    if counts["g1_checked"]:
+        counts["g1_snr_db"] = round(10 * np.log10(g1_signal / g1_error), 2) if g1_error else None   # None: identical
 
     def stereo(parts):
         return np.concatenate(parts) if parts else np.zeros((0, 2), np.int16)
@@ -470,7 +495,7 @@ def build(audio: al.Layer, first_qpc: int, rows: list[dict], *, level: int = LEV
         return unavailable(NO_ROWS)
     game = game_streams(rows)
     stats = dict(game.stats)
-    if stats["g1_differs"]:
+    if stats["g1_differs"] and (stats.get("g1_snr_db") or 0) < G1_PASS_DB:
         return unavailable(DIFFERS, stats)
     capture = np.concatenate([audio.block(i) for i in range(len(audio.blocks))]).astype(np.float32).mean(axis=1) \
         if audio.blocks else np.zeros(0, np.float32)

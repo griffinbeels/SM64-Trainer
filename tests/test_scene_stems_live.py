@@ -112,6 +112,7 @@ def test_each_vi_is_a_row_and_a_task_row_takes_the_games_output_from_the_next_vi
     assert np.array_equal(rows[0]["effects"], tone(2))
     assert rows[1]["flags"] & sl.REAL and np.array_equal(rows[1]["real"], tone(200))
     assert rows[1]["flags"] & sl.CHECKED and rows[1]["flags"] & sl.DIFFERS and rows[1]["g1"] == 1
+    assert rows[1]["g1_rms"] == 1000                                 # one unit everywhere, in thousandths
     assert rows[2]["flags"] == 0 and rows[2]["real"] is None and rows[2]["samples"] == 0
     assert rows[4]["flags"] & sl.AFTER_GAP and np.array_equal(rows[4]["real"], tone(400))
     assert splitter.restarts == 1                                    # the stems start silent after the gap

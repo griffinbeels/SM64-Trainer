@@ -17,8 +17,10 @@ included), each with the other side's notes mixing into scratch DMEM and each ca
 reverb ring. At the next VI it reads what Project64's RSP wrote for that task: the game's own
 output. Every VI becomes one row of the stem store (<lab>/stems/<session>/, a file per
 FILE_ROWS VIs, kept KEEP_SECONDS): its QPC, flags and the three streams. One VI in G1_EVERY also
-renders the task as dispatched and compares it with Project64's output (G1, sampled), so every
-scene carries its own evidence that the microcode made the sound he heard.
+renders the task as dispatched and compares it with Project64's output (G1, sampled: the largest
+difference and its RMS), so every scene carries its own evidence that the microcode made the sound
+he heard. Bit for bit only when Project64 runs the microcode exactly: its RSP plugin's recompiler
+rounds the vector math its own way (stems_layer.py, "Why G1 allows rounding").
 
 The rendering is continuous rather than per take: a stem's reverb ring needs STEM_SETTLE_S of
 the stem's own past before music and effects add up to the mix, and a renderer that follows the
@@ -66,7 +68,7 @@ import stems_check as sc  # noqa: E402
 import stems_probe as sp  # noqa: E402
 import tap  # noqa: E402
 
-ROW = struct.Struct("<IIqIIII")         # vi index, flags, qpc, samples, spool tasks at the VI, G1 max abs, 0
+ROW = struct.Struct("<IIqIIII")         # vi index, flags, qpc, samples, spool tasks at the VI, G1 max abs, G1 rms x1000
 TASK, REAL, SETTLED, SPLIT_FAILED, AFTER_GAP, MISSED, CHECKED, DIFFERS = 1, 2, 4, 8, 16, 32, 64, 128
 FILE_ROWS = 900                         # a store file per ~15 s of VIs
 KEEP_SECONDS = 960.0                    # rows kept: the spool's 15-minute window and a minute
@@ -193,9 +195,9 @@ class StemStore:
         self.lock = threading.Lock()
         self.changed = threading.Condition(self.lock)
 
-    def append(self, vi: int, flags: int, qpc: int, tasks: int, g1: int, streams: list) -> None:
+    def append(self, vi: int, flags: int, qpc: int, tasks: int, g1: int, streams: list, g1_rms: int = 0) -> None:
         samples = len(streams[0]) if streams else 0
-        data = ROW.pack(vi, flags, qpc, samples, tasks, g1, 0) + b"".join(
+        data = ROW.pack(vi, flags, qpc, samples, tasks, g1, g1_rms) + b"".join(
             np.ascontiguousarray(stream, "<i2").tobytes() for stream in streams)
         with self.lock:
             if self.handle is None or self.rows >= FILE_ROWS:
@@ -241,7 +243,7 @@ class StemStore:
 
 def read_rows(folder: Path, qpc_from: int, qpc_to: int) -> list[dict]:
     """The stored rows whose QPC lies in [qpc_from, qpc_to], in VI order: {"vi", "flags", "qpc",
-    "tasks", "g1", "real", "music", "effects"} (arrays or None)."""
+    "tasks", "g1", "g1_rms", "real", "music", "effects"} (arrays or None; g1_rms in thousandths)."""
     files = []
     for path in folder.glob("vi-*.stm"):
         try:
@@ -260,7 +262,7 @@ def read_rows(folder: Path, qpc_from: int, qpc_to: int) -> list[dict]:
             continue
         at = 0
         while at + ROW.size <= len(data):
-            vi, flags, qpc, samples, tasks, g1, _ = ROW.unpack_from(data, at)
+            vi, flags, qpc, samples, tasks, g1, g1_rms = ROW.unpack_from(data, at)
             count = (bool(flags & REAL) + 2 * bool(flags & TASK)) * samples * 2
             end = at + ROW.size + 2 * count
             if end > len(data):
@@ -272,8 +274,8 @@ def read_rows(folder: Path, qpc_from: int, qpc_to: int) -> list[dict]:
             streams = list(values) if values is not None else []
             real = streams.pop(0) if flags & REAL else None
             music, effects = streams if flags & TASK else (None, None)
-            rows.append({"vi": vi, "flags": flags, "qpc": qpc, "tasks": tasks, "g1": g1, "samples": samples,
-                         "real": real, "music": music, "effects": effects})
+            rows.append({"vi": vi, "flags": flags, "qpc": qpc, "tasks": tasks, "g1": g1, "g1_rms": g1_rms,
+                         "samples": samples, "real": real, "music": music, "effects": effects})
     return rows
 
 
@@ -357,13 +359,15 @@ class StemRenderer:
                 streams.append(real)
                 if "mix" in row:
                     flags |= CHECKED
-                    row["g1"] = int(np.abs(real.astype(np.int32) - row["mix"]).max()) if len(real) else 0
+                    error = real.astype(np.int32) - row["mix"]
+                    row["g1"] = int(np.abs(error).max()) if len(real) else 0
+                    row["g1_rms"] = round(float(np.sqrt(np.mean(error.astype(np.float64) ** 2))) * 1000) if len(real) else 0
                     self.counts["checked"] += 1
                     if row["g1"]:
                         flags |= DIFFERS
                         self.counts["differs"] += 1
             streams += [row["music"], row["effects"]]
-        self.store.append(row["vi"], flags, row["qpc"], row["tasks"], row["g1"], streams)
+        self.store.append(row["vi"], flags, row["qpc"], row["tasks"], row["g1"], streams, row.get("g1_rms", 0))
 
     def finish(self) -> None:
         if self.held is not None:

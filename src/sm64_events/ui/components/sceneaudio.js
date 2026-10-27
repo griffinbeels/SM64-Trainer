@@ -161,9 +161,10 @@ async function readBlock(response) {
 // performance time `start`), shown (a play's picture was drawn) and stop (Pause, a
 // step, a seek, a closed scene); the page reads the rest.
 export class SceneSound {
-  constructor({ changed } = {}) {
+  constructor({ changed, observe } = {}) {
     const saved = storedSound();
-    Object.assign(this, { changed: changed || (() => {}), volume: saved.volume, muted: saved.muted, table: null,
+    Object.assign(this, { changed: changed || (() => {}), observe: observe || (() => {}), volume: saved.volume,
+      muted: saved.muted, table: null,
       music: saved.music, effects: saved.effects, track: "mix", switchTo: undefined, splitReason: null,
       runs: [], times: new Float64Array(0), reason: null, session: null, fps: 30, ctx: null, master: null, node: null,
       playing: null, lastLate: null, offsets: [], reports: [], pending: [], sync: [], held: new Map(),
@@ -194,6 +195,7 @@ export class SceneSound {
         blocks: audio.blocks, samples: Int32Array.from(audio.samples), lost: new Set(audio.lost),
         stems: stemsOf(audio) };
       this.splitReason = splitReasonOf(audio);
+      this.noteRefusal(scene);
       this.runs = soundMap(this.table.samples, this.times, audio.rate, this.fps);
       this.reason = null;
       if (this.ctx && this.ctx.sampleRate !== audio.rate) this.close();
@@ -205,6 +207,14 @@ export class SceneSound {
         splitReason: null });
     }
     this.changed();
+  }
+
+  // A refused split: the row says the plain sentence, the log keeps why (the stems layer's own words).
+  noteRefusal(scene) {
+    const stems = scene.audio.stems;
+    if (!stems?.detail) return;
+    this.observe({ surface: "scene_viewer", kind: "sound_not_split", scene: scene.name ?? null,
+      reason: stems.reason, detail: stems.detail, stats: stems.stats || null });
   }
 
   // A growing scene gained frames, and maybe a refit of its sound (the server builds it from the

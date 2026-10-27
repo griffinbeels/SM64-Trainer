@@ -91,11 +91,24 @@ def test_a_recording_of_other_sound_is_refused_with_its_numbers(steady):
     assert stems.stats.get("correlated") == 0 or stems.stats["snr_db_median"] < stems_layer.PASS_DB
 
 
-def test_the_renderer_seeing_the_microcode_differ_from_project64_refuses_the_split(steady):
+def test_project64_rounding_the_microcode_its_own_way_still_splits_and_says_how_close(steady):
+    """Round 5, item 4: his Project64's RSP recompiler rounds the microcode's vector math its own
+    way, so every sampled G1 check differed and every take was refused. A difference of rounding
+    splits, with its SNR in the stats."""
     lengths, music, effects = fx.streams(12.0)
-    stems = stems_layer.read(stems_layer.build(steady["layer"], steady["first_qpc"],
-                                               fx.rows(lengths, music, effects, differs={300})), steady["layer"])
-    assert not stems.available and stems.reason == stems_layer.DIFFERS and stems.stats["g1_differs"] == 1
+    rows = fx.rows(lengths, music, effects, differs={300, 330}, checked={360})
+    stems = stems_layer.read(stems_layer.build(steady["layer"], steady["first_qpc"], rows), steady["layer"])
+    assert stems.available, stems.reason
+    assert (stems.stats["g1_checked"], stems.stats["g1_differs"], stems.stats["g1_max_abs"]) == (3, 2, 1)
+    assert stems.stats["g1_snr_db"] > 60
+
+
+def test_a_renderer_whose_sound_is_not_project64s_refuses_the_split(steady):
+    lengths, music, effects = fx.streams(12.0)
+    rows = fx.rows(lengths, music, effects, wrong={300}, checked={330, 360})
+    stems = stems_layer.read(stems_layer.build(steady["layer"], steady["first_qpc"], rows), steady["layer"])
+    assert not stems.available and stems.reason == stems_layer.DIFFERS
+    assert stems.stats["g1_differs"] == 1 and stems.stats["g1_snr_db"] < stems_layer.G1_PASS_DB
 
 
 def test_lost_and_unsplit_vis_play_silent_and_are_marked(steady):
@@ -178,8 +191,8 @@ def test_a_scene_without_the_split_says_why_and_stems_need_its_sound_first(recor
         plain.block(0, "music")
     said = pk.with_stems(with_sound, rom, stems_layer.unavailable("The renderer was not running."))
     package = pk.Package(said, rom)
-    assert scene_audio.SceneSound.of(package, presents).describe()["stems"] == {
-        "available": False, "reason": "The renderer was not running."}
+    assert scene_audio.SceneSound.of(package, presents).describe()["stems"] == {   # the row says it plainly
+        "available": False, "reason": scene_audio.NOT_SPLIT, "detail": "The renderer was not running.", "stats": {}}
     with pytest.raises(pk.PackageError, match="source audio first"):
         pk.with_stems(recording["package"], rom, stems_layer.unavailable("No sound."))
 

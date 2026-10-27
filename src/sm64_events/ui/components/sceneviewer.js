@@ -295,7 +295,7 @@ export class SceneLink {
       finding: false, glide: null, serial: 0, noticeTimer: null, moving: null, shared: new Map(), playback: null,
       readies: [], coldId: 0, autoplay: false, loop: savedLoop(), hud: savedHud(), ghosts: [], refusedGhosts: new Map(),
       asked: null, ghostPages: new Map(), ghostNote: null, ghostSerial: 0,
-      sound: new SceneSound({ changed: () => this.changed() }) });
+      sound: new SceneSound({ changed: () => this.changed(), observe: (note) => this.observe(note) }) });
     this.timings = new MovingTimings((summary) => { this.moving = summary; this.changed(); });
     this.onShared = (event) => this.sharedArrived(event);
   }
