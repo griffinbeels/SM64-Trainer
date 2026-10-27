@@ -40,6 +40,9 @@ CAMERAS = r"""
 """
 HAS_KEYBOARD = "document.activeElement === document.querySelector('.scene-lab')"
 DRAWN = "!!document.querySelector('.scene-lab-readout')"
+# tools/browser_guard.py's pointer lock stand-in is the page's requestPointerLock: checked before any
+# right press, so no test here can reach the browser's own lock (which confines the real cursor).
+STAND_IN = "window.__pointerLockStandIn?.armed() === true"
 
 
 def _hold(page, key: str, ms: int = 400) -> list:
@@ -110,6 +113,7 @@ def test_arriving_gives_the_viewer_the_keyboard_and_w_flies_with_no_button(tmp_p
             view = [entry["focus"][i] - entry["position"][i] for i in range(3)]
             assert sum(t * v for t, v in zip(travelled, view, strict=True)) > 0, (entry, last)   # forward, where it looks
             _shoot(page, tmp_path, "free")
+            assert page.evaluate(STAND_IN)
             box = page.locator(".scene-lab canvas").bounding_box()
             page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
             page.mouse.down(button="right")
@@ -138,13 +142,12 @@ def _static_imports(source: str) -> list[str]:
     return re.findall(r"^\s*import\s[^;]*?from\s+[\"']([^\"']+)[\"']", source, re.MULTILINE)
 
 
-# Watches the pointer lock: every change with the element that holds it, and the page's own lock
-# records on their way to the UI log. window.__lateGrantMs > 0 hands each request to Chromium that
-# long after the page made it (still inside the click's activation), as a busy browser can.
+# Watches the pointer lock -- tools/browser_guard.py's in-page stand-in, never the browser's own,
+# which on Windows confines the real cursor -- every change with the element that holds it, and the
+# page's own lock records on their way to the UI log.
 LOCK_WATCH = r"""
 (() => {
   const changes = window.__lockChanges = [], notes = window.__lockNotes = [];
-  window.__lateGrantMs = 0;
   document.addEventListener("pointerlockchange", () => changes.push(document.pointerLockElement?.tagName ?? null));
   const fetched = window.fetch.bind(window);
   window.fetch = (url, options) => {
@@ -154,13 +157,6 @@ LOCK_WATCH = r"""
     }
     return fetched(url, options);
   };
-  const native = HTMLCanvasElement.prototype.requestPointerLock;
-  HTMLCanvasElement.prototype.requestPointerLock = function (...args) {
-    if (!window.__lateGrantMs) return native.apply(this, args);
-    return new Promise((resolve, reject) => setTimeout(() => {
-      try { Promise.resolve(native.apply(this, args)).then(resolve, reject); } catch (error) { reject(error); }
-    }, window.__lateGrantMs));
-  };
 })()
 """
 LOCKED = "document.pointerLockElement && document.pointerLockElement.tagName"
@@ -169,7 +165,9 @@ LOCKED = "document.pointerLockElement && document.pointerLockElement.tagName"
 def test_the_pointer_lock_never_outlives_the_right_button(tmp_path, monkeypatch):
     """His report (2026-10-26): "it gets stuck in the middle of the screen, as if there's an invisible
     wall blocking its movement". Chromium on Windows keeps the cursor inside the page while a lock is
-    held; headless Chromium grants the viewer's lock, so both a quick and a late grant run for real."""
+    held. The lock here is tools/browser_guard.py's stand-in (asserted before the first right press),
+    granted at once and then 300 ms late, in the order Chromium was measured to use: the request's
+    promise first, then pointerlockchange."""
     with attempt_scene._served(tmp_path, monkeypatch, lab_on=True) as (base, _seen), sync_playwright() as play:
         browser = play.chromium.launch(headless=True, args=["--disable-gpu"])
         try:
@@ -182,6 +180,7 @@ def test_the_pointer_lock_never_outlives_the_right_button(tmp_path, monkeypatch)
             ready.wait_for(timeout=20000)
             ready.click()
             page.wait_for_function(DRAWN, timeout=20000)
+            assert page.evaluate(STAND_IN)                   # never the browser's own lock
             box = page.locator(".scene-lab canvas").bounding_box()
             page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
 
@@ -190,15 +189,15 @@ def test_the_pointer_lock_never_outlives_the_right_button(tmp_path, monkeypatch)
             page.mouse.up(button="right")
             page.wait_for_function(f"!({LOCKED})", timeout=5000)
 
-            page.evaluate("window.__lateGrantMs = 300")      # a late grant: the button is up before it lands
+            page.evaluate("window.__pointerLockStandIn.grantMs = 300")   # a late grant: the button is up first
             changes = page.evaluate("window.__lockChanges.length")
             page.mouse.down(button="right")
             page.wait_for_timeout(50)
             page.mouse.up(button="right")
             page.wait_for_function(f"window.__lockChanges.length >= {changes + 2}", timeout=5000)
             page.wait_for_timeout(200)
-            # It landed and was exited at once: Chromium resolves the request before it dispatches the
-            # change, so by then the lock is already gone and both changes read null.
+            # It landed and was exited at once: the request resolves before the change is dispatched,
+            # so by then the lock is already gone and both changes read null.
             late = page.evaluate("window.__lockChanges")[changes:]
             assert len(late) == 2 and late[-1] is None, late
             assert page.evaluate(LOCKED) is None

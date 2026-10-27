@@ -30,6 +30,8 @@ from sm64_events.core import perfmon, recorder_lock
 from sm64_events.server.broadcaster import Broadcaster
 from sm64_events.storage.db import Database
 from sm64_events.tracking.service import TrackerService
+from tools.browser_guard import cursor_clip, left_clipped, release_clip
+from tools.browser_guard import install as install_pointer_lock_stand_in
 from tools.test_lanes import (BROWSER_SWEEP_GROUPS, BROWSER_SWEEPS,  # noqa: F401 (tests read these here)
                               LANE_ENV, SHARED_GROUPS, browser_sweep_group, file_totals,
                               is_test_module, lane_of, load_durations, parse_shard,
@@ -255,6 +257,7 @@ def pytest_configure(config):
     inherit the live ancestor's budget and must never acquire it a second time.
     """
     _arm_the_browser_tripwire()
+    install_pointer_lock_stand_in()      # no test's browser may confine his real cursor (tools/browser_guard.py)
     _retry_an_aborted_first_navigation()
     if os.environ.get("SM64_REPORT_DIR"):
         _keep_failure_screenshots()
@@ -450,6 +453,27 @@ def _isolate_ui_log(tmp_path, monkeypatch):
     """
     from sm64_events.core import uilog
     monkeypatch.setattr(uilog, "data_root", lambda: tmp_path)
+
+
+@pytest.fixture(autouse=True)
+def _the_cursor_is_never_left_confined(request):
+    """A browser-lane test leaves the operating system's cursor as free as it found it.
+
+    Chromium on Windows confines the REAL cursor to its window while a page holds a pointer
+    lock, headless included: on 2026-10-26 a page test walled Griffin's mouse into the test's
+    viewport while he played (tools/browser_guard.py). Every browser runs a stand-in for the
+    lock; this reads GetClipCursor before and after each browser-lane test, frees a clip the
+    test left (a clip already there before is his own) and fails the test naming it."""
+    if lane_of(Path(str(request.node.path))) != "browser":
+        yield
+        return
+    before = cursor_clip()
+    yield
+    clip = left_clipped(before, cursor_clip())
+    if clip is not None:
+        release_clip()
+        pytest.fail(f"this test left the cursor confined to {clip}; screen {before[1]}. A browser reached the "
+                    "real pointer lock: every launch path must run tools/browser_guard.py's stand-in.")
 
 
 

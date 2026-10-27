@@ -15,6 +15,11 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 
+try:            # every browser uilab launches runs the pointer lock stand-in (browser_guard.py)
+    from browser_guard import install as _guard_browsers
+except ImportError:
+    from tools.browser_guard import install as _guard_browsers
+
 
 def _primary_checkout() -> Path:
     """The checkout every worktree of this repo shares, or this one."""
@@ -52,6 +57,7 @@ def find_uilab() -> str | None:
     """
     import importlib.util
 
+    _guard_browsers()
     if importlib.util.find_spec("uilab") is not None:
         return None
     repo = _primary_checkout()
