@@ -681,7 +681,7 @@ def build(*, recorder_lock=None):
         community_sync=community_sync,
         multiplayer=_build_multiplayer(replay, community_account, appearance=ghost.live_appearance),
         protect_local_api=True, local_port=server_port()), tracker=service, live_audio=_scene_lab_live_audio(),
-        ghost_sources={"tracker": service, "replay": replay, "ghost": ghost})
+        ghost_sources={"tracker": service, "replay": replay, "ghost": ghost, "community": community_sync})
 
 
 _LIVE_SOUND: list = []          # the one LiveAudio of this process, once asked for
@@ -711,7 +711,7 @@ def _mount_scene_lab(app, tracker=None, live_audio=None, ghost_sources=None):
     With the switch on, the server's own `tracker` also feeds the lab's attempt scenes (the
     live recording's lease, a cut per completed attempt); a caller without one (the UI fixture)
     gets the viewer alone and never arms the wrapper's tap. `ghost_sources` is what the viewer's
-    stage and ghost catalog read ({"tracker", "replay", "ghost"}, server/scene_ghosts.py); it
+    stage and ghost catalog read ({"tracker", "replay", "ghost", "community"}, server/scene_ghosts.py); it
     never arms anything."""
     if any(getattr(route, "path", None) == "/api/scene-lab" for route in app.routes):
         return app

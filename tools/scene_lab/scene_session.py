@@ -922,7 +922,7 @@ class SceneSession:
         """The recorded picture with the frame's scene state beside its closure (package.scene_state:
         the regions the tap recorded, closure included, in Project64's word order): where the
         in-game ghost reads the stage's camera, level and area. Without scene state, the closure.
-        `cuts` as _recorded_frame's: the HUD's commands skipped (hud.py)."""
+        `cuts` as for _recorded_frame: the HUD's commands blanked in the closure the state carries."""
         if self.package.states is None:
             return self._recorded_frame(index, timings, cuts)
         started = time.perf_counter()
@@ -931,12 +931,12 @@ class SceneSession:
         edges = np.flatnonzero(present[1:] != present[:-1]) * 4
         runs = list(zip(edges[0::2].tolist(), edges[1::2].tolist(), strict=True))
         data = b"".join(ram[begin:end].tobytes() for begin, end in runs)
+        timings["decode_ms"] = _ms(started)
         if cuts is not None:
-            blanked = self._hud_cut(hud_cut.closure_words(runs, data), task.task, timings, cuts)
-            data = hud_cut.blank_closure(runs, data, blanked)
+            data = hud_cut.blank_closure(runs, data, self._hud_cut(hud_cut.closure_words(runs, data), task.task,
+                                                                   timings, cuts))
         if self.image is not None:
             self.image.recorded(runs, data)
-        timings["decode_ms"] = _ms(started)
         return viewer.Frame(f"frame {index} stage", tuple(task.task), self.outlines[index]["vi"],
                             struct.pack(f"<{2 * len(runs)}I", *(edge for run in runs for edge in run)), data)
 

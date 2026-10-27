@@ -650,10 +650,11 @@ class SceneLab:
         return {"id": message.get("id"), "kind": "ghosts", **answer}
 
     def _load_ghost(self, ref) -> dict:
-        """Interface C: ghost_loader when one was given (tests, measurements), else the ghost
-        catalog's load_ghost (server/scene_ghosts.py), else the player's own runs in the replay store.
-        Blocking: it runs on the session's worker (set_ghosts)."""
-        loader = self.ghost_loader or getattr(getattr(self, "ghosts", None), "load_ghost", None)
+        """Interface C: a ghost_loader the lab was given (a test's, a tool's) first, else the
+        ghost catalog's load_ghost (server/scene_ghosts.py), else the player's own runs in the
+        replay store."""
+        catalog = getattr(self, "ghosts", None)
+        loader = self.ghost_loader or getattr(catalog, "load_ghost", None)
         if loader is None:
             from sm64_events.core.paths import replays_root
             loader = self.ghost_loader = _lab_module("stage_ghosts").LocalGhosts(replays_root() / "native")
@@ -876,8 +877,10 @@ def _attempt_ids(text: str) -> list[int]:
 
 def _mount_ghost_routes(router: APIRouter, lab: SceneLab) -> None:
     """GET /stage and /ghosts (server/scene_ghosts.py): the stage for a target and strategy, and
-    one page of a section of the ghosts that could be drawn into it. Plain `def` routes, so
-    FastAPI runs each on its threadpool: they read the journal and, the first time, whole clips."""
+    one page of a section of the ghosts that could be drawn into it. Both read the journal and,
+    the first time, whole clips, so that work runs on a thread; /ghosts first awaits, on the
+    loop the community client runs on, whatever its section needs that is not held yet
+    (scene_community.py: nothing inside the publication lease)."""
     from sm64_events.server.scene_ghosts import TargetError
 
     def target_of(course, star, segment):
@@ -892,14 +895,15 @@ def _mount_ghost_routes(router: APIRouter, lab: SceneLab) -> None:
         return lab.ghosts.stage(target_of(course, star, segment), strat or None)
 
     @router.get("/ghosts")
-    def ghosts(section: str = "yours", course: int | None = None, star: int | None = None,
-               segment: int | None = None, strat: str | None = Query(default=None, max_length=256),
-               sort: str = "fastest", page: int = Query(default=1, ge=1, le=100000),
-               q: str = Query(default="", max_length=128), player: str = Query(default="", max_length=128)):
-        target = target_of(course, star, segment)
+    async def ghosts(section: str = "yours", course: int | None = None, star: int | None = None,
+                     segment: int | None = None, strat: str | None = Query(default=None, max_length=256),
+                     sort: str = "fastest", page: int = Query(default=1, ge=1, le=100000),
+                     q: str = Query(default="", max_length=128), player: str = Query(default="", max_length=128)):
+        target = await asyncio.to_thread(target_of, course, star, segment)
         try:
-            return lab.ghosts.ghosts(target, strat or None, section=section, page=page, sort=sort,
-                                     query=q, player=player)
+            await lab.ghosts.fill(target, strat or None, section=section, page=page, query=q, player=player)
+            return await asyncio.to_thread(lambda: lab.ghosts.ghosts(
+                target, strat or None, section=section, page=page, sort=sort, query=q, player=player))
         except TargetError as error:
             raise HTTPException(422, str(error)) from None
 
@@ -908,12 +912,12 @@ def mount_scene_lab(app, config_path, **options) -> SceneLab:
     """Adds the scene viewer's routes to `app`, starts the live recording's lease and the attempt
     scenes when the app starts, and ends both and the open scene when it stops. `options` are
     SceneLab's (tests and e3_measure.py inject doubles and short timers), and `ghost_sources`,
-    what the stage and the ghost catalog read: {"tracker", "replay", "ghost"} (scene_ghosts.py)."""
+    what the stage and the ghost catalog read: {"tracker", "replay", "ghost", "community"} (scene_ghosts.py)."""
     sources = options.pop("ghost_sources", None) or {}
     lab = SceneLab(Path(config_path), **options)
     from sm64_events.server.scene_ghosts import SceneGhosts
     lab.ghosts = SceneGhosts(sources.get("tracker"), scenes=lambda: lab.scenes, replay=sources.get("replay"),
-                             ghost=sources.get("ghost"))
+                             ghost=sources.get("ghost"), community=sources.get("community"))
     router = APIRouter(prefix="/api/scene-lab")
     _mount_ghost_routes(router, lab)
 
