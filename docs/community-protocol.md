@@ -331,11 +331,26 @@ its encoded hash, so bytes are never revalidated, only re-gated.
 | `GET /v1/search` | a submitted name no held list answers (a complete top list, or a complete search for a shorter name, does) | identity and folded name | 10 minutes |
 | `GET /v1/recordings/{id}` then `/asset` | adding a community ghost the cache does not hold | the race's asset cache, by id | this Trainer run |
 
+Why a library page and not a rival pool: pools live in the population's 16
+held lists (`MAX_POOLS`), oldest evicted first, and renew only for the practice
+card's identity with the overlay on, so a viewer browsing targets through
+`request_pool` would push the Lineup's list out (a re-fetch of up to four pages)
+and hold lists nothing renews. A library page is one call, fastest first, with no
+rank band; its rows join the loose-row map (`MAX_METADATA`, 1,024), which never
+evicts a row the Lineup on screen uses (`keep`). When the race already holds a
+complete pool for the identity, the viewer reads that and asks nothing.
+
 A typical session (open a target, page through three top pages, search two
 players, add three ghosts) costs 2-3 calls for the pages, 0-2 for the searches
 and 0-6 for the ghosts (none for his own or for ones a race already downloaded):
-at most 11 of the account's 500 daily tickets, and at most 3 R2 reads (Class B,
-10 million a month free, no egress charge). A refusal is held for 60 seconds
+at most 11 of the account's 500 daily tickets (the service's own caps, which bind
+first: 500 per account and 30,000 in all a day, 200,000 Class B; the service README),
+and at most 3 R2 reads (Class B: 10 million a month free, and no egress charge,
+[R2 pricing](https://developers.cloudflare.com/r2/pricing/)). Each call also
+advances the service's daily ticket rows in D1, so fewer calls are fewer D1
+writes. The Worker runs on the approved Workers Paid plan (SETUP.md). The viewer
+never calls Supabase: sign-in and token refresh stay the account's (Supabase Free,
+50,000 monthly active users). A refusal is held for 60 seconds
 (`FAILURE_S`) beside the client's own cooldown, and the lists then show this
 Trainer's ghosts with a note. A ghost added in the viewer lands in the asset
 cache a race reads (`community_cache/<id>.ghost`), so racing it costs nothing

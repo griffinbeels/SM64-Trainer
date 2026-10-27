@@ -28,10 +28,14 @@ import gpu_gate  # noqa: E402
 import scene_attempt_fixture as fixture  # noqa: E402
 from test_community_account import UID  # noqa: E402
 from test_community_codec import native  # noqa: E402
+from test_scene_lab_ghosts import Journal, Replay, import_ghost, publish, run  # noqa: E402
 from sm64_events.community import CachedPopulation, CommunityError, CommunitySync, codec  # noqa: E402
 from sm64_events.core.paths import bundled_rank_standards, bundled_sheet_ladders  # noqa: E402
+from sm64_events.ghost.native_session import NativeGhost  # noqa: E402
+from sm64_events.ghost.pb import AttemptGhost  # noqa: E402
 from sm64_events.ghost.population import LocalPopulation  # noqa: E402
-from sm64_events.ghost.rivals import Rivals  # noqa: E402
+from sm64_events.ghost.rivals import RivalProvider, Rivals  # noqa: E402
+from sm64_events.ghost.sharing import sharing_for  # noqa: E402
 from sm64_events.ranks.standards import RankStandards  # noqa: E402
 from sm64_events.server import scene_community, scene_lab_api  # noqa: E402
 
@@ -115,8 +119,8 @@ def world(tmp_path, ranks, monkeypatch):
     rows = [recording(number, frames=10 + number) for number in range(1, 26)]
     rows.append(recording(90, frames=60, player="Me", player_id=UID))
     service = Service(rows)
-    journal = SimpleNamespace(attempt=lambda _id: None, target_attempts=lambda **_where: [], segment_defs=lambda: [],
-                              get_state=lambda key, default=None: default)
+    journal = Journal()
+    replay = Replay(tmp_path / "replays", journal)
     tracker = SimpleNamespace(db=journal, ranks=ranks, strat_by_star={(2, 2): "Standard"}, strat_by_segment={},
                               effective_game_version=lambda: "us")
     population = CachedPopulation(LocalPopulation(tmp_path / "population", definitions=()),
@@ -125,12 +129,13 @@ def world(tmp_path, ranks, monkeypatch):
     rivals = Rivals(tracker, population, SimpleNamespace(), lambda: "us", community=sync)
     app = FastAPI()
     lab = scene_lab_api.mount_scene_lab(app, config, ghost_sources={
-        "tracker": tracker, "ghost": SimpleNamespace(rivals=rivals), "community": sync})
+        "tracker": tracker, "replay": replay, "ghost": SimpleNamespace(rivals=rivals), "community": sync})
     identity = rivals.identity_for(TARGET, version="us", scope="strategy")
     with TestClient(app) as client:
         client.portal.call(sync.start)
-        yield SimpleNamespace(client=client, lab=lab, service=service, rows=service.rows, sync=sync,
-                              population=population, rivals=rivals, identity=identity, cache=tmp_path / "community_cache")
+        yield SimpleNamespace(client=client, lab=lab, service=service, rows=service.rows, sync=sync, journal=journal,
+                              replay=replay, population=population, rivals=rivals, identity=identity,
+                              cache=tmp_path / "community_cache")
         client.portal.call(sync.stop)
 
 
@@ -263,4 +268,35 @@ def test_his_own_sections_never_reach_the_network(world):
         page(world, **params)
     client = world.client
     assert client.get("/api/scene-lab/stage", params=STAR).status_code == 200
+    assert world.service.calls == []
+
+
+def test_a_local_ghost_loads_from_the_race_store_and_challenging_it_downloads_nothing(world):
+    """His run, another player's population recording and an imported one. Signed out, every section and
+    every load costs no call; signed in, a load still costs none. Each load is the very file the race's
+    own door resolves (the native session for his run, the rival provider for the rest), so racing it
+    later downloads nothing."""
+    world.journal.rows[50] = run(50, igt=331)
+    world.replay.commit(50)
+    kim = publish(world.population.local, player_id="kim", player_name="Kim", frames=320)
+    visitor = import_ghost(world.replay.cfg.save_root, author="Visitor", frames=300)
+    world.service.state = {**world.service.state, "status": "signed_out"}
+    assert world.client.get("/api/scene-lab/stage", params=STAR).status_code == 200
+    refs = {row["player"]: row["ref"] for row in page(world, section="top")["items"]}
+    assert page(world, section="yours")["items"][0]["attempt"] == 50
+    page(world, section="search", q="Kim")
+    page(world, section="player", player="Visitor")
+    loaded = {player: world.lab.ghosts.load_ghost(ref) for player, ref in refs.items()}
+    assert set(loaded) == {"Visitor", "Kim", "You"}
+    _answer, asset = NativeGhost(world.replay)._resolve_template(TARGET, AttemptGhost(50, "star", "2-2", "Standard"))
+    assert Path(asset[0]).read_bytes() == loaded["You"]["clip"]
+    sharing = sharing_for(world.replay, world.journal)
+    provider = RivalProvider(world.population, sharing)
+    raced = {"Kim": provider.resolve(world.population.get(kim)["ghost"], {**TARGET, "scope": "strategy"})[0],
+             "Visitor": provider.resolve(sharing.get(visitor["id"]), TARGET)[0]}
+    assert {player: Path(path).read_bytes() for player, path in raced.items()} == {
+        player: loaded[player]["clip"] for player in raced}
+    world.service.state = {**world.service.state, "status": "active"}
+    for ref in refs.values():
+        world.lab.ghosts.load_ghost(ref)
     assert world.service.calls == []
