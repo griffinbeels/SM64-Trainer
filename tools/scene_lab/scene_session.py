@@ -605,12 +605,13 @@ class SceneSession:
         self.sound, self.silence, self.live_sound = sound, None, None
         return True
 
-    def audio_block(self, index: int) -> tuple[bytes, str]:
-        """(file bytes, media type) of one block of the recording's sound: LookupError when there
-        is no sound or no such block, ValueError when the block fails its hash."""
+    def audio_block(self, index: int, track: str = "mix") -> tuple[bytes, str]:
+        """(file bytes, media type) of one block of the recording's sound, or of its music or
+        effects (scene_audio.TRACKS): LookupError when there is no sound, no such track or no
+        such block, ValueError when the block fails its hash."""
         if self.sound is None:
             raise LookupError(scene_audio.NO_SOUND)
-        return self.sound.block(index)
+        return self.sound.block(index, track)
 
     def _index(self, frame) -> int:
         if not isinstance(frame, int) or isinstance(frame, bool) or not 0 <= frame < len(self.frames):

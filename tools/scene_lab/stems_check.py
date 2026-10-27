@@ -1,10 +1,12 @@
 """G0-G3 on a recorded session: is it the game's own sound, and do the stems split it? (M4 stems)
 
-    stems_probe.py from-tap <tap session> --rom <z64> --map <MappingUS.map> [--lle-src <cxd4>]
-        [--capture <audio.cap>] [--report out.json] [--wavs <dir>]
+    stems_probe.py from-tap <tap or live spool session> --rom <z64> --map <MappingUS.map> [--lle-src <cxd4>]
+        [--capture <audio.cap>] [--report out.json] [--wavs <dir>] [--segment N] [--vis N]
 
 A session armed with the audio spans (tap.py arm: vi_region= and vi_dmem=1) holds, at every VI,
-the audio state the wrapper's UpdateScreen saw. Four gates, each with a verdict:
+the audio state the wrapper's UpdateScreen saw: a one-shot tap in its tap.bin, a live spool
+session (live_spool.Lease asks for the spans) in its segments, read from --segment's first
+byte (its writer keys rebuild the state) for at most --vis VIs. Four gates, each with a verdict:
 
 G0 capture point. At the VI the audio task the game dispatched waits in gSPTaskMesgQueue (it is
    &gAudioTasks[gAudioTaskIndex] and its list is the command buffer that index names), no audio
@@ -166,6 +168,90 @@ class Prediction:
     dmem: np.ndarray | None
 
 
+STEMS = (("music", sp.MUSIC_PLAYERS), ("effects", sp.EFFECT_PLAYERS))
+
+
+def vi_spans(session: Path) -> list[tuple[int, int]]:
+    """The RDRAM spans a session copied at every VI (its session.txt vi_region lines)."""
+    return [tuple(int(part, 16) if i == 0 else int(part) for i, part in enumerate(line.partition("=")[2].split(":")))
+            for line in (session / "session.txt").read_text(encoding="ascii").splitlines()
+            if line.startswith("vi_region=")]
+
+
+class Splitter:
+    """The ROM's own audio microcode (cxd4) over the VI states a recording holds: a waiting task as
+    the game dispatched it (what G1 compares with what Project64's RSP wrote), and its two stems.
+    A stem renders the same task from the same bytes with the other side's notes mixing into
+    scratch DMEM (stems_probe.edited_list), and carries its own reverb ring from task to task: a
+    new ring (an audio reset) starts both silent, so the stems sum to the mix STEM_SETTLE_S after
+    a reset or after the first task split. The checker's G1 and G3 and the scenes' stems
+    (stems_live.py) render through this one class."""
+
+    def __init__(self, lle: sp.Lle, rom: bytes, symbol_map: Path, spans: list[tuple[int, int]], sym: dict):
+        self.lle, self.spans, self.sym = lle, spans, sym
+        self.work = np.zeros(sp.RDRAM_BYTES, np.uint8)
+        ram, size, rom_at = sp.main_section(symbol_map)       # the boot and audio microcode, from the ROM
+        image = np.frombuffer(rom, np.uint8, size, rom_at).copy()
+        self.work[sp.phys(ram):sp.phys(ram) + size] = sp.swap32(image)
+        self.owners: sp.Owners | None = None
+        self.rings: dict[str, np.ndarray] = {}
+        self.ring_key = None
+        self.since_reset = 0.0
+
+    def load(self, state: tap.ViState) -> None:
+        for begin, size in self.spans:
+            self.work[begin:begin + size] = state.ram[begin:begin + size]
+        self.lle.sp[:0x1000] = state.dmem
+
+    def mix(self, pending: Pending, state: tap.ViState) -> int:
+        """Runs the task as the game dispatched it: its output is then in self.work, its list
+        buffers in self.lle.dmem. The microcode's status: 0 when it reached its BREAK."""
+        self.load(state)
+        return self.lle.run(self.work, pending.words)
+
+    def restart(self) -> None:
+        """The next task follows a gap (lost VIs, another session): both stems start silent."""
+        self.ring_key, self.owners = (), None     # () is no ring: the next split starts them anew
+
+    def split(self, pending: Pending, state: tap.ViState, ram: WordRam) -> tuple[dict, dict]:
+        """The two stems of the task waiting at this VI ({"music", "effects"}: int16 stereo of the
+        task's own length, None for a stem whose list could not be edited) and what the partition
+        saw: unknown owners, unattributed envelope mixers, voices handed over, edit errors,
+        whether the ring started anew, and whether the stems had settled."""
+        if self.owners is None:
+            self.owners = sp.Owners(ram)
+        alist, size = pending.words[12], pending.words[13]
+        cmds = list_commands(state.ram, alist, size)
+        notes = self.owners.update()
+        ring = reverb_ring(ram, self.sym)
+        owners, stats = sp.attribute(cmds, notes, ring or (0, 0))
+        seen = {"unknown_owner_commands": owners.count("unknown"), "unattributed_envmixers": stats["unattributed_mix"],
+                "handovers": len(stats["handovers"]), "edit_errors": 0, "ring_reset": ring != self.ring_key}
+        if seen["ring_reset"]:               # an audio reset allocated a new ring: the stems start silent
+            self.ring_key = ring
+            self.rings = {stem: np.zeros(0 if ring is None else ring[1] - ring[0], np.uint8) for stem, _ in STEMS}
+            self.since_reset = 0.0
+        seen["settled"] = self.since_reset >= STEM_SETTLE_S
+        renders = {}
+        for stem, keep in STEMS:
+            try:
+                edited = sp.edited_list(cmds, sp.muted_mask(owners, keep))
+            except ValueError:
+                seen["edit_errors"] += 1
+                renders[stem] = None
+                continue
+            self.load(state)
+            if ring:
+                self.work[ring[0]:ring[1]] = self.rings[stem]
+            sp.put_list(self.work, alist, edited)
+            self.lle.run(self.work, pending.words)
+            if ring:
+                self.rings[stem] = self.work[ring[0]:ring[1]].copy()
+            renders[stem] = sp.ai_samples(self.work, pending.ai_buffer, pending.ai_length)
+        self.since_reset += pending.ai_length / sp.AI_RATE
+        return renders, seen
+
+
 class Checker:
     def __init__(self, args):
         self.args = args
@@ -177,18 +263,11 @@ class Checker:
             raise SystemExit(f"{args.map}: the map disagrees with layout.py on {wrong}")
         header = tap.session_header(args.session)
         self.rdram_size = int(header["rdram_size"])
-        self.spans = [tuple(int(part, 16) if i == 0 else int(part) for i, part in
-                            enumerate(line.partition("=")[2].split(":")))
-                      for line in (args.session / "session.txt").read_text(encoding="ascii").splitlines()
-                      if line.startswith("vi_region=")]
-        self.lle = None
+        self.spans = vi_spans(args.session)
+        self.splitter = None
         if args.lle_src:
-            self.lle = sp.Lle(sp.build_lle(args.lle_src, args.build), bytes(0x1000), bytes(0x1000))
-            self.work = np.zeros(sp.RDRAM_BYTES, np.uint8)
-            ram, size, rom_at = sp.main_section(args.map)       # the boot and audio microcode, from the ROM
-            image = np.frombuffer(self.rom, np.uint8, size, rom_at).copy()
-            self.work[sp.phys(ram):sp.phys(ram) + size] = sp.swap32(image)
-        self.owners = None
+            lle = sp.Lle(sp.build_lle(args.lle_src, args.build), bytes(0x1000), bytes(0x1000))
+            self.splitter = Splitter(lle, self.rom, args.map, self.spans, self.sym)
         self.prediction: Prediction | None = None
         self.g0 = {"vis": 0, "pending": 0, "no_task_made": 0, "unexplained": [], "lost_vis": 0}
         self.g1 = {"compared": 0, "identical": 0, "mismatches": [], "skipped_lost": 0, "statuses": {}}
@@ -197,19 +276,16 @@ class Checker:
         self.real: list[tuple[int, np.ndarray]] = []         # (vi, the samples the RSP wrote)
         self.renders = {name: [] for name in ("mix", "music", "effects")}
         self.settled: list[bool] = []
-        self.rings: dict[str, np.ndarray] = {}
-        self.ring_key = None
-        self.since_reset = 0.0
         self.last: Pending | None = None
         self.last_vi: int | None = None
 
     def visit(self, record: tap.ViRegions, state: tap.ViState) -> None:
         vi = record.fields["vi_index"]
         ram = WordRam(state.ram, self.sym)
-        if self.owners is None:
-            self.owners = sp.Owners(ram)
         if self.last_vi is not None and vi != self.last_vi + 1:
             self.g0["lost_vis"] += vi - self.last_vi - 1
+            if self.splitter is not None:
+                self.splitter.restart()       # the stems missed the lost tasks: they start silent
         if self.prediction is not None:
             self.settle(self.prediction, state, vi)
         pending = pending_task(ram, self.sym, vi)
@@ -226,59 +302,28 @@ class Checker:
 
     def render(self, pending: Pending, state: tap.ViState, ram: WordRam) -> Prediction:
         regions = rsp_regions(ram, self.sym, pending)
-        if self.lle is None:
+        splitter = self.splitter
+        if splitter is None:
             return Prediction(pending, regions, None, None)
-        self.load(state)
-        status = self.lle.run(self.work, pending.words)
+        status = splitter.mix(pending, state)
         self.g1["statuses"][str(status)] = self.g1["statuses"].get(str(status), 0) + 1
-        expected = [self.work[begin:begin + size].copy() for _, begin, size in regions]
-        dmem = self.lle.dmem[DMEM_LISTS[0]:DMEM_LISTS[1]].copy()
+        expected = [splitter.work[begin:begin + size].copy() for _, begin, size in regions]
+        dmem = splitter.lle.dmem[DMEM_LISTS[0]:DMEM_LISTS[1]].copy()
         self.stems(pending, state, ram, expected[0])
         return Prediction(pending, regions, expected, dmem)
-
-    def load(self, state: tap.ViState) -> None:
-        for begin, size in self.spans:
-            self.work[begin:begin + size] = state.ram[begin:begin + size]
-        self.lle.sp[:0x1000] = state.dmem
 
     def stems(self, pending: Pending, state: tap.ViState, ram: WordRam, mix_bytes: np.ndarray) -> None:
         """G3 for one task: the mix the microcode just wrote, then each stem from the same bytes."""
         mix = sp.swap32(mix_bytes.copy()).view(">i2").astype(np.int16).reshape(-1, 2)
-        alist, size = pending.words[12], pending.words[13]
-        cmds = list_commands(state.ram, alist, size)
-        notes = self.owners.update()
-        ring = reverb_ring(ram, self.sym)
-        owners, stats = sp.attribute(cmds, notes, ring or (0, 0))
+        renders, seen = self.splitter.split(pending, state, ram)
         g3 = self.g3
         g3["tasks"] += 1
-        g3["unknown_owner_commands"] += owners.count("unknown")
-        g3["unattributed_envmixers"] += stats["unattributed_mix"]
-        g3["handovers"] += len(stats["handovers"])
-        if ring != self.ring_key:            # an audio reset allocated a new ring: the stems start silent
-            self.ring_key = ring
-            self.rings = {stem: np.zeros(0 if ring is None else ring[1] - ring[0], np.uint8) for stem in ("music", "effects")}
-            g3["ring_resets"] += 1
-            self.since_reset = 0.0
-        renders = {"mix": mix}
-        for stem, keep in (("music", sp.MUSIC_PLAYERS), ("effects", sp.EFFECT_PLAYERS)):
-            try:
-                edited = sp.edited_list(cmds, sp.muted_mask(owners, keep))
-            except ValueError:
-                g3["edit_errors"] += 1
-                renders[stem] = np.zeros_like(mix)
-                continue
-            self.load(state)
-            if ring:
-                self.work[ring[0]:ring[1]] = self.rings[stem]
-            sp.put_list(self.work, alist, edited)
-            self.lle.run(self.work, pending.words)
-            if ring:
-                self.rings[stem] = self.work[ring[0]:ring[1]].copy()
-            renders[stem] = sp.ai_samples(self.work, pending.ai_buffer, pending.ai_length)
-        for name, samples in renders.items():
-            self.renders[name].append(samples)
-        self.settled.append(self.since_reset >= STEM_SETTLE_S)
-        self.since_reset += len(mix) / sp.AI_RATE
+        for name in ("unknown_owner_commands", "unattributed_envmixers", "handovers", "edit_errors"):
+            g3[name] += seen[name]
+        g3["ring_resets"] += seen["ring_reset"]
+        for name, samples in {"mix": mix, **renders}.items():
+            self.renders[name].append(np.zeros_like(mix) if samples is None else samples)
+        self.settled.append(seen["settled"])
 
     def settle(self, prediction: Prediction, state: tap.ViState, vi: int) -> None:
         """G1 and G2's stream for the task of the last VI, from what this VI captured."""
@@ -310,7 +355,7 @@ class Checker:
         out = {"G0": dict(g0, unexplained=g0["unexplained"][:20], unexplained_count=len(g0["unexplained"]),
                           verdict="nothing to judge" if not g0["pending"] else
                           "pass" if not g0["unexplained"] else "fail")}
-        if self.lle is None:
+        if self.splitter is None:
             out["G1"] = out["G3"] = {"verdict": "not run", "reason": "no --lle-src"}
             return out
         clean_runs = set(g1["statuses"]) <= {"0"}         # every task reached the microcode's BREAK
@@ -352,18 +397,37 @@ class Checker:
 
 
 # --- G2: the game's output against the loopback recording ---
+LANCZOS_PHASES = 1 << 12        # a position's fraction to 1/4096 sample: the kernel comes from a table
+_TABLE: list = []
+
+
+def _lanczos_table() -> np.ndarray:
+    """The Lanczos kernel's taps at every 1/LANCZOS_PHASES fraction (computing sinc per sample
+    was most of a scene's stems time)."""
+    if not _TABLE:
+        fractions = np.arange(LANCZOS_PHASES + 1) / LANCZOS_PHASES
+        distance = np.arange(-LANCZOS + 1, LANCZOS + 1)[None, :] - fractions[:, None]
+        _TABLE.append((np.sinc(distance) * np.sinc(distance / LANCZOS)).astype(np.float32))
+    return _TABLE[0]
+
+
 def interp(x: np.ndarray, positions: np.ndarray) -> np.ndarray:
-    """Lanczos interpolation of mono `x` at fractional sample `positions` (zero outside)."""
+    """Lanczos interpolation of `x` at fractional sample `positions` (zero outside): mono, or
+    (samples, channels) with every channel read through one kernel (stems_layer's tracks)."""
     taps = np.arange(-LANCZOS + 1, LANCZOS + 1)
-    padded = np.concatenate([np.zeros(LANCZOS, np.float32), x.astype(np.float32), np.zeros(LANCZOS + 1, np.float32)])
-    out = np.empty(len(positions), np.float32)
+    channels = None if x.ndim == 1 else x.shape[1]
+    pad = np.zeros((LANCZOS,) if channels is None else (LANCZOS, channels), np.float32)
+    padded = np.concatenate([pad, x.astype(np.float32), pad, pad[:1]])
+    out = np.empty((len(positions),) if channels is None else (len(positions), channels), np.float32)
     for lo in range(0, len(positions), 1 << 15):
         t = positions[lo:lo + (1 << 15)]
         base = np.floor(t).astype(np.int64)
-        distance = taps[None, :] - (t - base)[:, None]
-        kernel = (np.sinc(distance) * np.sinc(distance / LANCZOS)).astype(np.float32)
+        kernel = _lanczos_table()[np.rint((t - base) * LANCZOS_PHASES).astype(np.int64)]
         index = np.clip(base[:, None] + taps[None, :] + LANCZOS, 0, len(padded) - 1)
-        out[lo:lo + len(t)] = (padded[index] * kernel).sum(axis=1)
+        if channels is None:
+            out[lo:lo + len(t)] = (padded[index] * kernel).sum(axis=1)
+        else:
+            out[lo:lo + len(t)] = np.einsum("mt,mtc->mc", kernel, padded[index])
     return out
 
 
@@ -383,12 +447,13 @@ def xcorr_lag(a: np.ndarray, b: np.ndarray) -> tuple[int, float]:
 
 
 def window_fit(game: np.ndarray, capture: np.ndarray, start: int, ratio: float, lag: float,
-               stretch: float = 1.0) -> dict | None:
-    """One window of game samples (32006 Hz) placed at capture position start * ratio + lag, the
-    game read `stretch` times as fast as nominal (the fitted drift): the integer lag by
-    correlation, then the fraction and gain that leave the least residual."""
-    count = int(G2_WINDOW_S * sp.AI_RATE * ratio)
-    search = int(G2_SEARCH_S * sp.AI_RATE * ratio)
+               stretch: float = 1.0, *, seconds: float = G2_WINDOW_S, search_s: float = G2_SEARCH_S) -> dict | None:
+    """One window of game samples (32006 Hz, `seconds` long) placed at capture position
+    start * ratio + lag (within search_s), the game read `stretch` times as fast as nominal (the
+    fitted drift): the integer lag by correlation, then the fraction and gain that leave the
+    least residual."""
+    count = int(seconds * sp.AI_RATE * ratio)
+    search = int(search_s * sp.AI_RATE * ratio)
     centre = int(round(start * ratio + lag))
     lo, hi = centre - search, centre + count + search
     if lo < 0 or hi > len(capture):
@@ -404,12 +469,19 @@ def window_fit(game: np.ndarray, capture: np.ndarray, start: int, ratio: float, 
         y = interp(game, start + (np.arange(count) - fraction) * step)
         gain = float(np.dot(c, y) / (np.dot(y, y) or 1.0))
         return float(np.sum((c - gain * y) ** 2)), fraction, gain
-    # The residual is near-parabolic in the fraction: three samples place its floor.
+    # The residual is near-parabolic in the fraction: three samples place its floor, and three
+    # more a tenth of a sample apart place it again (broadband sound bends the wide parabola:
+    # the first estimate alone sat 0.05 sample off on synthetic noise, 26 dB of a stem's sum).
     tried = [fit(-0.5), fit(0.0), fit(0.5)]
     curve = tried[0][0] - 2 * tried[1][0] + tried[2][0]
     if curve > 0:
         tried.append(fit(float(np.clip(0.25 * (tried[0][0] - tried[2][0]) / curve, -0.5, 0.5))))
-    residual, fraction, gain = min(tried)
+    best = min(tried)
+    near = [fit(best[1] - 0.1), best, fit(best[1] + 0.1)]
+    curve = near[0][0] - 2 * near[1][0] + near[2][0]
+    if curve > 0:
+        tried.append(fit(float(np.clip(best[1] + 0.05 * (near[0][0] - near[2][0]) / curve, -0.6, 0.6))))
+    residual, fraction, gain = min([*tried, near[0], near[2]])
     power = float(np.sum(c ** 2))
     return {"game_s": round(start / sp.AI_RATE, 3), "lag": lo + shift + fraction - start * ratio, "ncc": round(ncc, 4),
             "gain": round(gain, 4), "snr_db": round(10 * np.log10(power / residual), 2) if residual else 99.0}
@@ -475,12 +547,27 @@ def write_wavs(out: Path, checker: Checker, game: np.ndarray) -> dict:
     return {name: str(path) for name, path in paths.items()}
 
 
+def vi_source(args):
+    """The session's VI records: a one-shot tap's tap.bin, or a live spool session's segments from
+    --segment on (stems_live.session_vi_records); None when it has neither."""
+    if (args.session / "tap.bin").is_file():
+        return tap.read_records(args.session / "tap.bin")
+    if any(args.session.glob("seg-*.tap")):
+        import stems_live
+        return stems_live.session_vi_records(args.session, first_segment=getattr(args, "segment", None))
+    return None
+
+
 def run(args) -> int:
-    if not (args.session / "tap.bin").is_file():
-        print(f"{args.session}: no tap.bin", file=sys.stderr)
+    source = vi_source(args)
+    if source is None:
+        print(f"{args.session}: no tap.bin and no live spool segments", file=sys.stderr)
         return 2
     checker = Checker(args)
-    for record, state in tap.vi_states(tap.read_records(args.session / "tap.bin"), checker.rdram_size):
+    limit = getattr(args, "vis", 0) or 0
+    for count, (record, state) in enumerate(tap.vi_states(source, checker.rdram_size)):
+        if limit and count >= limit:
+            break
         checker.visit(record, state)
     report = {"session": str(args.session), "vi_spans": [[hex(b), n] for b, n in checker.spans],
               "gates": checker.verdicts()}
