@@ -37,6 +37,7 @@ from sm64_events.server import scene_exports, scene_lab_api  # noqa: E402
 from test_scene_lab_stage_ghosts import CLIP, Loader, config, recording  # noqa: E402,F401
 
 RATE = 48000
+VERSION = 1                     # the scene recording's format the page writes today
 FRAME_MS = 1000 / 30
 
 
@@ -223,6 +224,11 @@ def _finished(client, job: str, seconds: float = 60) -> dict:
     raise AssertionError(f"the export did not end: {status}")
 
 
+def _body(opened: dict, timeline: list, **more) -> dict:
+    """An export request as the page sends it (scenerecord.js): the recording's format version first."""
+    return {"version": VERSION, "session": opened["session"], "timeline": timeline, "fps": 60, **more}
+
+
 def _timeline():
     """Every kind of moment: play, a pause held on one picture, a free camera moved during the pause,
     the HUD off, a ghost added, the HUD on again while paused, at a 60 Hz display."""
@@ -261,13 +267,14 @@ def test_an_export_draws_every_entry_again_and_lands_beside_the_saved_replays(co
     with TestClient(_app(tmp_path, {"scene.sm64scene": recording["package"].read_bytes()}, recording["rom"],
                          loader)) as client:
         opened = client.post("/api/scene-lab/open", json={"package": "scene.sm64scene"}).json()
-        body = {"session": opened["session"], "timeline": entries, "fps": 60, "duration_ms": len(entries) * 1000 / 60}
+        body = _body(opened, entries, duration_ms=len(entries) * 1000 / 60)
         job = client.post("/api/scene-lab/export", json=body).json()["job"]
         status = _finished(client, job)
     assert status["state"] == "done", status
     path = Path(status["path"])
     assert path.parent == tmp_path / "clips" and path.name.startswith("scene ") and path.suffix == ".mp4"
-    assert status["message"] == f"Saved {path.name}. This recording has no sound, so the video is silent." and not list((tmp_path / "clips").glob("*.part"))
+    assert status["message"] == f"Saved {path.name}. This recording has no sound, so the video is silent."
+    assert not list((tmp_path / "clips").glob("*.part"))
     made = json.loads(path.read_text(encoding="utf-8"))
     assert made["fps"] == 60 and len(made["pictures"]) == len(entries)       # one output frame per 60 Hz entry
     expected = _direct(config, recording, entries, Loader({"a": (CLIP, "YOUR PB"), "b": (CLIP, "Alice")}))
@@ -288,7 +295,8 @@ def test_the_sound_reaches_the_file_on_its_pictures(tmp_path):
     package = pk.Package(with_sound, sound["rom"])
     pcm = sound["pcm"].astype(np.int32)
     music = (pcm // 4).astype(np.int16)
-    split = pk.with_stems(with_sound, sound["rom"], stems_layer.encode(package.audio, music, (pcm - music).astype(np.int16)))
+    effects = (pcm - music).astype(np.int16)
+    split = pk.with_stems(with_sound, sound["rom"], stems_layer.encode(package.audio, music, effects))
     rom = tmp_path / "rom.z64"
     rom.write_bytes(sound["rom"])
     with TestClient(_app(tmp_path, {"split.sm64scene": split}, rom, keep_folders=True)) as client:
@@ -302,8 +310,7 @@ def test_the_sound_reaches_the_file_on_its_pictures(tmp_path):
                             "ghosts": [], "play_ms": t if t < times[-1] else None,
                             "sound": {"music": t < 600, "effects": True, "volume": 1.0, "muted": False,
                                       "ghost_mutes": []}})
-        job = client.post("/api/scene-lab/export", json={"session": opened["session"], "timeline": entries,
-                                                        "fps": 60}).json()["job"]
+        job = client.post("/api/scene-lab/export", json=_body(opened, entries)).json()["job"]
         status = _finished(client, job)
         folder = client.app.state.scene_lab.exports.jobs[job].folder
     assert status["state"] == "done", status
@@ -331,8 +338,7 @@ def test_cancel_stops_the_child_and_leaves_no_file(config, recording, tmp_path):
     with TestClient(_app(tmp_path, {"scene.sm64scene": recording["package"].read_bytes()}, recording["rom"],
                          Loader({}), fake_host={"delay_ms": 100})) as client:
         opened = client.post("/api/scene-lab/open", json={"package": "scene.sm64scene"}).json()
-        job = client.post("/api/scene-lab/export", json={"session": opened["session"], "timeline": entries,
-                                                        "fps": 60}).json()["job"]
+        job = client.post("/api/scene-lab/export", json=_body(opened, entries)).json()["job"]
         deadline = time.monotonic() + 30
         while "Drawing" not in client.get(f"/api/scene-lab/export/{job}").json()["message"]:
             assert time.monotonic() < deadline
@@ -349,8 +355,7 @@ def test_an_encoder_failure_says_why_and_removes_the_partial_file(config, record
     with TestClient(_app(tmp_path, {"scene.sm64scene": recording["package"].read_bytes()}, recording["rom"],
                          Loader({"a": (CLIP, "x"), "b": (CLIP, "y")}), fail_after=1)) as client:
         opened = client.post("/api/scene-lab/open", json={"package": "scene.sm64scene"}).json()
-        job = client.post("/api/scene-lab/export", json={"session": opened["session"], "timeline": _timeline(),
-                                                        "fps": 60}).json()["job"]
+        job = client.post("/api/scene-lab/export", json=_body(opened, _timeline())).json()["job"]
         status = _finished(client, job)
     assert status["state"] == "error" and status["message"].startswith("The video encoder stopped")
     assert not list((tmp_path / "clips").iterdir())
@@ -360,8 +365,7 @@ def test_one_export_at_a_time_and_only_of_the_open_scene(config, recording, tmp_
     with TestClient(_app(tmp_path, {"scene.sm64scene": recording["package"].read_bytes()}, recording["rom"],
                          Loader({}), fake_host={"delay_ms": 100})) as client:
         opened = client.post("/api/scene-lab/open", json={"package": "scene.sm64scene"}).json()
-        body = {"session": opened["session"], "timeline": [{**entry, "ghosts": []} for entry in _timeline()],
-                "fps": 60}
+        body = _body(opened, [{**entry, "ghosts": []} for entry in _timeline()])
         stale = client.post("/api/scene-lab/export", json={**body, "session": opened["session"] + 1})
         assert stale.status_code == 409 and "no longer open" in stale.json()["detail"]
         assert client.post("/api/scene-lab/export", json={**body, "fps": 24}).status_code == 422
@@ -374,3 +378,39 @@ def test_one_export_at_a_time_and_only_of_the_open_scene(config, recording, tmp_
         assert client.get("/api/scene-lab/export/nope").status_code == 404
         client.post(f"/api/scene-lab/export/{job}/cancel")
         assert _finished(client, job, 20)["state"] == "cancelled"
+
+
+def test_a_recording_names_its_format_and_a_reader_refuses_another(config, recording, tmp_path):
+    """Recordings outlive changes to the viewer, so the format carries a version from the first one
+    and both readers, the lab and the export child, refuse one they do not know rather than guess."""
+    with TestClient(_app(tmp_path, {"scene.sm64scene": recording["package"].read_bytes()}, recording["rom"],
+                         Loader({}))) as client:
+        opened = client.post("/api/scene-lab/open", json={"package": "scene.sm64scene"}).json()
+        body = _body(opened, [{**entry, "ghosts": []} for entry in _timeline()])
+        for other in ({key: value for key, value in body.items() if key != "version"}, {**body, "version": 2}):
+            refused = client.post("/api/scene-lab/export", json=other)
+            assert refused.status_code == 422 and refused.json()["detail"] == scene_export.OTHER_VERSION
+    assert not (tmp_path / "clips").exists() or not list((tmp_path / "clips").iterdir())
+    with pytest.raises(scene_export.ExportError, match="another version"):
+        scene_export.run({"version": 2, "timeline": body["timeline"], "fps": 60}, tmp_path, lambda event: None,
+                         scene_export.threading.Event())
+
+
+def test_a_held_picture_never_plays_its_sound_twice_and_the_music_goes_on_where_it_stopped():
+    """Play, Pause 12 ms into picture 10, Play again, as the page records it (its clock resumes where
+    it paused: SceneLink.play's resumeMs): the sound is silent while paused and goes on from the
+    sample it stopped at, so nothing heard before the pause is heard again."""
+    runs, total = _table()
+    ramp = np.arange(total, dtype=np.int64)
+    stage = np.stack([(ramp % 30000 - 15000), ramp // 30000 * 1000], axis=1).astype(np.int16)
+    paused = 10 * FRAME_MS + 12                                   # the recorded time sounding at Pause
+    entries = [_entry(t, t) for t in np.arange(0, paused, 1000 / 60)] + [_entry(paused, None)]
+    entries += [_entry(t, paused + t - 1000) for t in np.arange(1000, 1400, 1000 / 60)]
+    pcm = es.mix(entries, 1400, RATE, runs, False, lambda track: stage, {})
+    heard = pcm[:, 1].astype(np.int64) // 1000 * 30000 + pcm[:, 0].astype(np.int64) + 15000   # the stream sample
+    before = slice(es.FADE, round(paused * 48) - es.FADE)
+    after = slice(round(1000 * 48) + es.FADE, round(1400 * 48) - es.FADE)
+    assert not pcm[round(paused * 48) + es.FADE:round(1000 * 48)].any()      # silent while paused
+    assert np.all(np.diff(heard[before]) == 1) and np.all(np.diff(heard[after]) == 1)
+    assert heard[after][0] == round(paused * 48) + es.FADE             # on from where it stopped, no repeat
+    assert heard[after][0] > heard[before][-1]

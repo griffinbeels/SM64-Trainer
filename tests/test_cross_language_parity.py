@@ -1034,3 +1034,16 @@ def test_a_scene_exports_sound_follows_the_pages_map_and_switches():
     assert js["tracks"] == [export_sound.track_for(*case) for case in
                             [(False, True, True), (False, False, False), (True, True, True), (True, False, True),
                              (True, True, False), (True, False, False)]]
+
+
+def test_the_scene_recordings_format_version_agrees():
+    """scenerecord.js writes a scene recording and tools/scene_lab/scene_export.py reads it (M4 round 6,
+    item 3); the version names the format, and the reader refuses one it does not know. Change the
+    entries' meaning on one side without the other and every recording either fails or is misread."""
+    import sys
+    sys.path.insert(0, str(REPO / "tools" / "scene_lab"))
+    import scene_export
+
+    js = run_node(f"{declaration(UI / 'components' / 'scenerecord.js', 'RECORDING')}\n"
+                  "console.log(JSON.stringify(RECORDING.version));")
+    assert js == scene_export.TIMELINE_VERSION

@@ -56,6 +56,12 @@ sys.path.insert(0, str(HERE))
 import export_sound  # noqa: E402
 
 FPS_CHOICES = (30, 60)
+# The scene recording's format (interface G's entries, scenerecord.js RECORDING.version). A recording
+# outlives changes to the viewer, so a reader refuses a version it does not know rather than guessing:
+# a new field that changes what an entry means (a play rate for slow motion, say) is a new version.
+TIMELINE_VERSION = 1
+OTHER_VERSION = ("This recording was made by another version of the Scene viewer, so it cannot be made "
+                 "into a video here.")
 DISPLAY_MS = 1000 / 60            # a display frame, for a timeline whose last entry has no end
 GOP_SECONDS = 2.0                 # a key picture this often: the ring's segment length, quick seeks in an editor
 AUDIO_BITRATE = "160k"            # the ring's AAC (replay/ffmpeg_sink.py), which saved replays keep
@@ -294,6 +300,8 @@ def _encoder(job: dict, width: int, height: int, fps: int, sound: Path, rate: in
 def run(job: dict, folder: Path, report, cancelled: threading.Event) -> dict:
     """Makes the video; returns its stats. ExportError with a sentence, or Cancelled."""
     started = time.perf_counter()
+    if job.get("version") != TIMELINE_VERSION:
+        raise ExportError(OTHER_VERSION)
     entries, fps = job["timeline"], int(job["fps"])
     if fps not in FPS_CHOICES or not entries:
         raise ExportError("Nothing was recorded.")

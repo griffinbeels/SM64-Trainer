@@ -1372,7 +1372,8 @@ stages): the readout shows them and the UI observation log records them.
 A package with a source-audio layer plays Project64's own sound during Play,
 following the pictures. Where the [[sound stems]] measured Project64's audio
 delay, each sound plays on the picture of its [[frame]]; elsewhere it plays as
-heard, that delay after its picture. Stepping, seeking and Pause are silent; Mute (or M) and the
+heard, that delay after its picture. Stepping, seeking and Pause are silent, and Play after Pause on
+the same picture goes on from where it paused, so a held picture never plays its sound twice; Mute (or M) and the
 volume persist per viewer; a stretch the capture lost plays silent and says
 so. A package without one says it has no sound. **Music** and **Sound effects**
 switch the scene's [[sound stems]] on and off apart, remembered like Mute:
@@ -1412,6 +1413,8 @@ screen while paused), the camera asked for and the camera the server drew
 drawn, and the sound's switches, volume, mutes and the recorded time it played.
 It holds no pictures: making the [[scene clip]] draws each entry again, so a
 stall while recording never reaches the video. Recordings stop at 30 minutes.
+The format carries a version, and the lab refuses a recording of a version it
+does not know rather than guess what its entries mean.
 
 - **Lives** -- the page's half (`src/sm64_events/ui/components/scenerecord.js`);
   its checks and the export job (`src/sm64_events/server/scene_exports.py`)

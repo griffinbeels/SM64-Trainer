@@ -28,17 +28,19 @@ const html = htm.bind(h);
 const ROOT = "/api/scene-lab";
 // fps: the video's frame rate. The free camera, rigs and fly-tos move every display frame, so at 30 a
 // camera move would keep half its steps; the game's own pictures (30 a second) each fill two frames.
-export const RECORDING = { fps: 60, maxMs: 30 * 60 * 1000, pollMs: 300 };
+// version: the recording's format (tools/scene_lab/scene_export.py TIMELINE_VERSION, which refuses another).
+export const RECORDING = { version: 1, fps: 60, maxMs: 30 * 60 * 1000, pollMs: 300 };
 
 const samePose = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
 // The recorded time a play's sound is at on the display frame that began at `frameTime`, and the
 // picture it shows then (a play's picture shows on the display frame it is due: SceneLink.holdUntil);
-// null before the play's sound starts (its lead) or after its last picture.
+// null before the play's sound starts (its lead, or a resumed play's point: what was heard before
+// Pause is never heard again) or after its last picture.
 export function playPosition(play, frameTime) {
   if (!play) return null;
   const elapsed = frameTime - play.start + (play.frameMs || 0);
-  if (elapsed < 0 || elapsed >= play.length) return null;
+  if (elapsed < (play.resumeMs || 0) || elapsed >= play.length) return null;
   return { frame: pictureAt(play.times, play.from, elapsed), playMs: play.times[play.from] + elapsed };
 }
 
@@ -125,7 +127,7 @@ const waitMs = (ms) => new Promise((go) => { setTimeout(go, ms); });
 
 // Sends a finished recording and follows its export until it ends. `update` gets each status.
 export async function exportRecording(recorded, update, { poll = waitMs } = {}) {
-  const { job } = await send("POST", `${ROOT}/export`, { ...recorded, fps: RECORDING.fps });
+  const { job } = await send("POST", `${ROOT}/export`, { version: RECORDING.version, ...recorded, fps: RECORDING.fps });
   let status = { state: "running", progress: 0, message: "Starting...", job };
   exporting = status;
   update(status);

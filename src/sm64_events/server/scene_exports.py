@@ -252,7 +252,11 @@ class SceneExports:
         LookupError (409: no such scene open) or RuntimeError (409: busy, no FFmpeg)."""
         lab = self.lab
         if not isinstance(body, dict):
-            raise ValueError("The export is {session, timeline, fps}.")
+            raise ValueError("The export is {version, session, timeline, fps}.")
+        from sm64_events.server.scene_lab_api import _lab_module
+        reader = _lab_module("scene_export")                   # the recording's format and its one reader
+        if body.get("version") != reader.TIMELINE_VERSION:
+            raise ValueError(reader.OTHER_VERSION)
         fps = body.get("fps", 60)
         if fps not in FPS_CHOICES:
             raise ValueError("fps is 30 or 60.")
@@ -283,7 +287,7 @@ class SceneExports:
         try:
             ghosts = await self._ghosts(entries, job_folder)
             output, config = await asyncio.to_thread(self._reserve, heading, described.get("name"))
-            job = {"config": config, "package": str(package), "sidecar": str(sidecar) if sidecar else None,
+            job = {"version": reader.TIMELINE_VERSION, "config": config, "package": str(package), "sidecar": str(sidecar) if sidecar else None,
                    "fps": fps, "duration_ms": duration, "timeline": entries, "ghosts": ghosts,
                    "look": lab._ghost_values(), "output": str(output), "encoder": encoder,
                    **{key: value for key, value in self.options.items() if key != "encoder"}}

@@ -31,3 +31,14 @@ export function pictureAt(times, from, elapsed) {
 export function playLength(times, from, fps = 30) {
   return times[times.length - 1] - times[from] + 1000 / fps;
 }
+
+// How far into picture `frame` a play's sound had got when it stopped at `now`: {session, frame,
+// ms}, or null when it had not reached that picture. Play on the same picture goes on from there
+// (SceneLink.play's resumeMs), so a held picture never plays its sound twice. A play that had not
+// started sounding yet keeps the point it resumed from.
+export function heardInto(play, frame, now, session) {
+  const heard = play.times[play.from] + Math.max(play.resumeMs || 0, now - play.start);
+  const end = frame + 1 < play.times.length ? play.times[frame + 1] : play.times[play.from] + play.length;
+  const into = Math.min(heard, end) - play.times[frame];
+  return into > 0 ? { session, frame, ms: into } : null;
+}

@@ -6,6 +6,7 @@ import { h } from "preact";
 import { render, cleanup, fireEvent, waitFor } from "@testing-library/preact";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { RECORDING, RecordBar, SceneRecorder, cameraUsed, playPosition } from "../../src/sm64_events/ui/components/scenerecord.js";
+import { SceneLink } from "../../src/sm64_events/ui/components/sceneviewer.js";
 
 const POSE = { focus: [1, 2, 3], position: [4, 5, 6], roll: 0, fov: 45 };
 let frames, fetches, statuses;
@@ -40,6 +41,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
   RECORDING.pollMs = 300;
   RECORDING.maxMs = 30 * 60 * 1000;
 });
@@ -134,6 +136,7 @@ test("Record, Stop, the video's progress, then Show in folder opens Explorer at 
   const posted = fetches.find((call) => call.url === "/api/scene-lab/export");
   expect(posted.method).toBe("POST");
   expect(posted.body.fps).toBe(60);
+  expect(posted.body.version).toBe(1);                 // the recording's format, which a reader checks
   expect(posted.body.session).toBe(4);
   expect(posted.body.timeline.map((entry) => entry.t_ms)).toEqual([0, 16]);
   page.getByText(/Saved Bob - Star 2026-10-27 14.05.33.mp4/);
@@ -158,4 +161,37 @@ test("Cancel asks the lab to stop, and a failure says the lab's own sentence", a
     && call.method === "POST")).toBe(true));
   statuses.push({ state: "error", progress: 0.4, message: "The video encoder failed: no space left." });
   await waitFor(() => page.getByText("The video encoder failed: no space left."));
+});
+
+test("Pause holds the play's clock: Play on that picture goes on from there, a step starts it over", () => {
+  let now = 1000;
+  vi.spyOn(performance, "now").mockImplementation(() => now);
+  const animation = globalThis.requestAnimationFrame;
+  globalThis.requestAnimationFrame = () => 0;
+  try {
+    const link = new SceneLink({ draw: () => 0, changed: () => {}, ended: () => {} });
+    link.scene = { session: 7, fps: 30, frames: Array.from({ length: 10 }, (_, k) => ({ recorded_ms: k * 40 })) };
+    link.frame = 2;
+    link.play();
+    expect(link.playback.start).toBe(1000);
+    now = 1025;                                    // 25 ms into picture 2's 40
+    link.pause();
+    expect(link.pausedOn).toEqual({ session: 7, frame: 2, ms: 25 });
+    now = 5000;
+    link.play();                                   // the same picture: on from 25 ms, never its first 25 again
+    expect(link.playback.resumeMs).toBe(25);
+    expect(link.playback.start).toBe(4975);
+    expect(playPosition(link.playback, 4980)).toBe(null);           // what was heard before Pause stays silent
+    expect(playPosition(link.playback, 4990)).toEqual({ frame: 2, playMs: 80 + 15 + 1000 / 60 });
+    now = 5010;
+    link.pause();
+    expect(link.pausedOn).toEqual({ session: 7, frame: 2, ms: 35 });
+    link.step(1);                                  // another picture: Play starts it over
+    expect(link.pausedOn).toBe(null);
+    link.play();
+    expect(link.playback.resumeMs).toBe(0);
+    expect(link.playback.start).toBe(5010);
+  } finally {
+    globalThis.requestAnimationFrame = animation;
+  }
 });
