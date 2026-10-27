@@ -869,6 +869,29 @@ test("a field that types keeps its keys, Ctrl and Meta combinations stay the bro
   expect(frames.length).toBe(0);
 });
 
+test("a choice made with the mouse in a select hands the keyboard back; a select reached with Tab keeps its keys", async () => {
+  const { page, socket, root } = await openScene();
+  const entry = await enterFree(page, socket);
+  const pictures = root.querySelector(".scene-lab-quality select");
+  fireEvent.pointerDown(pictures, { button: 0, pointerId: 1 });                 // the mouse opens its list
+  pictures.focus();
+  fireEvent.change(pictures, { target: { value: "raw" } });                     // and picks
+  expect(document.activeElement).toBe(root);
+  await until(() => expect(socket.last().encoding).toBe("raw"));
+  await socket.picture(socket.last());
+  clock.now = 5000;
+  expect(fireEvent.keyDown(document.activeElement, { key: "e", code: "KeyE" })).toBe(false);   // E flies up,
+  await tick(5050);
+  await until(() => expect(socket.last().camera.focus[1]).toBeGreaterThan(entry.focus[1]));
+  fireEvent.keyUp(root, { key: "e", code: "KeyE" });
+  expect(pictures.value).toBe("raw");                                           // never picks "Exact..." by its letter
+  pictures.focus();                                                             // reached with Tab
+  expect(fireEvent.keyDown(pictures, { key: "ArrowUp", code: "ArrowUp" })).toBe(true);        // its own key,
+  fireEvent.change(pictures, { target: { value: "jpeg" } });                    // the browser's pick from it
+  expect(document.activeElement).toBe(pictures);                                // and the keyboard stays there
+  expect(fireEvent.keyDown(pictures, { key: "e", code: "KeyE" })).toBe(true);
+});
+
 test("a key pressed while nothing on the page has focus is the viewer's, and its release is heard wherever it lands", async () => {
   const { page, socket, root } = await openScene();
   const entry = await enterFree(page, socket);

@@ -1170,7 +1170,7 @@ export function SceneViewer({ t }) {
   const lab = t?.sceneLab, intent = lab?.intent;
   const [status, setStatus] = useState(null);
   const [opening, setOpening] = useState(false);
-  const canvas = useRef(null), surface = useRef(null), refresh = useRef(null);
+  const canvas = useRef(null), surface = useRef(null), refresh = useRef(null), pointed = useRef(null);
   const link = useSceneLink(canvas, refresh);
   refresh.current = async () => {
     try {
@@ -1223,11 +1223,21 @@ export function SceneViewer({ t }) {
     try { await send("POST", `${ROOT}/close`); } catch (problem) { link.fail(problem.message); }
     refresh.current();
   }
-  const keys = (event) => onKey(link, event, canvas.current);
+  const keys = (event) => {
+    pointed.current = null;          // a key reaching the page: whatever has focus is used from the keyboard
+    onKey(link, event, canvas.current);
+  };
   // A mouse click on one of the page's controls hands the keyboard back to the viewer, so Space
   // plays after clicking Free camera; a control pressed from the keyboard (detail 0) keeps it.
+  // A select's choice made with the mouse does the same (its letters would otherwise pick an
+  // option by its first letter: E and S switch Pictures to "Exact..."); one reached with Tab
+  // keeps its keys.
   const clicked = (event) => {
     if (event.detail > 0 && !typesInto(event.target)) surface.current?.focus({ preventScroll: true });
+  };
+  const pointedAt = (event) => { pointed.current = event.target; };
+  const chosen = (event) => {
+    if (event.target.tagName === "SELECT" && pointed.current === event.target) surface.current?.focus({ preventScroll: true });
   };
   // Focus leaving for the rest of the page, or for a field that types, lets go of every key.
   const left = (event) => {
@@ -1235,7 +1245,7 @@ export function SceneViewer({ t }) {
     if (!next || !surface.current?.contains(next) || typesInto(next)) link.releaseKeys();
   };
   return html`<div class="workshop-page scene-lab" ref=${surface} tabindex="-1" onkeydown=${keys}
-      onclick=${clicked} onfocusout=${left}>
+      onclick=${clicked} onpointerdown=${pointedAt} onchange=${chosen} onfocusout=${left}>
     <header class="practice-card workshop-hero">
       <div class="workshop-title">
         <span class="workshop-title-icon"><${Icon} name="ghost" size=${22} /></span>

@@ -60,6 +60,33 @@ def _shoot(page, folder: Path, state: str) -> None:
         page.locator(".scene-lab-player").screenshot(path=str(folder / f"scene-keys-{state}-{width}.png"))
 
 
+def _mouse_pick_hands_the_keyboard_back(page) -> None:
+    """A Pictures choice made with the mouse: E then flies up, and never picks "Exact pixels" by its letter."""
+    pictures = page.locator(".scene-lab-quality select")
+    for choice in ("raw", "jpeg"):
+        pictures.click()
+        pictures.select_option(choice)
+    rose = _hold(page, "e")
+    assert pictures.input_value() == "jpeg"
+    assert rose and rose[-1]["focus"][1] > rose[0]["focus"][1], rose
+    assert page.evaluate(HAS_KEYBOARD)
+
+
+def _fields_keep_their_keys(page) -> None:
+    """The tuning panel's number field and a contenteditable keep W; a mouse click on Tune controls does not."""
+    page.get_by_role("button", name="Tune controls").click()
+    assert page.evaluate(HAS_KEYBOARD)
+    page.locator(".scene-lab-tune #flightSpeed").focus()
+    assert not _hold(page, "w", 200)
+    page.evaluate("""(() => { const note = document.createElement('div');
+      note.contentEditable = 'true'; note.id = 'key-note';
+      document.querySelector('.scene-lab').append(note); note.focus(); })()""")
+    page.keyboard.type("wasd")
+    page.wait_for_timeout(150)
+    assert page.locator("#key-note").inner_text() == "wasd"
+    assert not _hold(page, "w", 200)
+
+
 def test_arriving_gives_the_viewer_the_keyboard_and_w_flies_with_no_button(tmp_path, monkeypatch):
     with attempt_scene._served(tmp_path, monkeypatch, lab_on=True) as (base, _seen), sync_playwright() as play:
         browser = play.chromium.launch(headless=True, args=["--disable-gpu"])
@@ -98,18 +125,8 @@ def test_arriving_gives_the_viewer_the_keyboard_and_w_flies_with_no_button(tmp_p
             slid = _hold(page, "d")
             assert slid and slid[-1]["position"] != slid[0]["position"]
 
-            # A field that types keeps its keys: the tuning panel's number field and a contenteditable.
-            page.get_by_role("button", name="Tune controls").click()
-            assert page.evaluate(HAS_KEYBOARD)                # the mouse click handed the keyboard back
-            page.locator(".scene-lab-tune #flightSpeed").focus()
-            assert not _hold(page, "w", 200)
-            page.evaluate("""(() => { const note = document.createElement('div');
-              note.contentEditable = 'true'; note.id = 'key-note';
-              document.querySelector('.scene-lab').append(note); note.focus(); })()""")
-            page.keyboard.type("wasd")
-            page.wait_for_timeout(150)
-            assert page.locator("#key-note").inner_text() == "wasd"
-            assert not _hold(page, "w", 200)
+            _mouse_pick_hands_the_keyboard_back(page)
+            _fields_keep_their_keys(page)
             assert errors == []
             print("scene keys", json.dumps({"w_requests": len(flown), "w_travel": travelled,
                                              "d_requests": len(slid)}))
