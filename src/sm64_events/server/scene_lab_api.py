@@ -7,7 +7,10 @@ one reader, and without it this module is never imported and no route is added. 
                                   "live": whether the scene recording runs ({recording, reason})
     GET  /api/scene-lab/status    the config's readiness, the packages, the open scene, the last end
     GET  /api/scene-lab/attempt-scenes?ids=12,13   each known attempt's scene: ready, cutting, unavailable
-    POST /api/scene-lab/open      {package: <a listed name>} or {attempt: <id>} -> the scene; 409 with the reason
+    POST /api/scene-lab/open      {package: <a listed name>} or {attempt: <id>} -> the scene (with its
+                                  "title" and "target"); 409 with the reason
+    GET  /api/scene-lab/stage?course=&star=&strat=   the stage for a target and strategy (scene_ghosts.py)
+    GET  /api/scene-lab/ghosts?section=&...&page=    one page of the ghosts that could be drawn into it
     POST /api/scene-lab/close
     WS   /api/scene-lab/ws        pictures and poses of the open scene (protocol below)
     GET  /api/scene-lab/audio/{block}?session=N   one block of the open scene's sound
@@ -81,7 +84,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Response, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, Query, Response, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field, model_validator
 
 log = logging.getLogger("sm64.scene_lab")
@@ -230,6 +233,9 @@ class LoopProbe:
 class SceneLab:
     """The one open scene (or none) and the pages showing it."""
 
+    ghosts = None                  # scene_ghosts.SceneGhosts: the stage and the ghost catalog (mount_scene_lab)
+    heading = {"title": "Lab recording", "target": None}     # the open scene's, as _heading says it
+
     def __init__(self, config_path: Path, *, session_options: dict | None = None,
                  page_gone_seconds: float = PAGE_GONE_SECONDS, watch_seconds: float = WATCH_SECONDS,
                  idle_seconds: float | None = None, measure_loop: bool = False, live: bool = False,
@@ -282,8 +288,18 @@ class SceneLab:
             self.shared = None
 
     def _scene(self, described: dict) -> dict:
-        scene = {"session": self.generation, **described, "shared_pictures": self.shared is not None}
+        scene = {"session": self.generation, **described, "shared_pictures": self.shared is not None, **self.heading}
         return scene | ({"attempt": self.open_attempt} if self.open_attempt is not None else {})
+
+    def _heading(self, attempt: int | None) -> dict:
+        """The open scene's "title" and "target" (scene_ghosts.SceneGhosts.heading); blocking.
+        A title never stops a scene from opening: without one it says what was opened."""
+        try:
+            if self.ghosts is not None:
+                return self.ghosts.heading(attempt)
+        except Exception:  # noqa: BLE001 - the journal's names are a nicety beside the scene
+            log.warning("The scene's title could not be read.", exc_info=True)
+        return {"title": "Lab recording" if attempt is None else f"Attempt {attempt}", "target": None}
 
     # ------------------------------------------------------------ attempt scenes (live recording)
 
@@ -414,6 +430,7 @@ class SceneLab:
                 path, sidecar = self.scenes.path(attempt)
             except _lab_module("attempt_scenes").SceneUnavailable as unavailable:
                 raise SceneRefused(str(unavailable)) from None
+        heading = await asyncio.to_thread(self._heading, attempt)
         async with self.lock:
             await self._end("replaced")
             worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="scene-lab")
@@ -429,7 +446,8 @@ class SceneLab:
                     described = {**described, "audio": {**described["audio"], "reason": quiet}}
             self.session, self.worker, self.described = session, worker, described
             self.open_path, self.open_attempt = path, attempt
-            self.delivery = ThreadPoolExecutor(max_workers=1, thread_name_prefix="scene-lab-delivery")
+            self.heading = heading
+            self.delivery =ThreadPoolExecutor(max_workers=1, thread_name_prefix="scene-lab-delivery")
             self.generation += 1
             self.idle_seconds = self.idle_override or config.idle_seconds
             self.last_used = self.page_seen = time.monotonic()
@@ -812,12 +830,48 @@ def _attempt_ids(text: str) -> list[int]:
     return wanted
 
 
+def _mount_ghost_routes(router: APIRouter, lab: SceneLab) -> None:
+    """GET /stage and /ghosts (server/scene_ghosts.py): the stage for a target and strategy, and
+    one page of a section of the ghosts that could be drawn into it. Plain `def` routes, so
+    FastAPI runs each on its threadpool: they read the journal and, the first time, whole clips."""
+    from sm64_events.server.scene_ghosts import TargetError
+
+    def target_of(course, star, segment):
+        try:
+            return lab.ghosts.target(course=course, star=star, segment=segment)
+        except TargetError as error:
+            raise HTTPException(422, str(error)) from None
+
+    @router.get("/stage")
+    def stage(course: int | None = None, star: int | None = None, segment: int | None = None,
+              strat: str | None = Query(default=None, max_length=256)):
+        return lab.ghosts.stage(target_of(course, star, segment), strat or None)
+
+    @router.get("/ghosts")
+    def ghosts(section: str = "yours", course: int | None = None, star: int | None = None,
+               segment: int | None = None, strat: str | None = Query(default=None, max_length=256),
+               sort: str = "fastest", page: int = Query(default=1, ge=1, le=100000),
+               q: str = Query(default="", max_length=128), player: str = Query(default="", max_length=128)):
+        target = target_of(course, star, segment)
+        try:
+            return lab.ghosts.ghosts(target, strat or None, section=section, page=page, sort=sort,
+                                     query=q, player=player)
+        except TargetError as error:
+            raise HTTPException(422, str(error)) from None
+
+
 def mount_scene_lab(app, config_path, **options) -> SceneLab:
     """Adds the scene viewer's routes to `app`, starts the live recording's lease and the attempt
     scenes when the app starts, and ends both and the open scene when it stops. `options` are
-    SceneLab's (tests and e3_measure.py inject doubles and short timers)."""
+    SceneLab's (tests and e3_measure.py inject doubles and short timers), and `ghost_sources`,
+    what the stage and the ghost catalog read: {"tracker", "replay", "ghost"} (scene_ghosts.py)."""
+    sources = options.pop("ghost_sources", None) or {}
     lab = SceneLab(Path(config_path), **options)
+    from sm64_events.server.scene_ghosts import SceneGhosts
+    lab.ghosts = SceneGhosts(sources.get("tracker"), scenes=lambda: lab.scenes, replay=sources.get("replay"),
+                             ghost=sources.get("ghost"))
     router = APIRouter(prefix="/api/scene-lab")
+    _mount_ghost_routes(router, lab)
 
     @router.get("")
     def probe():

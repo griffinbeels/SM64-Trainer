@@ -628,7 +628,13 @@ test("the header names the scene, never its file: the server's title, else the a
   await until(() => expect(sockets.length).toBe(1));
   await until(() => expect(fallback.container.querySelector(".scene-lab-title")?.textContent)
     .toBe("Whomp's Fortress · Shoot into the Wild Blue · Single Jump · 11\"03"));
-  expect(sceneTitle({ name: "take-9731-46.sm64scene", attempt: 12, title: "Lab recording" }, view)).toBe("Lab recording");
+  // A title naming the target wins; a plain one ("Lab recording", "Attempt 12") yields to the attempt
+  // the log knows, and stays when the log does not know it.
+  expect(sceneTitle({ attempt: 12, title: "Bob-omb Battlefield · Big Bob-omb · Standard · 40\"10",
+    target: { course_id: 1 } }, view)).toBe("Bob-omb Battlefield · Big Bob-omb · Standard · 40\"10");
+  expect(sceneTitle({ name: "take-9731-46.sm64scene", attempt: 12, title: "Lab recording" }, view))
+    .toBe("Whomp's Fortress · Shoot into the Wild Blue · Single Jump · 11\"03");
+  expect(sceneTitle({ name: "take-9731-46.sm64scene", attempt: 99, title: "Attempt 99" }, view)).toBe("Attempt 99");
   expect(sceneTitle({ name: "take-9731-46.sm64scene", attempt: 99 }, view)).toBe("Recording");   // not in the log
   expect(sceneTitle({ name: "take-9731-46.sm64scene", attempt: 5 }, { segments: [{ id: 3, kind: "segment", name: "LBLJ",
     attempts: [{ id: 5, segment_id: 3, rta: "4\"20", igt: null }] }] })).toBe("Segment · LBLJ · 4\"20");

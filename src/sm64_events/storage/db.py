@@ -1211,6 +1211,19 @@ class Database:
             out = [_attempt_from_row(r) for r in rows]
         return sorted(out, key=lambda a: journal_id(a.id))
 
+    def target_attempts(self, *, course_id=None, star_id=None, segment_id=None) -> list[Attempt]:
+        """One star's (segment_id None) or one segment's attempts, in `attempts()`'s order --
+        filtered in SQL, so the Scene viewer's ghost catalog never loads the whole history
+        to list one target's ghosts (server/scene_ghosts.py)."""
+        if segment_id is not None:
+            where, values = "segment_id = ?", (segment_id,)
+        else:
+            where, values = "segment_id IS NULL AND course_id = ? AND star_id = ?", (course_id, star_id)
+        with self._lock:
+            rows = self._conn.execute(f"SELECT * FROM attempts WHERE {where}", values).fetchall()
+            out = [_attempt_from_row(r) for r in rows]
+        return sorted(out, key=lambda a: journal_id(a.id))
+
     def session_attempts(self, session_id: int) -> list[Attempt]:
         """One session's attempts, in `attempts()`'s chronological order --
         filtered in SQL, so a caller that runs after every attempt (the
