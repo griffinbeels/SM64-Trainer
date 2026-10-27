@@ -60,7 +60,7 @@ OVERLAY_MODULES = ("link_dispatch.cpp", "renderer_boundary.cpp", "link_source_ap
                    "ghost_draw.cpp", "ghost_playback.cpp", "ghost_dispatch.cpp", "ghost_presentation.cpp",
                    "ghost_audio.cpp", "ghost_annotation_assets.cpp", "ghost_font_cache.cpp",
                    "ghost_live_codec.cpp", "ghost_live_input.cpp", "ghost_live_render.cpp",
-                   "ghost_live_session.cpp", "ghost_live_ipc.cpp")
+                   "ghost_live_session.cpp", "ghost_live_ipc.cpp", "ghost_viewer.cpp")
 DEFINES = "SM64_REPLAY_GL_WITNESS;SM64_REPLAY_SOURCE;SM64_REPLAY_CONTEXT_LIFETIME;SM64_GHOST_RENDERER;"
 RECIPE_VERSION = "3"
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)

@@ -60,9 +60,15 @@ go through WebView2 shared memory and the binary reply is the header alone, or a
 post failed, as its header's encoding says), {"id",
 "session", "kind": "pose", "frame"} for the recorded camera and Mario, {"id", "session", "kind":
 "pick", "frame", "camera", "u", "v"} for where the picture drew a point (u, v from 0 to 1 across
-and down; Set focus). A picture comes back as one binary message, [u32 little-endian header
-length][header JSON][picture]; everything else is JSON text: a pose, a pick, {"id", "error"[,
-"closed"]}, or {"id", "superseded": true}. Each socket draws up to PICTURES_IN_FLIGHT pictures at
+and down; Set focus), and {"id", "session", "kind": "ghosts", "set": [{"ref", "label"}][, "origin":
+a frame]} for the ghosts every later picture draws (the whole set, replacing the last; [] removes
+them), answered {"id", "kind": "ghosts", "shown": [refs], "refused": [{"ref", "reason"}]} once
+each new ghost's recording is in the renderer (scene_session.set_ghosts; clips come from the
+ghost catalog's load_ghost, server/scene_ghosts.py, else `ghost_loader`). A picture of a scene
+with ghosts carries "ghosts" in its header ({"asked", "chosen", "drawn", "displayed",
+"pending", "refused"}). A picture comes back as one binary message, [u32 little-endian header
+length][header JSON][picture]; everything else is JSON text: a pose, a pick, a ghosts answer,
+{"id", "error"[, "closed"]}, or {"id", "superseded": true}. Each socket draws up to PICTURES_IN_FLIGHT pictures at
 once (answered in the order they began) and keeps at most one more request waiting: a newer one
 replaces it and the replaced one is answered superseded, so quick steps never queue stale
 renders behind the ones being drawn. Poses and picks wait in order and are answered before a
@@ -240,11 +246,13 @@ class SceneLab:
                  page_gone_seconds: float = PAGE_GONE_SECONDS, watch_seconds: float = WATCH_SECONDS,
                  idle_seconds: float | None = None, measure_loop: bool = False, live: bool = False,
                  lease_factory=None, cutter_factory=None, cutter_options: dict | None = None,
-                 grow_seconds: float = GROW_SECONDS, live_audio=None):
+                 grow_seconds: float = GROW_SECONDS, live_audio=None, ghost_loader=None):
         """live: hold the recording's lease and cut attempt scenes (main.py's server only; a test,
         the UI fixture or e3_measure.py never arms the wrapper's tap). Tests replace the lease
         (lease_factory(lab_root)), the cutter (cutter_factory(folder, on_event)) or the cutter
-        child's spool (cutter_options: attempt_cutter.CutterProcess's spool_factory, extra_path)."""
+        child's spool (cutter_options: attempt_cutter.CutterProcess's spool_factory, extra_path).
+        ghost_loader(ref) loads a ghost's clip where the lab has no ghost catalog (interface C's
+        shape; default: the player's own runs in the replay store, stage_ghosts.LocalGhosts)."""
         self.config_path = Path(config_path)
         self.session_options = session_options or {}
         self.live_on, self.lease_factory, self.cutter_options = live, lease_factory, cutter_options or {}
@@ -277,6 +285,7 @@ class SceneLab:
         self.watch_task: asyncio.Task | None = None
         self.loop_probe = LoopProbe() if measure_loop else None
         self.shared = None             # the desktop window's shared-memory pictures (attach_window)
+        self.ghost_loader = ghost_loader
 
     def attach_window(self, window) -> None:
         """The desktop app's pywebview window: its page may then ask for encoding "shared" and get
@@ -625,6 +634,41 @@ class SceneLab:
             return {"id": message.get("id"), "error": str(error)}
         return {"id": message.get("id"), "kind": "pick", **picked}
 
+    async def ghosts_reply(self, message: dict) -> dict:
+        """The open scene's ghosts become the page's set (scene_session.set_ghosts), drawn with the
+        player's ghost settings; every picture begun after this answer draws them."""
+        session = self.session
+        if session is not None and message.get("session") == self.generation:
+            session.ghost_look = _lab_module("stage_ghosts").Look.of(self._ghost_values())
+        try:
+            answer = await self._run(message.get("session"), "set_ghosts", message.get("set"), self._load_ghost,
+                                     message.get("origin"))
+        except SceneClosed as closed:
+            return {"id": message.get("id"), "error": str(closed), "closed": True}
+        except ValueError as error:
+            return {"id": message.get("id"), "error": str(error)}
+        return {"id": message.get("id"), "kind": "ghosts", **answer}
+
+    def _load_ghost(self, ref) -> dict:
+        """Interface C: a ghost_loader the lab was given (a test's, a tool's) first, else the
+        ghost catalog's load_ghost (server/scene_ghosts.py), else the player's own runs in the
+        replay store."""
+        catalog = getattr(self, "ghosts", None)
+        loader = self.ghost_loader or getattr(catalog, "load_ghost", None)
+        if loader is None:
+            from sm64_events.core.paths import replays_root
+            loader = self.ghost_loader = _lab_module("stage_ghosts").LocalGhosts(replays_root() / "native")
+        return loader(ref)
+
+    def _ghost_values(self) -> dict | None:
+        """The player's ghost settings (the in-game ghost's), from the catalog's ghost session when
+        the lab has one; None keeps the shipped defaults."""
+        session = getattr(getattr(self, "ghosts", None), "ghost", None)
+        try:
+            return session.payload() if session is not None else None
+        except Exception:  # noqa: BLE001 - the viewer draws with the defaults rather than not at all
+            return None
+
     async def audio_block(self, generation: int, block: int) -> tuple[bytes, str]:
         """One block of the open scene's sound, decoded and checked off the session's worker."""
         session = self.session
@@ -768,7 +812,7 @@ class _PageSocket:
             if not isinstance(message, dict):
                 await self.send({"id": None, "error": "a request is one JSON object"})
                 continue
-            if message.get("kind") in ("pose", "pick"):
+            if message.get("kind") in ("pose", "pick", "ghosts"):
                 if len(self.questions) >= MAX_QUESTIONS_WAITING:
                     await self.send({"id": self.questions.popleft().get("id"), "superseded": True})
                 self.questions.append(message)
@@ -786,7 +830,8 @@ class _PageSocket:
             while self.questions or (self.picture is not None and len(self.drawing) < PICTURES_IN_FLIGHT):
                 if self.questions:
                     question = self.questions.popleft()
-                    reply = self.lab.pick_reply if question.get("kind") == "pick" else self.lab.pose_reply
+                    reply = {"pick": self.lab.pick_reply, "ghosts": self.lab.ghosts_reply}.get(
+                        question.get("kind"), self.lab.pose_reply)
                     await self.send(await reply(question))
                 else:
                     message, self.picture = self.picture, None

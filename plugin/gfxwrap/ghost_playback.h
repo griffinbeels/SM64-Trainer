@@ -197,6 +197,10 @@ const gp_api *api();
 int set_live_model_demand(uint64_t id, uint32_t rom, uint32_t configuration);
 bool shared_model(uint32_t context, ghost_live::ModelBinding &);
 bool model_current(const ghost_live::ModelBinding &);
+/* prepare_clip's validation alone, for a reader that keeps its own copy (the
+ * scene viewer's ghosts, ghost_viewer.h): true for a clip saved playback
+ * would accept, with its indexed rows. Any thread; reads only its arguments. */
+bool clip_valid(const gclip_header &, const gclip_frame *, uint32_t &indexed);
 /* Refused rows of a valid clip that playback hides rather than bridging:
  * where the ghost blinks. UINT32_MAX for a clip prepare_clip refuses. Any
  * thread; reads only its arguments. ghost/clip.py blink_frames states it too. */

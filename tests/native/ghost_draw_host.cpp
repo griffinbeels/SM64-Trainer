@@ -14,6 +14,7 @@
 #include "ghost_link.h"
 #include "ghost_playback.h"
 #include "ghost_live_session.h"
+#include "ghost_viewer.h"
 #include "ghost_presentation.h"
 #include "ghost_stream.h"
 #include "link_dispatch.h"
@@ -215,6 +216,17 @@ bool current(const gp_draw_token &token) { return token_current && token.revisio
 bool records_display() { return false; }
 const ghost_path::Frame *path() { return nullptr; }
 void retire_on_context_loss() {}
+}
+namespace ghost_viewer { // the scene viewer host's ghosts: never set up in the game
+bool atlas(sg_atlas_view *, uint64_t *) { return false; }
+bool particles(sg_particle_view *, uint64_t *) { return false; }
+bool annotations(ghost_annotation::View *, uint64_t *) { return false; }
+bool plan(const gc_sample &) { return false; }
+bool evaluate(const gc_sample &, const ghost::WorldPass &, ghost_compositor::Pose *, uint32_t, uint32_t &count) {
+    count = 0; return false;
+}
+bool current() { return false; }
+void finished(bool) {}
 }
 namespace ghost_live_session {
 bool begin(uint32_t,uint32_t,uint32_t,const gc_sample*,uint64_t) noexcept {return live_chooses;}

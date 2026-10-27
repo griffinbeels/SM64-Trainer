@@ -5,6 +5,7 @@
 #include "ghost_compositor.h"
 #include "ghost_playback.h"
 #include "ghost_live_session.h"
+#include "ghost_viewer.h"
 #include "ghost_presentation.h"
 #include "renderer_gl_state.h"
 #include <cstdio>
@@ -42,6 +43,12 @@ bool atlas(sg_atlas_view*,uint64_t*){return false;}
 bool particles(sg_particle_view*,uint64_t*){return false;}
 bool annotations(ghost_annotation::View*,uint64_t*){return false;}
 bool plan(const gc_sample&){++evaluations;return false;}
+}
+namespace ghost_viewer {
+bool atlas(sg_atlas_view*,uint64_t*){return false;}
+bool particles(sg_particle_view*,uint64_t*){return false;}
+bool annotations(ghost_annotation::View*,uint64_t*){return false;}
+bool plan(const gc_sample&){return false;}
 }
 namespace ghost_live_session {
 void retire_list() noexcept {}
