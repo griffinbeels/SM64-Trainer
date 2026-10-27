@@ -4,25 +4,42 @@
  * is the same renderer setup kept alive behind a binary pipe protocol.
  *
  *   viewer_host --renderer <dll> --plugin-dir <dir> --header <128 hex digits>
- *               [--ghost-consumer 1]
+ *               [--ghosts 1] [--ghost-consumer 1]
  *
  * --ghost-consumer (M4 multi-runner probe) stands in for the capture wrapper's
  * SourceV3 negotiation before the ROM opens: the Trainer renderer's ghost
  * overlay draws only for a negotiated clean consumer. Its ghosts then reach
  * the window, so ReadScreen returns the stage with them. The host registers
- * no image callbacks and records nothing; the ghosts themselves are driven
- * over the renderer's own ghost channel (Local\sm64_trainer_ghost_v14_<pid>).
+ * no image callbacks and records nothing; the probe's ghosts are driven over
+ * the renderer's own ghost channel (Local\sm64_trainer_ghost_v14_<pid>).
+ *
+ * --ghosts (the scene viewer's ghosts) negotiates the same consumer and binds
+ * the renderer's SM64ViewerGhostsV1 table (ghost_viewer.h): each picture names
+ * its ghosts and their frames, so any order of pictures draws them exactly.
+ * A renderer without the table (LINK's, an older Trainer one) still renders;
+ * its setup request answers GV_ABSENT.
  *
  * Requests arrive on stdin, responses leave on stdout (little-endian):
- *   request  = magic 'VWRQ', kind (1 render, 2 quit), flags (1 camera,
- *              2 discard), run_count, byte_count, task[16] (OSTask words),
- *              vi[14] (GFX_INFO order), camera[16] (doubles, row-major,
- *              row vectors: view' = view * camera), then run_count
- *              (begin, end) RDRAM storage ranges, then their byte_count bytes.
- *   response = magic 'VWRS', status (bit 0: the camera walk failed, so the
- *              picture is the recorded camera), width, height, render_us,
- *              read_us, camera_us, matrices, pixel_bytes, then ReadScreen's
- *              BGR rows bottom-up (none for a discard request).
+ *   request  = magic 'VWRQ', kind (1 render, 2 quit, 3 ghost setup, 4 ghost
+ *              load), flags (1 camera, 2 discard, 4 ghosts), run_count,
+ *              byte_count, task[16] (OSTask words), vi[14] (GFX_INFO order),
+ *              camera[16] (doubles, row-major, row vectors: view' = view *
+ *              camera), then run_count (begin, end) RDRAM storage ranges,
+ *              then their byte_count bytes, then with flag 4 the ghosts block:
+ *              u32 count, gv_look, count gv_ghost (ghost_viewer.h).
+ *              Setup (3): byte_count bytes, a gc_layout then the 8 MiB ROM.
+ *              Load (4): task[0] the slot, byte_count bytes, the 64-byte
+ *              label then the .ghost file's bytes (none empties the slot).
+ *   response = magic 'VWRS', status, width, height, render_us, read_us,
+ *              camera_us, matrices, pixel_bytes, then ReadScreen's BGR rows
+ *              bottom-up (none for a discard, setup or load request).
+ *              A render's status: bit 0 the camera walk failed, so the
+ *              picture is the recorded camera; with ghosts, bit 1 the overlay
+ *              did not reach them (not set up yet: the caller draws again),
+ *              bit 2 their image was finished for the screen, bit 3 the
+ *              renderer refused the block (none drawn), bits 8-15 the ghosts
+ *              drawn, 16-23 those with a row to show, 24-31 asked.
+ *              Setup and load answer the table's result as a signed status.
  * A request writes only its closure runs: bytes outside a task's closure are
  * never read (the closure proof), so frames need no RDRAM reset and serve in
  * any order. Every request rewrites all of its closure, which also undoes the
@@ -56,6 +73,9 @@
 #define MAX_MATRICES 4096
 #define ADDRESS_MASK 0x7FFFFFu
 #define REQUEST_MAGIC 0x51525756u   /* "VWRQ" */
+#define MAX_PAYLOAD (72u << 20)     /* a setup's ROM, or one ghost clip, sent once */
+#define GV_GHOSTS 16u               /* ghost_viewer.h, beside its own struct copies below */
+#define GV_ABSENT (-100)            /* the renderer has no SM64ViewerGhostsV1 */
 #define RESPONSE_MAGIC 0x53525756u  /* "VWRS" */
 
 #pragma pack(push, 1)
@@ -80,7 +100,8 @@ static volatile LONG g_busy;           /* 1 while a request is inside the render
 static volatile ULONGLONG g_progress;  /* tick the current request started */
 static const char *g_dll;
 static double g_ticks_per_us;
-static int g_ghost_consumer;
+static int g_ghost_consumer, g_ghosts;
+static unsigned char *g_payload;         /* a setup or load request's bytes */
 
 /* link_source_api.h's SourceV3 table, as far as this host calls it. */
 typedef struct { uint32_t bytes, version, reserved[2]; void *capture, *completed; } source_callbacks_t;
@@ -96,6 +117,24 @@ typedef struct {
     void (__cdecl *clean_consumer)(int);
 } source_v3_t;
 typedef const source_v3_t *(__cdecl *source_v3_get_t)(uint32_t version, uint32_t bytes);
+
+/* ghost_viewer.h's table, as far as this host calls it. */
+typedef struct { float opacity, name_background_opacity; uint32_t flags, reserved; } gv_look_t;
+typedef struct { uint32_t slot; int32_t frame; uint32_t hue_degrees, reserved; } gv_ghost_t;
+typedef struct { uint32_t bytes, asked, planned, chosen, posed, displayed, reserved[2]; } gv_status_t;
+typedef struct {
+    uint32_t bytes, version, reserved[2];
+    int32_t (__cdecl *setup)(const void *layout, const uint8_t *rom, uint32_t rom_bytes);
+    int32_t (__cdecl *load)(uint32_t slot, const uint8_t *clip, uint32_t bytes, const char *label);
+    int32_t (__cdecl *picture)(const gv_look_t *, const gv_ghost_t *, uint32_t count);
+    int32_t (__cdecl *status)(gv_status_t *, uint32_t bytes);
+} gv_api_t;
+typedef const gv_api_t *(__cdecl *gv_get_t)(uint32_t version, uint32_t bytes);
+#define GC_LAYOUT_BYTES 200u        /* sizeof(gc_layout), ghost_capture.cpp checks it */
+static const gv_api_t *g_gv;
+static uint32_t g_ghost_count;
+static gv_look_t g_look;
+static gv_ghost_t g_ghost_list[GV_GHOSTS];
 
 static void check_interrupts(void) {}
 
@@ -248,12 +287,20 @@ static int apply_camera(const request_t *request) {
 }
 
 /* Reads one request's runs and bytes into staging, validating every length
- * before RDRAM changes. Returns 0 on a clean EOF, 2 on quit. */
+ * before RDRAM changes. Returns 0 on a clean EOF, 2 on quit, 3 or 4 for a
+ * ghost setup or load (its bytes in g_payload). */
 static int read_request(request_t *request) {
     if (!read_exact(request, sizeof *request)) return 0;
     if (request->magic != REQUEST_MAGIC) fail("bad request magic");
     if (request->kind == 2) return 2;
+    if (request->kind == 3 || request->kind == 4) {
+        if (request->run_count || request->flags || request->byte_count > MAX_PAYLOAD)
+            fail("a ghost request carries runs, flags or too many bytes");
+        if (request->byte_count && !read_exact(g_payload, request->byte_count)) fail("ghost bytes missing");
+        return (int)request->kind;
+    }
     if (request->kind != 1) fail("unknown request kind");
+    if (request->flags & ~7u) fail("unknown request flags");
     if (request->run_count > MAX_RUNS || request->byte_count > RDRAM_BYTES)
         fail("request exceeds the run or byte bound");
     if (request->run_count && !read_exact(g_runs, (size_t)request->run_count * 8)) fail("runs missing");
@@ -267,7 +314,26 @@ static int read_request(request_t *request) {
     if (request->byte_count && !read_exact(g_staging, request->byte_count)) fail("run bytes missing");
     for (int index = 0; index < 16; index++)
         if (!isfinite(request->camera[index])) fail("camera holds a non-finite number");
+    g_ghost_count = 0;
+    if (request->flags & 4) {
+        if (!read_exact(&g_ghost_count, sizeof g_ghost_count) || g_ghost_count > GV_GHOSTS
+                || !read_exact(&g_look, sizeof g_look)
+                || (g_ghost_count && !read_exact(g_ghost_list, g_ghost_count * sizeof *g_ghost_list)))
+            fail("the ghosts block is missing or holds too many ghosts");
+        if (!g_gv) fail("a ghosts block needs --ghosts 1 and a renderer that draws them");
+    }
     return 1;
+}
+
+/* A setup or load request, answered with the table's result and no picture. */
+static int32_t ghost_request(const request_t *request) {
+    if (!g_gv) return GV_ABSENT;
+    if (request->kind == 3) {
+        if (request->byte_count < GC_LAYOUT_BYTES) return -1;
+        return g_gv->setup(g_payload, g_payload + GC_LAYOUT_BYTES, request->byte_count - GC_LAYOUT_BYTES);
+    }
+    if (request->byte_count < 64 || g_payload[63]) return -1;   /* a terminated 64-byte label first */
+    return g_gv->load(request->task[0], g_payload + 64, request->byte_count - 64, (const char *)g_payload);
 }
 
 static DWORD WINAPI serve(LPVOID parameter) {
@@ -303,7 +369,9 @@ static DWORD WINAPI serve(LPVOID parameter) {
     gfx.VI_X_SCALE_REG = &g_vi[12]; gfx.VI_Y_SCALE_REG = &g_vi[13];
     gfx.CheckInterrupts = check_interrupts;
     if (!api.InitiateGFX(gfx)) fail("InitiateGFX failed");
-    if (g_ghost_consumer) {
+    gv_get_t ghosts = g_ghosts ? (gv_get_t)GetProcAddress(module, "SM64ViewerGhostsV1") : NULL;
+    if (ghosts) g_gv = ghosts(1, sizeof(gv_api_t));
+    if (g_ghost_consumer || g_gv) {
         source_v3_get_t get = (source_v3_get_t)GetProcAddress(module, "SM64ReplaySourceV3");
         const source_v3_t *source = get ? get(3, sizeof(source_v3_t)) : NULL;
         source_callbacks_t none = {sizeof none, 2, {0, 0}, NULL, NULL};
@@ -317,6 +385,14 @@ static DWORD WINAPI serve(LPVOID parameter) {
     static request_t request;
     for (;;) {
         int kind = read_request(&request);
+        if (kind == 3 || kind == 4) {
+            g_progress = GetTickCount64();
+            InterlockedExchange(&g_busy, 1);
+            response_t answer = {RESPONSE_MAGIC, (uint32_t)ghost_request(&request), 0, 0, 0, 0, 0, 0, 0};
+            InterlockedExchange(&g_busy, 0);
+            write_exact(&answer, sizeof answer);
+            continue;
+        }
         if (kind != 1) break;
         g_progress = GetTickCount64();
         InterlockedExchange(&g_busy, 1);
@@ -330,6 +406,12 @@ static DWORD WINAPI serve(LPVOID parameter) {
         memcpy(g_vi, request.vi, sizeof g_vi);
         response_t response = {RESPONSE_MAGIC, 0, 0, 0, 0, 0, 0, 0, 0};
         LARGE_INTEGER start;
+        /* A block the renderer refuses (a slot it does not hold) draws none of them. */
+        if (g_gv && g_gv->picture(&g_look, g_ghost_list, g_ghost_count) != 0) {
+            g_gv->picture(&g_look, g_ghost_list, 0);
+            response.status |= 8u;
+            g_ghost_count = 0;
+        }
         QueryPerformanceCounter(&start);
         if (request.flags & 1) {
             int matrices = apply_camera(&request);
@@ -341,6 +423,13 @@ static DWORD WINAPI serve(LPVOID parameter) {
         api.ProcessDList();
         api.UpdateScreen();
         response.render_us = elapsed_us(start);
+        if (g_gv && g_ghost_count) {
+            gv_status_t drawn;
+            memset(&drawn, 0, sizeof drawn);
+            if (g_gv->status(&drawn, sizeof drawn) == 0)
+                response.status |= (drawn.planned ? 0u : 2u) | (drawn.displayed ? 4u : 0u)
+                    | (drawn.posed & 0xFF) << 8 | (drawn.chosen & 0xFF) << 16 | (drawn.asked & 0xFF) << 24;
+        }
         void *pixels = NULL;
         if (!(request.flags & 2)) {
             long width = 0, height = 0;
@@ -404,6 +493,7 @@ int main(int argc, char **argv) {
         else if (strcmp(argv[index], "--plugin-dir") == 0) plugin_dir = argv[index + 1];
         else if (strcmp(argv[index], "--header") == 0) header = argv[index + 1];
         else if (strcmp(argv[index], "--ghost-consumer") == 0) g_ghost_consumer = atoi(argv[index + 1]) != 0;
+        else if (strcmp(argv[index], "--ghosts") == 0) g_ghosts = atoi(argv[index + 1]) != 0;
     }
     if (!renderer || !plugin_dir || !header || strlen(header) != 128) {
         fprintf(stderr, "usage: viewer_host --renderer <dll> --plugin-dir <dir> --header <128 hex>\n");
@@ -426,6 +516,9 @@ int main(int argc, char **argv) {
     g_staging = VirtualAlloc(NULL, RDRAM_BYTES, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
     g_runs = VirtualAlloc(NULL, MAX_RUNS * 8, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
     if (!g_rdram || !g_staging || !g_runs) fail("cannot allocate RDRAM");
+    /* Reserved whole, committed only as far as a request writes it. */
+    g_payload = VirtualAlloc(NULL, MAX_PAYLOAD, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    if (!g_payload) fail("cannot allocate the ghost buffer");
     HWND window = make_window();
     if (!window) fail("cannot create the render window");
     HANDLE thread = CreateThread(NULL, 0, serve, window, 0, NULL);

@@ -1367,6 +1367,26 @@ so. A package without one says it has no sound.
 - **Not** -- the replay player, which plays recorded video; the scene viewer
   redraws the game's graphics from a [[scene package]]
 
+### Stage ghost
+
+A [[saved ghost]] the [[scene viewer]] draws into the scene it plays (its
+stage), from that [[ghost]]'s own recording. One you add appears in the next
+picture, from the recorded or the free camera, while playing, stepping or
+seeking either way. It looks as it does in the game: its own [[ghost
+colour]], shadow and [[name box]], hidden behind the stage's walls. Its first
+[[frame]] stands on the scene's first [[frame]] (an [[attempt]]'s scene starts
+where that [[attempt]] did), and it follows the game's clock from there, so
+lag [[frame]]s keep it in step. At its end one with its [[star]] dance holds
+its last pose and fades; any other one is gone. The race's own fades,
+[[corner inputs]], path and sound stay off.
+
+- **Lives** -- the set, its alignment and its look
+  (`tools/scene_lab/stage_ghosts.py`); the scene's set
+  (`tools/scene_lab/scene_session.py`); which row each one shows, in the
+  [[renderer]] (`plugin/gfxwrap/ghost_viewer.cpp`), drawn by the same code as
+  a race's (`plugin/gfxwrap/ghost_figure.h`)
+- **Not** -- the [[ghost set]], which picks who races you in the game
+
 ### Ghost button
 
 The button left of ▷ on a [[practice log]] row, shown only while the scene lab

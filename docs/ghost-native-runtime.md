@@ -2157,6 +2157,64 @@ compares `point_fade` with the witnesses' own statement of the rule at 47916
 points (every mode, three overlaps, eleven depths); the GPU pixels are
 checked against that same statement.
 
+### Ghosts in the scene viewer
+
+The [scene viewer](glossary.md#scene-viewer) (M4 lab) draws
+[stage ghosts](glossary.md#stage-ghost) into a recorded scene with the code
+the game's ghost uses: `ghost_viewer.cpp` is a third contributor to
+`ghost_draw.cpp`'s seal beside saved playback and the live race, and each row
+is drawn by `ghost_figure.h`, which saved playback now calls too (body, held
+object, shadow, particles, tint, fades, and the [name box](glossary.md#name-box)
+riding on the body). The viewer's host (`tools/scene_lab/viewer_host.c
+--ghosts 1`) negotiates the clean consumer as the capture wrapper does, binds
+the renderer's `SM64ViewerGhostsV1` table, builds the model once (`setup`:
+the capture layout and the 8 MiB cartridge), loads each clip once per add
+(`load`: a `.ghost` file's bytes, read by `ghost_assets::clip` and refused by
+`ghost_playback::clip_valid` exactly as playback would), and before every
+picture publishes that picture's ghosts and each one's frame (`picture`).
+
+- **Stateless pictures.** Nothing carries between pictures: a picture with
+  ghosts reconfigures the capture, so its stage sample opens a new epoch and a
+  frame drawn after a later one is never a clock that ran backward (the
+  multi-runner probe's live channel dropped every ghost on the first picture
+  after a step back). A seek or a step back draws byte for byte what playing to
+  it drew (measured on the GPU, 2026-10-27).
+- **The stage's camera is the game's.** The renderer reads the stage's camera,
+  level and area from RAM as it does live: a free-camera picture already sends
+  the whole rebuilt RAM; a recorded picture with ghosts sends its frame's scene
+  state beside the closure (`scene_session._stage_frame`, about 1.7 MB). A free
+  camera of the recorded camera's own focus, position, roll and field of view
+  draws the recorded picture with its ghosts byte for byte.
+- **Rows.** Ghost frame k is k game frames after the stage's first frame (the
+  tap's `global_timer`), so lag frames and held pictures stay in step. Each
+  ghost's row is chosen as playback chooses one at a fixed coordinate: before
+  its start its first pose; a frame its recording lacks hides it; a refused
+  row shows the pose it bridges from, or hides; another level or area hides it.
+  Past its last row a clip with a dance tail holds its last pose and fades out
+  over `GP_STAR_FADE_FRAMES`, as a race ends; any other clip is gone. A dance
+  the recording cut short is not played on by animation here.
+- **The look.** Opacity, tint (each ghost's hue by its place in the set:
+  `native_session.ghost_hue`), shadow, names, the name box and its opacity, and
+  inputs over the name follow the ghost settings (`gv_look`). The live race's
+  own effects are off: the overlap and player-first fades (the stage's runner
+  is not live Mario), the corner inputs, the path and the sound.
+- **Threads.** The host calls the table between lists; GLideN64 runs each list
+  on its own thread while the host's call waits. An SRW lock hands each
+  picture's ghosts and the status across, a loaded clip is immutable (a list
+  keeps its own reference), and the model passes once: `setup` opens and
+  detaches it, the renderer's first call adopts it. In Project64 `setup` never
+  runs, so every renderer call answers "nothing" and the game's ghosts draw as
+  before.
+- **Cost** (his WF attempt scene, two of his own runs, recorded camera,
+  RTX 5090, 2026-10-27): the renderer's time per picture p50 0.39 ms with no
+  ghost, 2.0 ms with one, 2.2 ms with two, 2.6 ms with five; the scene state a
+  recorded picture with ghosts sends adds about 8 ms on the session's worker.
+- **Witness.** [The viewer ghost witness](../tests/test_ghost_viewer_native.py)
+  runs `ghost_viewer.cpp` with playback's validation and figure against a stub
+  model, its renderer calls on their own thread: every row rule above, the
+  refusals, and the same picture however it is reached; a viewer that draws the
+  nearest row across a gap fails it.
+
 ## Verification boundaries
 
 **Every frame must carry Mario's position.** A committed clip counts refused

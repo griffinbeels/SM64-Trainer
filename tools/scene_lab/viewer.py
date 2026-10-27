@@ -65,6 +65,16 @@ SOURCES = (HERE / "viewer_host.c", ROOT / "plugin/gfxwrap/zilmar.h")
 REQUEST = struct.Struct("<5I16I14I16d")
 RESPONSE = struct.Struct("<9I")
 REQUEST_MAGIC, RESPONSE_MAGIC = 0x51525756, 0x53525756
+RENDER, QUIT, GHOST_SETUP, GHOST_LOAD = 1, 2, 3, 4      # request kinds
+CAMERA, DISCARD, GHOSTS = 1, 2, 4                         # render flags
+# The scene viewer's ghosts (plugin/gfxwrap/ghost_viewer.h): a render's ghosts block is
+# u32 count, gv_look, then count gv_ghost; a load's payload is its 64-byte label, then the clip.
+GHOST_LOOK = struct.Struct("<2f2I")      # opacity, name box opacity, flags, reserved
+GHOST_ENTRY = struct.Struct("<Ii2I")     # slot, frame, hue degrees, reserved
+GHOST_SLOTS = 16                         # GV_GHOSTS
+LABEL_BYTES = 64
+GHOST_FLAGS = {"tint": 1, "shadow": 2, "names": 4, "inputs": 8, "values": 16, "white_name": 32}
+GV_ABSENT = -100                         # viewer_host.c: the renderer has no ghost table
 IDENTITY = (1.0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 1.0)
 ENCODINGS = ("raw", "jpeg")
 _WINDOWED = re.compile(r"^(video\\windowed(?:Width|Height))=\d+$", re.MULTILINE)
@@ -79,6 +89,16 @@ class Frame:
     runs: bytes          # packed <II (begin, end) RDRAM storage ranges
     data: bytes          # their bytes, concatenated
     identity: dict = field(default_factory=dict)
+    ghosts: bytes | None = None   # the ghosts block this picture draws (ghost_block), or none
+
+
+def ghost_block(look: tuple, ghosts: list[tuple[int, int, int]]) -> bytes:
+    """The ghosts block of one picture: look = (opacity, name box opacity, flags) and each
+    ghost's (slot, frame, hue degrees), frame being the game frames since the stage's first."""
+    if len(ghosts) > GHOST_SLOTS:
+        raise ValueError(f"a picture draws at most {GHOST_SLOTS} ghosts")
+    return (struct.pack("<I", len(ghosts)) + GHOST_LOOK.pack(*look, 0)
+            + b"".join(GHOST_ENTRY.pack(slot, frame, hue, 0) for slot, frame, hue in ghosts))
 
 
 @dataclass
@@ -93,10 +113,20 @@ class Picture:
     camera_failed: bool
     host_ms: float       # request written to picture read, as Python sees it
     slot: int | None = None   # the Host's slots slot the pixels were read into; its owner releases it
+    status: int = 0      # the response's status word (viewer_host.c)
 
     @property
     def sha256(self) -> str:
         return hashlib.sha256(self.pixels).hexdigest()
+
+    @property
+    def ghosts(self) -> dict:
+        """What the picture's ghosts block did: asked, chosen (a row to show), drawn, whether
+        their image reached the screen, pending (the overlay did not reach them yet) and refused
+        (the renderer drew none: a slot it does not hold)."""
+        return {"asked": self.status >> 24 & 0xFF, "chosen": self.status >> 16 & 0xFF,
+                "drawn": self.status >> 8 & 0xFF, "displayed": bool(self.status & 4),
+                "pending": bool(self.status & 2), "refused": bool(self.status & 8)}
 
 
 def _fill(stream, view: memoryview) -> int:
@@ -205,16 +235,20 @@ class Host:
     sees EOF. `command` replaces the built executable (fake_viewer_host.py, a protocol double,
     in tests and dry runs)."""
 
-    def __init__(self, renderer: Path, plugin_dir: Path, header: str, command: list[str] | None = None):
+    def __init__(self, renderer: Path, plugin_dir: Path, header: str, command: list[str] | None = None,
+                 ghosts: bool = False):
         self.process = subprocess.Popen(
             [*(command or [str(build())]), "--renderer", str(renderer), "--plugin-dir", str(plugin_dir),
-             "--header", header],
+             "--header", header, *(["--ghosts", "1"] if ghosts else [])],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **quiet_spawn_kwargs())
         self.lock = threading.Lock()                      # writing a request
         self.counting = threading.Lock()                  # self.waiting
         self.waiting = 0                                  # requests whose picture nobody has received yet
-        self.sent: deque[float] = deque()                 # write times of requests the reader has yet to read
+        self.sent: deque[tuple[float, bool]] = deque()    # (write time, a call) of requests the reader has yet to read
         self.answers: queue.SimpleQueue = queue.SimpleQueue()   # Pictures in order, then what ended the pipe
+        # A call's answer (a ghost setup or load, or a render its caller waits on itself, call()):
+        # its own queue, so a call made while pictures are in flight never takes their answers.
+        self.calls: queue.SimpleQueue = queue.SimpleQueue()
         # Where the reader puts pixels: None, a new bytes per picture; else slots with claim(size) ->
         # (slot, writable view) or None when none is free (picture_encoder.PictureSlots).
         self.slots = None
@@ -238,9 +272,10 @@ class Host:
                     break
                 magic, status, width, height, render_us, read_us, camera_us, matrices, size = RESPONSE.unpack(head)
                 if magic != RESPONSE_MAGIC or size != width * height * 3 or not self.sent:
-                    self.answers.put(RuntimeError("viewer_host answered out of protocol"))
+                    self._end(RuntimeError("viewer_host answered out of protocol"))
                     return
-                claimed = self.slots.claim(size) if self.slots is not None else None
+                sent, call = self.sent.popleft()
+                claimed = self.slots.claim(size) if self.slots is not None and not call else None
                 if claimed is None:
                     slot, pixels = None, stdout.read(size) if size else b""
                     if len(pixels) != size:
@@ -249,30 +284,74 @@ class Host:
                     slot, pixels = claimed
                     if _fill(stdout, pixels) != size:
                         break
-                host_ms = (time.perf_counter() - self.sent.popleft()) * 1000
-                self.answers.put(Picture(width, height, pixels, render_us / 1000, read_us / 1000,
-                                         camera_us / 1000, matrices, bool(status & 1), host_ms, slot))
+                host_ms = (time.perf_counter() - sent) * 1000
+                (self.calls if call else self.answers).put(
+                    Picture(width, height, pixels, render_us / 1000, read_us / 1000, camera_us / 1000, matrices,
+                            bool(status & 1), host_ms, slot, status))
         except (OSError, ValueError) as error:
-            self.answers.put(RuntimeError(f"viewer_host's pipe failed: {error}"))
+            self._end(RuntimeError(f"viewer_host's pipe failed: {error}"))
             return
         try:
             code = self.process.wait(timeout=5)
         except subprocess.TimeoutExpired:
             code = None
-        self.answers.put(RuntimeError(f"viewer_host exited ({code}): {' | '.join(self.errors)}"))
+        self._end(RuntimeError(f"viewer_host exited ({code}): {' | '.join(self.errors)}"))
 
-    def send(self, frame: Frame, camera=None, discard: bool = False) -> None:
-        """Writes one request; the next receive() answers the oldest request not yet received."""
-        flags = (1 if camera is not None else 0) | (2 if discard else 0)
-        request = REQUEST.pack(REQUEST_MAGIC, 1, flags, len(frame.runs) // 8, len(frame.data),
+    def _end(self, error: Exception) -> None:
+        self.answers.put(error)
+        self.calls.put(error)
+
+    def send(self, frame: Frame, camera=None, discard: bool = False, *, call: bool = False) -> None:
+        """Writes one request; the next receive() answers the oldest request not yet received
+        (with `call`, the next _answer() instead)."""
+        flags = ((CAMERA if camera is not None else 0) | (DISCARD if discard else 0)
+                 | (GHOSTS if frame.ghosts is not None else 0))
+        request = REQUEST.pack(REQUEST_MAGIC, RENDER, flags, len(frame.runs) // 8, len(frame.data),
                                *frame.task, *frame.vi, *(camera if camera is not None else IDENTITY))
+        self._write(request + frame.runs, frame.data, frame.ghosts or b"", call)
+
+    def _write(self, head: bytes, data: bytes, tail: bytes, call: bool) -> None:
         with self.lock:
-            with self.counting:
-                self.waiting += 1
-            self.sent.append(time.perf_counter())
-            self.process.stdin.write(request + frame.runs)
-            self.process.stdin.write(frame.data)
+            if not call:
+                with self.counting:
+                    self.waiting += 1
+            self.sent.append((time.perf_counter(), call))
+            self.process.stdin.write(head)
+            self.process.stdin.write(data)
+            if tail:
+                self.process.stdin.write(tail)
             self.process.stdin.flush()
+
+    def _answer(self) -> Picture:
+        answer = self.calls.get()
+        if isinstance(answer, Exception):
+            self.calls.put(answer)
+            raise answer
+        return answer
+
+    def call(self, frame: Frame, discard: bool = True) -> Picture:
+        """A render whose answer this caller waits for itself, beside any pictures in flight
+        (a ghost warm-up: the scene's worker draws while the delivery thread collects)."""
+        self.send(frame, discard=discard, call=True)
+        return self._answer()
+
+    def _ghost_request(self, kind: int, word: int, payload: bytes) -> int:
+        request = REQUEST.pack(REQUEST_MAGIC, kind, 0, 0, len(payload), word, *(0,) * 15, *(0,) * 14, *IDENTITY)
+        self._write(request, payload, b"", True)
+        return struct.unpack("<i", struct.pack("<I", self._answer().status))[0]
+
+    def ghost_setup(self, layout: bytes, rom: bytes) -> int:
+        """Builds the ghost model from the ROM and binds the capture layout the stage is read
+        with: 0, or a GV result (ghost_viewer.h; GV_ABSENT for a renderer without ghosts)."""
+        return self._ghost_request(GHOST_SETUP, 0, layout + rom)
+
+    def ghost_load(self, slot: int, clip: bytes, label: str) -> int:
+        """Loads a saved recording into a slot under a label (empty bytes empty the slot):
+        0, or a GV result (-3: a clip saved playback would refuse)."""
+        encoded = label.encode("utf-8")
+        if len(encoded) >= LABEL_BYTES:
+            raise ValueError("a ghost label is at most 63 bytes")
+        return self._ghost_request(GHOST_LOAD, slot, encoded.ljust(LABEL_BYTES, b"\0") + clip)
 
     def receive(self) -> Picture:
         """The picture for the oldest request not yet received, waiting for the host if need be.

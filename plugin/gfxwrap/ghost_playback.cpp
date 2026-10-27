@@ -12,6 +12,7 @@
 #include "ghost_live_render.h"
 #include "ghost_annotation_assets.h"
 #include "ghost_path.h"
+#include "ghost_figure.h"
 #include <algorithm>
 #include <atomic>
 #include <cmath>
@@ -374,10 +375,8 @@ bool elapsed_coordinate(uint64_t elapsed,uint64_t origin,uint32_t offset,uint64_
     value=elapsed-origin+offset;return true;
 }
 uint64_t clip_coordinate(const Clip& clip,uint32_t index) {
-    const auto& h=clip.header;
     // prepare_clip proved subtraction/addition bounds for every stored row.
-    return clip.frames[index].sample.clock.elapsed_frames-h.origin_elapsed
-        +(h.clock_kind==GCLIP_STAR_CLOCK?h.origin_raw:0);
+    return ghost_figure::coordinate(clip.header,clip.frames,index);
 }
 bool recorded_touch(const Clip& clip,const gp_request& request,uint64_t& recorded) {
     bool found=false;recorded=0;
@@ -940,21 +939,7 @@ void silence(uint32_t index) {
 // in the same scene with consecutive occurrences and coordinates. Null
 // otherwise (a longer run, a scene change, the clip's first or last rows).
 const gclip_frame *bridged(const Clip& clip,uint32_t at) {
-    const auto posed=[&](uint32_t i){return (clip.frames[i].sample.valid_fields&GC_VALID_POSE)!=0;};
-    uint32_t before=at,after=at;
-    while(before>0 && !posed(before-1) && at-before<GP_BRIDGE_FRAMES)--before;
-    if(before==0 || !posed(before-1))return nullptr;
-    --before;
-    while(after+1<clip.index_count && !posed(after+1) && after-before<GP_BRIDGE_FRAMES)++after;
-    if(after+1>=clip.index_count || !posed(after+1))return nullptr;
-    ++after;
-    if(after-before-1>GP_BRIDGE_FRAMES)return nullptr;
-    const auto &first=clip.frames[before].sample,&last=clip.frames[after].sample;
-    if(last.sequence-first.sequence!=after-before
-            || clip_coordinate(clip,after)-clip_coordinate(clip,before)!=after-before)return nullptr;
-    for(uint32_t i=before;i<=after;++i)
-        if(clip.frames[i].sample.level!=first.level || clip.frames[i].sample.area!=first.area)return nullptr;
-    return &clip.frames[before];
+    return ghost_figure::bridged(clip.header,clip.frames,clip.index_count,at);
 }
 uint32_t draw(uint32_t index,uint32_t rom_layout,const gs_record& recorded,
               const gc_sample& particles_from,const gc_sample& live,const ghost::WorldPass& world,
@@ -1080,39 +1065,17 @@ uint32_t choose(uint32_t index,const Coordinate& frame,const gc_sample& live,Cho
 uint32_t draw(uint32_t index,uint32_t rom_layout,const gs_record& recorded,
               const gc_sample& particles_from,const gc_sample& live,const ghost::WorldPass& world,
               float fade,ghost_compositor::Pose& out) {
-    gs_record mapped=recorded;
-    if(!ghost_scene::rebase(mapped.sample,live))return GP_WRONG_SCENE;
-    std::memcpy(displayed_position[index],mapped.sample.pose.position,sizeof(displayed_position[index]));
+    ghost_figure::Look look{};
+    look.opacity=active_request.opacity;
+    look.hue_degrees=active_request.tint_enabled?float(active_request.clips[index].hue_degrees):0.0f;
+    look.proximity=active_request.proximity_enabled!=0;look.proximity_distance=active_request.proximity_distance;
+    look.occlusion_fade=active_request.occlusion_fade!=0;look.shadow=active_request.shadow_enabled!=0;
+    ghost_figure::Storage storage{scratch[index],shadows[index].vertices,shadows[index].texture,particle_vertices[index]};
+    const auto drawn=ghost_figure::draw(model.value,rom_layout,recorded,particles_from,live,world,look,fade,storage,
+                                        displayed_position[index],out);
+    if(drawn==ghost_figure::Drawn::wrong_scene)return GP_WRONG_SCENE;
     evaluations.fetch_add(1);
-    const float opacity=active_request.opacity*fade;
-    // The overlap fade rides with the player-first region, not the opacity:
-    // the shaders give the two ONE floor (ghost_occlusion.h).
-    const float overlap=active_request.proximity_enabled && (live.valid_fields&GC_VALID_POSE)
-        ? ghost_proximity::factor(live.pose.position,live.pose.scale,
-              mapped.sample.pose.position,mapped.sample.pose.scale,active_request.proximity_distance)
-        : 1.0f;
-    if(ghost_pose::evaluate(model.value,mapped,live,world,opacity,scratch[index],out,rom_layout)!=ghost_pose::Result::ok) {
-        out={};refusals.fetch_add(1);return GP_POSE_REFUSED;
-    }
-    out.hue_degrees=active_request.tint_enabled?float(active_request.clips[index].hue_degrees):0.0f;
-    // Player first: the same live Mario region for every ghost this frame,
-    // under the live view-projection its body and shadow are drawn with.
-    ghost_occlusion::region(out.view_projection,active_request.occlusion_fade!=0,
-        (live.valid_fields&GC_VALID_POSE)!=0,live.pose.position,live.pose.scale,out.occlusion);
-    out.occlusion.overlap=overlap;
-    if(active_request.shadow_enabled && (mapped.sample.valid_fields&GC_VALID_SHADOW)
-            && !ghost_pose::shadow(model.value,mapped.sample,out.view_projection,shadows[index].vertices,
-                                   shadows[index].texture,out.shadow)) {
-        out={};refusals.fetch_add(1);return GP_POSE_REFUSED;
-    }
-    // Recorded particles never refuse their ghost; unknown frames are skipped.
-    sg_particle_view particles{};
-    if((particles_from.valid_fields&GC_VALID_PARTICLES) && sg_model_get_particles(model.value,&particles)==SG_OK) {
-        gc_sample mapped_particles=particles_from;
-        if(ghost_scene::rebase_components(mapped_particles,recorded.sample,live))
-            ghost_particle_pose::place(model.value,particles,mapped_particles,live.camera,out.view_projection,
-                                       particle_vertices[index],out.particles);
-    }
+    if(drawn==ghost_figure::Drawn::refused) {refusals.fetch_add(1);return GP_POSE_REFUSED;}
     rendered.fetch_add(1);
     return GP_READY;
 }
@@ -1166,32 +1129,17 @@ uint32_t pose_row(uint32_t index,const Choice& choice,const gc_sample& live,cons
                 choice.fade,out);
 }
 void annotate(uint32_t index,const Choice& choice,ghost_compositor::Pose& pose) {
-    auto& out=pose.annotation;
-    std::memcpy(out.label,active_request.clips[index].label,sizeof(out.label));
-    std::memcpy(out.position,displayed_position[index],sizeof(out.position));
-    out.scale=bound[index]->frames[choice.posed].sample.pose.scale[1];
-    if(!(out.scale>0))out.scale=1;
-    // The top of the body as drawn this frame (his own vertices, not a held
-    // object's): the name sits on it, crouching, sliding or diving with him.
-    out.top=NAN;
-    for(uint32_t i=0;i<pose.body_count && i<pose.count;++i) {
-        const float y=pose.vertices[i].position[1];
-        if(std::isfinite(y) && !(y<=out.top))out.top=y;
-    }
-    out.names=active_request.names_enabled!=0;
-    out.background=uint8_t(active_request.name_background);
-    out.background_opacity=active_request.name_background_opacity;
-    out.slot=uint8_t(index);
-    const bool recorded=choice.recorded && !choice.falling && !choice.played;
-    out.hud=active_request.hud_inputs_enabled && recorded;
-    out.inputs=active_request.inputs_enabled && recorded;
-    out.values=active_request.input_mode==GP_INPUT_VALUES;
-    out.artwork=model.annotations.usamune;
-    out.font=model.annotations.font;
+    ghost_figure::Names names{};
+    names.names=active_request.names_enabled!=0;names.inputs=active_request.inputs_enabled!=0;
+    names.hud=active_request.hud_inputs_enabled!=0;names.values=active_request.input_mode==GP_INPUT_VALUES;
+    names.background=uint8_t(active_request.name_background);
+    names.background_opacity=active_request.name_background_opacity;
     // A refused pose can borrow older geometry. Its pad remains the exact
     // current record: independent validity must never borrow a button hold.
-    const auto& selected=bound[index]->frames[choice.record].sample;
-    if((out.inputs || out.hud) && (selected.valid_fields&GC_VALID_PAD)) {out.known=true;out.pad=selected.pad;}
+    ghost_figure::annotate(active_request.clips[index].label,displayed_position[index],
+        bound[index]->frames[choice.posed].sample.pose.scale[1],uint8_t(index),names,
+        choice.recorded && !choice.falling && !choice.played,bound[index]->frames[choice.record].sample,
+        model.annotations.usamune,model.annotations.font,pose);
 }
 // Each ghost's coordinate is the live one plus its alignment (and the shared
 // nudge): the same live frame finds ghost j at c_path - shift(path) + shift(j).
@@ -1273,6 +1221,9 @@ namespace ghost_playback {
 #if defined(SM64_GHOST_TEST_HOOKS)
 void test_miss_next_request() noexcept {miss_next_request.store(true);}
 #endif
+bool clip_valid(const gclip_header& header,const gclip_frame *frames,uint32_t& indexed) {
+    indexed=0;return valid_clip(header,frames,indexed);
+}
 uint32_t hidden_refusals(const gclip_header& header,const gclip_frame *frames) {
     uint32_t indexed=0;
     if(!valid_clip(header,frames,indexed))return UINT32_MAX;
