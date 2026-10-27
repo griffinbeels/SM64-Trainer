@@ -634,7 +634,8 @@ class SceneGhosts:
     def load_ghost(self, ref) -> dict:
         """A listed ghost's recording as the in-game ghost plays it: {"clip": the bytes of the
         native clip file the race would hand the renderer, checked against the hash the race
-        validated and decoded whole, "player", "frames" (its records), "label" (the in-game
+        validated and decoded whole, "player", "frames" (its records), "time" (the run time the list
+        shows, 11"03, or None), "label" (the in-game
         name box, `native_session.ghost_label`)}. Blocking (it reads and decodes the whole clip;
         call it off the event loop); LookupError with a plain sentence."""
         from sm64_events.ghost.clip import INCOMPLETE_INPUTS, ClipError, decode_clip, inputs_complete
@@ -659,7 +660,8 @@ class SceneGhosts:
             with self._lock:
                 self._refused[ref] = reason
             raise LookupError(reason) from None
-        return {"clip": data, "player": ghost.player, "frames": len(clip.frames), "label": label}
+        return {"clip": data, "player": ghost.player, "frames": len(clip.frames), "label": label,
+                "time": bare_time(ghost.frames)}
 
     def _recording(self, ghost: Ghost) -> tuple:
         """(path, manifest, label) through the race's own door for this ghost's source."""

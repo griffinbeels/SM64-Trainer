@@ -458,7 +458,7 @@ def test_load_ghost_hands_the_renderer_the_race_bytes_and_the_in_game_name_box(l
         rows = {row["player"] + row["time"]: row for row in _ghosts(client, section="top")["items"]}
         mine = {row["frames"]: row["ref"] for row in _ghosts(client, section="yours")["items"]}
     loaded = server.ghosts.load_ghost(mine[331])
-    assert loaded == {"clip": clip.read_bytes(), "player": "You", "frames": 37, "label": "YOUR PB"}
+    assert loaded == {"clip": clip.read_bytes(), "player": "You", "frames": 37, "label": "YOUR PB", "time": '11"03'}
     assert server.ghosts.load_ghost(mine[340])["label"] == "YOUR RUN"
     kim = server.ghosts.load_ghost(rows['Kim10"66']["ref"])
     assert (kim["player"], kim["label"], kim["frames"]) == ("Kim", "Kim", 33)
