@@ -278,10 +278,12 @@ def test_capture_stops_when_the_lease_ends_or_lapses_and_resumes_in_a_new_segmen
 
 @needs_toolchain
 def test_a_later_segment_rebuilds_the_audio_spans_alone_when_the_lease_asks_for_them(recorded, tmp_path):
-    """VI spans are off unless the lease's extra lines name them; then each segment starts with a VI key."""
+    """The lease asks for the VI spans (the stem renderer's input) unless told not to; then each
+    segment starts with a VI key."""
     frames = recorded["frames"]
-    lease = live_spool.Lease(_lab(tmp_path), extra_lines=[*tap.audio_state_lines(US), "segment_ms=50"])
-    assert "vi_region=" not in live_spool.lease_text() and "vi_dmem=1" in lease.text
+    lease = live_spool.Lease(_lab(tmp_path), extra_lines=["segment_ms=50"])
+    assert all(line in lease.text.splitlines() for line in tap.audio_state_lines(US))
+    assert "vi_region=" not in live_spool.lease_text(audio=False)
     lease.start()
     host = Host(tmp_path, frames[0])
     try:

@@ -13,9 +13,9 @@ that segment's first byte, and an append-only index names every task, its global
 level, area and time. A reader sees a task once the next one arrives or 100 ms later.
 Spool.follow() keeps a scene's captures coming while he plays (a cutter writes the
 package as the attempt goes and finishes at its end); Spool.source() cuts a finished span.
-The lease asks for tap.py arm's identity and scene-state lines, never pictures, full
-copies or the per-VI audio spans unless its extra lines name them
-(tap.audio_state_lines).
+The lease asks for tap.py arm's identity and scene-state lines and the per-VI audio spans
+with SP DMEM (tap.audio_state_lines: the stem renderer's input, stems_live.py; audio=False
+leaves them out), never pictures or full copies.
 
 Evidence (2026-10-26, this machine). Disk: his BoB session (tap-20261025-184022, 90 s,
 29 tasks/s) through the real writer (tap_offline_host --spool-bench), 15 s segments,
@@ -37,6 +37,15 @@ His session read back from the spool: tasks 1000-1300 (from mid-segment) and 170
 package's code row (97,100 bytes at ROM 0x7cc6c0); Spool.source decodes 537 tasks/s.
 Spool.follow at 30 Hz on savestate frames: a capture 35 ms p50, 45 ms p99, 79 ms max after
 the game made the task, at 7.6% of a core for the follower.
+
+The audio spans (2026-10-27, two round-1 savestates replayed through the real writer at one
+VI each, 1199 VIs and 600 tasks each, music playing and the probe's coin and voice
+requests): a VI delta is 21.4 KB raw and 13.6 KB on disk after XPRESS on Whomp's Fortress
+(48.9 MB a minute at 59.94 VIs a second), 5.4 KB and 3.1 KB on the quieter one (11.0 MB a
+minute); each segment's VI key adds 95 to 134 KB. With the 42 MB a minute of tasks above,
+the window holds 0.8 to 1.4 GB, so the 15 minutes still bind before the 2 GiB cap (which
+binds only past 143 MB a minute). The producer's cost per VI rose from 18 to 35 us p50
+(58 us p99, 239 us max); the writer's busy time was 0.9% of a core.
 
 Limits:
 - Lab only. The lease file lives under %LOCALAPPDATA% of the Project64 process; a
@@ -92,18 +101,20 @@ RENEW_SECONDS = 2.0
 LEASE_MS = 8000
 STALE_SECONDS = 3.0                     # an open segment with no row this long: the writer stopped
 FOLLOW_POLL = 0.02                      # a follower at the live edge re-reads this often
+MAX_BYTES = 2 << 30                     # the segments' byte cap; the window (15 minutes) is the usual bound
 
 
 def resolve_lab_root(override: Path | None = None) -> Path:
     return Path(override) if override is not None else tap.lab_root()
 
 
-def lease_text(version: str = "us", extra_lines: Sequence[str] = (), *, window_seconds: float = 900,
-               max_bytes: int = 2 << 30, segment_seconds: float = 15) -> str:
-    """The lease's lines: tap.py arm's identity and scene-state lines (never pictures or
-    audio), the live settings, the boot span, then the caller's extra lines (which win)."""
+def lease_text(version: str = "us", extra_lines: Sequence[str] = (), *, audio: bool = True,
+               window_seconds: float = 900, max_bytes: int = MAX_BYTES, segment_seconds: float = 15) -> str:
+    """The lease's lines: tap.py arm's identity and scene-state lines, the per-VI audio spans
+    unless `audio` is off (never pictures), the live settings, the boot span, then the
+    caller's extra lines (which win)."""
     arming = tap.arming_text(SimpleNamespace(version=version, seconds=600, no_reference=True, reference_every=1,
-                                             full_every=0, no_scene_state=False, no_audio_state=True))
+                                             full_every=0, no_scene_state=False, no_audio_state=not audio))
     live = [f"lease_ms={LEASE_MS}", f"window_ms={int(window_seconds * 1000)}", f"max_bytes={int(max_bytes)}",
             f"segment_ms={int(segment_seconds * 1000)}",
             f"boot_region={provenance.EXPANSION_RAM:x}:{(8 << 20) - provenance.EXPANSION_RAM}"]
@@ -114,10 +125,11 @@ class Lease:
     """The Trainer's side of continuous capture: lease.txt, renewed while it runs."""
 
     def __init__(self, lab_root: Path | None = None, *, extra_lines: Sequence[str] = (), version: str = "us",
-                 window_seconds: float = 900, max_bytes: int = 2 << 30, segment_seconds: float = 15) -> None:
+                 audio: bool = True, window_seconds: float = 900, max_bytes: int = MAX_BYTES,
+                 segment_seconds: float = 15) -> None:
         self.path = resolve_lab_root(lab_root) / "live" / "lease.txt"
-        self.text = lease_text(version, extra_lines, window_seconds=window_seconds, max_bytes=max_bytes,
-                               segment_seconds=segment_seconds)
+        self.text = lease_text(version, extra_lines, audio=audio, window_seconds=window_seconds,
+                               max_bytes=max_bytes, segment_seconds=segment_seconds)
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 

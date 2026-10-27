@@ -15,12 +15,20 @@ Project64's measured delay, each sound plays with its game event instead. Griffi
 yet, and the next live session measures the delay.
 
 describe() gives {available, rate, block_samples, total_samples, blocks, codec, shift_ms, samples,
-lost}: `samples` per frame (-1 where the frame's picture has no sound: before or after the
+lost, stems}: `samples` per frame (-1 where the frame's picture has no sound: before or after the
 recording, or in a gap), `lost` the frames whose sound span (to the next frame's sample) touches
 a marked loss. The stored stream holds silence there, so it plays as silence, and the page says
 so. A block is served whole, as the .flac file the layer's block makes with its STREAMINFO (or a
 .wav for a stored layer), once its decoded PCM has matched its hash; a block that does not is
 refused, never served.
+
+`stems` is the scene's music and sound effects (round 4, item 11: "toggle music / game sound
+effects separately"): {available: true, tracks, lost} when the package carries a source-stems
+layer that split it (stems_layer.py), else {available: false, reason}. The two tracks lie on the
+recording's own samples and blocks, so a frame's sample and a block's index mean the same in all
+three: block(index, "music") is the same span as block(index). The viewer plays the recording
+while both are on, and one track while only that one is; `lost` names the frames whose span
+touches a stretch with no split, where a single track plays silence.
 """
 from __future__ import annotations
 
@@ -37,6 +45,9 @@ import audio_layer as al  # noqa: E402
 
 SOUND_SHIFT_MS = 0.0          # 0: as heard. Project64's audio delay here: each sound with its game event
 NO_SOUND = "This recording has no sound."
+NO_STEMS = "This scene was saved before music and sound effects could be split."
+STEMS_PENDING = "Music and sound effects can be switched a few seconds after the attempt ends."
+TRACKS = ("mix", "music", "effects")
 LIVE_BLOCK_SAMPLES = al.FLAC_FRAME * 20     # audio_layer.encode_layer's blocks, so the attached layer's match
 PENDING = -2                  # LiveSound: a frame whose sound has not reached the ring yet
 
@@ -49,9 +60,10 @@ def absent() -> dict:
 class SceneSound:
     """One package's sound, mapped to the viewer's frames."""
 
-    def __init__(self, layer: al.Layer, samples: list[int], lost: list[int], shift_ms: float):
+    def __init__(self, layer: al.Layer, samples: list[int], lost: list[int], shift_ms: float, stems=None):
         self.layer, self.samples, self.lost, self.shift_ms = layer, samples, lost, shift_ms
-        self.checked: set[int] = set()            # blocks whose PCM matched its hash
+        self.stems = stems                        # stems_layer.Stems, or None when the package has none
+        self.checked: set[tuple[str, int]] = set()   # (track, block) whose PCM matched its hash
 
     @classmethod
     def of(cls, package, presents: list[int | None], shift_ms: float = SOUND_SHIFT_MS) -> SceneSound | None:
@@ -68,24 +80,39 @@ class SceneSound:
                 continue
             status, sample = ac.locate(picture.ticks + layer.offset_ticks + shift, layer.segments, layer.losses)
             samples.append(sample if status in (ac.COVERED, ac.LOSS) else -1)
-        return cls(layer, samples, lost_frames(samples, layer.losses), shift_ms)
+        return cls(layer, samples, lost_frames(samples, layer.losses), shift_ms, getattr(package, "stems", None))
 
     def describe(self) -> dict:
         layer = self.layer
         return {"available": True, "rate": layer.rate, "block_samples": layer.block_samples,
                 "total_samples": layer.total_samples, "blocks": len(layer.blocks),
                 "codec": "flac" if layer.codec == al.FLAC else "stored", "shift_ms": self.shift_ms,
-                "samples": self.samples, "lost": self.lost}
+                "samples": self.samples, "lost": self.lost, "stems": self._stems()}
 
-    def block(self, index: int) -> tuple[bytes, str]:
-        """Block `index` as a file the browser decodes: LookupError for no such block, LayerError
-        (a ValueError) when its decoded PCM misses its hash. Thread-safe: the layer is immutable."""
-        layer = self.layer
+    def _stems(self) -> dict:
+        stems = self.stems
+        if stems is None or not stems.available:
+            return {"available": False, "reason": stems.reason if stems is not None else NO_STEMS}
+        return {"available": True, "tracks": list(TRACKS[1:]), "lost": lost_frames(self.samples, stems.gaps)}
+
+    def block(self, index: int, track: str = "mix") -> tuple[bytes, str]:
+        """Block `index` of a track ("mix": the recording; "music", "effects": its stems) as a
+        file the browser decodes: LookupError for no such block or track, a ValueError
+        (LayerError, StemsError) when its decoded PCM misses its hash. Thread-safe: the layers
+        are immutable."""
+        layer, stems = self.layer, self.stems
         if not isinstance(index, int) or isinstance(index, bool) or not 0 <= index < len(layer.blocks):
             raise LookupError("This recording's sound has no such block.")
-        if index not in self.checked:
-            layer.block(index)                                   # decodes and checks the hash
-            self.checked.add(index)
+        if track != "mix" and (track not in TRACKS or stems is None or not stems.available):
+            raise LookupError("This recording's sound has no such track.")
+        if (track, index) not in self.checked:
+            if track == "mix":
+                layer.block(index)                               # decodes and checks the hash
+            else:
+                stems.block(track, index)
+            self.checked.add((track, index))
+        if track != "mix":
+            return al.flac_file(stems.stored(track, index), stems.rate), "audio/flac"
         offset, stored, _samples, _digest = layer.blocks[index]
         raw = layer.payload[offset:offset + stored]
         if layer.codec == al.FLAC:
@@ -253,11 +280,15 @@ class LiveSound:
         total = len(self.pcm) // 4
         return {"available": True, "rate": self.rate, "block_samples": LIVE_BLOCK_SAMPLES,
                 "total_samples": total, "blocks": -(-total // LIVE_BLOCK_SAMPLES), "codec": "stored",
-                "shift_ms": self.shift_ms, "samples": self.samples, "lost": self.lost, "live": True}
+                "shift_ms": self.shift_ms, "samples": self.samples, "lost": self.lost, "live": True,
+                "stems": {"available": False, "reason": STEMS_PENDING}}
 
-    def block(self, index: int) -> tuple[bytes, str]:
+    def block(self, index: int, track: str = "mix") -> tuple[bytes, str]:
         """Block `index` of the stream so far, as a .wav file. The stream is only appended to, so
-        a block read while it grows is the same block later (the last may be shorter)."""
+        a block read while it grows is the same block later (the last may be shorter). The ring
+        holds the recording only: its stems come with the layer the cutter adds."""
+        if track != "mix":
+            raise LookupError("This recording's sound has no such track.")
         total = len(self.pcm) // 4
         if not isinstance(index, int) or isinstance(index, bool) or not 0 <= index < -(-total // LIVE_BLOCK_SAMPLES):
             raise LookupError("This recording's sound has no such block.")

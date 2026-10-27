@@ -13,7 +13,7 @@ one reader, and without it this module is never imported and no route is added. 
     GET  /api/scene-lab/ghosts?section=&...&page=    one page of the ghosts that could be drawn into it
     POST /api/scene-lab/close
     WS   /api/scene-lab/ws        pictures and poses of the open scene (protocol below)
-    GET  /api/scene-lab/audio/{block}?session=N   one block of the open scene's sound
+    GET  /api/scene-lab/audio/{block}?session=N[&track=music|effects]   one block of the open scene's sound
 
 The lab config is a private JSON file of absolute paths: {"rom", "packages" (a folder of
 .sm64scene files), "pj64_plugin", "map" (the free camera's MappingUS.map), and optionally
@@ -327,7 +327,7 @@ class SceneLab:
             return self.cutter_factory(folder, on_event)
         config = LabConfig.load(self.config_path)
         return _lab_module("attempt_cutter").CutterProcess(config.rom, folder, on_event, lab_root=config.lab_root,
-                                                           **self.cutter_options)
+                                                           symbol_map=config.map, **self.cutter_options)
 
     def _start_live_blocking(self) -> None:
         if self.scenes is None or not self.live_on:
@@ -681,7 +681,7 @@ class SceneLab:
     def _load_ghost(self, ref) -> dict:
         """Interface C: ghost_loader when one was given (tests, measurements), else the ghost
         catalog's load_ghost (server/scene_ghosts.py), else the player's own runs in the replay store.
-        Blocking: it runs on the session's worker (set_ghosts)."""
+        Blocking: ghosts_reply runs it on a thread of its own per new ghost, never on the session's worker."""
         loader = self.ghost_loader or getattr(getattr(self, "ghosts", None), "load_ghost", None)
         if loader is None:
             from sm64_events.core.paths import replays_root
@@ -707,13 +707,14 @@ class SceneLab:
         except Exception:  # noqa: BLE001 - the viewer draws with the defaults rather than not at all
             return None
 
-    async def audio_block(self, generation: int, block: int) -> tuple[bytes, str]:
-        """One block of the open scene's sound, decoded and checked off the session's worker."""
+    async def audio_block(self, generation: int, block: int, track: str = "mix") -> tuple[bytes, str]:
+        """One block of the open scene's sound (or of its music or effects), decoded and checked
+        off the session's worker."""
         session = self.session
         if session is None or generation != self.generation:
             raise SceneClosed((self.ended or {}).get("message") or "This scene is not open.")
         self.last_used = time.monotonic()
-        return await asyncio.to_thread(session.audio_block, block)
+        return await asyncio.to_thread(session.audio_block, block, track)
 
     async def serve_socket(self, websocket: WebSocket) -> None:
         await websocket.accept()
@@ -1003,9 +1004,9 @@ def mount_scene_lab(app, config_path, **options) -> SceneLab:
         await lab.serve_socket(websocket)
 
     @router.get("/audio/{block}")
-    async def audio(block: int, session: int):
+    async def audio(block: int, session: int, track: str = "mix"):
         try:
-            data, media_type = await lab.audio_block(session, block)
+            data, media_type = await lab.audio_block(session, block, track)
         except SceneClosed as closed:
             raise HTTPException(409, str(closed)) from None
         except LookupError as missing:

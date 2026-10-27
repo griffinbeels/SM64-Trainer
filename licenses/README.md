@@ -20,6 +20,7 @@ About (`src/sm64_events/ui/credits.js`) says who made each one.
 | FreeType 2.5.3 and 2.10.1 | Inside the renderer: on-screen text, and Qt's fonts | FreeType License | `renderer/FreeType/` | <https://download.savannah.gnu.org/releases/freetype/> |
 | libpng 1.6.32 and 1.6.37, zlib 1.2.8 and 1.2.11 | Inside the renderer (GlideHQ and Qt) | libpng, zlib | `renderer/libpng/`, `renderer/zlib/` | <http://www.libpng.org/>, <https://zlib.net/> |
 | xxHash | Inside the renderer | BSD-2-Clause | `renderer/xxHash/` | The renderer's upstream tree, `src/xxHash/` |
+| cxd4 (mupen64plus-rsp-cxd4) | Not in the installed app: the scene lab, from source, runs the game's own audio microcode in it to split music from sound effects | CC0-1.0 | `cxd4/` | `tools/scene_lab/cxd4/` in this repository (its README names the pinned upstream commit) |
 | NVIDIA Video Codec SDK header | `SM64GpuEncoderV1.dll`: hardware encoding on NVIDIA cards | MIT | `nvidia-video-codec-headers/` | `plugin/gfxwrap/vendor/nvEncodeAPI.h` in this repository |
 | Preact 10.24.3 | The interface | MIT | `preact/` | <https://github.com/preactjs/preact/tree/10.24.3> |
 | htm 3.1.1 | The interface's markup | Apache-2.0 | `htm/` | <https://github.com/developit/htm/tree/3.1.1> |

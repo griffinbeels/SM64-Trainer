@@ -82,11 +82,13 @@ class CutterProcess:
     every line the child writes, then once with {"exited": code} when it is gone."""
 
     def __init__(self, rom: Path, folder: Path, on_event, *, lab_root: Path | None = None,
-                 spool_factory: str | None = None, extra_path: tuple = ()):
+                 spool_factory: str | None = None, extra_path: tuple = (), symbol_map: Path | None = None):
         from sm64_events.core.childproc import python_child, quiet_spawn_kwargs
         args = ["--rom", str(rom), "--folder", str(folder)]
         if lab_root is not None:
             args += ["--lab-root", str(lab_root)]
+        if symbol_map is not None:
+            args += ["--map", str(symbol_map)]
         if spool_factory:
             args += ["--spool-factory", spool_factory]
         argv, env = python_child("attempt_cutter", "--scene-lab-cutter", args, site_packages=True)
@@ -320,9 +322,11 @@ class Brain:
     recording. Everything but the takes' own threads runs on the main thread (note, tick); a take
     reports back through finished()."""
 
-    def __init__(self, rom: bytes, rom_loads: list, folder: Path, opener, emit, clock=time.monotonic):
+    def __init__(self, rom: bytes, rom_loads: list, folder: Path, opener, emit, clock=time.monotonic,
+                 stems=None, stems_problem: str | None = None):
         import package
         self.package = package
+        self.stems, self.stems_problem = stems, stems_problem    # stems_live.StemsProcess: music and effects
         self.rom, self.rom_loads, self.folder, self.opener, self.emit, self.clock = (
             rom, rom_loads, Path(folder), opener, emit, clock)
         self.folder.mkdir(parents=True, exist_ok=True)
@@ -514,7 +518,8 @@ class Brain:
         cut = take.cut
         presents = take.absolute_presents(stats["frames"])
         if presents:
-            self.sounds[take.attempt_id] = (take.path, presents)
+            session = getattr(getattr(take.spool, "session", None), "name", "")
+            self.sounds[take.attempt_id] = (take.path, presents, session)
             while len(self.sounds) > SOUNDS_KEPT:
                 self.sounds.pop(next(iter(self.sounds)))
         sound = {"presents_qpc": [presents[0][1], presents[-1][1]], "qpc_frequency": self.spool_frequency} \
@@ -531,15 +536,23 @@ class Brain:
         """Adds the sound the recorder heard (the server wrote it from live_audio's ring) to a
         finished attempt scene, off the main thread: {"id", "sound": None} once the package
         carries it, else the plain sentence why the scene stays silent."""
-        path, presents = self.sounds.get(attempt_id, (None, None))
+        path, presents, session = self.sounds.get(attempt_id, (None, None, None))
         if path is None:
             reason = "This attempt's scene is no longer kept."
         else:
             try:
-                reason = __import__("live_audio").attach_span(path, capture, presents, self.spool_frequency, self.rom)
+                reason = __import__("live_audio").attach_span(path, capture, presents, self.spool_frequency, self.rom,
+                                                              more=self._with_stems(presents, session))
             except Exception as error:  # noqa: BLE001 - a silent scene, never a stopped cutter
                 reason = f"This attempt's sound could not be added: {error}"
         self.emit({"id": attempt_id, "sound": reason})
+
+    def _with_stems(self, presents: list, session: str):
+        """attach_span's last step: the scene's music and effects beside its sound, in the same
+        write (stems_live.attach: the stems child's layer, or one saying why there is none)."""
+        import stems_live
+        return lambda data, payload: stems_live.attach(data, self.rom, payload, self.stems, self.stems_problem,
+                                                       presents[0][1], session, self.folder)
 
     def _fit(self, note: dict) -> None:
         """A growing scene's one sound fit (scene_audio.LiveSound), off the main thread: the
@@ -571,6 +584,8 @@ class Brain:
             take.abandon()
         for take in self.takes:
             take.join(timeout=10)
+        if self.stems is not None:
+            self.stems.close()
 
 
 def _opener(spec: str | None, lab_root: Path | None):
@@ -590,6 +605,7 @@ def serve(argv: list[str] | None = None) -> int:
     parser.add_argument("--folder", required=True, type=Path)
     parser.add_argument("--lab-root", type=Path)
     parser.add_argument("--spool-factory")
+    parser.add_argument("--map", type=Path, help="the symbol map: music and effects split beside each scene's sound")
     args = parser.parse_args(argv)
     sink, sink_lock = sys.stdout, threading.Lock()
 
@@ -603,7 +619,13 @@ def serve(argv: list[str] | None = None) -> int:
     rom = args.rom.read_bytes()
     rom_loads = package.provenance.segment_loads(rom)
     args.folder.mkdir(parents=True, exist_ok=True)
-    brain = Brain(rom, rom_loads, args.folder, _opener(args.spool_factory, args.lab_root), emit)
+    stems, stems_problem = None, "The scene lab has no symbol map (lab.json \"map\"), so music and sound effects cannot be split."
+    if args.map is not None:
+        import stems_live
+        stems = stems_live.StemsProcess(args.rom, args.map, lab_root=args.lab_root,
+                                        on_event=lambda event: emit({"stems_child": event}))
+    brain = Brain(rom, rom_loads, args.folder, _opener(args.spool_factory, args.lab_root), emit,
+                  stems=stems, stems_problem=stems_problem)
     emit({"ready": True, "rom_seconds": round(time.perf_counter() - started, 3)})
     notes: queue.SimpleQueue = queue.SimpleQueue()
     threading.Thread(target=_read_notes, args=(sys.stdin, notes), name="cutter-notes", daemon=True).start()

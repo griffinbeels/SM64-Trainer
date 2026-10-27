@@ -7,7 +7,6 @@ The truth each test checks against is the simulated device clock itself, never
 the module's own fit. No recorded audio is involved.
 """
 import hashlib
-import importlib.util
 import random
 import struct
 import sys
@@ -18,18 +17,12 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools/scene_lab"))
-spec = importlib.util.spec_from_file_location("audio_clock", ROOT / "tools/scene_lab/audio_clock.py")
-ac = importlib.util.module_from_spec(spec)
-sys.modules[spec.name] = ac
-spec.loader.exec_module(ac)
-spec = importlib.util.spec_from_file_location("audio_layer", ROOT / "tools/scene_lab/audio_layer.py")
-al = importlib.util.module_from_spec(spec)
-sys.modules[spec.name] = al
-spec.loader.exec_module(al)
-spec = importlib.util.spec_from_file_location("audio_session", ROOT / "tools/scene_lab/audio_session.py")
-asn = importlib.util.module_from_spec(spec)
-sys.modules[spec.name] = asn
-spec.loader.exec_module(asn)
+# Plain imports, never a fresh copy in sys.modules: a second audio_clock would make a second
+# Picture class, and a package another test file already imported would then hold pictures
+# that compare unequal to this run's (seen 2026-10-27 when the stems tests joined the run).
+import audio_clock as ac  # noqa: E402
+import audio_layer as al  # noqa: E402
+import audio_session as asn  # noqa: E402
 
 RATE, FREQ = 48000, 10_000_000
 START = 7_000_000_000          # QPC ticks since boot when the tap opens (arbitrary)

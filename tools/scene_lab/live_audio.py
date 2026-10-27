@@ -47,6 +47,7 @@ audio in memory only; the files it writes belong outside the repository.
 from __future__ import annotations
 
 import bisect
+import logging
 import os
 import sys
 import threading
@@ -332,10 +333,13 @@ def span_layer(chosen: list, presents: Sequence[tuple[int, int]], frequency: int
 
 
 def attach_span(package: Path, capture: Path, presents: Sequence[tuple[int, int]], qpc_frequency: int,
-                rom: bytes) -> str | None:
+                rom: bytes, *, more=None) -> str | None:
     """Adds the capture as the cut package's source-audio layer, in place (atomic replace).
-    `presents`: (present sequence, absolute QPC) of the package's pictures. None on success,
-    else one plain sentence saying why the scene stays silent (the package is left as it was)."""
+    `presents`: (present sequence, absolute QPC) of the package's pictures. `more(data, payload)`,
+    when given, returns the package bytes with further layers made from the sound (the cutter's
+    stems, stems_live.attach), written in the same replace; if it fails the sound goes in alone.
+    None on success, else one plain sentence saying why the scene stays silent (the package is
+    left as it was)."""
     import package as scene_package
 
     try:
@@ -353,6 +357,11 @@ def attach_span(package: Path, capture: Path, presents: Sequence[tuple[int, int]
         return f"The scene package could not be read ({error.strerror or error})."
     except ValueError as error:            # audio_layer.LayerError, package.PackageError
         return f"This attempt's sound could not be added to its scene ({error})."
+    if more is not None:
+        try:
+            data = more(data, payload)
+        except Exception:  # noqa: BLE001 - the sound still goes in; the scene's stems say they are missing
+            logging.getLogger("sm64.scene_lab").warning("A scene's stems could not be added.", exc_info=True)
     partial = Path(package).with_name(Path(package).name + ".partial")
     try:
         partial.write_bytes(data)
