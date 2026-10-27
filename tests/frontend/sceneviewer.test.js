@@ -20,7 +20,7 @@ import { SEARCH_WAIT } from "../../src/sm64_events/ui/components/sceneghosts.js"
 const REFERENCE = { orbitPerPixel: 0.01, steepestDegrees: 80, levelPerPixel: 0.1, panPerPixel: 0.002,
   dollyPerWheel: 0.002, closestDistance: 40, farthestDistance: 20000, flightSpeed: 1000, lookPerPixel: 0.004,
   fastMultiplier: 5, slowMultiplier: 0.2, speedPerNotch: 1.5, levelPerSecond: 30, flyToStandoff: 300, flyToMs: 200,
-  focusDistance: 600, marioHeight: 100 };
+  marioHeight: 100 };
 const FRAMES = Array.from({ length: 5 }, (_, i) => ({ level: 9, area: 1, game_frame: 1000 + i }));
 const POSE = { focus: [10, 200, -30], position: [10, 500, 1170], roll: 0, fov: 45, mario: [40, 80, -60] };
 const PER_DEGREE = 65536 / 360;
@@ -1297,19 +1297,38 @@ test("a key pressed while nothing on the page has focus is the viewer's, and its
 
 // ------------------------------------------------------------------ focus
 
-test("Look at Mario puts the focus point on him at a useful distance and a fallback picture shows its reason", async () => {
+// His report, 2026-10-27: "It should only change the camera look direction, NOT the camera position.
+// Same position, just looking at mario." From the recorded camera too: it enters Free camera at the
+// recorded place (no jump) and turns there; its roll and field of view stay.
+test("Look at Mario turns the camera to face him where it stands, keeping its roll and field of view", async () => {
   const { page, socket } = await openScene();
-  const first = await enterFree(page, socket);
+  await socket.picture(socket.sent[0]);
+  const tilted = { ...POSE, roll: 900, fov: 52 };
   fireEvent.click(page.getByRole("button", { name: "Look at Mario" }));
-  await waitFor(() => expect(socket.last()).toMatchObject({ kind: "pose", frame: 0 }));
-  socket.text({ id: socket.last().id, kind: "pose", pose: POSE, reason: null });
-  await waitFor(() => expect(socket.last().camera?.focus).toEqual([40, 80 + REFERENCE.marioHeight, -60]));
-  const camera = socket.last().camera;
-  expect(Math.hypot(...[0, 1, 2].map((i) => camera.position[i] - camera.focus[i])))
-    .toBeCloseTo(Math.min(REFERENCE.focusDistance, Math.hypot(300, 1200)), 6);
-  expect(first.roll).toBe(0);
+  await until(() => expect(socket.last()).toMatchObject({ kind: "pose", frame: 0 }));
+  const entry = socket.last().id;
+  socket.text({ id: entry, kind: "pose", pose: tilted, reason: null });
+  await until(() => expect([socket.last().kind, socket.last().id > entry]).toEqual(["pose", true]));
+  socket.text({ id: socket.last().id, kind: "pose", pose: tilted, reason: null });
+  await until(() => expect(socket.last().camera?.focus).toEqual([40, 80 + REFERENCE.marioHeight, -60]));
+  const camera = socket.last().camera, target = [40, 80 + REFERENCE.marioHeight, -60];
+  close(camera.position, POSE.position);
+  const facing = [0, 1, 2].map((i) => camera.focus[i] - camera.position[i]);
+  const toMario = [0, 1, 2].map((i) => target[i] - POSE.position[i]);
+  close(facing.map((value) => value / Math.hypot(...facing)), toMario.map((value) => value / Math.hypot(...toMario)));
+  expect([camera.roll, camera.fov]).toEqual([900, 52]);
   await socket.picture(socket.last(), { camera: "recorded", reason: "This frame has no 3D scene to move around in." });
   await waitFor(() => expect(page.container.textContent).toContain("This frame has no 3D scene to move around in."));
+});
+
+test("lookingAt keeps the camera's place, roll and field of view, faces the point, and stays put on it", () => {
+  const orbit = { ...orbitFromPose(POSE.focus, POSE.position, { roll: -300, fov: 60 }) };
+  const turnedTo = lookingAt(orbit, [500, -40, 900], REFERENCE), camera = cameraOf(turnedTo);
+  close(camera.position, cameraOf(orbit).position);
+  close(camera.focus, [500, -40 + REFERENCE.marioHeight, 900]);
+  expect([camera.roll, camera.fov]).toEqual([-300, 60]);
+  const onHim = lookingAt(orbit, [POSE.position[0], POSE.position[1] - REFERENCE.marioHeight, POSE.position[2]], REFERENCE);
+  expect(onHim).toBe(orbit);
 });
 
 test("Set focus asks where the clicked point is and turns the camera to orbit it, staying where it is", async () => {
@@ -1903,7 +1922,7 @@ test("every movement reads its tuning: the shipped values when none is given, a 
     ["flightSpeed", (t) => flightSpeed(1, {}, t)], ["fastMultiplier", (t) => flightSpeed(1, { fast: true }, t)],
     ["slowMultiplier", (t) => flightSpeed(1, { slow: true }, t)], ["speedPerNotch", (t) => speedStepped(1, 1, t)],
     ["levelPerSecond", (t) => flown(tilted, { forward: 1 }, 0.01, 10, t)],
-    ["focusDistance", (t) => lookingAt(orbit, [0, 0, 0], t)], ["marioHeight", (t) => lookingAt(orbit, [0, 0, 0], t)],
+    ["marioHeight", (t) => lookingAt(orbit, [0, 0, 0], t)],
     ["flyToStandoff", (t) => flyToTarget(orbit, [100, 0, -200], [0, 0, 0], t)],
     ["flyToMs", (t) => glideAt(orbit, lookingAt(orbit, [0, 0, 0]), 150, t)],
   ];
