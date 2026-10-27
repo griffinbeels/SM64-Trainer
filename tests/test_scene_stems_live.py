@@ -207,4 +207,5 @@ def test_a_child_that_cannot_start_answers_every_request_with_why(tmp_path):
         assert answer == {"reason": stems.problem}
     finally:
         assert stems.close() is not None
+    assert not any(thread.is_alive() for thread in stems.threads)   # nothing of it outlives close()
     assert not list(tmp_path.glob("stems-audio-*"))

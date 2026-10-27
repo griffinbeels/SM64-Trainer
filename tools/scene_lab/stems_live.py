@@ -569,8 +569,10 @@ class StemsProcess:
         self.lock = threading.Lock()
         self.serial = 0
         self.outgoing: queue.SimpleQueue = queue.SimpleQueue()
-        threading.Thread(target=self._write, name="stems-notes", daemon=True).start()
-        threading.Thread(target=self._read, name="stems-events", daemon=True).start()
+        self.threads = [threading.Thread(target=self._write, name="stems-notes", daemon=True),
+                        threading.Thread(target=self._read, name="stems-events", daemon=True)]
+        for thread in self.threads:
+            thread.start()
 
     @property
     def pid(self) -> int:
@@ -634,12 +636,18 @@ class StemsProcess:
         self.on_event({"exited": code})
 
     def close(self, timeout: float = 10.0) -> int | None:
+        """Ends the child and its two threads: nothing of it runs once this returns (the
+        cutter's interpreter ends right after, and a pipe thread still writing then failed
+        fast, 0xC0000409)."""
         self.outgoing.put(None)
         try:
-            return self.process.wait(timeout=timeout)
+            code = self.process.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
             self.process.kill()
-            return self.process.wait(timeout=5)
+            code = self.process.wait(timeout=5)
+        for thread in self.threads:
+            thread.join(timeout=5)
+        return code
 
 
 def attach(data: bytes, rom: bytes, audio_payload: bytes, stems: StemsProcess | None, problem: str | None,
