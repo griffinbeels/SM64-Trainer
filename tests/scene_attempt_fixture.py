@@ -15,6 +15,9 @@ import struct
 import sys
 from pathlib import Path
 
+from sm64_events.memory.addresses import MARIO_ACTION_OFF, MARIO_ACTION_TIMER_OFF
+from sm64_events.memory.layout import layout_for
+
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("scene_state_synthetic", ROOT / "tests/test_scene_state_package.py")
 state = importlib.util.module_from_spec(spec)
@@ -27,6 +30,10 @@ LEVEL = state.LEVEL
 TIMER, LEVEL_NUM, AREA_NUM = 0x32D5D4, 0x32DDF8, 0x33BACA     # the US identity addresses (layout.py)
 IDENTITY = f"global_timer:{TIMER:x}:4,curr_level:{LEVEL_NUM:x}:2,curr_area:{AREA_NUM:x}:2"
 rom = state._rom
+# With `marios`, each task's regions also copy Mario's action and actionTimer at the US layout's
+# address, as the tap's scene_bss region does (attempt_span.MarioReader).
+MARIO = layout_for("us").mario_struct & 0x1FFFFFFF
+MARIO_SPAN = (MARIO & ~0xFF, 0x100)
 
 
 def _task(task_index: int, image: bytes) -> bytes:
@@ -49,8 +56,9 @@ def _record(kind: int, sequence: int, body: bytes, qpc: int) -> bytes:
 
 
 def write_session(folder: Path, rom_bytes: bytes, places: list[tuple[int, int, int]],
-                  name: str = "tap-20261026-120000") -> Path:
-    """A session of len(places) tasks at 30 per second of QPC time (10 MHz)."""
+                  name: str = "tap-20261026-120000", marios: list[tuple[int, int]] | None = None) -> Path:
+    """A session of len(places) tasks at 30 per second of QPC time (10 MHz); `marios`: Mario's
+    (action, actionTimer) in each task."""
     rng = random.Random(11)
     ram = bytearray(RDRAM)
     ram[0x330000:0x332000] = rng.randbytes(0x2000)
@@ -76,9 +84,15 @@ def write_session(folder: Path, rom_bytes: bytes, places: list[tuple[int, int, i
         ram[TIMER:TIMER + 4] = struct.pack(">I", timer)
         ram[LEVEL_NUM:LEVEL_NUM + 2] = struct.pack(">H", level)
         ram[AREA_NUM:AREA_NUM + 2] = struct.pack(">H", area)
+        task_spans = [(0x330000, 0x2000)]
+        if marios is not None:
+            action, timer_value = marios[index]
+            ram[MARIO + MARIO_ACTION_OFF:MARIO + MARIO_ACTION_OFF + 4] = struct.pack(">I", action)
+            ram[MARIO + MARIO_ACTION_TIMER_OFF:MARIO + MARIO_ACTION_TIMER_OFF + 2] = struct.pack(">H", timer_value)
+            task_spans.append(MARIO_SPAN)
         swapped = pk.swap_words(bytes(ram))
         add(pk.tap.REC_TASK, _task(index, swapped), index)
-        add(pk.tap.REC_REGIONS, state._regions(index, 0, base, [(0x330000, 0x2000)], swapped), index)
+        add(pk.tap.REC_REGIONS, state._regions(index, 0, base, task_spans, swapped), index)
         loaded = previous is not None and (level, area) != previous
         add(pk.tap.REC_REGIONS, state._regions(index, 1 if loaded else 2, base,
                                                [LEVEL] if loaded else [(block & ~0xFF, 256)], swapped), index)

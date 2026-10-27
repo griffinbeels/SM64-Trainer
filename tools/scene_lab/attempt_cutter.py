@@ -26,7 +26,10 @@ tests/scene_spool_double.py: ready 0.11 s after the fade-out's last picture reac
 recording, 0.26 s after a reset's, and the server's 250 Hz poll loop ticked as without a cut
 (p99 4.4 ms, max 5.2 ms in three runs; one run had a single 43 ms gap). When an
 attempt completes, attempt_span decides its scene, the take that began at its first task is told
-to stop at the last, and finish() writes only the frames still pending and the index. An attempt
+to stop at the last, and finish() writes only the frames still pending and the index. Each take
+reads Mario in every task it writes (attempt_span.MarioReader on the task's scene state), so a
+star's scene ends where its dance does (attempt_span.dance): the span rule reads the take's
+states, and once the take knows its attempt's end it writes nothing past that dance. An attempt
 with no take (it began before the recording, at a start the stream did not announce, or shares
 its start with an attempt that claimed the take) gets a take that starts behind the live edge and
 stays "cutting" for as long as that takes. A take nobody claims is abandoned: an anchor's take
@@ -58,6 +61,7 @@ HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 import attempt_span  # noqa: E402
+import tap  # noqa: E402
 
 PACKAGE_SUFFIX = ".sm64scene"
 TICK_SECONDS = 0.1             # how often the child re-reads the recording while anything waits
@@ -73,6 +77,7 @@ PUBLISH_SECONDS = 0.25         # how often a growing package is published (what 
 TAKE_ZLIB_LEVEL = 6            # package.compress: about 6x faster than level 9 for 6 % more bytes
 _BELOW_NORMAL = getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0)
 _SERIAL = itertools.count(1)   # takes from one start (a behind take, an abandoned one) never share a file
+TASK_INDEX = tap.TASK_FIELDS.index("task_index")   # a capture's task index (a live_spool.TaskRef's index)
 
 
 # ---------------------------------------------------------------- the server's handle
@@ -166,6 +171,12 @@ class Take(threading.Thread):
         self.ended = False
         self.stop_index = last
         self.limit: int | None = None          # write no further than this until claimed (Waiting.through)
+        # Mario in each task read (attempt_span.dance's input; None while the recording's states
+        # cannot show him), and the end of the attempt this take serves once the span rule found
+        # it: past that end's star dance the take writes nothing.
+        self.marios: dict[int, attempt_span.Mario | None] | None = None
+        self.end: int | None = None
+        self.refs: dict | None = None          # a behind take's tasks, end to last: where its dance stops
         # The package is written in place under its final name, and published beside it as it
         # grows (package.PackageWriter.publish): a growing scene opens from the two.
         self.path = Path(brain.folder) / f"take-{first.index}-{next(_SERIAL)}{PACKAGE_SUFFIX}"
@@ -195,9 +206,46 @@ class Take(threading.Thread):
     def claim(self, attempt_id: int, cut: attempt_span.Cut, decided_at: float) -> None:
         self.attempt_id, self.cut, self.decided_at, self.reserved = attempt_id, cut, decided_at, None
         self.abandon_at = None
+        self.end = cut.end.index
         self.stop_index = cut.last.index
         if self.source is not None:
             self.source.stop_at(cut.last.index)
+
+    def _mario_note(self, timer):
+        """note(capture) -> its task index, keeping Mario in that task in `marios` when the
+        recording's states can show him (its task regions, at its version's layout)."""
+        reader = attempt_span.MarioReader.of(self.source.identity)
+        states = getattr(self.source, "states", None)
+        if reader is not None and states is not None:
+            self.marios = {}
+
+        def note(capture) -> int:
+            index = capture.fields[TASK_INDEX]
+            if self.marios is not None:
+                frame = None if timer is None else tap.word_value(capture.extras, *timer)
+                self.marios[index] = reader.read(states.task.get(capture.task_sequence), frame)
+            return index
+        return note
+
+    def _past_dance(self, index: int) -> int | None:
+        """The star dance's last task when task `index` lies past it (attempt_span.dance over the
+        tasks this take read), else None."""
+        if self.end is None or not self.marios:
+            return None
+        found = attempt_span.dance(self.end, self.marios)
+        return found.last if found is not None and found.last is not None and index > found.last else None
+
+    def _shorten(self, index: int) -> None:
+        """A take cut from behind the recording learns its dance as it reads it: a claimed span
+        that runs past the dance's last task stops there (the span rule decided it without the
+        states)."""
+        last = self._past_dance(index)
+        cut = self.cut
+        if last is not None and cut is not None and self.refs and last in self.refs and last < cut.last.index:
+            self.cut = attempt_span.Cut(cut.first, self.refs[last], cut.end, "dance")
+            self.stop_index = last
+            if self.source is not None:
+                self.source.stop_at(last)
 
     def abandon(self) -> None:
         self.dropped.set()
@@ -227,15 +275,17 @@ class Take(threading.Thread):
     def _hold(self, capture, timer) -> None:
         """Waits before writing a frame that may lie past this take's span: past `limit` (the
         newest task the span rule placed inside it while the end of the fade-out is still to
-        come), or the first frame of a start announced after this take began (the reset that
-        ends this attempt starts the next). A level load's first frame costs ~0.9 s to write
-        (a checkpoint over a new level, measured 2026-10-26), which would otherwise come
-        between his reset and "ready". A start that ends something else releases after HOLD_SECONDS."""
+        come), past the star dance after its attempt's end (_past_dance: the span rule ends
+        there once it sees the same states), or the first frame of a start announced after this
+        take began (the reset that ends this attempt starts the next). A level load's first
+        frame costs ~0.9 s to write (a checkpoint over a new level, measured 2026-10-26), which
+        would otherwise come between his reset and "ready". A start that ends something else
+        releases after HOLD_SECONDS."""
         index = self.position + 1
         started = time.monotonic()
         while not self.dropped.is_set() and self.cut is None:
             self._publish()                      # what it holds back from is shown meanwhile
-            if self.limit is not None and index > self.limit:
+            if (self.limit is not None and index > self.limit) or self._past_dance(index) is not None:
                 time.sleep(0.005)
                 continue
             if timer is None or time.monotonic() - started > HOLD_SECONDS:
@@ -263,10 +313,13 @@ class Take(threading.Thread):
             self.writer = writer
             self.cpu_started = time.thread_time()
             timer = dict((name, (address, size)) for name, address, size in self.source.identity).get("global_timer")
+            note = self._mario_note(timer)
             for capture in self.source.captures:
+                index = note(capture)
                 self._hold(capture, timer)
                 while brain.should_wait(self) and not self.dropped.is_set():
                     time.sleep(0.005)
+                self._shorten(index)
                 if self.dropped.is_set() or (self.cut is not None and self.position >= self.cut.last.index):
                     break
                 began = time.perf_counter()
@@ -438,6 +491,14 @@ class Brain:
     def _open_take(self, first_index: int) -> Take | None:
         return next((take for take in self.takes if take.open and take.first.index == first_index), None)
 
+    def _marios(self, first_index: int) -> dict | None:
+        """Mario in each task a take writing from that task has read (attempt_span.span's
+        `marios`), or None when none is: the span rule then decides without the dance."""
+        take = next((take for take in self.takes if take.first.index == first_index and not take.dropped.is_set()
+                     and not take.ended and take.kind != "behind"), None)
+        marios = None if take is None else take.marios
+        return None if marios is None else dict(marios)
+
     def _resolve_starts(self, tasks: list, now: float) -> None:
         newest = tasks[-1] if tasks else None
         for start in list(self.starts):
@@ -462,7 +523,7 @@ class Brain:
 
     def _decide(self, tasks: list, health: dict, now: float) -> None:
         for attempt_id, entry in list(self.pending.items()):
-            found = attempt_span.span(entry["mark"], tasks, list(self.boundaries), health)
+            found = attempt_span.span(entry["mark"], tasks, list(self.boundaries), health, self._marios)
             if isinstance(found, attempt_span.Unavailable):
                 self.pending.pop(attempt_id)
                 self._release(attempt_id)
@@ -473,6 +534,8 @@ class Brain:
                     take.reserved = attempt_id
                     if found.through is not None:
                         take.limit = found.through.index
+                    if found.end is not None:
+                        take.end = found.end.index
                     self._say(attempt_id, entry, "ready", growing=True, path=str(take.path), grow=str(take.grow))
                 else:
                     self._say(attempt_id, entry, "cutting", reason=found.reason)
@@ -481,6 +544,7 @@ class Brain:
                 take = self._open_take(found.first.index)
                 if take is None or take.reserved not in (None, attempt_id):
                     take = Take(self, found.first, "behind", last=found.last.index)
+                    take.refs = {task.index: task for task in tasks if found.end.index <= task.index <= found.last.index}
                     take.claim(attempt_id, found, now)          # before it starts: a failure has its attempt
                     self._begin(take)
                 else:

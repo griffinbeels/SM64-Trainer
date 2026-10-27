@@ -18,7 +18,7 @@
 .scene-lab-stage canvas.is-flying, .scene-lab-stage canvas.is-flying:active { cursor: none; }
 .scene-lab-tag, .scene-lab-busy { position: absolute; top: 10px; padding: 3px 8px; border-radius: 6px; background: rgba(0,0,0,.6); font-size: .78rem; pointer-events: none; }
 .scene-lab-tag { left: 10px; }
-.scene-lab-tag.is-free { color: var(--gold-soft); }
+.scene-lab-tag.is-free, .scene-lab-tag.is-view { color: var(--gold-soft); }
 .scene-lab-busy { right: 10px; color: var(--muted); }
 .scene-lab-cue { position: absolute; left: 50%; bottom: 12px; max-width: calc(100% - 24px); margin: 0; padding: 4px 10px;
   transform: translateX(-50%); border-radius: 6px; background: rgba(0,0,0,.66); color: var(--text); font-size: .78rem;
@@ -94,10 +94,11 @@
 .scene-lab-ghost-stage { justify-self: stretch; text-align: center; color: var(--gold-soft); font-size: .78rem; white-space: nowrap; }
 .scene-lab-ghost-more { grid-column: 2 / -1; justify-self: start; }
 .scene-lab-ghost .scene-lab-ghost-more { min-height: 26px; padding: 0 8px; font-size: .78rem; }
+.scene-lab-ghost .scene-lab-ghost-view[aria-pressed="true"] { border-color: var(--gold); color: var(--gold-soft); }
 .scene-lab-ghost-reason { grid-column: 2 / -1; color: var(--coral); font-size: .78rem; line-height: 1.4; }
 .scene-lab-ghost-controls { grid-column: 2 / -1; display: flex; flex-wrap: wrap; gap: 6px; }
 .scene-lab-ghost .scene-lab-ghost-controls button { min-height: 26px; padding: 0 8px; font-size: .78rem; gap: 4px; }
-.scene-lab-ghost-controls button[aria-pressed=true] { border-color: var(--coral); color: var(--coral); }
+.scene-lab-ghost .scene-lab-ghost-mute[aria-pressed=true] { border-color: var(--coral); color: var(--coral); }
 .scene-lab-ghost-more-list { grid-column: 1 / -1; padding: 4px 0 2px 14px; border-left: 2px solid var(--border-soft); }
 .scene-lab-ghost-more-list .scene-lab-ghost { background: transparent; }
 .scene-lab-ghost-note { margin: 0; color: var(--muted); font-size: .8rem; line-height: 1.5; }

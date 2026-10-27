@@ -1331,7 +1331,8 @@ picture on screen); hold the right button to look around with the mouse, the
 wheel or the flight speed control then setting the speed; drag to turn around
 the focus point, Shift-drag or a middle-button drag to slide, the wheel to move
 closer; **double-click** a surface to fly to just in front of it and look at
-Mario (an eased flight any input stops); F looks at Mario; **Set focus** then a
+Mario (an eased flight any input stops); F (**Look at Mario**) turns the camera to face Mario
+where it stands, its place, tilt and field of view kept; **Set focus** then a
 click puts the focus point where the picture drew that pixel; one button puts
 the view back where Free camera began; R returns to the recorded camera. A tilted view levels as you turn or fly, never on entry.
 Moving the camera never pauses Play; only Pause, Space, a step or the slider do. **Restart** goes to the
@@ -1416,6 +1417,7 @@ its last pose and fades; any other one is gone. The race's own fades,
 (never music) beside the stage's sound, on the [[frame]]s that recorded them,
 placed and faded from the stage's recorded camera and Mario as the game does,
 at your [[ghost]] volume; each has a Mute of its own in the panel below the player.
+Each one in the scene has a [[ghost's view]].
 
 - **Lives** -- the set, its alignment and its look
   (`tools/scene_lab/stage_ghosts.py`); its sound (`tools/scene_lab/ghost_sound.py`,
@@ -1424,6 +1426,25 @@ at your [[ghost]] volume; each has a Mute of its own in the panel below the play
   [[renderer]] (`plugin/gfxwrap/ghost_viewer.cpp`), drawn by the same code as
   a race's (`plugin/gfxwrap/ghost_figure.h`)
 - **Not** -- the [[ghost set]], which picks who races you in the game
+
+### Ghost's view
+
+The [[scene viewer]]'s stage seen from a [[stage ghost]]'s own camera: the
+camera that [[ghost]]'s game drew with where its figure stands in that
+picture, from its recording, so it follows that [[ghost]] through Play, steps
+and seeks. One button per [[stage ghost]] ("Sully's view", beside Recorded
+camera; Their view on its row), the picture's corner names whose it is, and
+Free camera from it starts at that camera. The world stays the stage's: its
+objects, its Mario, its Lakitu and its counters. Where the recording has no
+camera there in the stage's area (a gap, before its start, after its end,
+another area), the view holds its nearest one and says why.
+
+- **Lives** -- which camera (`tools/scene_lab/stage_ghosts.py`, from each
+  record's camera in `src/sm64_events/ghost/clip.py`); drawn through the free
+  camera (`tools/scene_lab/scene_session.py`); the buttons
+  (`src/sm64_events/ui/components/sceneviewer.js`,
+  `src/sm64_events/ui/components/sceneghosts.js`)
+- **Not** -- the recorded camera, the stage's own view
 
 ### Ghost button
 
@@ -1482,9 +1503,13 @@ the server encodes the picture itself.
 
 The [[scene package]] of one [[attempt]] he just played, which the [[scene viewer]]
 opens by the [[attempt]]'s id. It starts on the [[frame]] the [[attempt]]'s clock
-started and ends on the last picture of the fade-out after its end: the [[frame]]
-before the next level or area appears, the [[frame]] before his [[reset]], or 10 s
-after the end when nothing comes. While the lab is on, the [[scene tap]] records
+started. An [[attempt]] that ends on a [[star]] grab ends on the [[star]] dance's last
+[[frame]]: the last one before the game stops moving Mario (the exit fade's last
+iris picture, his pause, a save dialog) or he leaves the dance, the same [[frame]]
+his own [[dance tail]] ends on; the scene keeps nothing frozen after the dance.
+Any other [[attempt]] ends on the last picture of the fade-out after its end: the
+[[frame]] before the next level or area appears, the [[frame]] before his [[reset]],
+or 10 s after the end when nothing comes. While the lab is on, the [[scene tap]] records
 all the time, and a hidden child process writes each [[attempt]]'s package as he
 plays it, publishing what it has every quarter second. So the scene opens as
 soon as the [[attempt]] completes, before the tap has even recorded its fade-out:

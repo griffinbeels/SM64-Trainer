@@ -83,8 +83,31 @@ function rowAction(shown, wanted) {
   return wanted ? "Adding..." : "Removing...";
 }
 
-// One ghost: rank where known, player (with the day, for one of yours), time, and Add or Remove.
-// `children` go under it (a player's slower ghosts).
+// Whose view a ghost's camera is, in words: "Sully's view"; one of yours with no player name is
+// "Your view" and its time, as the stage is usually a run of yours too; and when another ghost in the
+// scene has the same name, its time, so two runs by one player stay apart.
+export function viewName(ghosts, ref) {
+  const nameOf = (ghost) => ghost.player || ghost.label || "Ghost";
+  const ghost = ghosts.find((each) => each.ref === ref);
+  if (!ghost) return "A ghost's view";
+  const name = nameOf(ghost), owner = name === "You" ? "Your view" : `${name}'s view`;
+  const shared = name === "You" || ghosts.filter((each) => nameOf(each) === name).length > 1;
+  return shared && ghost.time ? `${owner} · ${ghost.time}` : owner;
+}
+
+// A ghost in the scene's row button for its view (the camera bar has one per ghost too).
+function TheirView({ link, ghostRef }) {
+  const available = link.freeAvailable;
+  return html`<button type="button" class="scene-lab-ghost-view" aria-pressed=${!link.free && link.view === ghostRef}
+      disabled=${!available} aria-label=${`Their view: ${viewName(link.ghosts, ghostRef)}`}
+      title=${available ? "See the stage from this ghost's own camera, following it as the scene plays"
+        : link.scene.free_camera?.reason}
+      onclick=${(event) => link.theirView(ghostRef, event.timeStamp)}>Their view</button>`;
+}
+
+// One ghost: rank where known, player (with the day, for one of yours), time, and Add or Remove;
+// once it is in the scene, a strip under it: Their view shows the stage from its own camera, Mute
+// silences its sound. `children` go under it (a player's slower ghosts).
 function GhostRow({ item, link, stage, more = null, children = null }) {
   const shown = link.ghosts.some((ghost) => ghost.ref === item.ref);
   const wanted = link.wantedGhosts.some((ghost) => ghost.ref === item.ref);
@@ -102,26 +125,32 @@ function GhostRow({ item, link, stage, more = null, children = null }) {
     ${isStage ? html`<span class="scene-lab-ghost-stage" title="This run is the scene you are watching">The stage</span>`
       : html`<button type="button" disabled=${waiting} aria-label=${`${action.replace("...", "")} ${name}`}
           onclick=${toggle}>${action}</button>`}
+    ${shown && html`<${InScene} link=${link} ghostRef=${item.ref} name=${name} isStage=${isStage} />`}
     ${more}
-    ${shown && html`<${GhostSound} link=${link} ghostRef=${item.ref} name=${name} />`}
     ${refused && !shown && html`<span class="scene-lab-ghost-reason" role="status">${refused}</span>`}
     ${children}
   </li>`;
 }
 
-// A ghost in the scene: its own sound effects play beside the stage's, under the volume and Mute;
+// A ghost in the scene's strip under its row: Their view (not for the stage's own run) and Mute.
+function InScene({ link, ghostRef, name, isStage }) {
+  return html`<div class="scene-lab-ghost-controls">
+    ${!isStage && html`<${TheirView} link=${link} ghostRef=${ghostRef} />`}
+    <${GhostMute} link=${link} ghostRef=${ghostRef} name=${name} />
+  </div>`;
+}
+
+// A ghost in the scene plays its own sound effects beside the stage's, under the volume and Mute;
 // this Mute silences that ghost alone (SceneSound.toggleGhost). Disabled, with why, when its sound
 // cannot play.
-function GhostSound({ link, ghostRef, name }) {
+function GhostMute({ link, ghostRef, name }) {
   const sound = link.sound, muted = sound.ghostMuted(ghostRef);
   const problem = !sound.available ? "This recording has no sound, so its ghosts play silent too."
     : sound.ghostProblems.has(ghostRef) ? "This ghost's sound could not be played." : null;
   const title = problem || (muted ? "Play this ghost's sound effects again" : "Mute this ghost's sound effects");
-  return html`<div class="scene-lab-ghost-controls">
-    <button type="button" aria-pressed=${muted} disabled=${!!problem} aria-label=${`Mute ${name}`} title=${title}
-        onclick=${() => sound.toggleGhost(ghostRef)}>
-      <${Icon} name=${muted ? "speakerMuted" : "speaker"} size=${14} /> Mute</button>
-  </div>`;
+  return html`<button type="button" class="scene-lab-ghost-mute" aria-pressed=${muted} disabled=${!!problem}
+      aria-label=${`Mute ${name}`} title=${title} onclick=${() => sound.toggleGhost(ghostRef)}>
+    <${Icon} name=${muted ? "speakerMuted" : "speaker"} size=${14} /> Mute</button>`;
 }
 
 // A section's rows, or why there are none. The lab's "note" (why other players' ghosts are missing:
