@@ -57,7 +57,8 @@ def test_the_ghost_button_never_loads_the_viewer():
 
 
 def _lab(folder: Path) -> Path:
-    """A scratch lab: the synthetic recording packaged, its ROM, a plugin folder, the config."""
+    """A scratch lab: the synthetic recording packaged, its ROM, a plugin folder, the config. Its lab folder
+    (camera presets, attempt scenes) is scratch too, never the real one in LOCALAPPDATA."""
     synthetic = viewer_tests.synthetic
     rom, segment7 = synthetic._rom()
     session = folder / "tap-synthetic"
@@ -84,7 +85,8 @@ def _lab(folder: Path) -> Path:
     config = folder / "lab.json"
     config.write_text(json.dumps({"rom": str(folder / "rom.z64"), "packages": str(folder / "packages"),
                                   "pj64_plugin": str(folder / "Plugin"),
-                                  "map": str(folder / "MappingUS.map")}), encoding="utf-8")
+                                  "map": str(folder / "MappingUS.map"),
+                                  "lab_root": str(folder / "lab-root")}), encoding="utf-8")
     return config
 
 
