@@ -5,6 +5,8 @@ samples (M4 round 4, lab only).
     payload = unavailable("why, in one sentence")  # a scene whose stems could not be made says so
     stems = read(payload, audio)                   # checked; stems.block(track, index) decodes one block
 
+    uv run python tools/scene_lab/stems_layer.py <scene.sm64scene>... --rom <z64>   # each scene's split and numbers
+
 A scene plays its source-audio layer: Project64's output as the recorder heard it ("as heard",
 audio_layer.py), with the sample each picture appeared at. The stems come from the game's own
 timeline instead: stems_live.py's rows hold, per VI, what Project64's RSP wrote (the game's
@@ -587,3 +589,30 @@ def read(payload: bytes, audio: al.Layer | None) -> Stems:
             at += stored
     _require(at == len(payload), "stems layer length differs from its blocks")
     return Stems(payload, status, reason, stats, rate, total, block_samples, blocks, gaps)
+
+
+def main() -> int:
+    """One JSON line per scene: whether it is split, why not, and its layer's numbers."""
+    import argparse
+
+    import package
+    parser = argparse.ArgumentParser(description="Print each attempt scene's music and effects split.")
+    parser.add_argument("scenes", nargs="+", type=Path)
+    parser.add_argument("--rom", required=True, type=Path)
+    args = parser.parse_args()
+    rom = args.rom.read_bytes()
+    for path in args.scenes:
+        try:
+            stems = package.Package(path.read_bytes(), rom).stems
+        except (OSError, ValueError) as error:
+            print(json.dumps({"scene": path.name, "error": str(error)}))
+            continue
+        print(json.dumps({"scene": path.name, "split": None if stems is None else stems.available,
+                          "reason": None if stems is None else stems.reason or None,
+                          "gaps": None if stems is None else len(stems.gaps),
+                          "stats": None if stems is None else stems.stats}))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
