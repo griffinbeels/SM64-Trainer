@@ -11,7 +11,10 @@
 // from here too, so the map has one reader. Blocks come per track: "mix" (the
 // recording) and, when the scene has them, "music" and "effects", which lie on
 // the recording's own samples, so one map and one clock serve all three; a
-// track change fades out, swaps and fades in, and no track is silence.
+// track change fades out, swaps and fades in, and no track is silence. Each
+// ghost in the scene adds a track of its own sound ("ghost:<ref>", ghost_sound.py),
+// on the same samples, mixed under the stage at its own gain (0 muted), which
+// moves over FADE frames.
 const FADE = 64;                 // 1.3 ms at 48 kHz
 const REPORT_QUANTA = 16;        // a position report every ~43 ms of sound
 const AT = { run: 0, s: 0, edge: 0 };
@@ -63,11 +66,19 @@ const TAKE = {
     const track = message.track ?? "mix";
     this.trackBlocks(track).set(message.index, message.channels);
     if (track === this.track) this.cached = -1;
+    for (const ghost of this.ghosts) if (ghost.track === track) ghost.cached = -1;
   },
   keep(message) {
     const blocks = this.trackBlocks(message.track ?? "mix");
     for (const index of [...blocks.keys()]) if (!message.indices.includes(index)) blocks.delete(index);
     this.cached = -1;
+    for (const ghost of this.ghosts) ghost.cached = -1;
+  },
+  ghosts(message) {                                 // the ghosts' tracks and gains; a gone ghost's blocks go
+    const was = new Map(this.ghosts.map((ghost) => [ghost.track, ghost]));
+    this.ghosts = message.tracks.map(({ track, gain }) => Object.assign(was.get(track)
+      ?? { track, level: 0, cached: -1, data: null }, { gain, blocks: this.trackBlocks(track) }));
+    for (const track of was.keys()) if (!message.tracks.some((ghost) => ghost.track === track)) this.tracks.delete(track);
   },
   track(message) {                                  // fades out, swaps, fades in (at once when silent)
     this.nextTrack = message.track ?? null;
@@ -86,7 +97,7 @@ export class SceneSoundProcessor extends Base {
   constructor() {
     super();
     Object.assign(this, { runs: [], blockSamples: 1, tracks: new Map([["mix", new Map()]]), track: "mix",
-      blocks: null, switching: false, nextTrack: "mix", clock: null, next: [], env: 0, fading: false,
+      blocks: null, switching: false, nextTrack: "mix", clock: null, next: [], env: 0, fading: false, ghosts: [],
       hint: 0, quanta: 0, starved: 0, cached: -1, cachedData: null, firstP: 0, firstS: null, l: 0, r: 0 });
     this.blocks = this.tracks.get("mix");
     if (this.port) this.port.onmessage = (event) => this.take(event.data);
@@ -120,6 +131,16 @@ export class SceneSoundProcessor extends Base {
     return this.cachedData[channel][index - block * size] ?? 0;
   }
 
+  // A ghost's sample: its own block cache; a block not here yet is silence (that ghost only).
+  ghostValue(ghost, index, channel) {
+    const size = this.blockSamples, block = Math.floor(index / size);
+    if (block !== ghost.cached) {
+      ghost.data = ghost.blocks.get(block) ?? null;
+      ghost.cached = block;
+    }
+    return ghost.data ? ghost.data[channel][index - block * size] ?? 0 : 0;
+  }
+
   // Takes up the next clock piece once it is due: at once when it carries the
   // sound on, after fading the old one out when it jumps or stops.
   advance(f) {
@@ -149,6 +170,13 @@ export class SceneSoundProcessor extends Base {
     const edge = Math.min(1, at.edge / this.clock.slope / FADE), whole = Math.floor(at.s), part = at.s - whole;
     this.l = edge * (this.value(whole, 0) * (1 - part) + this.value(whole + 1, 0) * part);
     this.r = edge * (this.value(whole, 1) * (1 - part) + this.value(whole + 1, 1) * part);
+    for (const ghost of this.ghosts) {
+      ghost.level += Math.max(-1 / FADE, Math.min(1 / FADE, ghost.gain - ghost.level));
+      if (!ghost.level) continue;
+      const scale = edge * ghost.level;
+      this.l += scale * (this.ghostValue(ghost, whole, 0) * (1 - part) + this.ghostValue(ghost, whole + 1, 0) * part);
+      this.r += scale * (this.ghostValue(ghost, whole, 1) * (1 - part) + this.ghostValue(ghost, whole + 1, 1) * part);
+    }
   }
 
   // One quantum: `out` is [left, right], `frame0` the context frame of its first sample.

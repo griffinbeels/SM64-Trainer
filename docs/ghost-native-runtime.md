@@ -2197,7 +2197,22 @@ picture publishes that picture's ghosts and each one's frame (`picture`).
   `native_session.ghost_hue`), shadow, names, the name box and its opacity, and
   inputs over the name follow the ghost settings (`gv_look`). The live race's
   own effects are off: the overlap and player-first fades (the stage's runner
-  is not live Mario), the corner inputs, the path and the sound.
+  is not live Mario), the corner inputs and the path.
+- **Its sound** (round 5, 2026-10-27; `tools/scene_lab/ghost_sound.py`). Each
+  ghost plays its own [sound events](#sound-events), never music, through the
+  in-game engine (`tools/scene_lab/ghost_sound_host.cpp` links
+  `ghost_audio.cpp`'s ROM check and the model library's `sa_*`), one engine
+  per ghost so ghosts never cut each other off. One tick per ghost frame: its
+  cues, its root under the stage's recorded camera (`gLakituState`, the
+  `cameraToObject` space), `min(1, GP_SOUND_NEAR / d)` from the stage's Mario,
+  the ghost volume setting; hidden rows are silent and a dance tail fades as
+  its picture does. The track lies on the stage recording's own samples
+  (scene frame k's picture sample is ghost frame g(k)'s tick start), so the
+  page's worklet mixes it on the stage's clock with a gain per ghost (Mute).
+  The server renders it once, on the first block asked: on his 655-frame HMC
+  take 1.4 s (the stage's camera reads 1.0 s, the engine 88 ms). The stage's
+  own sound is "as heard": on that take it lands 148 ms after its picture
+  (Project64's audio delay), while a ghost's lands on its picture.
 - **Threads.** The host calls the table between lists; GLideN64 runs each list
   on its own thread while the host's call waits. An SRW lock hands each
   picture's ghosts and the status across, a loaded clip is immutable (a list

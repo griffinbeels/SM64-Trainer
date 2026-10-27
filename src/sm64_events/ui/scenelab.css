@@ -95,6 +95,9 @@
 .scene-lab-ghost-more { grid-column: 2 / -1; justify-self: start; }
 .scene-lab-ghost .scene-lab-ghost-more { min-height: 26px; padding: 0 8px; font-size: .78rem; }
 .scene-lab-ghost-reason { grid-column: 2 / -1; color: var(--coral); font-size: .78rem; line-height: 1.4; }
+.scene-lab-ghost-controls { grid-column: 2 / -1; display: flex; flex-wrap: wrap; gap: 6px; }
+.scene-lab-ghost .scene-lab-ghost-controls button { min-height: 26px; padding: 0 8px; font-size: .78rem; gap: 4px; }
+.scene-lab-ghost-controls button[aria-pressed=true] { border-color: var(--coral); color: var(--coral); }
 .scene-lab-ghost-more-list { grid-column: 1 / -1; padding: 4px 0 2px 14px; border-left: 2px solid var(--border-soft); }
 .scene-lab-ghost-more-list .scene-lab-ghost { background: transparent; }
 .scene-lab-ghost-note { margin: 0; color: var(--muted); font-size: .8rem; line-height: 1.5; }

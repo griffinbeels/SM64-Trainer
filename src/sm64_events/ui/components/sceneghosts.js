@@ -11,13 +11,15 @@
 // dropdown looks at another strategy of the same star), and Find a player (each matching player's
 // best ghost; "N more" opens that player's slower ones, fastest first). Add and Remove change the
 // scene's ghosts: the page sends the whole list over the scene socket (SceneLink.setGhosts) and the
-// lab draws them into every picture after its answer. A ghost the lab cannot draw stays unselected
+// lab draws them into every picture after its answer; each ghost in the scene plays its own sound
+// effects (never music: ghost_sound.py) with a Mute of its own. A ghost the lab cannot draw stays unselected
 // with the lab's reason on its row. The stage's own run is the stage: its row says so instead of
 // offering Add.
 import { h } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON } from "../api.js";
+import { Icon } from "./icons.js";
 import { StratPicker } from "./stratpicker.js";
 import { targetKey, targetQuery } from "./scenestage.js";
 
@@ -101,9 +103,25 @@ function GhostRow({ item, link, stage, more = null, children = null }) {
       : html`<button type="button" disabled=${waiting} aria-label=${`${action.replace("...", "")} ${name}`}
           onclick=${toggle}>${action}</button>`}
     ${more}
+    ${shown && html`<${GhostSound} link=${link} ghostRef=${item.ref} name=${name} />`}
     ${refused && !shown && html`<span class="scene-lab-ghost-reason" role="status">${refused}</span>`}
     ${children}
   </li>`;
+}
+
+// A ghost in the scene: its own sound effects play beside the stage's, under the volume and Mute;
+// this Mute silences that ghost alone (SceneSound.toggleGhost). Disabled, with why, when its sound
+// cannot play.
+function GhostSound({ link, ghostRef, name }) {
+  const sound = link.sound, muted = sound.ghostMuted(ghostRef);
+  const problem = !sound.available ? "This recording has no sound, so its ghosts play silent too."
+    : sound.ghostProblems.has(ghostRef) ? "This ghost's sound could not be played." : null;
+  const title = problem || (muted ? "Play this ghost's sound effects again" : "Mute this ghost's sound effects");
+  return html`<div class="scene-lab-ghost-controls">
+    <button type="button" aria-pressed=${muted} disabled=${!!problem} aria-label=${`Mute ${name}`} title=${title}
+        onclick=${() => sound.toggleGhost(ghostRef)}>
+      <${Icon} name=${muted ? "speakerMuted" : "speaker"} size=${14} /> Mute</button>
+  </div>`;
 }
 
 // A section's rows, or why there are none. The lab's "note" (why other players' ghosts are missing:

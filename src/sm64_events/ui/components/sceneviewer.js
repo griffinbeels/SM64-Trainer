@@ -577,6 +577,7 @@ export class SceneLink {
     for (const ghost of list) refused.delete(ghost.ref);
     for (const { ref, reason } of answer.refused || []) refused.set(ref, reason);
     Object.assign(this, { ghosts: list.filter((ghost) => shown.has(ghost.ref)), refusedGhosts: refused });
+    this.sound.setGhosts(this.ghosts.map((ghost) => ghost.ref));    // each plays its own sound effects
     keep(this.scene, { ghosts: this.ghosts });
     this.want("input");
     this.changed();
