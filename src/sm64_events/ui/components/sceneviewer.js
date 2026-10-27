@@ -41,11 +41,18 @@
 //
 // The recording's sound (sceneaudio.js) follows the picture clock: SceneLink
 // tells it when Play starts, each picture it draws, and every stop.
+//
+// Play stops only when the person pauses (Pause, Space, a step, the slider):
+// moving the camera, by any of the ways above, keeps it playing. Restart goes
+// to the first frame and keeps playing or stays paused; Loop plays on from the
+// first frame after the last (a scene still being written loops once it is
+// whole).
 import { h } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { Icon } from "./icons.js";
 import { getJSON, send } from "../api.js";
+import { displayName } from "../entitysection.js";
 import { ControlGroups } from "../tunecontrols.js";
 import { postObservation } from "../uilog.js";
 import { SCENE_CAMERA_DEFAULTS, SCENE_CAMERA_GROUPS, SCENE_CAMERA_TUNABLES, sceneCameraTuning,
@@ -230,6 +237,31 @@ export function pictureFraction(canvas, clientX, clientY) {
 const webview = () => globalThis.chrome?.webview ?? null;
 export const SHARED_WAIT = { ms: 2000 };
 
+// Loop stays as the person left it, across scenes and visits (this browser only).
+export const LOOP_PREFERENCE = "sm64.sceneLoop";
+function savedLoop() {
+  try { return localStorage.getItem(LOOP_PREFERENCE) === "on"; } catch { return false; }
+}
+
+// The heading for the open scene, never its file name: the server's title, else the attempt the
+// Practice log already shows (course, star, strategy and time), else "Recording".
+export function sceneTitle(scene, view) {
+  if (scene?.title) return scene.title;
+  const found = scene?.attempt != null ? attemptIn(view, scene.attempt) : null;
+  if (!found) return "Recording";
+  const { section, attempt } = found, named = displayName(section, view?.catalog?.courses || []);
+  const time = attempt.segment_id != null ? attempt.rta : attempt.igt ?? attempt.rta;
+  return [named.context, named.name, attempt.strat_tag, time].filter(Boolean).join(" · ");
+}
+
+function attemptIn(view, id) {
+  for (const section of [...(view?.stars || []), ...(view?.segments || [])]) {
+    const attempt = (section.attempts || []).find((row) => row.id === id);
+    if (attempt) return { section, attempt };
+  }
+  return null;
+}
+
 // The open scene's requests and camera: up to PICTURES_IN_FLIGHT pictures in
 // flight, the newest input waiting behind them, input time kept from the
 // EARLIEST input so input-to-picture stays honest (until that picture is
@@ -243,7 +275,7 @@ export class SceneLink {
       wanted: null, sequence: 0, questions: new Map(), latencies: [], pending: [0, 0, false], drag: null,
       entering: null, arrived: 0, drawnSeq: 0, looking: null, flight: idleFlight(), speed: 1, picking: false,
       finding: false, glide: null, serial: 0, noticeTimer: null, moving: null, shared: new Map(), playback: null,
-      readies: [], coldId: 0, autoplay: false,
+      readies: [], coldId: 0, autoplay: false, loop: savedLoop(),
       sound: new SceneSound({ changed: () => this.changed() }) });
     this.timings = new MovingTimings((summary) => { this.moving = summary; this.changed(); });
     this.onShared = (event) => this.sharedArrived(event);
@@ -358,6 +390,7 @@ export class SceneLink {
     const id = ++this.sequence, camera = this.free && this.orbit ? cameraOf(this.orbit) : null;
     this.inFlight.set(id, { ...this.wanted, id, frame, free: !!camera, sent: performance.now(), play,
       due: play ? play.dueOf(frame) : null });
+    if (play && this.wanted.kind !== "play") play.moved = true;
     this.wanted = null;
     this.ws.send(JSON.stringify({ id, session: this.scene.session, frame, camera, encoding: this.encoding }));
     this.drawing = true;
@@ -386,6 +419,8 @@ export class SceneLink {
     };
   }
 
+  // A camera moved during the play asked for the play's next frame, which a stopped play never
+  // shows: the camera is asked for again at the frame on screen.
   stopPlay() {
     const play = this.playback;
     if (!play) return;
@@ -395,6 +430,7 @@ export class SceneLink {
       if (this.wanted.kind === "play") this.wanted = null;
       else this.wanted.frame = null;
     }
+    if (play.moved) this.want("input");
     this.sound.stop();
   }
 
@@ -552,9 +588,10 @@ export class SceneLink {
     this.want("move", time);
   }
 
+  // A drag: it never pauses Play (his report, 2026-10-27: "It should not pause the gameplay when I
+  // adjust the camera, unless I explicitly paused").
   move(dx, dy, sliding, time) {
     this.interrupt();
-    this.pause();
     if (!this.free) {
       this.pending = [this.pending[0] + dx, this.pending[1] + dy, sliding];
       return this.enterFree();
@@ -826,6 +863,26 @@ export class SceneLink {
 
   toggle() { this.interrupt(); if (this.playing) this.pause(); else this.play(); }
 
+  // To the first frame: a play goes on from there at once, a pause stays paused on it.
+  restart(time) {
+    if (!this.playing) return this.seek(0, "input", time);
+    this.interrupt();
+    this.playFromStart();
+  }
+
+  // Restart while playing, and Loop at the end: the play begins again on the first frame.
+  playFromStart() {
+    this.stopPlay();
+    this.frame = 0;
+    this.play();
+  }
+
+  setLoop(on) {
+    this.loop = on;
+    try { localStorage.setItem(LOOP_PREFERENCE, on ? "on" : "off"); } catch { /* kept for this visit only */ }
+    this.changed();
+  }
+
   // The recording's own clock (sceneclock.js): each picture stays up as long
   // as the recording showed it. A play asks for each picture ahead, as long
   // before it is due as a picture takes to be ready plus a display frame, and
@@ -866,7 +923,7 @@ export class SceneLink {
       }
       play.frameAt = frameTime;
       if (frameTime - play.start >= play.length) {
-        if (!scene.growing) return this.finishPlay(scene);
+        if (!scene.growing) return this.loop ? this.playFromStart() : this.finishPlay(scene);
         play.heldAt ??= frameTime;
       }
       for (const hold of play.holds.splice(0)) {
@@ -897,6 +954,8 @@ export class SceneLink {
 const KEYS = {
   ArrowLeft: (link, event) => link.step(-1, event.timeStamp),
   ArrowRight: (link, event) => link.step(1, event.timeStamp),
+  ",": (link, event) => link.step(-1, event.timeStamp),
+  ".": (link, event) => link.step(1, event.timeStamp),
   Home: (link, event) => link.step(-Infinity, event.timeStamp),
   End: (link, event) => link.step(Infinity, event.timeStamp),
   " ": (link) => link.toggle(),
@@ -1064,12 +1123,18 @@ function frameWords(frame) {
 function Transport({ link }) {
   const frames = link.scene.frames;
   return html`<div class="scene-lab-bar" aria-label="Playback">
-    <button type="button" onclick=${(event) => link.step(-1, event.timeStamp)} title="Back one frame (Left arrow)">
+    <button type="button" onclick=${(event) => link.restart(event.timeStamp)}
+        title=${link.playing ? "Play again from the first frame" : "Go to the first frame"}>
+      <${Icon} name="restart" size=${15} /> Restart</button>
+    <button type="button" onclick=${(event) => link.step(-1, event.timeStamp)} title="Back one frame (Left arrow or ,)">
       <${Icon} name="stepBack" size=${15} /> Back 1</button>
     <button type="button" class="primary" onclick=${() => link.toggle()} title="Play or pause (Space)">
       <${Icon} name=${link.playing ? "pause" : "play"} size=${16} /> ${link.playing ? "Pause" : "Play"}</button>
-    <button type="button" onclick=${(event) => link.step(1, event.timeStamp)} title="Forward one frame (Right arrow)">
+    <button type="button" onclick=${(event) => link.step(1, event.timeStamp)} title="Forward one frame (Right arrow or .)">
       <${Icon} name="stepForward" size=${15} /> Forward 1</button>
+    <button type="button" aria-pressed=${link.loop} onclick=${() => link.setLoop(!link.loop)}
+        title="When on, Play goes on from the first frame after the last">
+      <${Icon} name="loop" size=${15} /> Loop</button>
     <input type="range" min="0" max=${Math.max(0, frames.length - 1)} value=${link.frame} aria-label="Frame"
       oninput=${(event) => { link.pause(); link.seek(Number(event.currentTarget.value), "input", event.timeStamp); }} />
     <span class="scene-lab-frame">Frame ${link.frame + 1} of ${frames.length}${link.scene.growing ? " so far" : ""}
@@ -1083,7 +1148,7 @@ export function hintFor(link) {
   if (link.picking) return "Click a surface in the picture to turn around it. Esc cancels.";
   if (link.looking) return "Move the mouse to look around. W A S D move, Q and E go down and up, Shift is faster, Alt slower, the wheel sets the speed. Let go of the right button to stop looking.";
   if (link.free) return "W A S D move, Q and E go down and up, Shift is faster, Alt slower; hold the right button to look around. Drag to turn around the focus point, Shift-drag or middle-drag to slide, the wheel moves closer, double-click a surface to fly there. F looks at Mario, R returns to the recorded camera.";
-  return "W A S D move the camera from this picture, Q and E go down and up; dragging, scrolling, double-clicking or holding the right button move it too. Left and Right step one frame, Space plays.";
+  return "W A S D move the camera from this picture, Q and E go down and up; dragging, scrolling, double-clicking or holding the right button move it too. Left and Right (or , and .) step one frame, Space plays.";
 }
 
 // The same lesson on the picture itself while it is what you are acting on:
@@ -1355,7 +1420,7 @@ export function SceneViewer({ t }) {
         <div><span class="eyebrow">Lab</span><h2>Scene viewer</h2></div>
       </div>
       ${link.scene ? html`<div class="scene-lab-open">
-          <span class="scene-lab-name" title=${link.scene.name}>${link.scene.name}</span>
+          <span class="scene-lab-title" title=${sceneTitle(link.scene, t?.view)}>${sceneTitle(link.scene, t?.view)}</span>
           <button type="button" onclick=${close} title="Close this recording and stop the renderer">Close</button>
         </div>`
         : html`<${Opener} status=${status} opening=${opening} open=${open} />`}
