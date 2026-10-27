@@ -224,15 +224,15 @@ def test_a_forgotten_attempt_leaves_no_file(recording, tmp_path):
 
 # ---------------------------------------------------------------- the star dance (round 5)
 
-GRAB, FADE, PAUSE = 150, 80, 92        # a ground grab at 150; the exit fade at actionTimer 80; his pause at 92
+GRAB, PAUSE = 150, 92                  # a ground grab at 150; his pause at actionTimer 92, inside the exit fade
 
 
-def mario(index: int) -> tuple[int, int, int]:
-    """(action, actionTimer, warp op): running, then the exit dance from GRAB, paused at PAUSE."""
+def mario(index: int) -> tuple[int, int]:
+    """(action, actionTimer): running, then the exit dance from GRAB, paused at PAUSE."""
     if index < GRAB:
-        return 0x04000440, 0, 0                                  # ACT_WALKING
+        return 0x04000440, 0                                     # ACT_WALKING
     counted = min(index - GRAB, PAUSE)
-    return ACT_STAR_DANCE_EXIT, counted, 17 if counted >= FADE else 0
+    return ACT_STAR_DANCE_EXIT, counted
 
 
 @pytest.fixture(scope="module")
@@ -248,9 +248,9 @@ def dancing(tmp_path_factory):
 
 
 def test_a_live_take_stops_writing_at_the_star_dances_end_and_never_shows_the_pause(dancing, tmp_path):
-    """The exit fade begins at task 230 (actionTimer 80); his pause from 242 froze the picture
-    until the castle loads at 300. The take holds at 230 while the recording runs on, and the
-    scene is 20..230: what an open scene shows never passes it."""
+    """His pause at actionTimer 92 (task 242) froze the picture until the castle loads at 300.
+    The take holds at 242 while the recording runs on, and the scene is 20..242: what an open
+    scene shows never passes it."""
     run = Run(dancing, tmp_path, through=40)
     try:
         run.start(20)
@@ -262,15 +262,15 @@ def test_a_live_take_stops_writing_at_the_star_dances_end_and_never_shows_the_pa
         assert take.end == GRAB
         run.spool.through = 299
         ready = run.ended(8)
-        assert take.position == GRAB + FADE                     # it never wrote the frame after
+        assert take.position == GRAB + PAUSE                    # it never wrote the frame after
         published = scene_session.Growth(take.path, take.grow).read(dancing["rom"])
-        assert published is None or len(published) <= GRAB + FADE - 20 + 1
+        assert published is None or len(published) <= GRAB + PAUSE - 20 + 1
     finally:
         run.close()
-    assert (ready["first"], ready["last"], ready["why"], ready["frames"]) == (20, GRAB + FADE, "dance", 211)
-    assert ready["seconds"] == pytest.approx(211 / 30, abs=0.05)
+    assert (ready["first"], ready["last"], ready["why"], ready["frames"]) == (20, GRAB + PAUSE, "dance", 223)
+    assert ready["seconds"] == pytest.approx(223 / 30, abs=0.05)
     cut = package.Package(Path(ready["path"]).read_bytes(), dancing["rom"])
-    assert "dropped_frames" not in cut.index.meta["stats"] and len(cut) == 211
+    assert "dropped_frames" not in cut.index.meta["stats"] and len(cut) == 223
     _same_frames(cut, dancing["whole"], 20)
 
 
@@ -283,9 +283,9 @@ def test_a_take_cut_from_behind_stops_itself_at_the_dance_it_reads(dancing, tmp_
         ready = run.ended(6)
     finally:
         run.close()
-    assert (ready["take_kind"], ready["first"], ready["last"], ready["why"]) == ("behind", 100, GRAB + FADE, "dance")
+    assert (ready["take_kind"], ready["first"], ready["last"], ready["why"]) == ("behind", 100, GRAB + PAUSE, "dance")
     cut = package.Package(Path(ready["path"]).read_bytes(), dancing["rom"])
-    assert len(cut) == GRAB + FADE - 100 + 1
+    assert len(cut) == GRAB + PAUSE - 100 + 1
     _same_frames(cut, dancing["whole"], 100)
 
 
@@ -313,9 +313,10 @@ ROM = Path(r"C:\Users\griff\Desktop\games\Project64 1.6 (wermi's build v7)\Proje
                     reason="his recorded BoB session and ROM are private to the lab machine")
 def test_his_bob_star_grab_opens_from_its_anchor_to_the_star_dances_end(tmp_path, monkeypatch):
     """Read-only over tap-20261025-184022: an attempt anchored at task 1950 whose star grab
-    (task 2105, a midair grab: the dance from 2127) completes it; its scene ends at task 2207,
-    where the game starts the exit fade (actionTimer 80, read from the recording's own scene
-    state), not at 2240, the iris's black picture before castle inside, and opens in the viewer
+    (task 2105, a midair grab: the dance from 2127) completes it; the exit fade begins at 2207
+    (actionTimer 80) and its scene ends at task 2238, actionTimer 111, the last iris picture
+    before the game stops Mario for the level change (read from the recording's own scene
+    state), not at 2240, the frozen black iris before castle inside; it opens in the viewer
     (fake renderer) on exactly those frames."""
     import fake_viewer_host
     import gpu_gate
@@ -329,7 +330,7 @@ def test_his_bob_star_grab_opens_from_its_anchor_to_the_star_dances_end(tmp_path
         ready = run.ended(41)
     finally:
         run.close()
-    assert (ready["state"], ready["first"], ready["last"], ready["why"]) == ("ready", 1950, 2207, "dance")
+    assert (ready["state"], ready["first"], ready["last"], ready["why"]) == ("ready", 1950, 2238, "dance")
     config = SimpleNamespace(rom=ROM, map=None)
     session = scene_session.SceneSession.open(
         config, Path(ready["path"]), host_factory=scene_session.command_host(fake_viewer_host.command()),
@@ -339,5 +340,5 @@ def test_his_bob_star_grab_opens_from_its_anchor_to_the_star_dances_end(tmp_path
     finally:
         session.close()
     refs = run.refs
-    assert frames[0]["game_frame"] == refs[1950].global_timer and frames[-1]["game_frame"] == refs[2207].global_timer
+    assert frames[0]["game_frame"] == refs[1950].global_timer and frames[-1]["game_frame"] == refs[2238].global_timer
     assert {(frame["level"], frame["area"]) for frame in frames} == {(9, 1)}

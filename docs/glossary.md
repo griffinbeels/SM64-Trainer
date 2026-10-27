@@ -1474,8 +1474,9 @@ the server encodes the picture itself.
 The [[scene package]] of one [[attempt]] he just played, which the [[scene viewer]]
 opens by the [[attempt]]'s id. It starts on the [[frame]] the [[attempt]]'s clock
 started. An [[attempt]] that ends on a star grab ends on the star dance's last
-[[frame]]: where the game starts the exit fade, the dance stops (his pause, a save
-dialog) or Mario leaves it, whichever comes first; nothing after the dance is kept.
+[[frame]]: the last one before the game stops moving Mario (the exit fade's last
+iris picture, his pause, a save dialog) or he leaves the dance, the same [[frame]]
+his own [[dance tail]] ends on; nothing frozen after the dance is kept.
 Any other [[attempt]] ends on the last picture of the fade-out after its end: the
 [[frame]] before the next level or area appears, the [[frame]] before his [[reset]],
 or 10 s after the end when nothing comes. While the lab is on, the [[scene tap]] records

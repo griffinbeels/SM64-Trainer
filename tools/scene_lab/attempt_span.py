@@ -34,18 +34,21 @@ Last: the earliest of
   - CAP_FRAMES after the end, when nothing else comes;
   - the newest recorded task, once the recording has stopped.
 
-The dance: Mario's action, actionTimer and sDelayedWarpOp come from each task's scene state
-(the tap's task regions hold gMarioStates and the warp; MarioReader), which only the take
-following the attempt reads, as it writes each frame (`marios`, by task index). The end is a
-star grab when Mario is in a grab or dance action (addresses.STAR_GRAB_ACTIONS: the midair
-fall, then the dance) at the end or within DANCE_ENTRY_FRAMES after it. The dance's last
-frame is then the earliest of
-  - the frame the game starts the exit fade (sDelayedWarpOp set: actionTimer 80 of an exit
-    dance, the game's own level_trigger_warp);
-  - the frame before Mario's action leaves the grab and dance actions;
+The dance: Mario's action and actionTimer come from each task's scene state (the tap's task
+regions hold gMarioStates; MarioReader), which only the take following the attempt reads, as
+it writes each frame (`marios`, by task index). The end is a star grab when Mario is in a grab
+or dance action (addresses.STAR_GRAB_ACTIONS: the midair fall, then the dance) at the end or
+within DANCE_ENTRY_FRAMES after it. The dance's last frame is then the earliest of
   - the frame before the game stops: in a dance actionTimer counts by exactly one each game
     frame (n64decomp general_star_dance_handler), so a frame where it holds while the game
-    frame moves on is his pause, or the no-exit dance's save dialog stopping time.
+    frame moves on is his pause, the no-exit dance's save dialog stopping time at 80, or the
+    exit warp itself: its fade begins at actionTimer 80 and runs 32 frames, and at 111, its
+    last iris picture with Mario in it, the game stops updating him for the level change;
+  - the frame before Mario's action leaves the grab and dance actions.
+That is where a ghost's own clip ends its dance (ghost/archive.py dance_tail: the clock stops
+at the exit warp or a pause; docs/ghost-native-runtime.md, the dance ends at actionTimer 111),
+so a stage and an equal-time ghost end together. The fade-out stays in the scene, as he asked
+in round 2; the frozen frames after it do not.
 Until the take's states reach the dance's end (or an earlier stop), the span waits. Without a
 take (`marios` None: a take cut from behind the recording) the rule above decides, and that
 take stops itself at the dance's end as it reads it (attempt_cutter.Take).
@@ -70,9 +73,12 @@ timer stopped while the game frame ran on, at actionTimer 80 (attempt 505), 92 (
 "Frame 622 of 830", game frame 4790) and 100 (524, for 19 frames before his reset). With no
 load after it, the old rule ran 505 and 553 to the cap: 841 and 830 shown frames, 220 and 208
 of them frozen. Read again through MarioReader and dance() (Mario found on every frame of all
-nine takes), they end where the fade begins: 505 at 621 shown frames, 524 at 613 (was 655),
-553 at 610; his six resets keep their ends. The BoB grab above now ends at task 2207, its
-dance's actionTimer 80, 33 frames before the iris's black picture.
+nine takes), each ends on its last frame before the pause: 505 at 621 shown frames (game frame
+1396), 524 at 633 (2872, was 655), 553 at 622 (4790); his six resets keep their ends. His own
+ghost clips of the three stars end on those same game frames (replays/native attempt_N.json
+last_global_timer 1396, 2872, 4790). The BoB grab above, which he did not pause, ends at task
+2238: actionTimer 111, the exit warp's last iris picture before the game stopped Mario (2239
+and 2240 repeat 111 under the black iris).
 
 Limits: the journal's anchor frame and the tap's global_timer are both gGlobalTimer, but at
 different moments of the game frame (the poller's read, the task's dispatch); on his live play
@@ -179,18 +185,15 @@ class Mario:
     global_timer: int
     action: int
     timer: int                        # actionTimer
-    warp: int                         # sDelayedWarpOp: nonzero once a warp (and its fade) began
 
 
 class MarioReader:
-    """Mario's action, actionTimer and the pending warp in a task's scene state (its tap.Regions
-    of kind "task", which copy gMarioStates and sDelayedWarpOp with every task), at the layout
-    of the recording's version."""
+    """Mario's action and actionTimer in a task's scene state (its tap.Regions of kind "task",
+    which copy gMarioStates with every task), at the layout of the recording's version."""
 
     def __init__(self, layout):
         mario = layout.mario_struct & 0x1FFFFFFF
-        self.fields = ((mario + MARIO_ACTION_OFF, 4), (mario + MARIO_ACTION_TIMER_OFF, 2),
-                       (layout.pending_warp_op & 0x1FFFFFFF, 2))
+        self.fields = ((mario + MARIO_ACTION_OFF, 4), (mario + MARIO_ACTION_TIMER_OFF, 2))
 
     @classmethod
     def of(cls, identity) -> MarioReader | None:
@@ -199,8 +202,7 @@ class MarioReader:
         timer = next((address for name, address, _size in identity if name == "global_timer"), None)
         for version in VERSIONS:
             layout = layout_for(version)
-            if timer is not None and layout.global_timer & 0x1FFFFFFF == timer and layout.mario_struct \
-                    and layout.pending_warp_op:
+            if timer is not None and layout.global_timer & 0x1FFFFFFF == timer and layout.mario_struct:
                 return cls(layout)
         return None
 
@@ -241,11 +243,9 @@ def dance(end: int, marios: Mapping[int, Mario | None]) -> Dance | None:
             continue
         if mario.action not in STAR_GRAB_ACTIONS:
             return Dance(seen - 1, seen)                        # the dance is over
-        if mario.warp:
-            return Dance(seen, seen)                            # the exit fade begins
         if (previous is not None and mario.action in STAR_DANCE_ACTIONS and mario.action == previous.action
                 and mario.global_timer == previous.global_timer + 1 and mario.timer == previous.timer):
-            return Dance(seen - 1, seen)                        # the game stopped: a pause, a dialog
+            return Dance(seen - 1, seen)                        # the game stopped: a pause, a dialog, the warp
         previous = mario
     return Dance(None, seen)
 
