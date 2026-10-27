@@ -312,3 +312,32 @@ files and final docs. Service worker owns `cloud/community/**` + local tests.
 Beta worker owns channel/path/updater/desktop identity and beta builder/tests;
 it leaves main.py and community config to root/client respectively. Writers
 use separate worktrees, commit only owned files and report tested commits.
+
+## The Scene viewer's reads
+
+The lab's [Scene viewer](api.md#scene-viewer-m4-lab-source-checkouts-only-off-by-default)
+lists other players' ghosts through this same client, cache and account
+(`server/scene_community.py`); it adds no route, key or store. Each Worker call
+below spends one account ticket, cache hits on the service included, and listings
+are `no-store` with no conditional request, so the client's lease is the saving:
+a listing is held for the ten-minute publication lease (`cache.TTL`) and asked
+again only after it lapses. Recording ids are immutable and the asset's ETag is
+its encoded hash, so bytes are never revalidated, only re-gated.
+
+| Call | Trigger | Held by | Fresh for |
+| --- | --- | --- | --- |
+| `GET /v1/catalog` | the first community read of the hour, shared with the race | the client | 1 hour |
+| `GET /v1/library/recordings` | a strategy's top list with no held list and no complete race list (a held complete pool answers it); a page past the 20 rows held | target, clock, ROM, strategy | 10 minutes; a continuation 5 |
+| `GET /v1/search` | a submitted name no held list answers (a complete top list, or a complete search for a shorter name, does) | identity and folded name | 10 minutes |
+| `GET /v1/recordings/{id}` then `/asset` | adding a community ghost the cache does not hold | the race's asset cache, by id | this Trainer run |
+
+A typical session (open a target, page through three top pages, search two
+players, add three ghosts) costs 2-3 calls for the pages, 0-2 for the searches
+and 0-6 for the ghosts (none for his own or for ones a race already downloaded):
+at most 11 of the account's 500 daily tickets, and at most 3 R2 reads (Class B,
+10 million a month free, no egress charge). A refusal is held for 60 seconds
+(`FAILURE_S`) beside the client's own cooldown, and the lists then show this
+Trainer's ghosts with a note. A ghost added in the viewer lands in the asset
+cache a race reads (`community_cache/<id>.ghost`), so racing it costs nothing
+more; the cache is cleared at each start by design, so the next run's first add
+of that ghost downloads it again. Tests: `tests/test_scene_lab_community.py`.

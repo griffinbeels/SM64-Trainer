@@ -401,7 +401,9 @@ def test_top_is_each_players_best_fastest_first_with_rank_and_how_many_more(lab,
         assert [(row["frames"], row["rank"], row["more"]) for row in kim["items"]] == [(320, 1, 0), (340, 3, 0),
                                                                                       (345, 3, 0)]
         mine = _ghosts(client, section="yours")
-        assert [(row["frames"], row["yours"]) for row in mine["items"]] == [(331, True), (360, True)]
+        assert [(row["frames"], row["yours"], row["attempt"]) for row in mine["items"]] == [(331, True, 50),
+                                                                                             (360, True, None)]
+        assert {row["attempt"] for row in top["items"] if not row["yours"]} == {None}
         found = _ghosts(client, section="search", q="A")
         assert [row["player"] for row in found["items"]] == ["Ana"]
         assert _ghosts(client, section="search", q="  ")["reason"] == scene_ghosts.NO_QUERY
