@@ -81,8 +81,30 @@ def _scene_number(value):
     return value
 
 
+# The Scene viewer's pointer lock, one record per step (sceneviewer.js noteLock). On Windows a lock
+# no look is using walls the cursor in (his report, 2026-10-26), so each request, grant, end of a
+# look and exit lands here with why, the request's number, and whether a look, the window's focus
+# and a visible page were there; `dropped` counts the records the page's throttle held back.
+SCENE_LOCK_EVENTS = ("requested", "granted", "ended", "exited", "error")
+SCENE_LOCK_WHY = 40
+
+
+def _scene_lock(body: dict) -> dict:
+    def flag(key):
+        return body.get(key) if isinstance(body.get(key), bool) else None
+    why, sent = body.get("why"), body.get("client_utc")
+    return {"surface": "scene_viewer", "kind": "pointer_lock",
+            "event": body.get("event") if body.get("event") in SCENE_LOCK_EVENTS else None,
+            "why": why[:SCENE_LOCK_WHY] if isinstance(why, str) else None,
+            "request": _scene_number(body.get("request")), "look": flag("look"), "focused": flag("focused"),
+            "hidden": flag("hidden"), "dropped": _scene_number(body.get("dropped")),
+            "client_utc": sent[:MAX_TEXT] if isinstance(sent, str) else None}
+
+
 def _scene_viewer(body: dict) -> dict:
     """A scene_viewer record keeps only its own numbers: anything else, or out of range, is null."""
+    if body.get("kind") == "pointer_lock":
+        return _scene_lock(body)
     entry = {"surface": "scene_viewer",
              "encoding": body.get("encoding") if body.get("encoding") in ("jpeg", "raw", "shared") else None}
     for key in SCENE_VIEWER_COUNTS:
@@ -235,6 +257,11 @@ def render(entry: dict) -> str:
             " ".join(part for part in (row.get("label"), row.get("igt")) if part)
             for row in rows)
         return f"recorder({entry.get('total')}) -> {drawn or '(NO ROWS)'}"
+    if entry.get("surface") == "scene_viewer" and entry.get("kind") == "pointer_lock":
+        why = f" ({entry.get('why')})" if entry.get("why") else ""
+        dropped = f", {entry.get('dropped')} lock records not logged before it" if entry.get("dropped") else ""
+        return (f"scene viewer pointer lock {entry.get('event')}{why}: request {entry.get('request')}, look "
+                f"{entry.get('look')}, focused {entry.get('focused')}, hidden {entry.get('hidden')}{dropped}")
     if entry.get("surface") == "scene_viewer":
         def pair(key):
             value = entry.get(key) or {}

@@ -8,8 +8,8 @@
 import { h } from "preact";
 import { render, cleanup, fireEvent, waitFor } from "@testing-library/preact";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { DRAG_DEAD_ZONE, MOVING_WINDOW, PICTURES_IN_FLIGHT, SHARED_WAIT, STILL_MS, SceneViewer, hintFor,
-  movingSummary, pictureFraction, speedWords } from "../../src/sm64_events/ui/components/sceneviewer.js";
+import { DRAG_DEAD_ZONE, LOCK_NOTES, MOVING_WINDOW, PICTURES_IN_FLIGHT, SHARED_WAIT, STILL_MS, SceneViewer, hintFor,
+  movingSummary, pictureFraction, speedWords, throttledNotes } from "../../src/sm64_events/ui/components/sceneviewer.js";
 import { cameraOf, dollied, easeInOut, flightSpeed, flown, flyToTarget, glideAt, lookingAt, looked, orbitFromPose, slid,
   speedStepped, turned, worldPoint } from "../../src/sm64_events/ui/components/scenecamera.js";
 import { SCENE_CAMERA_DEFAULTS, setSceneCameraTuning } from "../../src/sm64_events/ui/scenecameratuning.js";
@@ -21,7 +21,7 @@ const REFERENCE = { orbitPerPixel: 0.01, steepestDegrees: 80, levelPerPixel: 0.1
 const FRAMES = Array.from({ length: 5 }, (_, i) => ({ level: 9, area: 1, game_frame: 1000 + i }));
 const POSE = { focus: [10, 200, -30], position: [10, 500, 1170], roll: 0, fov: 45, mario: [40, 80, -60] };
 const PER_DEGREE = 65536 / 360;
-let sockets, opened, fetches, frames, locked;
+let sockets, opened, fetches, frames, locked, lockRequests;
 // The page's clock is the test's: performance.now() reads `clock.now`, which only tick() (an
 // animation frame) and the test itself move, as one clock serves both in a browser. A step's
 // time is then the test's and never the machine's, so a loaded machine cannot change a result.
@@ -58,6 +58,7 @@ beforeEach(() => {
   fetches = [];
   frames = [];
   locked = null;
+  lockRequests = null;
   setSceneCameraTuning(REFERENCE);
   opened = { session: 1, name: "bob-minute.sm64scene", fps: 30, frames: FRAMES, renderer_pid: 7,
     free_camera: { available: true, reason: null } };
@@ -80,10 +81,12 @@ beforeEach(() => {
   HTMLCanvasElement.prototype.getBoundingClientRect = () => ({ left: 0, top: 0, width: 640, height: 480 });
   HTMLCanvasElement.prototype.setPointerCapture = vi.fn();
   HTMLCanvasElement.prototype.releasePointerCapture = vi.fn();
+  // Granted at once, as a quick browser does; a test that sets lockRequests = [] grants each
+  // request itself, late: the lock lands (pointerlockchange), then the request's promise resolves.
   HTMLCanvasElement.prototype.requestPointerLock = vi.fn(function lock() {
-    locked = this;
-    document.dispatchEvent(new Event("pointerlockchange"));
-    return Promise.resolve();
+    const grant = () => { locked = this; document.dispatchEvent(new Event("pointerlockchange")); };
+    if (!lockRequests) { grant(); return Promise.resolve(); }
+    return new Promise((resolve) => { lockRequests.push(() => { grant(); resolve(); }); });
   });
   Object.defineProperty(document, "pointerLockElement", { configurable: true, get: () => locked });
   document.exitPointerLock = vi.fn(() => { locked = null; document.dispatchEvent(new Event("pointerlockchange")); });
@@ -755,6 +758,8 @@ test.each([
   }],
   ["the browser ending the pointer lock", () => { locked = null; document.dispatchEvent(new Event("pointerlockchange")); }],
   ["leaving the page", ({ page }) => page.unmount()],
+  ["R", ({ root }) => fireEvent.keyDown(root, { key: "r", code: "KeyR" })],
+  ["Close", ({ page }) => fireEvent.click(page.getByRole("button", { name: "Close" }))],
 ])("%s stops every movement, lets go of every key and gives the pointer back", async (_label, end) => {
   const { page, socket, root, canvas } = await openScene();
   await startLooking(page, socket, canvas);
@@ -772,7 +777,8 @@ test.each([
   expect(socket.sent.length).toBe(after);
   expect(frames.length).toBe(0);
   expect(locked).toBeNull();
-  if (root.isConnected) expect(hint(page)).not.toContain(LOOKING);
+  const shown = page.container.querySelector(".scene-lab-hint");
+  if (shown) expect(shown.textContent).not.toContain(LOOKING);
 });
 
 test("arrows still step and Space still plays while looking around: one keyboard owner", async () => {
@@ -784,6 +790,109 @@ test("arrows still step and Space still plays while looking around: one keyboard
   await socket.picture(socket.last());
   fireEvent.keyDown(root, { key: " ", code: "Space" });
   await waitFor(() => expect(page.getByRole("button", { name: "Pause" })).toBeTruthy());
+});
+
+// ------------------------------------------------------------------ the pointer lock never outlives its look
+// His report (2026-10-26): "it gets stuck in the middle of the screen, as if there's an invisible
+// wall blocking its movement". On Windows a held pointer lock keeps the cursor inside the page.
+
+// The page's pointer lock records, in the order they were posted to the UI log.
+const lockNotes = () => fetches.filter(([url, method]) => url === "/api/uilog" && method === "POST")
+  .map(([, , body]) => JSON.parse(body)).filter((record) => record.kind === "pointer_lock");
+const steps = (records) => records.map((record) => [record.event, record.why]);
+
+test("a lock granted after the right button was let go is exited the moment it lands, and the log says why", async () => {
+  const { page, socket, canvas } = await openScene();
+  await enterFree(page, socket);
+  await settled();
+  const from = lockNotes().length;
+  lockRequests = [];
+  fireEvent.pointerDown(canvas, { button: 2, buttons: 2, pointerId: 3 });
+  await until(() => expect(hint(page)).toContain(LOOKING));
+  fireEvent.pointerUp(canvas, { button: 2, buttons: 0, pointerId: 3 });       // let go before the browser grants
+  expect(document.exitPointerLock).not.toHaveBeenCalled();                      // nothing held yet to exit
+  lockRequests.shift()();                                                       // the late grant
+  await settled();
+  expect(document.exitPointerLock).toHaveBeenCalledTimes(1);
+  expect(locked).toBeNull();
+  expect(hint(page)).not.toContain(LOOKING);
+  await until(() => expect(steps(lockNotes().slice(from))).toEqual([
+    ["requested", null], ["ended", "button up"], ["exited", "no look"]]));
+  expect(lockNotes().slice(from).map((record) => record.request)).toEqual([1, 1, 1]);
+});
+
+test.each([
+  ["page hidden", () => vi.spyOn(Document.prototype, "hidden", "get").mockReturnValue(true)],
+  ["window unfocused", () => vi.spyOn(document, "hasFocus").mockReturnValue(false)],
+])("a lock that lands with the %s is exited at once; the look goes on with the pointer captured", async (why, away) => {
+  const { page, socket, canvas } = await openScene();
+  await enterFree(page, socket);
+  await settled();
+  const from = lockNotes().length;
+  lockRequests = [];
+  fireEvent.pointerDown(canvas, { button: 2, buttons: 2, pointerId: 3 });
+  await until(() => expect(hint(page)).toContain(LOOKING));
+  away();
+  lockRequests.shift()();
+  await settled();
+  expect(document.exitPointerLock).toHaveBeenCalledTimes(1);
+  expect(locked).toBeNull();
+  expect(hint(page)).toContain(LOOKING);                                        // the button is still down
+  await until(() => expect(steps(lockNotes().slice(from))).toEqual([["requested", null], ["exited", why]]));
+});
+
+test("a grant for a request an earlier look made is exited; the look in progress takes its own", async () => {
+  const { page, socket, canvas } = await openScene();
+  await enterFree(page, socket);
+  await settled();
+  const from = lockNotes().length;
+  lockRequests = [];
+  fireEvent.pointerDown(canvas, { button: 2, buttons: 2, pointerId: 3 });
+  await until(() => expect(hint(page)).toContain(LOOKING));
+  fireEvent.pointerUp(canvas, { button: 2, buttons: 0, pointerId: 3 });
+  fireEvent.pointerDown(canvas, { button: 2, buttons: 2, pointerId: 3 });       // pressed again before any grant
+  await until(() => expect(hint(page)).toContain(LOOKING));
+  lockRequests.shift()();                                                       // the first request's grant
+  await settled();
+  expect(document.exitPointerLock).toHaveBeenCalledTimes(1);
+  expect(locked).toBeNull();
+  expect(hint(page)).toContain(LOOKING);
+  lockRequests.shift()();                                                       // the second's: kept
+  await settled();
+  expect(locked).toBe(canvas);
+  fireEvent.pointerUp(canvas, { button: 2, buttons: 0, pointerId: 3 });
+  expect(locked).toBeNull();
+  await until(() => expect(lockNotes().slice(from).map((record) => [record.event, record.why, record.request])).toEqual([
+    ["requested", null, 1], ["ended", "button up", 1], ["requested", null, 2], ["exited", "stale request", 2],
+    ["granted", null, 2], ["ended", "button up", 2], ["exited", "button up", 2]]));
+});
+
+test("a request the browser refuses is logged, and the look goes on with the pointer captured", async () => {
+  const { page, socket, canvas } = await openScene();
+  await enterFree(page, socket);
+  await settled();
+  const from = lockNotes().length;
+  HTMLCanvasElement.prototype.requestPointerLock = vi.fn(() => {
+    document.dispatchEvent(new Event("pointerlockerror"));
+    return Promise.reject(new Error("refused"));
+  });
+  fireEvent.pointerDown(canvas, { button: 2, buttons: 2, pointerId: 3 });
+  await until(() => expect(hint(page)).toContain(LOOKING));
+  await settled();
+  expect(canvas.setPointerCapture).toHaveBeenCalled();
+  await until(() => expect(steps(lockNotes().slice(from))).toEqual([["requested", null], ["error", null]]));
+});
+
+test("the lock's records reach the log at most LOCK_NOTES.records a window, and the next says how many did not", () => {
+  const posted = [], clock = { at: 0 };
+  const note = throttledNotes((record) => posted.push(record), () => clock.at);
+  for (let i = 0; i < LOCK_NOTES.records + 5; i++) note({ event: "requested", request: i });
+  expect(posted.length).toBe(LOCK_NOTES.records);
+  clock.at = LOCK_NOTES.ms;
+  note({ event: "granted", request: 99 });
+  expect(posted.at(-1)).toEqual({ event: "granted", request: 99, dropped: 5 });
+  note({ event: "ended", request: 99 });
+  expect(posted.at(-1)).toEqual({ event: "ended", request: 99 });
 });
 
 // ------------------------------------------------------------------ who has the keyboard

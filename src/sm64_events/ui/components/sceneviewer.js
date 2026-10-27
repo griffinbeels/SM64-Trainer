@@ -152,6 +152,22 @@ export class MovingTimings {
     Object.assign(this, { samples: [], skipped: 0, timer: null });
   }
 }
+
+// The pointer lock's records (SceneLink.noteLock, about four a right-button hold) reach the UI
+// log at most LOCK_NOTES.records per LOCK_NOTES.ms: a page caught granting and exiting cannot
+// flood it, and the next record that goes says how many did not.
+export const LOCK_NOTES = { records: 40, ms: 10000 };
+export function throttledNotes(post, now = () => performance.now()) {
+  let sent = [], dropped = 0;
+  return (record) => {
+    const at = now();
+    sent = sent.filter((time) => at - time < LOCK_NOTES.ms);
+    if (sent.length >= LOCK_NOTES.records) { dropped += 1; return; }
+    sent.push(at);
+    post(dropped ? { ...record, dropped } : record);
+    dropped = 0;
+  };
+}
 const ms = (value) => (value == null ? "-" : `${Math.round(value)} ms`);
 const megabytes = (bytes) => `${(bytes / 1048576).toFixed(1)} MB`;
 // Three figures, whole numbers with one place: 0.64x, 1.0x, 1.25x, 15.3x.
@@ -219,8 +235,9 @@ export const SHARED_WAIT = { ms: 2000 };
 // EARLIEST input so input-to-picture stays honest (until that picture is
 // drawn). `changed` re-renders the page.
 export class SceneLink {
-  constructor({ draw, changed, ended, animate = (step) => requestAnimationFrame(step) }) {
-    Object.assign(this, { draw, changed, ended, animate });
+  constructor({ draw, changed, ended, animate = (step) => requestAnimationFrame(step), observe = () => {} }) {
+    Object.assign(this, { draw, changed, ended, animate, observe });
+    Object.assign(this, { lockSerial: 0, lockTarget: null, lockPromised: null, lockExit: null });
     Object.assign(this, { scene: null, frame: 0, free: false, orbit: null, entry: null, encoding: "jpeg",
       playing: false, shown: null, notice: null, error: null, drawing: false, ws: null, inFlight: new Map(),
       wanted: null, sequence: 0, questions: new Map(), latencies: [], pending: [0, 0, false], drag: null,
@@ -274,7 +291,8 @@ export class SceneLink {
       if (waiting.buffer) webview()?.releaseBuffer(waiting.buffer);
       else { clearTimeout(waiting.timer); waiting.resolve(null); }
     }
-    Object.assign(this, { looking: null, picking: false, drag: null });
+    this.stopLook("scene closed");
+    Object.assign(this, { picking: false, drag: null });
     this.releaseKeys();
     if (this.ws) { this.ws.onclose = null; this.ws.close(); this.ws = null; }
   }
@@ -511,7 +529,7 @@ export class SceneLink {
 
   recorded(time) {
     this.interrupt();
-    this.stopLook();
+    this.stopLook("recorded camera");
     this.releaseKeys();
     Object.assign(this, { free: false, notice: null, picking: false });
     this.want("input", time);
@@ -678,16 +696,99 @@ export class SceneLink {
   async startLook() {
     if (!this.freeAvailable || this.looking) return;
     this.interrupt();
-    Object.assign(this, { looking: { locked: false }, picking: false });
+    const look = { locked: false, token: null };
+    Object.assign(this, { looking: look, picking: false });
     this.changed();
     await this.enterFree();
-    if (!this.free) this.stopLook();
+    if (!this.free && this.looking === look) this.stopLook("no free camera");
   }
 
-  stopLook() {
-    if (!this.looking) return;
+  // Every way a look ends: `why` goes into the pointer lock's records.
+  stopLook(why) {
+    const was = this.looking;
     this.looking = null;
-    this.changed();
+    if (was) this.noteLock("ended", why);
+    this.exitLock(why);
+    if (was) this.changed();
+  }
+
+  // ---- the pointer lock a look asks for. Chromium on Windows keeps the cursor
+  // inside the page while a lock is held, so a lock no look is using walls the
+  // cursor in (his report, 2026-10-26: "as if there's an invisible wall
+  // blocking its movement"). Each request carries a token: a lock stays only
+  // while the look that asked for it is in progress, the page shows and the
+  // window has focus, and is exited the moment it lands otherwise (released
+  // before the grant, a stale request, a hidden page, another window in front).
+  // Every end of a look exits the lock it holds, and a request still pending
+  // then has no look to land on. noteLock records each step in the UI log:
+  // requested, granted, ended (the look, and why), exited (and why: what asked,
+  // or the browser), error.
+  requestLock(canvas) {
+    const token = ++this.lockSerial;
+    if (this.looking) this.looking.token = token;
+    this.lockTarget = canvas;
+    this.noteLock("requested", null, token);
+    let asked;
+    try { asked = canvas.requestPointerLock?.(); } catch { return this.noteLock("error", "request threw", token); }
+    if (typeof asked?.then !== "function") return;
+    this.lockPromised = token;
+    asked.then(() => this.lockGranted(token), () => {});   // a refusal arrives as pointerlockerror
+  }
+
+  // Why a lock may not stay, or null: the look that asked is in progress, the page shows, the window has focus.
+  unwelcome(token = this.looking?.token) {
+    if (!this.looking) return "no look";
+    if (token !== this.looking.token) return "stale request";
+    if (document.hidden) return "page hidden";
+    if (!document.hasFocus()) return "window unfocused";
+    return null;
+  }
+
+  holdsLock() { return !!this.lockTarget && document.pointerLockElement === this.lockTarget; }
+
+  // Request `token` granted (its promise): kept, or exited at once.
+  lockGranted(token) {
+    if (!this.holdsLock()) return;
+    const why = this.unwelcome(token);
+    if (why) this.exitLock(why);
+    else this.lockKept(token);
+  }
+
+  lockKept(token) {
+    if (this.looking.locked) return;
+    this.looking.locked = true;
+    this.noteLock("granted", null, token);
+  }
+
+  // pointerlockchange. A lock landing with no look to use it is exited; one whose request
+  // promised an answer is judged by that answer (lockGranted), which knows its token. True
+  // when the browser itself ended a lock a look was using (its own Esc): every movement ends.
+  lockChanged() {
+    if (this.holdsLock()) {
+      const why = this.unwelcome();
+      if (why) this.exitLock(why);
+      else if (this.lockPromised !== this.looking.token) this.lockKept(this.looking.token);
+      return false;
+    }
+    const asked = this.lockExit, used = !!this.looking?.locked;
+    if (asked == null && !used) return false;
+    this.lockExit = null;
+    if (this.looking) this.looking.locked = false;
+    this.noteLock("exited", asked ?? "the browser");
+    return asked == null;
+  }
+
+  // Exits the lock this page holds, if it holds one; the browser's pointerlockchange confirms it.
+  exitLock(why) {
+    if (this.looking) this.looking.locked = false;
+    if (!this.holdsLock()) return;
+    this.lockExit = why;
+    document.exitPointerLock?.();
+  }
+
+  noteLock(event, why = null, request = this.lockSerial) {
+    this.observe({ surface: "scene_viewer", kind: "pointer_lock", event, why, request, look: !!this.looking,
+      focused: document.hasFocus(), hidden: document.hidden });
   }
 
   look(dx, dy, time) {
@@ -701,10 +802,10 @@ export class SceneLink {
   resetSpeed() { this.speed = 1; this.changed(); }
 
   // Esc, letting go of the window, leaving the page, Close: every movement stops and every key is let go.
-  release() {
+  release(why) {
     this.interrupt();
     Object.assign(this, { drag: null, picking: false });
-    this.stopLook();
+    this.stopLook(why);
     this.releaseKeys();
     this.changed();
   }
@@ -831,7 +932,7 @@ export function typesInto(target) {
 function onKey(link, event, canvas) {
   if (event.ctrlKey || event.metaKey || typesInto(event.target)) return;
   const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
-  if (key === "Escape") return endLook(link, canvas, true);
+  if (key === "Escape") return endLook(link, canvas, "Esc", true);
   if (link.moveKey(event)) return event.preventDefault();
   if (key === "Alt" && link.freeAvailable) return event.preventDefault();   // Alt alone would open the window menu
   const action = KEYS[key];
@@ -841,11 +942,11 @@ function onKey(link, event, canvas) {
 }
 
 // Stops looking around (and a drag; and Set focus and every key when
-// `everything`) and gives the pointer back: the pointer lock and the capture.
-function endLook(link, canvas, everything = false) {
+// `everything`) and gives the pointer back: the pointer lock (stopLook) and
+// the capture. `why` goes into the pointer lock's record.
+function endLook(link, canvas, why, everything = false) {
   const drag = link.drag;
-  if (everything) link.release(); else { link.stopLook(); link.drag = null; }
-  if (canvas && document.pointerLockElement === canvas) document.exitPointerLock?.();
+  if (everything) link.release(why); else { link.stopLook(why); link.drag = null; }
   for (const id of [drag?.id, link.capture].filter((value) => value != null)) {
     try { canvas?.releasePointerCapture(id); } catch { /* already released */ }
   }
@@ -871,7 +972,7 @@ function takeOff(link, surface, event) {
   canvas.setPointerCapture(event.pointerId);
   link.capture = event.pointerId;
   link.startLook();
-  try { canvas.requestPointerLock?.()?.catch?.(() => {}); } catch { /* the browser refused: capture still holds */ }
+  link.requestLock(canvas);          // refused, the capture still holds
 }
 
 function pointerHandlers(link, surface) {
@@ -894,7 +995,7 @@ function pointerHandlers(link, surface) {
     },
     [MOVE_EVENT]: (event) => {
       if (link.looking) {
-        if (!(event.buttons & 2)) return endLook(link, event.currentTarget);
+        if (!(event.buttons & 2)) return endLook(link, event.currentTarget, "button up elsewhere");
         return link.look(event.movementX, event.movementY, event.timeStamp);
       }
       const drag = link.drag;
@@ -912,10 +1013,10 @@ function pointerHandlers(link, surface) {
       if (at) link.flyTo(at.u, at.v, event.timeStamp);
     },
     onpointerup: (event) => {
-      if (link.looking && !(event.buttons & 2)) endLook(link, event.currentTarget);
+      if (link.looking && !(event.buttons & 2)) endLook(link, event.currentTarget, "button up");
       link.drag = null;
     },
-    onpointercancel: (event) => endLook(link, event.currentTarget),
+    onpointercancel: (event) => endLook(link, event.currentTarget, "pointer cancelled"),
     onlostpointercapture: () => { link.drag = null; },
     oncontextmenu: (event) => { if (movable()) event.preventDefault(); },
     onwheel: (event) => {
@@ -1131,15 +1232,15 @@ function useSceneLink(canvas, refresh) {
   if (!link.current) {
     link.current = new SceneLink({
       draw: (header, bytes, claim, ready) => paint(canvas.current, header, bytes, claim, ready),
-      changed: () => setRevision((revision) => revision + 1), ended: () => refresh.current() });
+      changed: () => setRevision((revision) => revision + 1), ended: () => refresh.current(),
+      observe: throttledNotes(postObservation) });
   }
   useEffect(() => {
-    const scene = link.current, release = () => endLook(scene, canvas.current, true);
-    const hidden = () => { if (document.hidden) { scene.pause(); release(); } };
-    const lock = () => {   // the browser ended the pointer lock (its own Esc): every movement ends with it
-      if (scene.looking && document.pointerLockElement !== canvas.current && scene.looking.locked) release();
-      if (scene.looking && document.pointerLockElement === canvas.current) scene.looking.locked = true;
-    };
+    const scene = link.current, release = (why) => endLook(scene, canvas.current, why, true);
+    const hidden = () => { if (document.hidden) { scene.pause(); release("window hidden"); } };
+    const blurred = () => release("window blur");
+    const lock = () => { if (scene.lockChanged()) release("the browser"); };
+    const refused = () => scene.noteLock("error");
     // A key let go of anywhere is let go of: focus may have left the viewer since it went down.
     const keyUp = (event) => {
       scene.moveKey(event);
@@ -1147,14 +1248,16 @@ function useSceneLink(canvas, refresh) {
     };
     document.addEventListener("visibilitychange", hidden);
     document.addEventListener("pointerlockchange", lock);
-    window.addEventListener("blur", release);
+    document.addEventListener("pointerlockerror", refused);
+    window.addEventListener("blur", blurred);
     window.addEventListener("keyup", keyUp);
     return () => {
+      release("left the page");
       document.removeEventListener("visibilitychange", hidden);
       document.removeEventListener("pointerlockchange", lock);
-      window.removeEventListener("blur", release);
+      document.removeEventListener("pointerlockerror", refused);
+      window.removeEventListener("blur", blurred);
       window.removeEventListener("keyup", keyUp);
-      release();
       // The server frees the renderer once no page has shown the scene for a
       // little while, so a tab switch and back keeps it open.
       scene.disconnect();
@@ -1216,7 +1319,7 @@ export function SceneViewer({ t }) {
     refresh.current();
   }
   async function close() {
-    endLook(link, canvas.current, true);
+    endLook(link, canvas.current, "closed", true);
     link.disconnect();
     link.scene = null;
     link.changed();

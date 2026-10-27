@@ -138,6 +138,79 @@ def _static_imports(source: str) -> list[str]:
     return re.findall(r"^\s*import\s[^;]*?from\s+[\"']([^\"']+)[\"']", source, re.MULTILINE)
 
 
+# Watches the pointer lock: every change with the element that holds it, and the page's own lock
+# records on their way to the UI log. window.__lateGrantMs > 0 hands each request to Chromium that
+# long after the page made it (still inside the click's activation), as a busy browser can.
+LOCK_WATCH = r"""
+(() => {
+  const changes = window.__lockChanges = [], notes = window.__lockNotes = [];
+  window.__lateGrantMs = 0;
+  document.addEventListener("pointerlockchange", () => changes.push(document.pointerLockElement?.tagName ?? null));
+  const fetched = window.fetch.bind(window);
+  window.fetch = (url, options) => {
+    if (String(url).endsWith("/api/uilog")) {
+      try { const body = JSON.parse(options.body); if (body.kind === "pointer_lock") notes.push([body.event, body.why]); }
+      catch { /* not a record */ }
+    }
+    return fetched(url, options);
+  };
+  const native = HTMLCanvasElement.prototype.requestPointerLock;
+  HTMLCanvasElement.prototype.requestPointerLock = function (...args) {
+    if (!window.__lateGrantMs) return native.apply(this, args);
+    return new Promise((resolve, reject) => setTimeout(() => {
+      try { Promise.resolve(native.apply(this, args)).then(resolve, reject); } catch (error) { reject(error); }
+    }, window.__lateGrantMs));
+  };
+})()
+"""
+LOCKED = "document.pointerLockElement && document.pointerLockElement.tagName"
+
+
+def test_the_pointer_lock_never_outlives_the_right_button(tmp_path, monkeypatch):
+    """His report (2026-10-26): "it gets stuck in the middle of the screen, as if there's an invisible
+    wall blocking its movement". Chromium on Windows keeps the cursor inside the page while a lock is
+    held; headless Chromium grants the viewer's lock, so both a quick and a late grant run for real."""
+    with attempt_scene._served(tmp_path, monkeypatch, lab_on=True) as (base, _seen), sync_playwright() as play:
+        browser = play.chromium.launch(headless=True, args=["--disable-gpu"])
+        try:
+            page = browser.new_page(viewport={"width": 1280, "height": 1000})
+            page.add_init_script(LOCK_WATCH)
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            page.goto(base)
+            ready = page.locator(f"{attempt_scene.ROWS} .attempt-scene:not([disabled])").first
+            ready.wait_for(timeout=20000)
+            ready.click()
+            page.wait_for_function(DRAWN, timeout=20000)
+            box = page.locator(".scene-lab canvas").bounding_box()
+            page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+
+            page.mouse.down(button="right")                  # a quick grant: held while the button is
+            page.wait_for_function(f"({LOCKED}) === 'CANVAS'", timeout=5000)
+            page.mouse.up(button="right")
+            page.wait_for_function(f"!({LOCKED})", timeout=5000)
+
+            page.evaluate("window.__lateGrantMs = 300")      # a late grant: the button is up before it lands
+            changes = page.evaluate("window.__lockChanges.length")
+            page.mouse.down(button="right")
+            page.wait_for_timeout(50)
+            page.mouse.up(button="right")
+            page.wait_for_function(f"window.__lockChanges.length >= {changes + 2}", timeout=5000)
+            page.wait_for_timeout(200)
+            # It landed and was exited at once: Chromium resolves the request before it dispatches the
+            # change, so by then the lock is already gone and both changes read null.
+            late = page.evaluate("window.__lockChanges")[changes:]
+            assert len(late) == 2 and late[-1] is None, late
+            assert page.evaluate(LOCKED) is None
+            notes = page.evaluate("window.__lockNotes")
+            assert notes[:4] == [["requested", None], ["granted", None], ["ended", "button up"],
+                                 ["exited", "button up"]], notes
+            assert notes[4:] == [["requested", None], ["ended", "button up"], ["exited", "no look"]], notes
+            assert errors == []
+        finally:
+            browser.close()
+
+
 def test_the_shell_reaches_the_viewer_only_after_the_server_says_it_exists():
     app = strip_comments((UI / "app.js").read_text(encoding="utf-8"))
     assert not any("sceneviewer" in name for name in _static_imports(app))

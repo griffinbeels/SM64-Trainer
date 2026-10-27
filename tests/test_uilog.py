@@ -74,6 +74,28 @@ def test_a_scene_viewer_record_keeps_only_its_own_numbers(log):
     assert "60.9 pictures/s" in line and "input to drawn 22.4/31.0 ms" in line and "1600x1200 jpeg" in line
 
 
+def test_a_scene_viewer_pointer_lock_record_keeps_its_step_and_why(log):
+    """The Scene viewer's pointer lock posts each step (sceneviewer.js noteLock) on the same surface:
+    a known step, a short reason, its request number and three flags, nothing else; it reads back
+    as one line, and the moving summary still sanitises as before."""
+    stored = uilog.record({"surface": "scene_viewer", "kind": "pointer_lock", "event": "exited", "why": "no look",
+                           "request": 7, "look": False, "focused": True, "hidden": "no", "dropped": 3,
+                           "client_utc": "2026-10-26T17:40:00.000Z", "pictures": 12, "note": "x"})
+    (read,) = uilog.read(log)
+    assert read == stored
+    assert {key: stored[key] for key in ("event", "why", "request", "look", "focused", "hidden", "dropped")} == {
+        "event": "exited", "why": "no look", "request": 7, "look": False, "focused": True, "hidden": None,
+        "dropped": 3}
+    assert "pictures" not in stored and "note" not in stored and stored["client_utc"].startswith("2026-10-26")
+    odd = uilog.record({"surface": "scene_viewer", "kind": "pointer_lock", "event": "stolen", "why": "w" * 500,
+                        "request": -1, "look": 1})
+    assert odd["event"] is None and len(odd["why"]) == uilog.SCENE_LOCK_WHY and odd["request"] is None
+    assert odd["look"] is None
+    line = uilog.render(stored)
+    assert "pointer lock exited (no look): request 7" in line and "3 lock records not logged" in line
+    assert uilog.record({"surface": "scene_viewer", "pictures": 5})["pictures"] == 5
+
+
 def test_unknown_fields_never_reach_disk(log):
     uilog.record({**SELECTOR, "evil": "x" * 5000, "nested": {"deep": [1] * 900}})
     (stored,) = uilog.read(log)
