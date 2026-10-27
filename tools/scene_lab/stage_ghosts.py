@@ -18,18 +18,26 @@ global_timer counts game frames, so lag frames and held pictures stay in step wi
 Past its recording a star ghost holds its last pose and fades out as it does at the end of a race
 in the game; any other ghost is gone (ghost_viewer.cpp choose).
 
+Labels: each name box says what the game's ghost would (native_session.ghost_label: YOUR PB,
+YOUR RUN, the credited player, GHOST n). One viewer-only difference, his round-4 goal ("understand
+the differences between different ghosts clearly"): when two or more ghosts in the scene would
+carry the same label, each of those adds its time (YOUR RUN 11''03); a label no other ghost shares
+stays exactly the game's. The game's dialog font has no double quote, so the time's " is drawn as
+two apostrophes, which look the same there. A long label gives up its end, never the time.
+
 The look follows the player's ghost settings (ghost/settings.py, the in-game ghost's): opacity,
 colour (each ghost's hue steps from his as in the game's set: native_session.ghost_hue), shadow,
 name boxes and their box, and the inputs over the name. The live race's own effects stay off: the
 fade where a ghost overlaps or hides live Mario (the stage's runner is not live Mario here), the
 corner input stack, the path and the ghost's sound.
 
-`load_ghost(ref)` is the clip loader (interface C: {"clip", "player", "frames", "label"}, or
-LookupError with a plain sentence). The catalog's (server/scene_ghosts.py) serves the page; until
+`load_ghost(ref)` is the clip loader (interface C: {"clip", "player", "frames", "label"} and,
+optionally, "time": the bare run time; or LookupError with a plain sentence). The catalog's (server/scene_ghosts.py) serves the page; until
 it is wired, LocalGhosts reads the player's own attempts from the replay store's native folder.
 """
 from __future__ import annotations
 
+import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -38,6 +46,7 @@ from types import SimpleNamespace
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import viewer  # noqa: E402  (also puts src/ on sys.path through replay)
+from sm64_events.core.timefmt import format_igt_short  # noqa: E402
 from sm64_events.ghost import settings  # noqa: E402
 from sm64_events.ghost.native_session import ghost_hue, ghost_label  # noqa: E402
 
@@ -51,12 +60,37 @@ REFUSALS = {-2: "The renderer could not build the ghost's model from the ROM.",
             -4: "There is not enough memory to load this ghost.",
             -5: "The renderer refused the ghost capture layout."}
 LOADER_FAILED = "This ghost could not be loaded."
+LABEL_FIT = 28                # characters a name box shows before it cuts the end (180 layout px)
+TIME_CHARACTERS = frozenset("0123456789'\"")
 
 
 def ghost_frame(timer: int, origin_timer: int) -> int:
     """The ghost's row for a scene frame: game frames since the stage's first frame (negative
     before it, where a ghost shows its first pose, as the game's ghost does before its start)."""
     return int(timer) - int(origin_timer)
+
+
+def distinct_labels(ghosts: list[tuple[str, str | None]]) -> list[str]:
+    """Each ghost's name box text from its (in-game label, bare time): a label two or more ghosts
+    share takes its ghost's time; the rest stay exactly the game's."""
+    counts: dict[str, int] = {}
+    for base, _time in ghosts:
+        counts[base] = counts.get(base, 0) + 1
+    return [with_time(base, time) if counts[base] > 1 and time else base for base, time in ghosts]
+
+
+def with_time(label: str, time: str) -> str:
+    """`label` and its time, the time's " drawn as two apostrophes (the dialog font has no double
+    quote); a label too long for both gives up its end, never the time."""
+    text = time.replace('"', "''")
+    if len(label) + 1 + len(text) > LABEL_FIT:
+        label = label[:max(1, LABEL_FIT - len(text) - 4)] + "..."
+    return f"{label} {text}"
+
+
+def bare_time(value) -> str | None:
+    """A bare time as the catalog lists it (11"03, 1'02"16), or None for anything else."""
+    return value if isinstance(value, str) and 0 < len(value) <= 12 and set(value) <= TIME_CHARACTERS else None
 
 
 def label_text(label, number: int) -> str:
@@ -102,9 +136,12 @@ class Look:
 class Shown:
     ref: str
     slot: int
-    label: str
+    label: str                   # what its name box shows now (distinct_labels)
     player: str | None
     frames: int | None
+    base: str = ""               # the game's label for it (label_text)
+    time: str | None = None      # its bare run time, when the loader or the page knows it
+    clip: bytes = b""            # its recording, kept to load again under a new label
 
 
 class StageGhosts:
@@ -140,8 +177,17 @@ class StageGhosts:
                 shown.append(loaded)
         for gone in kept.values():
             host.ghost_load(gone.slot, b"", "")
+        self._relabel(host, shown)
         self.shown = shown
         return {"shown": [ghost.ref for ghost in shown], "refused": refused}
+
+    @staticmethod
+    def _relabel(host, shown: list[Shown]) -> None:
+        """Gives every ghost its distinct label (distinct_labels), loading again each one whose
+        label changed: a second YOUR RUN adds both times, its removal takes them away."""
+        for ghost, label in zip(shown, distinct_labels([(g.base, g.time) for g in shown]), strict=True):
+            if label != ghost.label and not host.ghost_load(ghost.slot, ghost.clip, label):
+                ghost.label = label
 
     def clear(self, host) -> None:
         for ghost in self.shown:
@@ -163,7 +209,8 @@ class StageGhosts:
         if result:
             host.ghost_load(slot, b"", "")
             return REFUSALS.get(result, NOT_PLAYABLE)
-        return Shown(entry["ref"], slot, label, got.get("player"), got.get("frames"))
+        return Shown(entry["ref"], slot, label, got.get("player"), got.get("frames"), label,
+                     bare_time(got.get("time")) or bare_time(entry.get("time")), bytes(clip))
 
     def block(self, look: Look, frame: int) -> bytes | None:
         """One picture's ghosts block (viewer.ghost_block): every shown ghost at `frame` game frames
@@ -180,8 +227,9 @@ def checked(entries) -> list[dict]:
     seen, wanted = set(), []
     for entry in entries:
         if not isinstance(entry, dict) or not isinstance(entry.get("ref"), str) or not entry["ref"] \
-                or len(entry["ref"]) > 512 or not isinstance(entry.get("label", ""), (str, type(None))):
-            raise ValueError("each ghost is {ref, label}: a ref the catalog listed, and its label")
+                or len(entry["ref"]) > 512 or not isinstance(entry.get("label", ""), (str, type(None))) \
+                or not isinstance(entry.get("time"), (str, type(None))):
+            raise ValueError("each ghost is {ref, label[, time]}: a ref the catalog listed, its label and time")
         if entry["ref"] not in seen:
             seen.add(entry["ref"])
             wanted.append(entry)
@@ -211,5 +259,15 @@ class LocalGhosts:
             frames = len(ghost_clip.decode_clip(data).frames)
         except (ValueError, LookupError):
             raise LookupError(NOT_PLAYABLE) from None
-        return {"clip": data, "player": "You", "frames": frames,
+        return {"clip": data, "player": "You", "frames": frames, "time": self._time(path),
                 "label": ghost_label(SimpleNamespace(pb=False, import_id=None))}
+
+    @staticmethod
+    def _time(path: Path) -> str | None:
+        """The run's time from its manifest: the frames from its clock's start to its closing frame."""
+        try:
+            manifest = json.loads(path.with_suffix(".json").read_text(encoding="utf-8"))
+            run = manifest["closed_frame"] - manifest["native_clock_frame"]
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+        return format_igt_short(run) if type(run) is int and run > 0 else None

@@ -9,6 +9,7 @@ hands over. What the renderer itself draws, and its own refusals, are the native
 import json
 import struct
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -54,17 +55,22 @@ def config(recording, tmp_path, monkeypatch):
 
 
 class Loader:
-    """Interface C's shape over a dict of refs, counting what it was asked."""
+    """Interface C's shape over a dict of refs ({ref: (clip, label[, time])}), counting what it was
+    asked; a ref in `slow` waits for `release` first, as a community download does."""
 
-    def __init__(self, clips: dict):
-        self.clips, self.asked = clips, []
+    def __init__(self, clips: dict, slow: tuple = ()):
+        self.clips, self.asked, self.slow, self.release = clips, [], set(slow), threading.Event()
+        self.threads: set[str] = set()
 
     def __call__(self, ref):
         self.asked.append(ref)
+        self.threads.add(threading.current_thread().name)
+        if ref in self.slow:
+            assert self.release.wait(10)
         if ref not in self.clips:
             raise LookupError("This ghost is not in the catalog any more.")
-        clip, label = self.clips[ref]
-        return {"clip": clip, "player": label, "frames": 300, "label": label}
+        clip, label, *time = self.clips[ref]
+        return {"clip": clip, "player": label, "frames": 300, "label": label, "time": time[0] if time else None}
 
 
 def _open(config, recording, **options):
@@ -201,9 +207,7 @@ def test_a_new_set_keeps_shown_ghosts_in_their_slots_and_empties_the_rest():
     assert host.slots == {} and ghosts.block(look, 0) is None
 
 
-def test_the_socket_sets_the_ghosts_before_the_next_picture(config, recording, tmp_path):
-    """Interface B over the real routes: the "ghosts" message is answered in order, before a
-    waiting picture, and that picture draws the set."""
+def _lab(config, recording, tmp_path, loader):
     (tmp_path / "packages").mkdir()
     (tmp_path / "packages" / "scene.sm64scene").write_bytes(recording["package"].read_bytes())
     path = tmp_path / "lab.json"
@@ -211,20 +215,74 @@ def test_the_socket_sets_the_ghosts_before_the_next_picture(config, recording, t
                                 "pj64_plugin": str(config.pj64_plugin), "map": str(tmp_path / "MappingUS.map")}),
                     encoding="utf-8")
     app = FastAPI()
-    loader = Loader({"a": (CLIP, "YOUR PB")})
     scene_lab_api.mount_scene_lab(app, path, watch_seconds=0.05, ghost_loader=loader, session_options={
         "host_factory": scene_session.command_host(fake_viewer_host.command())})
-    with TestClient(app) as client:
+    return app
+
+
+def _picture_header(socket) -> dict:
+    data = socket.receive()["bytes"]
+    return json.loads(data[4:4 + struct.unpack_from("<I", data)[0]])
+
+
+def test_the_socket_sets_the_ghosts_and_later_pictures_draw_them(config, recording, tmp_path):
+    """Interface B over the real routes: the "ghosts" message's answer names what was shown and
+    refused, and a picture asked for after it draws the set."""
+    loader = Loader({"a": (CLIP, "YOUR PB")})
+    with TestClient(_lab(config, recording, tmp_path, loader)) as client:
         opened = client.post("/api/scene-lab/open", json={"package": "scene.sm64scene"}).json()
         with client.websocket_connect("/api/scene-lab/ws") as socket:
             socket.send_json({"id": 1, "session": opened["session"], "kind": "ghosts",
                               "set": [{"ref": "a", "label": "YOUR PB"}, {"ref": "z", "label": "Zed"}]})
-            socket.send_json({"id": 2, "session": opened["session"], "frame": 1, "camera": None, "encoding": "raw"})
             reply = json.loads(socket.receive()["text"])
             assert reply == {"id": 1, "kind": "ghosts", "shown": ["a"],
                              "refused": [{"ref": "z", "reason": "This ghost is not in the catalog any more."}]}
-            data = socket.receive()["bytes"]
-            header = json.loads(data[4:4 + struct.unpack_from("<I", data)[0]])
+            socket.send_json({"id": 2, "session": opened["session"], "frame": 1, "camera": None, "encoding": "raw"})
+            header = _picture_header(socket)
             assert header["id"] == 2 and header["ghosts"]["drawn"] == 1
             socket.send_json({"id": 3, "session": opened["session"], "kind": "ghosts", "set": "nope"})
             assert "error" in json.loads(socket.receive()["text"])
+    assert loader.threads and not any(name.startswith("scene-lab") for name in loader.threads)
+
+
+def test_a_ghost_still_downloading_never_holds_up_the_pictures(config, recording, tmp_path):
+    """A clip that takes its time (a community download) loads off the session's worker: pictures
+    go on meanwhile, and a later set waits its turn, so the last set sent is the one shown."""
+    loader = Loader({"slow": (CLIP, "Bob"), "fast": (CLIP, "Alice")}, slow=("slow",))
+    with TestClient(_lab(config, recording, tmp_path, loader)) as client:
+        opened = client.post("/api/scene-lab/open", json={"package": "scene.sm64scene"}).json()
+        with client.websocket_connect("/api/scene-lab/ws") as socket:
+            socket.send_json({"id": 1, "session": opened["session"], "kind": "ghosts", "set": [{"ref": "slow"}]})
+            socket.send_json({"id": 2, "session": opened["session"], "kind": "ghosts", "set": [{"ref": "fast"}]})
+            socket.send_json({"id": 3, "session": opened["session"], "frame": 1, "camera": None, "encoding": "raw"})
+            header = _picture_header(socket)                        # while "slow" still loads
+            assert header["id"] == 3 and "ghosts" not in header
+            loader.release.set()
+            replies = [json.loads(socket.receive()["text"]) for _ in range(2)]
+            assert [reply["id"] for reply in replies] == [1, 2]
+            assert replies[1]["shown"] == ["fast"]
+            socket.send_json({"id": 4, "session": opened["session"], "frame": 1, "camera": None, "encoding": "raw"})
+            assert _picture_header(socket)["ghosts"]["drawn"] == 1
+
+
+def test_ghosts_that_would_share_a_name_add_their_times():
+    """His goal: tell ghosts apart. Two of his runs both read YOUR RUN in the game; here each adds
+    its time, while a name no other ghost shares stays exactly the game's."""
+    host, ghosts = _Slots(), stage_ghosts.StageGhosts()
+    loader = Loader({"a": (CLIP, "YOUR RUN", '11"03'), "b": (CLIP, "YOUR RUN", '11"20'), "c": (CLIP, "Alice", '10"90'),
+                     "d": (CLIP, "YOUR PB", '1\'02"16'), "e": (CLIP, "YOUR PB")})
+    ghosts.replace(host, [{"ref": "a"}, {"ref": "c"}], loader)
+    assert [ghost.label for ghost in ghosts.shown] == ["YOUR RUN", "Alice"]
+    ghosts.replace(host, [{"ref": "a"}, {"ref": "c"}, {"ref": "b"}], loader)
+    assert [ghost.label for ghost in ghosts.shown] == ["YOUR RUN 11''03", "Alice", "YOUR RUN 11''20"]
+    assert host.slots[ghosts.shown[0].slot] == "YOUR RUN 11''03"            # loaded again under it
+    ghosts.replace(host, [{"ref": "c"}, {"ref": "b"}], loader)
+    assert [ghost.label for ghost in ghosts.shown] == ["Alice", "YOUR RUN"]   # unique again: the game's
+    assert host.slots[ghosts.shown[1].slot] == "YOUR RUN"
+    ghosts.replace(host, [{"ref": "d"}, {"ref": "e", "time": '9"99'}], loader)  # the page's time as fallback
+    assert [ghost.label for ghost in ghosts.shown] == ["YOUR PB 1'02''16", "YOUR PB 9''99"]
+    long = stage_ghosts.with_time("A" * 40, '1\'02"16')
+    assert long.endswith(" 1'02''16") and len(long) <= stage_ghosts.LABEL_FIT
+    assert stage_ghosts.distinct_labels([("X", None), ("X", '1"00')]) == ["X", "X 1''00"]
+    for label in host.slots.values():
+        assert stage_ghosts.label_text(label, 1) == label                    # the game's font writes it
