@@ -1047,8 +1047,9 @@ server starts the folder empty).
 Run the server with `uv run --with unicorn==2.1.4` for the free camera;
 `run-scene-lab.bat` does both, reading `%LOCALAPPDATA%\SM64Trainer\scene-lab\lab.json`
 and starting the test server. One scene is open
-at a time; its renderer helper, evaluator and picture encoder (a child process that
-makes the JPEGs) stop on
+at a time; its renderer helper, evaluator, picture encoder (a child process that
+makes the JPEGs) and two state resolvers (below-normal child processes that work out the
+free camera's next frames during Play, `tools/scene_lab/state_resolver.py`) stop on
 Close, another Open, `idle_seconds` without a request, about 20 s with no page
 connected, a helper that dies, or server shutdown. A worker thread runs the game's
 code and sends each request to the renderer while a delivery thread reads the

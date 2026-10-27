@@ -1306,8 +1306,8 @@ position. It executes code only from the viewer's ROM and checks every block
 against that ROM first. On this desktop a new camera on the same task costs
 about 4 ms, the next task about 22 ms with the recorded answers (52 ms
 searching, while walkers need their matrices put back), and a jump to any task
-about 60 ms (2026-10-25). A viewer works out the next tasks on a second thread
-while it draws this one.
+about 60 ms (2026-10-25). A viewer has its two [[state resolver]]s work out
+the next tasks while it draws this one (a second thread until they are ready).
 
 - **Lives** -- `tools/scene_lab/evaluator.py` (what a viewer calls); the
   game-code sandbox and its proofs (`tools/scene_lab/e2_georender.py`, with
@@ -1498,6 +1498,29 @@ the server encodes the picture itself.
   the scene (`tools/scene_lab/scene_session.py`); the desktop window's way
   around it (`tools/scene_lab/webview_pictures.py`)
 - **Not** -- the [[recorder]]'s video encoder, which compresses recorded play
+
+### State resolver
+
+One of the [[scene viewer]]'s two child processes that work out the
+[[scene evaluator]]'s state of the [[frame]]s Play needs next, so the free
+camera keeps 30 fps. One [[frame]]'s state costs about 20 ms, and 40-55 ms where
+the evaluator must search. Worked out on a thread of the server, it shared
+Python's lock with the free camera's pictures: while the camera moved during
+Play, some pictures came 150-300 ms late and Play skipped about one [[frame]] in
+seven, with or without [[ghost]]s (measured 2026-10-27 on his Hazy Maze Cave
+takes). Each child reads the open scene's own package from shared memory and
+hands each state back the same way. The server keeps it as if it had worked it
+out itself, so every picture is the same bytes. One child goes on [[frame]] after
+[[frame]] while Play stays ahead; the other takes [[frame]]s further on when the
+first falls behind. Windows gives them below-normal priority; they start the
+first time the free camera moves in a whole scene and stop with it. A [[frame]]
+they cannot do, the server works out as before.
+
+- **Lives** -- `tools/scene_lab/state_resolver.py`; used by the evaluator
+  (`tools/scene_lab/evaluator.py`); started and closed with the scene
+  (`tools/scene_lab/scene_session.py`)
+- **Not** -- the [[picture encoder]], which compresses pictures; a resolver
+  draws nothing
 
 ### Attempt scene
 
