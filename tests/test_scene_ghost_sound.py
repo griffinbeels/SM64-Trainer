@@ -36,27 +36,7 @@ def clip_bytes(count=40, sounds=None, *, level=7, area=1, other_area=()):
     return encode_clip(rows, producer(), clock_kind=STAR_CLOCK)
 
 
-class FakeEngine:
-    """The engine host's shape: ticks of 1056 or 1088 frames (as SM64's), an impulse of 10000 x gain at
-    each cued tick's first sample."""
-
-    def __init__(self, _rom=None, fail=False):
-        self.calls, self.fail = [], fail
-
-    def render(self, ticks):
-        self.calls.append(ticks)
-        if self.fail:
-            raise RuntimeError("the ghost sound engine stopped (exit 3)")
-        lengths = np.array([1088 if k % 3 else 1056 for k in range(len(ticks))], np.int64)
-        pcm = np.zeros((int(lengths.sum()), 2), np.int16)
-        starts = np.concatenate([[0], np.cumsum(lengths)])
-        for k, (_position, gain, cues) in enumerate(ticks):
-            if cues:
-                pcm[starts[k]:starts[k] + 8] = int(10000 * gain)
-        return lengths, pcm
-
-    def close(self):
-        return 0
+from ghost_sound_double import FakeEngine  # noqa: E402  (the engine's shape; the track maker child loads it too)
 
 
 def scene(timers, *, first_sample=4800, shown=(), volume=0.5):
@@ -313,3 +293,96 @@ def test_the_games_own_engine_sounds_a_cue_from_its_tick_at_its_gain():
     with pytest.raises(RuntimeError, match="stopped"):
         refused.render(ticks(1.0))
     refused.close()
+
+
+# ---------------------------------------------------------------- the track maker child
+
+def state_scene(tmp_path):
+    """A stand-in scene over test_scene_state_package.py's synthetic scene-state package, its ROM
+    marked US so the stage's camera is read, and a symbol map placing gLakituState where that
+    package captured a valid camera and focus: (scene, map path)."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("ghost_sound_state_synthetic", ROOT / "tests/test_scene_state_package.py")
+    synthetic = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(synthetic)
+    rom = bytearray(synthetic._rom())
+    rom[0x3E] = ord("E")
+    rom = bytes(rom)
+    out = tmp_path / "state.sm64scene"
+    synthetic.pk.write_package(synthetic.pk.load_source(synthetic._session(tmp_path, rom), states=True), rom, out,
+                               synthetic.pk.ZLIB, group=3, checkpoint_every=synthetic.EVERY)
+    package = synthetic.pk.Package(out.read_bytes(), rom)
+
+    def valid(data):
+        values = np.frombuffer(data, "<f4")
+        return bool(np.isfinite(values).all() and (np.abs(values) < 1e5).all() and (np.abs(values) > 1e-3).any())
+    base = next(0x80330400 + at for at in range(0, 0x1000, 4)
+                if valid(package.scene_bytes(0, [(0x330400 + at + ghost_sound.LAKITU_POS, 12)])[0])
+                and valid(package.scene_bytes(0, [(0x330400 + at + ghost_sound.LAKITU_FOCUS, 12)])[0]))
+    symbols = tmp_path / "map.txt"
+    symbols.write_text(f"                0x00000000{base:08x}                gLakituState\n", encoding="ascii")
+    data = clip_bytes(count=len(package), sounds={2: (JUMP,), 6: (LAND,)})
+    stand_in = scene([500 + index for index in range(len(package))], shown=[shown("attempt:7", data)], volume=1.0)
+    stand_in.package, stand_in.rom = package, rom
+    return stand_in, symbols
+
+
+def child_sounds(symbols, engine="PositionEngine"):
+    return ghost_sound.SceneGhostSounds(map_path=symbols, maker_factory=lambda: ghost_sound.TrackMaker(
+        engine=f"ghost_sound_double:{engine}", extra_path=(ROOT / "tests",)))
+
+
+def test_a_track_made_in_the_below_normal_child_is_the_one_made_here_and_ends_with_the_scene(tmp_path):
+    """Making a track shares nothing with the server's pictures (round 5, item 2: Play started while
+    tracks were made hitched): the child makes the same samples, the stage's camera read from the
+    scene's own package included (PositionEngine carries where each tick sounded from)."""
+    import psutil
+    from ghost_sound_double import PositionEngine
+    stand_in, symbols = state_scene(tmp_path)
+    here = ghost_sound.SceneGhostSounds(host_factory=PositionEngine, map_path=symbols)
+    there = child_sounds(symbols)
+    ghost = stand_in.ghosts.shown[0]
+    try:
+        made_here, made_there = here.track(stand_in, ghost), there.track(stand_in, ghost)
+        assert np.array_equal(made_here, made_there)
+        assert len(np.unique(made_here[:, 1])) > 2                    # the camera was read: z moves
+        assert {key: there.stats[ghost.ref][key] for key in ("ticks", "cues")} == {
+            key: here.stats[ghost.ref][key] for key in ("ticks", "cues")}
+        child = there.maker.process
+        if hasattr(psutil, "BELOW_NORMAL_PRIORITY_CLASS"):
+            assert psutil.Process(child.pid).nice() == psutil.BELOW_NORMAL_PRIORITY_CLASS
+        assert there.track(stand_in, ghost) is made_there              # made once per scene and ghost
+    finally:
+        here.close()
+        there.close()
+    assert child.poll() is not None
+
+
+def test_a_ghost_the_child_cannot_sound_plays_silent_and_the_child_goes_on(tmp_path):
+    stand_in, symbols = state_scene(tmp_path)
+    there = child_sounds(symbols, "FailingEngine")
+    try:
+        with pytest.raises(LookupError, match=ghost_sound.NO_SOUND):
+            there.block(stand_in, "attempt:7", 0)
+        assert there.maker.process.poll() is None
+    finally:
+        there.close()
+
+
+def test_the_scenes_ghost_sounds_make_their_tracks_in_the_child(monkeypatch):
+    """As scene_session.py makes them (no engine given): every track goes to a TrackMaker."""
+    asked = []
+
+    class Maker:
+        def make(self, inputs, package):
+            asked.append((inputs.clip, package))
+            return np.zeros((inputs.total, 2), np.int16), {"ticks": 0}
+
+        def close(self):
+            pass
+    monkeypatch.setattr(ghost_sound, "TrackMaker", Maker)
+    data = clip_bytes(sounds={2: (JUMP,)})
+    stand_in = scene(list(range(100, 140)), shown=[shown("attempt:7", data)])
+    sounds = ghost_sound.SceneGhostSounds()
+    sounds.track(stand_in, stand_in.ghosts.shown[0])
+    assert asked == [(data, None)]                                    # no scene state: no package to read

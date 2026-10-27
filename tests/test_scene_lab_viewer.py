@@ -445,10 +445,12 @@ def test_free_pictures_hand_the_frames_ahead_to_the_state_resolvers_once_they_ar
             assert [index for index, _thread in made.prepared] == SHOWN[1:4] and pool.asked == []
             assert pool.package is server.session.package and pool.deliver == made.delivered
             assert made.resolvers is pool and made.kept_ahead == scene_session.RESOLVED_AHEAD
+            free(0)                                       # a drag before they are ready: no thread work
             pool.ready = True
             free(1)
+            free(1)                                       # a drag: the children get the frames after it again
             free(3)                                       # the frames after it, as many as there are
-            assert pool.asked == [SHOWN[2:], SHOWN[4:]] and len(made.prepared) == 3
+            assert pool.asked == [SHOWN[2:], SHOWN[2:], SHOWN[4:]] and len(made.prepared) == 3
         client.post("/api/scene-lab/close")
     assert len(evaluators.pools) == 1 and evaluators.pools[0].closed
 

@@ -32,9 +32,11 @@ linearly between them, and reads the engine's 32 kHz output there (stems_check.i
 sound lands on the picture of the jump. Placement is read every PLACE_EVERY scene frames and
 held between.
 
-Where it is mixed: the engine is native (one process per open scene), so the server renders each
-ghost's track once, on the first block the page asks for, and serves it as blocks that tile the
-scene's own sound; the page's worklet mixes those blocks on the clock that already plays the
+Where it is made and mixed: each ghost's track is made once, on the first block the page asks
+for, in the scene's track maker (TrackMaker: one below-normal child process per open scene, with
+the engine as its own child), and the server serves it as blocks that tile the scene's own sound
+(make_track is the one derivation; with a test's engine it runs in the server). The page's
+worklet mixes those blocks on the clock that already plays the
 stage, so a ghost is in sample sync with the stage by construction, and a mute or the volume
 changes a gain within 64 samples. Mixing on the server instead would cost a new render for every
 mute. Measured 2026-10-27 on his 655-frame HMC attempt scene with one of his own runs: 1.37 s for
@@ -42,9 +44,10 @@ the first block (the stage's camera and Mario, 110 scene-state reads: 1.0 s; the
 ticks and 51 cues: 88 ms; laying it on 1.2 M samples: 0.26 s), every later block 0.05 ms, 4.8 MB
 held per ghost. The stage reads now take only the 36 bytes they need of each state (package.scene_bytes),
 not the whole 8 MiB state: on his 830-frame HMC take 0.66-0.77 s a track instead of 1.32-1.40 s, the same
-samples (2026-10-27). The render runs on a server thread and shares Python's lock with the pictures, so a
-Play started while tracks are still being made hitches for about half a second; made at the ghost's add
-(the page asks then), it is over before Play. The 655-frame scene has no stems fit, so its own
+samples (2026-10-27). Made on a server thread, that shared Python's lock with the pictures: a Play started
+while 2 or 5 tracks were being made hitched (input to picture up to 180-190 ms, 2-5 late frames); made in
+the track maker it is the same samples and Play runs as without them (up to 47-53 ms, 0-2 late, 2026-10-27).
+The 655-frame scene has no stems fit, so its own
 sound plays as heard: 148 ms after its
 picture, Project64's audio delay, while its own run's ghost lands on the picture. A scene with a
 measured delay plays its sound on its pictures too (scene_audio.measured_delay), and the ghosts'
@@ -53,7 +56,9 @@ tracks follow its samples (the cache key carries the shift).
 from __future__ import annotations
 
 import hashlib
+import importlib
 import importlib.util
+import json
 import logging
 import math
 import os
@@ -64,6 +69,7 @@ import sys
 import tempfile
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -89,6 +95,7 @@ LAKITU_FOCUS, LAKITU_POS = 0x80, 0x8C          # struct LakituState (camera_stat
 TRACK_PREFIX = "ghost:"
 NO_TRACK = "This ghost is not in the scene."
 NO_SOUND = "This ghost's sound could not be made."
+_BELOW_NORMAL = getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0)
 log = logging.getLogger("sm64.scene_lab")
 
 
@@ -287,21 +294,245 @@ def lakitu_address(map_path: Path | None) -> int | None:
     return None
 
 
+@dataclass
+class TrackInputs:
+    """Everything one ghost's track is made from, as plain values a child process can take: its
+    clip; the scene's viewer frames (package indices), each one's identity (global_timer,
+    curr_level, curr_area) and recording sample (-1: none); the global_timer of the frame every
+    ghost's first frame stands on; the recording's length in samples; the ghost volume; the ROM;
+    gLakituState (None: unknown)."""
+    clip: bytes
+    frames: list
+    identities: list
+    origin: int | None
+    samples: list
+    total: int
+    volume: float
+    rom: bytes
+    lakitu: int | None
+
+    @classmethod
+    def of(cls, scene, ghost, lakitu: int | None) -> TrackInputs:
+        kept = ("global_timer", "curr_level", "curr_area")
+        return cls(bytes(ghost.clip), [int(index) for index in scene.frames],
+                   [{key: scene.outlines[index]["identity"].get(key) for key in kept} for index in scene.frames],
+                   scene.outlines[scene.ghost_origin]["identity"].get("global_timer"),
+                   [int(sample) for sample in scene.sound.samples], int(scene.sound.layer.total_samples),
+                   float(scene.ghost_look.volume), scene.rom, lakitu)
+
+    def plain(self) -> dict:
+        """The values a request carries beside the clip and the ROM (TrackMaker.make)."""
+        return {"frames": self.frames, "identities": self.identities, "origin": self.origin,
+                "samples": self.samples, "total": self.total, "volume": self.volume, "lakitu": self.lakitu}
+
+
+def make_track(inputs: TrackInputs, reader, engine) -> tuple[np.ndarray, dict]:
+    """One ghost's track on the recording's samples ((total, 2) int16) and how it went: the clip's
+    ticks planned against the stage (stage_of) and run in the engine (`engine()`, started on first
+    use: EngineHost or a test's), then laid on the recording's samples (lay). `reader(index,
+    wanted)`: a few bytes of a frame's scene state (package.Package.scene_bytes), None without the
+    scene-state layer. The one derivation, in a TrackMaker child or in this process."""
+    from sm64_events.ghost import clip as ghost_clip
+    clip = ghost_clip.decode_clip(inputs.clip)
+    timer = [identity.get("global_timer") for identity in inputs.identities]
+    origin, samples = inputs.origin, inputs.samples
+    knots_at = [(k, samples[k], timer[k] - origin) for k in range(len(inputs.frames))
+                if samples[k] >= 0 and timer[k] is not None and origin is not None]
+    if len(knots_at) < 2:
+        return np.zeros((inputs.total, 2), np.int16), {"ticks": 0}
+    first_g = max(0, min(g for _, _, g in knots_at))
+    last_g = max(g for _, _, g in knots_at)
+    frames = range(first_g, last_g + 2)
+    started = time.perf_counter()
+    stage = stage_of(inputs, knots_at, reader)
+    placed = time.perf_counter()
+    ticks = plan_ticks(clip, frames, stage, inputs.volume, clip.dance_tail)
+    lengths, pcm = engine().render(ticks)
+    rendered = time.perf_counter()
+    track = lay(pcm, lengths, [(s, g - first_g) for _, s, g in knots_at if g >= first_g], inputs.total)
+    return track, {"ticks": len(ticks), "cues": sum(len(cues) for _, _, cues in ticks),
+                   "stage_ms": round((placed - started) * 1000, 1), "engine_ms": round((rendered - placed) * 1000, 1),
+                   "lay_ms": round((time.perf_counter() - rendered) * 1000, 1)}
+
+
+def stage_of(inputs: TrackInputs, knots_at: list, reader):
+    """stage(g): the stage's camera position, focus, Mario, level and area at ghost frame g, read
+    every PLACE_EVERY scene frames from the scene state and held between."""
+    from sm64_events.memory.addresses import MARIO_POS_OFF
+    from sm64_events.memory.layout import layout_for
+    lakitu = inputs.lakitu if inputs.rom[0x3E] == ord("E") else None
+    try:
+        mario_struct = layout_for({ord("E"): "us", ord("J"): "jp"}[inputs.rom[0x3E]]).mario_struct
+    except KeyError:
+        mario_struct = None
+    reads: list[tuple[int, tuple]] = []
+    if reader is not None:
+        # Only these three vectors of each state are read (package.scene_bytes): building the
+        # whole 8 MiB state for them cost ~1 s a track (round 5, measured 2026-10-27).
+        addresses = [None if lakitu is None else lakitu + LAKITU_POS, None if lakitu is None else lakitu + LAKITU_FOCUS,
+                     None if mario_struct is None else mario_struct + MARIO_POS_OFF]
+        wanted = [(address & 0x1FFFFFFF, 12) for address in addresses if address is not None]
+
+        def vector(data):
+            values = struct.unpack("<3f", data)
+            return values if all(math.isfinite(value) and abs(value) < 1e6 for value in values) else None
+        for position, (k, _sample, g) in enumerate(knots_at):
+            if position % PLACE_EVERY and position != len(knots_at) - 1:
+                continue
+            found = iter(reader(inputs.frames[k], wanted))
+            camera, focus, mario = (None if address is None else vector(next(found)) for address in addresses)
+            reads.append((g, (camera, focus, mario)))
+    identity = {g: inputs.identities[k] for k, _s, g in knots_at}
+    gs = [g for g, _ in reads]
+
+    def stage(g: int):
+        place = reads[max(0, np.searchsorted(gs, g, side="right") - 1)][1] if reads else (None, None, None)
+        seen = identity.get(g) or identity[min(identity, key=lambda known: abs(known - g))]
+        return (*place, seen.get("curr_level"), seen.get("curr_area"))
+    return stage
+
+
+class TrackMaker:
+    """The child process that makes a scene's ghost tracks (serve), below normal priority and
+    hidden. make() hands it one ghost's inputs, and the scene's package for the stage reads, in a
+    shared memory block, and takes the finished samples back from the same block; the server's
+    thread only waits on the pipe meanwhile, so a track being made never shares the server's
+    Python lock with the pictures. One request at a time (SceneGhostSounds.lock); the ROM goes once."""
+
+    def __init__(self, engine: str | None = None, extra_path: tuple = ()):
+        from sm64_events.core.childproc import python_child, quiet_spawn_kwargs
+        argv, env = python_child("ghost_sound", "--scene-lab-ghost-sound",
+                                 ["--serve", *(["--engine", engine] if engine else [])], site_packages=True)
+        env["PYTHONPATH"] = os.pathsep.join(filter(None, (*map(str, extra_path), str(HERE), env.get("PYTHONPATH"))))
+        spawn = quiet_spawn_kwargs()
+        spawn["creationflags"] = spawn.get("creationflags", 0) | _BELOW_NORMAL
+        self.process = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                        stderr=subprocess.DEVNULL, env=env, **spawn)
+        self.rom = None                                # the ROM the child holds
+
+    @property
+    def pid(self) -> int:
+        return self.process.pid
+
+    def make(self, inputs: TrackInputs, package) -> tuple[np.ndarray, dict]:
+        """(track, stats) as make_track gives them; `package` the scene package's bytes (or a
+        package.Joined of them), None without the scene-state layer. RuntimeError with the child's
+        reason, or when the child has ended."""
+        from multiprocessing import shared_memory
+        data = b"" if package is None else package if isinstance(package, bytes) else package[0:len(package)]
+        rom = b"" if self.rom is inputs.rom else inputs.rom
+        parts, at = {}, 0
+        for name, size in (("package", len(data)), ("clip", len(inputs.clip)), ("rom", len(rom)),
+                           ("out", inputs.total * 4)):
+            parts[name], at = [at, size], at + size
+        memory = shared_memory.SharedMemory(create=True, size=max(1, at))
+        try:
+            for name, content in (("package", data), ("clip", inputs.clip), ("rom", rom)):
+                begin, size = parts[name]
+                memory.buf[begin:begin + size] = content
+            request = {"memory": memory.name, **parts, "inputs": inputs.plain()}
+            try:
+                self.process.stdin.write((json.dumps(request) + "\n").encode("utf-8"))
+                self.process.stdin.flush()
+                line = self.process.stdout.readline()
+            except (OSError, ValueError) as error:
+                raise RuntimeError(f"the ghost track maker stopped: {error}") from None
+            if not line:
+                raise RuntimeError(f"the ghost track maker stopped (exit {self.process.poll()})")
+            answer = json.loads(line)
+            if "error" in answer:
+                raise RuntimeError(answer["error"])
+            self.rom = inputs.rom
+            begin, size = parts["out"]
+            track = np.frombuffer(memory.buf[begin:begin + size], "<i2").reshape(-1, 2).copy()
+            return track, answer["stats"]
+        finally:
+            memory.close()
+            memory.unlink()
+
+    def close(self) -> int | None:
+        try:
+            self.process.stdin.close()
+        except OSError:
+            pass
+        try:
+            return self.process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            self.process.kill()
+            return self.process.wait(timeout=5)
+
+
+def _part(memory, span) -> bytes:
+    begin, size = span
+    return bytes(memory.buf[begin:begin + size])
+
+
+def serve(argv=None) -> int:
+    """The track maker child (TrackMaker): one JSON request a line, one answer a line, EOF exits."""
+    import argparse
+    from multiprocessing import shared_memory
+    parser = argparse.ArgumentParser(description="the scene viewer's ghost track maker")
+    parser.add_argument("--serve", action="store_true")
+    parser.add_argument("--engine", help="module:callable starting a stand-in engine host (tests)")
+    args = parser.parse_args(argv)
+    factory = EngineHost
+    if args.engine:
+        module, _, name = args.engine.partition(":")
+        factory = getattr(importlib.import_module(module), name)
+    untracked = {"track": False} if sys.version_info >= (3, 13) else {}   # as picture_encoder.serve
+    rom, host, sink = None, None, sys.stdout.buffer
+
+    def engine():
+        nonlocal host
+        if host is None:
+            host = factory(rom)
+        return host
+    for line in sys.stdin.buffer:
+        try:
+            request = json.loads(line)
+            memory = shared_memory.SharedMemory(name=request["memory"], **untracked)
+            try:
+                if request["rom"][1]:
+                    rom = _part(memory, request["rom"])
+                reader = None
+                if request["package"][1]:
+                    import package as scene_package
+                    reader = scene_package.Package(_part(memory, request["package"]), rom).scene_bytes
+                inputs = TrackInputs(clip=_part(memory, request["clip"]), rom=rom, **request["inputs"])
+                track, stats = make_track(inputs, reader, engine)
+                begin, size = request["out"]
+                if track.nbytes != size:
+                    raise ValueError("the track is not the recording's length")
+                memory.buf[begin:begin + size] = np.ascontiguousarray(track, "<i2").tobytes()
+            finally:
+                memory.close()
+            answer = {"stats": stats}
+        except Exception as error:  # noqa: BLE001 - that ghost plays silent; the server logs why
+            answer = {"error": f"{type(error).__name__}: {error}"[:500]}
+        sink.write((json.dumps(answer) + "\n").encode("utf-8"))
+        sink.flush()
+    if host is not None:
+        host.close()
+    return 0
+
+
 class SceneGhostSounds:
-    """The ghost tracks of one open scene, each rendered once on the first block asked of it
-    (a track per ghost ref, origin and scene length) and kept while the scene is open.
+    """The ghost tracks of one open scene, each made once on the first block asked of it (a track
+    per ghost ref, origin and scene length) and kept while the scene is open.
 
     `scene`: the session's package, ROM bytes, viewer frames (package indices), outlines, its
     SceneSound (the recording's samples per viewer frame), the ghost origin, the ghosts shown
-    (stage_ghosts.Shown) and their look (its volume: the player's ghost volume). `host_factory(rom)`
-    starts the engine host (EngineHost unless a test gives its own)."""
+    (stage_ghosts.Shown) and their look (its volume: the player's ghost volume). Tracks are made in
+    a TrackMaker child (`maker_factory()` when given); with `host_factory(rom)` (a test's engine)
+    they are made in this process instead, and also when the child cannot start."""
 
-    def __init__(self, host_factory=EngineHost, map_path: Path | None = None):
-        self.host_factory, self.map_path = host_factory, map_path
+    def __init__(self, host_factory=None, map_path: Path | None = None, maker_factory=None):
+        self.host_factory, self.map_path, self.maker_factory = host_factory, map_path, maker_factory
         self.host: EngineHost | None = None
+        self.maker: TrackMaker | None = None
         self.tracks: dict[tuple, np.ndarray] = {}
         self.stats: dict[str, dict] = {}
-        self.lock = threading.Lock()                 # one render at a time; tracks are immutable once made
+        self.lock = threading.Lock()                 # one track at a time; tracks are immutable once made
         self.twin = None                             # a Package of the scene's own, for its camera reads
 
     def block(self, scene, ref: str, index: int) -> tuple[bytes, str]:
@@ -332,85 +563,58 @@ class SceneGhostSounds:
             found = self.tracks.get(key)
             if found is None:
                 started = time.perf_counter()
-                found = self.tracks[key] = self._render(scene, ghost)
+                found, self.stats[ghost.ref] = self._make(scene, ghost)
+                self.tracks[key] = found
                 self.stats[ghost.ref]["ms"] = round((time.perf_counter() - started) * 1000, 1)
             return found
 
-    def _render(self, scene, ghost) -> np.ndarray:
-        from sm64_events.ghost import clip as ghost_clip
-        clip = ghost_clip.decode_clip(ghost.clip)
-        timer = [scene.outlines[index]["identity"].get("global_timer") for index in scene.frames]
-        origin = scene.outlines[scene.ghost_origin]["identity"].get("global_timer")
-        samples = scene.sound.samples
-        knots_at = [(k, samples[k], timer[k] - origin) for k in range(len(scene.frames))
-                    if samples[k] >= 0 and timer[k] is not None and origin is not None]
-        layer = scene.sound.layer
-        if len(knots_at) < 2:
-            self.stats[ghost.ref] = {"ticks": 0}
-            return np.zeros((layer.total_samples, 2), np.int16)
-        first_g = max(0, min(g for _, _, g in knots_at))
-        last_g = max(g for _, _, g in knots_at)
-        frames = range(first_g, last_g + 2)
-        started = time.perf_counter()
-        stage = self._stage(scene, knots_at)
-        placed = time.perf_counter()
-        ticks = plan_ticks(clip, frames, stage, scene.ghost_look.volume, clip.dance_tail)
-        if self.host is None:
-            self.host = self.host_factory(scene.rom)
-        lengths, pcm = self.host.render(ticks)
-        rendered = time.perf_counter()
-        track = lay(pcm, lengths, [(s, g - first_g) for _, s, g in knots_at if g >= first_g], layer.total_samples)
-        self.stats[ghost.ref] = {"ticks": len(ticks), "cues": sum(len(cues) for _, _, cues in ticks),
-                                 "stage_ms": round((placed - started) * 1000, 1),
-                                 "engine_ms": round((rendered - placed) * 1000, 1),
-                                 "lay_ms": round((time.perf_counter() - rendered) * 1000, 1)}
-        return track
-
-    def _stage(self, scene, knots_at: list):
-        """stage(g): the stage's camera position, focus, Mario, level and area at ghost frame g,
-        read every PLACE_EVERY scene frames from the scene state (a package of this object's own,
-        so the picture worker's cursor is never moved) and held between."""
-        from sm64_events.memory.addresses import MARIO_POS_OFF
-        from sm64_events.memory.layout import layout_for
+    def _make(self, scene, ghost) -> tuple[np.ndarray, dict]:
+        inputs = TrackInputs.of(scene, ghost, lakitu_address(self.map_path))
         package = scene.package
-        lakitu = lakitu_address(self.map_path) if scene.rom[0x3E] == ord("E") else None
-        try:
-            mario_struct = layout_for({ord("E"): "us", ord("J"): "jp"}[scene.rom[0x3E]]).mario_struct
-        except KeyError:
-            mario_struct = None
-        reads: list[tuple[int, tuple]] = []
+        maker = self._maker()
+        if maker is not None:
+            try:
+                return maker.make(inputs, None if package.states is None else package.data)
+            except RuntimeError:
+                if maker.process.poll() is not None:     # it ended: the next track starts another
+                    self.maker = None
+                raise
+        reader = None
         if package.states is not None:
             import package as scene_package
             if self.twin is None or self.twin.data is not package.data:
                 self.twin = scene_package.Package(package.data, package.rom, checked=package.index)
+            reader = self.twin.scene_bytes        # a package of this object's own: the pictures' cursor stays
 
-            # Only these three vectors of each state are read (package.scene_bytes): building the
-            # whole 8 MiB state for them cost ~1 s a track on the server's Python lock, and the
-            # free camera's pictures waited for it (round 5, measured 2026-10-27).
-            addresses = [None if lakitu is None else lakitu + LAKITU_POS, None if lakitu is None else lakitu + LAKITU_FOCUS,
-                         None if mario_struct is None else mario_struct + MARIO_POS_OFF]
-            wanted = [(address & 0x1FFFFFFF, 12) for address in addresses if address is not None]
+        def engine():
+            if self.host is None:
+                self.host = (self.host_factory or EngineHost)(inputs.rom)
+            return self.host
+        return make_track(inputs, reader, engine)
 
-            def vector(data):
-                values = struct.unpack("<3f", data)
-                return values if all(math.isfinite(value) and abs(value) < 1e6 for value in values) else None
-            for position, (k, _sample, g) in enumerate(knots_at):
-                if position % PLACE_EVERY and position != len(knots_at) - 1:
-                    continue
-                found = iter(self.twin.scene_bytes(scene.frames[k], wanted))
-                camera, focus, mario = (None if address is None else vector(next(found)) for address in addresses)
-                reads.append((g, (camera, focus, mario)))
-        identity = {g: scene.outlines[scene.frames[k]]["identity"] for k, _s, g in knots_at}
-        gs = [g for g, _ in reads]
-
-        def stage(g: int):
-            place = reads[max(0, np.searchsorted(gs, g, side="right") - 1)][1] if reads else (None, None, None)
-            seen = identity.get(g) or identity[min(identity, key=lambda known: abs(known - g))]
-            return (*place, seen.get("curr_level"), seen.get("curr_area"))
-        return stage
+    def _maker(self) -> TrackMaker | None:
+        """The track maker child (started on the first track), None to make tracks in this process:
+        a test's engine (host_factory), or a child that could not start."""
+        if self.host_factory is not None:
+            return None
+        if self.maker is None:
+            try:
+                self.maker = (self.maker_factory or TrackMaker)()
+            except OSError as error:
+                log.warning("scene viewer: the ghost track maker could not start (%s); tracks are made here", error)
+                self.host_factory = EngineHost
+                return None
+        return self.maker
 
     def close(self) -> None:
         host, self.host = self.host, None
         if host is not None:
             host.close()
+        maker, self.maker = self.maker, None
+        if maker is not None:
+            maker.close()
         self.tracks.clear()
+
+
+if __name__ == "__main__":
+    raise SystemExit(serve())
