@@ -104,11 +104,6 @@ export const SCENE_CAMERA_TUNABLES = {
   },
 
   // --- Look at Mario (F) ------------------------------------------------------
-  focusDistance: {
-    group: "Look at Mario", label: "Distance it brings you to", value: 700,
-    min: 100, max: 5000, step: 50, unit: "units",
-    why: "Look at Mario keeps the camera's direction and comes this close when it was farther; nearer than this it stays where it is.",
-  },
   marioHeight: {
     group: "Look at Mario", label: "Focus height above his feet", value: 120,
     min: 0, max: 300, step: 5, unit: "units",

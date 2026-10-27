@@ -15,12 +15,12 @@ import { cameraOf, dollied, easeInOut, flightSpeed, flown, flyToTarget, glideAt,
   speedStepped, turned, worldPoint } from "../../src/sm64_events/ui/components/scenecamera.js";
 import { SCENE_CAMERA_DEFAULTS, setSceneCameraTuning } from "../../src/sm64_events/ui/scenecameratuning.js";
 import { stageDefault, targetQuery } from "../../src/sm64_events/ui/components/scenestage.js";
-import { SEARCH_WAIT } from "../../src/sm64_events/ui/components/sceneghosts.js";
+import { SEARCH_WAIT, viewName } from "../../src/sm64_events/ui/components/sceneghosts.js";
 
 const REFERENCE = { orbitPerPixel: 0.01, steepestDegrees: 80, levelPerPixel: 0.1, panPerPixel: 0.002,
   dollyPerWheel: 0.002, closestDistance: 40, farthestDistance: 20000, flightSpeed: 1000, lookPerPixel: 0.004,
   fastMultiplier: 5, slowMultiplier: 0.2, speedPerNotch: 1.5, levelPerSecond: 30, flyToStandoff: 300, flyToMs: 200,
-  focusDistance: 600, marioHeight: 100 };
+  marioHeight: 100 };
 const FRAMES = Array.from({ length: 5 }, (_, i) => ({ level: 9, area: 1, game_frame: 1000 + i }));
 const POSE = { focus: [10, 200, -30], position: [10, 500, 1170], roll: 0, fov: 45, mario: [40, 80, -60] };
 const PER_DEGREE = 65536 / 360;
@@ -1297,19 +1297,38 @@ test("a key pressed while nothing on the page has focus is the viewer's, and its
 
 // ------------------------------------------------------------------ focus
 
-test("Look at Mario puts the focus point on him at a useful distance and a fallback picture shows its reason", async () => {
+// His report, 2026-10-27: "It should only change the camera look direction, NOT the camera position.
+// Same position, just looking at mario." From the recorded camera too: it enters Free camera at the
+// recorded place (no jump) and turns there; its roll and field of view stay.
+test("Look at Mario turns the camera to face him where it stands, keeping its roll and field of view", async () => {
   const { page, socket } = await openScene();
-  const first = await enterFree(page, socket);
+  await socket.picture(socket.sent[0]);
+  const tilted = { ...POSE, roll: 900, fov: 52 };
   fireEvent.click(page.getByRole("button", { name: "Look at Mario" }));
-  await waitFor(() => expect(socket.last()).toMatchObject({ kind: "pose", frame: 0 }));
-  socket.text({ id: socket.last().id, kind: "pose", pose: POSE, reason: null });
-  await waitFor(() => expect(socket.last().camera?.focus).toEqual([40, 80 + REFERENCE.marioHeight, -60]));
-  const camera = socket.last().camera;
-  expect(Math.hypot(...[0, 1, 2].map((i) => camera.position[i] - camera.focus[i])))
-    .toBeCloseTo(Math.min(REFERENCE.focusDistance, Math.hypot(300, 1200)), 6);
-  expect(first.roll).toBe(0);
+  await until(() => expect(socket.last()).toMatchObject({ kind: "pose", frame: 0 }));
+  const entry = socket.last().id;
+  socket.text({ id: entry, kind: "pose", pose: tilted, reason: null });
+  await until(() => expect([socket.last().kind, socket.last().id > entry]).toEqual(["pose", true]));
+  socket.text({ id: socket.last().id, kind: "pose", pose: tilted, reason: null });
+  await until(() => expect(socket.last().camera?.focus).toEqual([40, 80 + REFERENCE.marioHeight, -60]));
+  const camera = socket.last().camera, target = [40, 80 + REFERENCE.marioHeight, -60];
+  close(camera.position, POSE.position);
+  const facing = [0, 1, 2].map((i) => camera.focus[i] - camera.position[i]);
+  const toMario = [0, 1, 2].map((i) => target[i] - POSE.position[i]);
+  close(facing.map((value) => value / Math.hypot(...facing)), toMario.map((value) => value / Math.hypot(...toMario)));
+  expect([camera.roll, camera.fov]).toEqual([900, 52]);
   await socket.picture(socket.last(), { camera: "recorded", reason: "This frame has no 3D scene to move around in." });
   await waitFor(() => expect(page.container.textContent).toContain("This frame has no 3D scene to move around in."));
+});
+
+test("lookingAt keeps the camera's place, roll and field of view, faces the point, and stays put on it", () => {
+  const orbit = { ...orbitFromPose(POSE.focus, POSE.position, { roll: -300, fov: 60 }) };
+  const turnedTo = lookingAt(orbit, [500, -40, 900], REFERENCE), camera = cameraOf(turnedTo);
+  close(camera.position, cameraOf(orbit).position);
+  close(camera.focus, [500, -40 + REFERENCE.marioHeight, 900]);
+  expect([camera.roll, camera.fov]).toEqual([-300, 60]);
+  const onHim = lookingAt(orbit, [POSE.position[0], POSE.position[1] - REFERENCE.marioHeight, POSE.position[2]], REFERENCE);
+  expect(onHim).toBe(orbit);
 });
 
 test("Set focus asks where the clicked point is and turns the camera to orbit it, staying where it is", async () => {
@@ -1834,6 +1853,112 @@ test("Add and Remove send the whole list; the lab's answer selects rows, gives a
   await until(() => expect(ghostsSent(socket).at(-1).set).toEqual([]));
 });
 
+// His words (round 5, item 5): "we need one button per active ghost in the scene to follow their
+// recorded POV."
+const GHOST_CAMERA = { focus: [100, 200, -300], position: [600, 700, 1200], roll: -700, fov: 50 };
+async function twoGhostsIn(page, socket) {
+  await until(() => expect(ghostRow(page, "top-Single Jump-1")).not.toBeNull());
+  for (const ref of ["top-Single Jump-0", "top-Single Jump-1"]) {
+    fireEvent.click(within(ghostRow(page, ref)).getByRole("button", { name: /^Add/ }));
+    await until(() => expect(within(ghostRow(page, ref)).getByRole("button", { name: /^Adding/ })).toBeTruthy());
+  }
+  const pictures = socket.pictures().length;
+  socket.text({ id: ghostsSent(socket).at(-1).id, kind: "ghosts", shown: ["top-Single Jump-0", "top-Single Jump-1"],
+    refused: [] });
+  await until(() => expect(ghostRow(page, "top-Single Jump-1").classList.contains("is-shown")).toBe(true));
+  await until(() => expect(socket.pictures().length).toBe(pictures + 1));       // the picture on screen, with them
+  await socket.picture(socket.pictures().at(-1));
+}
+const tag = (page) => page.container.querySelector(".scene-lab-tag").textContent;
+const pressed = (button) => button.getAttribute("aria-pressed");
+
+test("each ghost in the scene has a view button: the stage from its own camera, through steps, into Free camera", async () => {
+  ghostRoutes();
+  const page = arrive();
+  const socket = await sceneUp(1);
+  await twoGhostsIn(page, socket);
+  const bar = within(page.container.querySelector('[aria-label="Camera"]'));
+  const theirs = bar.getByRole("button", { name: "Player 2's view" });
+  expect(bar.getByRole("button", { name: "Player 1's view" })).toBeTruthy();
+  expect(pressed(bar.getByRole("button", { name: "Recorded camera" }))).toBe("true");
+
+  fireEvent.click(theirs);
+  await until(() => expect(socket.pictures().at(-1).camera).toEqual({ ghost: "top-Single Jump-1" }));
+  expect([pressed(theirs), pressed(bar.getByRole("button", { name: "Recorded camera" }))]).toEqual(["true", "false"]);
+  expect(tag(page)).toBe("Player 2's view");
+  const row = within(ghostRow(page, "top-Single Jump-1"));
+  expect(pressed(row.getByRole("button", { name: "Their view: Player 2's view" }))).toBe("true");
+  await socket.picture(socket.pictures().at(-1), { camera: "free",
+    view: { ghost: "top-Single Jump-1", camera: GHOST_CAMERA } });
+
+  // It follows the ghost: a step asks for the next frame from that ghost's camera, and a reason
+  // the lab gives (a moment its recording has no camera for) is shown.
+  fireEvent.click(page.getByRole("button", { name: "Forward 1" }));
+  await until(() => expect(socket.pictures().at(-1)).toMatchObject({ frame: 1, camera: { ghost: "top-Single Jump-1" } }));
+  await socket.picture(socket.pictures().at(-1), { camera: "free", reason: "This ghost's recording has ended, so this is the last view it had.",
+    view: { ghost: "top-Single Jump-1", camera: GHOST_CAMERA } });
+  await until(() => expect(page.container.textContent).toContain("This ghost's recording has ended"));
+
+  // Free camera starts where the ghost's camera is, with no pose asked and no jump.
+  const before = socket.sent.length;
+  fireEvent.click(bar.getByRole("button", { name: "Free camera" }));
+  await until(() => expect(socket.pictures().at(-1).camera?.position).toBeTruthy());
+  expect(socket.sent.slice(before).some((message) => message.kind === "pose")).toBe(false);
+  const free = socket.pictures().at(-1).camera;
+  close(free.position, GHOST_CAMERA.position);
+  close(free.focus, GHOST_CAMERA.focus);
+  expect([free.roll, free.fov]).toEqual([GHOST_CAMERA.roll, GHOST_CAMERA.fov]);
+  expect([tag(page), pressed(theirs)]).toEqual(["Free camera", "false"]);
+  await socket.picture(socket.pictures().at(-1));
+
+  // The row's own button, then Recorded camera (R) back to the stage's own view.
+  fireEvent.click(within(ghostRow(page, "top-Single Jump-0")).getByRole("button", { name: "Their view: Player 1's view" }));
+  await until(() => expect(socket.pictures().at(-1).camera).toEqual({ ghost: "top-Single Jump-0" }));
+  expect(tag(page)).toBe("Player 1's view");
+  await socket.picture(socket.pictures().at(-1), { camera: "free", view: { ghost: "top-Single Jump-0", camera: GHOST_CAMERA } });
+  fireEvent.keyDown(document.body, { key: "r" });
+  await until(() => expect(socket.pictures().at(-1).camera).toBeNull());
+  expect(tag(page)).toBe("Recorded camera");
+});
+
+test("removing the ghost whose view is on screen goes back to the recorded camera", async () => {
+  ghostRoutes();
+  const page = arrive();
+  const socket = await sceneUp(1);
+  await twoGhostsIn(page, socket);
+  const bar = within(page.container.querySelector('[aria-label="Camera"]'));
+  fireEvent.click(bar.getByRole("button", { name: "Player 1's view" }));
+  await until(() => expect(socket.pictures().at(-1).camera).toEqual({ ghost: "top-Single Jump-0" }));
+  await socket.picture(socket.pictures().at(-1), { camera: "free", view: { ghost: "top-Single Jump-0", camera: GHOST_CAMERA } });
+  fireEvent.click(within(ghostRow(page, "top-Single Jump-0")).getByRole("button", { name: /^Remove/ }));
+  await until(() => expect(socket.pictures().at(-1).camera).toBeNull());
+  expect(tag(page)).toBe("Recorded camera");
+  socket.text({ id: ghostsSent(socket).at(-1).id, kind: "ghosts", shown: ["top-Single Jump-1"], refused: [] });
+  await until(() => expect(bar.queryByRole("button", { name: "Player 1's view" })).toBeNull());
+  expect(bar.getByRole("button", { name: "Player 2's view" })).toBeTruthy();
+});
+
+test("view buttons name whose camera it is, with the time for yours and where two ghosts share a name", () => {
+  const ghosts = [{ ref: "a", player: "Sully", time: "11\"03" }, { ref: "b", player: "Sully", time: "11\"40" },
+    { ref: "c", player: "Bob", time: "10\"50" }, { ref: "d", label: "YOUR PB" }, { ref: "e", player: "You", time: "12\"00" }];
+  expect(["a", "b", "c", "d", "e", "gone"].map((ref) => viewName(ghosts, ref))).toEqual(["Sully's view · 11\"03",
+    "Sully's view · 11\"40", "Bob's view", "YOUR PB's view", "Your view · 12\"00", "A ghost's view"]);
+});
+
+test("without the free camera the view buttons stay, disabled, with the reason", async () => {
+  opened = { ...opened, free_camera: { available: false, reason: "The lab config names no symbol map." } };
+  ghostRoutes();
+  const page = arrive();
+  const socket = await sceneUp(1);
+  await twoGhostsIn(page, socket);
+  const view = within(page.container.querySelector('[aria-label="Camera"]')).getByRole("button", { name: "Player 1's view" });
+  expect([view.disabled, view.title]).toEqual([true, "The lab config names no symbol map."]);
+  const sent = socket.pictures().length;
+  fireEvent.click(view);
+  await settled();
+  expect(socket.pictures().length).toBe(sent);
+});
+
 test("the same scene left and come back to draws its ghosts again; a new stage starts with none", async () => {
   ghostRoutes();
   const first = arrive();
@@ -1903,7 +2028,7 @@ test("every movement reads its tuning: the shipped values when none is given, a 
     ["flightSpeed", (t) => flightSpeed(1, {}, t)], ["fastMultiplier", (t) => flightSpeed(1, { fast: true }, t)],
     ["slowMultiplier", (t) => flightSpeed(1, { slow: true }, t)], ["speedPerNotch", (t) => speedStepped(1, 1, t)],
     ["levelPerSecond", (t) => flown(tilted, { forward: 1 }, 0.01, 10, t)],
-    ["focusDistance", (t) => lookingAt(orbit, [0, 0, 0], t)], ["marioHeight", (t) => lookingAt(orbit, [0, 0, 0], t)],
+    ["marioHeight", (t) => lookingAt(orbit, [0, 0, 0], t)],
     ["flyToStandoff", (t) => flyToTarget(orbit, [100, 0, -200], [0, 0, 0], t)],
     ["flyToMs", (t) => glideAt(orbit, lookingAt(orbit, [0, 0, 0]), 150, t)],
   ];

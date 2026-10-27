@@ -81,8 +81,31 @@ function rowAction(shown, wanted) {
   return wanted ? "Adding..." : "Removing...";
 }
 
-// One ghost: rank where known, player (with the day, for one of yours), time, and Add or Remove.
-// `children` go under it (a player's slower ghosts).
+// Whose view a ghost's camera is, in words: "Sully's view"; one of yours with no player name is
+// "Your view" and its time, as the stage is usually a run of yours too; and when another ghost in the
+// scene has the same name, its time, so two runs by one player stay apart.
+export function viewName(ghosts, ref) {
+  const nameOf = (ghost) => ghost.player || ghost.label || "Ghost";
+  const ghost = ghosts.find((each) => each.ref === ref);
+  if (!ghost) return "A ghost's view";
+  const name = nameOf(ghost), owner = name === "You" ? "Your view" : `${name}'s view`;
+  const shared = name === "You" || ghosts.filter((each) => nameOf(each) === name).length > 1;
+  return shared && ghost.time ? `${owner} · ${ghost.time}` : owner;
+}
+
+// A ghost in the scene's row button for its view (the camera bar has one per ghost too).
+function TheirView({ link, ghostRef }) {
+  const available = link.freeAvailable;
+  return html`<button type="button" class="scene-lab-ghost-view" aria-pressed=${!link.free && link.view === ghostRef}
+      disabled=${!available} aria-label=${`Their view: ${viewName(link.ghosts, ghostRef)}`}
+      title=${available ? "See the stage from this ghost's own camera, following it as the scene plays"
+        : link.scene.free_camera?.reason}
+      onclick=${(event) => link.theirView(ghostRef, event.timeStamp)}>Their view</button>`;
+}
+
+// One ghost: rank where known, player (with the day, for one of yours), time, and Add or Remove;
+// once it is in the scene, Their view shows the stage from its own camera. `children` go under it
+// (a player's slower ghosts).
 function GhostRow({ item, link, stage, more = null, children = null }) {
   const shown = link.ghosts.some((ghost) => ghost.ref === item.ref);
   const wanted = link.wantedGhosts.some((ghost) => ghost.ref === item.ref);
@@ -100,6 +123,7 @@ function GhostRow({ item, link, stage, more = null, children = null }) {
     ${isStage ? html`<span class="scene-lab-ghost-stage" title="This run is the scene you are watching">The stage</span>`
       : html`<button type="button" disabled=${waiting} aria-label=${`${action.replace("...", "")} ${name}`}
           onclick=${toggle}>${action}</button>`}
+    ${shown && !isStage && html`<${TheirView} link=${link} ghostRef=${item.ref} />`}
     ${more}
     ${refused && !shown && html`<span class="scene-lab-ghost-reason" role="status">${refused}</span>`}
     ${children}

@@ -124,12 +124,13 @@ export function flown(orbit, move, seconds, speed, tuning = SCENE_CAMERA_DEFAULT
     seconds * tuning.levelPerSecond);
 }
 
-// Look at Mario: the focus point on Mario, the camera's direction kept, as
-// close as the focus distance when it was farther, and level.
+// Look at Mario: the camera stays where it stands and only turns to face him
+// (his report, 2026-10-27: "Same position, just looking at mario"); its roll
+// and field of view are kept, and it orbits him from then on. Unchanged when
+// the camera stands on that point (no direction to face).
 export function lookingAt(orbit, mario, tuning = SCENE_CAMERA_DEFAULTS) {
-  const limit = tuning.steepestDegrees * Math.PI / 180;
-  return { ...orbit, focus: add(mario, [0, tuning.marioHeight, 0]), dist: Math.min(orbit.dist, tuning.focusDistance),
-    pitch: clamp(orbit.pitch, -limit, limit), roll: 0 };
+  return orbitFromPose(add(mario, [0, tuning.marioHeight, 0]), cameraOf(orbit).position,
+    { roll: orbit.roll || 0, fov: orbit.fov ?? null }) || orbit;
 }
 
 // Set focus: turn to the picked point and orbit it, the camera where it was, level.
