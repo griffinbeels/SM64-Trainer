@@ -217,6 +217,69 @@ def test_the_transport_fits_one_row_the_title_names_the_attempt_and_a_drag_keeps
             browser.close()
 
 
+# Each picture request's "hud" (absent: null) and each picture header's "hud" on the scene socket.
+HUDS = r"""
+(() => {
+  const seen = window.__huds = { asked: [], drawn: [] };
+  const Native = window.WebSocket;
+  window.WebSocket = class extends Native {
+    constructor(...args) {
+      super(...args);
+      this.addEventListener("message", (event) => {
+        if (typeof event.data === "string") return;
+        const length = new DataView(event.data).getUint32(0, true);
+        const header = JSON.parse(new TextDecoder().decode(new Uint8Array(event.data, 4, length)));
+        seen.drawn.push([header.hud ?? null, header.hud_reason ?? null]);
+      });
+    }
+    send(data) {
+      try { const message = JSON.parse(data); if (!message.kind) seen.asked.push(message.hud ?? null); }
+      catch { /* not a request */ }
+      return super.send(data);
+    }
+  };
+})()
+"""
+
+
+def test_hud_off_reaches_the_lab_on_every_picture_and_is_remembered(tmp_path, monkeypatch):
+    """Round 4, item 9 on the real page and the real lab (m4-hud's flag): HUD off asks the picture on
+    screen again without the HUD and every picture after it; the lab's header answers for each; and
+    the choice is still off after leaving and coming back."""
+    with attempt_scene._served(tmp_path, monkeypatch, lab_on=True) as (base, _seen), sync_playwright() as play:
+        browser = play.chromium.launch(headless=True, args=["--disable-gpu"])
+        try:
+            page = browser.new_page(viewport={"width": 1280, "height": 1000})
+            page.add_init_script(HUDS)
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            page.goto(base)
+            ready = page.locator(f"{attempt_scene.ROWS} .attempt-scene:not([disabled])").first
+            ready.wait_for(timeout=20000)
+            ready.click()
+            page.wait_for_function(DRAWN, timeout=20000)
+            page.wait_for_function(f"!({PLAYING})", timeout=20000)
+            assert set(page.evaluate("window.__huds.asked")) == {None}                  # on: the lab's default
+            hud = page.get_by_role("button", name="HUD")
+            assert hud.get_attribute("aria-pressed") == "true"
+            asked = page.evaluate("window.__huds.asked.length")
+            hud.click()
+            page.wait_for_function(f"window.__huds.asked.length > {asked} && window.__huds.drawn.length > {asked}")
+            page.keyboard.press(".")
+            page.wait_for_function(f"window.__huds.drawn.length > {asked + 1}")
+            huds = page.evaluate("window.__huds")
+            assert huds["asked"][asked:] == [False, False], huds
+            assert all(drawn[0] is False or drawn[1] for drawn in huds["drawn"][asked:]), huds   # cut, or why not
+            page.locator('.nav-item[title="Practice"]:visible').click()
+            page.locator('.nav-item[title="Scene viewer"]:visible').click()
+            page.wait_for_function(DRAWN, timeout=20000)
+            assert page.get_by_role("button", name="HUD").get_attribute("aria-pressed") == "false"
+            assert page.evaluate("window.__huds.asked.at(-1)") is False
+            assert errors == []
+        finally:
+            browser.close()
+
+
 def _static_imports(source: str) -> list[str]:
     return re.findall(r"^\s*import\s[^;]*?from\s+[\"']([^\"']+)[\"']", source, re.MULTILINE)
 

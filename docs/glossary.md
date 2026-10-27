@@ -1333,8 +1333,11 @@ never a file. The **stage picker** (Practice's own course grid and [[strategy]] 
 which opens, or the lab's reason why there is none. It starts on the scene you opened, else on
 Practice's [[target]]. Below the player, the [[ghost]] panel lists **Your [[ghost]]s** (fastest or newest
 first), **Top [[ghost]]s** (each player's best for a [[strategy]], with its place) and **Find a player**
-(each player's best; "more" opens their slower ones), a page at a time; Add draws that [[ghost]]
-into the stage from the next picture, and a [[ghost]] the lab cannot draw shows its reason.
+(each player's best; "more" opens their slower ones), a page at a time, each page asked once in a
+scene's life and a name only once typing stops or on Enter; Add draws that [[ghost]] into the stage
+from the next picture, and a [[ghost]] the lab cannot draw shows its reason. **HUD** (kept per
+viewer) leaves the game's on-screen counters and timer out of every picture, the one on screen at
+once.
 The page takes the keyboard when you arrive (the sidebar or the [[ghost button]])
 and after a mouse click on its controls; a field that types keeps its keys, and
 Esc, leaving the window or the page lets go of every key.

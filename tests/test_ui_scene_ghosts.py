@@ -345,7 +345,7 @@ def test_the_ghost_panel_pages_sorts_searches_and_adds_ghosts_into_the_scene(tmp
             assert [row["ref"] for row in yours] == [f"yours-{i}" for i in range(10)]
             assert yours[0]["stage"] and yours[0]["action"] is None                      # the stage is not addable
             assert all(row["action"] == "Add" for row in yours[1:])
-            assert page.locator(SECTION.format("Your ghosts")).get_by_text("Page 1 of 3").is_visible()
+            assert page.locator(SECTION.format("Your ghosts")).get_by_text("Page 1", exact=True).is_visible()
             top = _rows(page, "Top ghosts")
             assert len(top) == 10 and top[0]["ref"] == first and top[2]["ref"] == REFUSED
             for width in (850, 1280):

@@ -23,37 +23,48 @@ import { targetKey, targetQuery } from "./scenestage.js";
 
 const html = htm.bind(h);
 const ROOT = "/api/scene-lab";
-// How long typing in Find a player waits before it asks (the rival search's own wait).
-export const SEARCH_WAIT = { ms: 250 };
+// How long Find a player waits after typing stops before it asks; Enter asks at once. Every new
+// name can cost the lab a community call, so it is never asked per keystroke.
+export const SEARCH_WAIT = { ms: 400 };
 
 // One section's pages (the lab counts them from 1): `query` names the section and the target
-// (null: nothing to ask). A new query starts on its first page; an answer to an older query or page
-// is dropped, and the page before stays up while the next loads.
-function useGhostPages(query) {
+// (null: nothing to ask). Each page is asked once in a scene's life: `cache` (SceneLink.ghostPages)
+// keeps every answer, and an ask still on its way, so paging back, reopening a section or coming
+// back to the scene asks nothing. A new query starts on its first page; an answer to an older one is
+// dropped, and the page before stays up while the next loads. Nothing here asks on a timer.
+function useGhostPages(query, cache) {
   const [paging, setPaging] = useState({ query: null, page: 1 });
   const page = paging.query === query ? paging.page : 1;
   const asking = query ? `${query}&page=${page}` : null;
   const [answered, setAnswered] = useState({ query: null, asking: null, answer: null, error: null });
   useEffect(() => {
-    if (!asking) return undefined;
+    const entry = asking ? cache.get(asking) : null;
+    if (!asking || entry?.answer) return undefined;
     let alive = true;
-    getJSON(`${ROOT}/ghosts?${asking}`)
-      .then((answer) => { if (alive) setAnswered({ query, asking, answer, error: null }); })
-      .catch((problem) => { if (alive) setAnswered({ query, asking, answer: null, error: problem.message }); });
+    const pending = entry?.pending || getJSON(`${ROOT}/ghosts?${asking}`);
+    if (!entry) {
+      cache.set(asking, { pending });
+      pending.then((answer) => cache.set(asking, { answer }), () => cache.delete(asking));   // a failure asks again
+    }
+    pending.then((answer) => { if (alive) setAnswered({ query, asking, answer, error: null }); },
+      (problem) => { if (alive) setAnswered({ query, asking, answer: null, error: problem.message }); });
     return () => { alive = false; };
-  }, [asking]);
+  }, [asking, cache]);
+  const held = asking ? cache.get(asking)?.answer : undefined;
   const fresh = answered.asking === asking, same = answered.query === query;
-  return { page, answer: same ? answered.answer : null, error: fresh ? answered.error : null,
+  return { page, answer: held ?? (same ? answered.answer : null), error: fresh && !held ? answered.error : null,
     setPage: (next) => setPaging({ query, page: next }) };
 }
 
+// "pages" can count one page past what the lab holds (more top ghosts it fetches when asked), so it
+// says whether there is a next page, not how many there are.
 function Pager({ pages, label }) {
-  const total = pages.answer?.pages || 1;
-  if (total <= 1) return null;
+  const more = pages.page < (pages.answer?.pages || 1);
+  if (!more && pages.page <= 1) return null;
   return html`<div class="scene-lab-ghost-pager" role="group" aria-label=${`${label} pages`}>
     <button type="button" disabled=${pages.page <= 1} onclick=${() => pages.setPage(pages.page - 1)}>Previous</button>
-    <span>Page ${pages.page} of ${total}</span>
-    <button type="button" disabled=${pages.page >= total} onclick=${() => pages.setPage(pages.page + 1)}>Next</button>
+    <span>Page ${pages.page}</span>
+    <button type="button" disabled=${!more} onclick=${() => pages.setPage(pages.page + 1)}>Next</button>
   </div>`;
 }
 
@@ -63,35 +74,47 @@ function recordedDay(utc) {
   return when && !Number.isNaN(when.getTime()) ? when.toLocaleDateString(undefined, { month: "short", day: "numeric" }) : null;
 }
 
+// What a row's button says: Add or Remove, or, while the lab has not answered the list it is in or
+// out of (a ghost new to the lab may need a download first), Adding or Removing.
+function rowAction(shown, wanted) {
+  if (wanted === shown) return shown ? "Remove" : "Add";
+  return wanted ? "Adding..." : "Removing...";
+}
+
 // One ghost: rank where known, player (with the day, for one of yours), time, and Add or Remove.
 // `children` go under it (a player's slower ghosts).
 function GhostRow({ item, link, stage, more = null, children = null }) {
   const shown = link.ghosts.some((ghost) => ghost.ref === item.ref);
+  const wanted = link.wantedGhosts.some((ghost) => ghost.ref === item.ref);
   const isStage = stage != null && item.attempt === stage;
   const refused = link.refusedGhosts.get(item.ref);
-  const toggle = () => link.setGhosts(shown ? link.ghosts.filter((ghost) => ghost.ref !== item.ref)
-    : [...link.ghosts, { ref: item.ref, label: item.player, player: item.player, time: item.time }]);
+  const toggle = () => link.setGhosts(wanted ? link.wantedGhosts.filter((ghost) => ghost.ref !== item.ref)
+    : [...link.wantedGhosts, { ref: item.ref, label: item.player, player: item.player, time: item.time }]);
   const name = `${item.player} ${item.time}`, day = item.yours ? recordedDay(item.recorded_utc) : null;
-  return html`<li class=${`scene-lab-ghost${shown ? " is-shown" : ""}${isStage ? " is-stage" : ""}`} data-ref=${item.ref}>
+  const action = rowAction(shown, wanted), waiting = wanted !== shown;
+  return html`<li class=${`scene-lab-ghost${shown ? " is-shown" : ""}${waiting ? " is-waiting" : ""}${isStage ? " is-stage" : ""}`}
+      data-ref=${item.ref}>
     <span class="scene-lab-ghost-rank">${item.rank != null ? `#${item.rank}` : ""}</span>
     <span class="scene-lab-ghost-player" title=${item.player}>${item.player}${day && html`<small> · ${day}</small>`}</span>
     <span class="scene-lab-ghost-time">${item.time}</span>
     ${isStage ? html`<span class="scene-lab-ghost-stage" title="This run is the scene you are watching">The stage</span>`
-      : html`<button type="button" aria-label=${`${shown ? "Remove" : "Add"} ${name}`} onclick=${toggle}>
-          ${shown ? "Remove" : "Add"}</button>`}
+      : html`<button type="button" disabled=${waiting} aria-label=${`${action.replace("...", "")} ${name}`}
+          onclick=${toggle}>${action}</button>`}
     ${more}
     ${refused && !shown && html`<span class="scene-lab-ghost-reason" role="status">${refused}</span>`}
     ${children}
   </li>`;
 }
 
-// A section's rows, or why there are none.
+// A section's rows, or why there are none. The lab's "note" (why other players' ghosts are missing:
+// signed out, offline, a source checkout) is one quiet line above them.
 function GhostList({ pages, link, stage, empty, label, row = null }) {
   const { answer, error } = pages;
   if (error) return html`<p class="scene-lab-ghost-note is-bad" role="status">${error}</p>`;
   if (!answer) return html`<p class="scene-lab-ghost-note" role="status">Loading...</p>`;
-  if (!answer.items?.length) return html`<p class="scene-lab-ghost-note">${answer.reason || empty}</p>`;
-  return html`<ol class="scene-lab-ghost-list" aria-label=${label}>
+  const note = answer.note && html`<p class="scene-lab-ghost-note" role="note">${answer.note}</p>`;
+  if (!answer.items?.length) return html`${note}<p class="scene-lab-ghost-note">${answer.reason || empty}</p>`;
+  return html`${note}<ol class="scene-lab-ghost-list" aria-label=${label}>
       ${answer.items.map((item) => (row ? row(item)
         : html`<${GhostRow} key=${item.ref} item=${item} link=${link} stage=${stage} />`))}
     </ol>
@@ -101,7 +124,7 @@ function GhostList({ pages, link, stage, empty, label, row = null }) {
 function YourGhosts({ link, target, stage }) {
   const [sort, setSort] = useState("fastest");
   const query = `section=yours&${targetQuery(target)}&sort=${sort}`;
-  const pages = useGhostPages(query);
+  const pages = useGhostPages(query, link.ghostPages);
   return html`<section class="scene-lab-ghost-section" aria-label="Your ghosts">
     <header><h4>Your ghosts</h4>
       <select aria-label="Sort your ghosts" value=${sort} onchange=${(event) => setSort(event.currentTarget.value)}>
@@ -119,7 +142,7 @@ function TopGhosts({ link, target, stage, strategies }) {
   const [strat, setStrat] = useState({ from: null, value: null });
   const from = `${targetKey(target)}|${target.strat ?? ""}`;
   const chosen = strat.from === from ? strat.value : target.strat ?? null;
-  const pages = useGhostPages(`section=top&${targetQuery({ ...target, strat: chosen })}`);
+  const pages = useGhostPages(`section=top&${targetQuery({ ...target, strat: chosen })}`, link.ghostPages);
   return html`<section class="scene-lab-ghost-section" aria-label="Top ghosts">
     <header><h4>Top ghosts</h4>
       ${strategies?.length ? html`<${StratPicker} key=${from} entity=${targetKey(target)} strategies=${strategies}
@@ -133,7 +156,8 @@ function TopGhosts({ link, target, stage, strategies }) {
 
 // A player's slower ghosts, fastest first, under their best.
 function PlayerMore({ link, target, stage, player }) {
-  const pages = useGhostPages(`section=player&player=${encodeURIComponent(player)}&${targetQuery(target)}`);
+  const pages = useGhostPages(`section=player&player=${encodeURIComponent(player)}&${targetQuery(target)}`,
+    link.ghostPages);
   return html`<div class="scene-lab-ghost-more-list">
     <${GhostList} pages=${pages} link=${link} stage=${stage} label=${`${player}'s ghosts`}
       empty="No other ghosts." />
@@ -146,12 +170,19 @@ function FindPlayer({ link, target, stage }) {
   const [open, setOpen] = useState(() => new Set());
   const timer = useRef(null);
   useEffect(() => () => clearTimeout(timer.current), []);
+  const submit = (value) => {
+    clearTimeout(timer.current);
+    if (value.trim() === asked) return;
+    setAsked(value.trim());
+    setOpen(new Set());
+  };
   const type = (value) => {
     setTyped(value);
     clearTimeout(timer.current);
-    timer.current = setTimeout(() => { setAsked(value.trim()); setOpen(new Set()); }, SEARCH_WAIT.ms);
+    timer.current = setTimeout(() => submit(value), SEARCH_WAIT.ms);
   };
-  const pages = useGhostPages(asked ? `section=search&q=${encodeURIComponent(asked)}&${targetQuery(target)}` : null);
+  const pages = useGhostPages(asked ? `section=search&q=${encodeURIComponent(asked)}&${targetQuery(target)}` : null,
+    link.ghostPages);
   const flip = (player) => setOpen((was) => {
     const next = new Set(was);
     if (!next.delete(player)) next.add(player);
@@ -168,7 +199,8 @@ function FindPlayer({ link, target, stage }) {
   return html`<section class="scene-lab-ghost-section" aria-label="Find a player">
     <header><h4>Find a player</h4>
       <input type="search" maxlength="80" placeholder="Player name" aria-label="Find a player by name" value=${typed}
-        oninput=${(event) => type(event.currentTarget.value)} /></header>
+        oninput=${(event) => type(event.currentTarget.value)}
+        onkeydown=${(event) => { if (event.key === "Enter") submit(event.currentTarget.value); }} /></header>
     ${asked ? html`<${GhostList} pages=${pages} link=${link} stage=${stage} label="Players found" row=${row}
         empty="No one by that name has a ghost here." />`
       : html`<p class="scene-lab-ghost-note">Each player's fastest ghost; "more" shows their slower ones.</p>`}
@@ -178,12 +210,12 @@ function FindPlayer({ link, target, stage }) {
 // `strategies`: the target's strategy names (the stage picker's list), for Top ghosts' own dropdown.
 export function GhostPanel({ link, target, strategies }) {
   if (!link.scene || !targetKey(target)) return null;
-  const stage = link.scene.attempt ?? null, count = link.ghosts.length;
+  const stage = link.scene.attempt ?? null, count = link.ghosts.length, wanted = link.wantedGhosts.length;
   return html`<section class="practice-card scene-lab-ghosts" aria-label="Ghosts">
     <div class="scene-lab-ghosts-head">
       <h3>Ghosts</h3>
       <p class="scene-lab-hint">${count ? `${count} in the scene.` : "Add ghosts to watch them run beside this one."}</p>
-      ${count ? html`<button type="button" onclick=${() => link.setGhosts([])}>Remove all</button>` : null}
+      ${wanted ? html`<button type="button" onclick=${() => link.setGhosts([])}>Remove all</button>` : null}
     </div>
     ${link.ghostNote && html`<p class="scene-lab-ghost-note is-bad" role="status">${link.ghostNote}</p>`}
     <div class="scene-lab-ghost-sections">

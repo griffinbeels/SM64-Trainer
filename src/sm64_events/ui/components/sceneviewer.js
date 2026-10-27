@@ -248,6 +248,13 @@ function savedLoop() {
   try { return localStorage.getItem(LOOP_PREFERENCE) === "on"; } catch { return false; }
 }
 
+// HUD likewise (his round 4, item 9: "I might want to see the video WITHOUT a hud"): on unless
+// he turned it off.
+export const HUD_PREFERENCE = "sm64.sceneHud";
+function savedHud() {
+  try { return localStorage.getItem(HUD_PREFERENCE) !== "off"; } catch { return true; }
+}
+
 // The heading for the open scene, never its file name: the server's title when it names the
 // scene's target, else the attempt the Practice log already shows (course, star, strategy and
 // time), else the server's plain title ("Lab recording"), else "Recording".
@@ -260,15 +267,18 @@ export function sceneTitle(scene, view) {
   return [named.context, named.name, attempt.strat_tag, time].filter(Boolean).join(" · ");
 }
 
-// What the page last showed for a scene -- the stage picker's target and the scene's ghosts -- so a page
-// that leaves and comes back to the same scene shows them again (the page's own state goes with it).
-let kept = { scene: null, target: null, ghosts: [] };
+// What the page last showed for a scene -- the stage picker's target, the scene's ghosts, and every
+// page of ghosts the lab answered (sceneghosts.js asks each page once in a scene's life) -- so a
+// page that leaves and comes back to the same scene shows them again, asking nothing (the page's own
+// state goes with it). A scene that ends forgets them: the lab's ghost refs last one server.
+const unkept = (key = null) => ({ scene: key, target: null, ghosts: [], pages: new Map() });
+let kept = unkept();
 const sceneKey = (scene) => (scene ? `${scene.session}|${scene.attempt ?? scene.name}` : null);
 function keep(scene, fields) {
-  if (kept.scene !== sceneKey(scene)) kept = { scene: sceneKey(scene), target: null, ghosts: [] };
+  if (kept.scene !== sceneKey(scene)) kept = unkept(sceneKey(scene));
   Object.assign(kept, fields);
 }
-const keptFor = (scene) => (kept.scene === sceneKey(scene) ? kept : { target: null, ghosts: [] });
+const keptFor = (scene) => (kept.scene === sceneKey(scene) ? kept : unkept());
 
 // The open scene's requests and camera: up to PICTURES_IN_FLIGHT pictures in
 // flight, the newest input waiting behind them, input time kept from the
@@ -283,8 +293,9 @@ export class SceneLink {
       wanted: null, sequence: 0, questions: new Map(), latencies: [], pending: [0, 0, false], drag: null,
       entering: null, arrived: 0, drawnSeq: 0, looking: null, flight: idleFlight(), speed: 1, picking: false,
       finding: false, glide: null, serial: 0, noticeTimer: null, moving: null, shared: new Map(), playback: null,
-      readies: [], coldId: 0, autoplay: false, loop: savedLoop(), ghosts: [], refusedGhosts: new Map(),
-      ghostNote: null, ghostSerial: 0, sound: new SceneSound({ changed: () => this.changed() }) });
+      readies: [], coldId: 0, autoplay: false, loop: savedLoop(), hud: savedHud(), ghosts: [], refusedGhosts: new Map(),
+      asked: null, ghostPages: new Map(), ghostNote: null, ghostSerial: 0,
+      sound: new SceneSound({ changed: () => this.changed() }) });
     this.timings = new MovingTimings((summary) => { this.moving = summary; this.changed(); });
     this.onShared = (event) => this.sharedArrived(event);
   }
@@ -314,7 +325,9 @@ export class SceneLink {
     // A new scene starts with no ghosts.
     Object.assign(this, { ws, scene, frame: 0, free: false, orbit: null, entry: null, inFlight: new Map(),
       wanted: null, notice: null, error: null, speed: 1, moving: null, readies: [], coldId: this.sequence + 1,
-      ghosts: keptFor(scene).ghosts, refusedGhosts: new Map(), ghostNote: null });
+      ghosts: keptFor(scene).ghosts, asked: null, refusedGhosts: new Map(), ghostNote: null });
+    keep(scene, {});
+    this.ghostPages = kept.pages;
     if (this.sharedAvailable) {
       webview().addEventListener("sharedbufferreceived", this.onShared);
       this.encoding = "shared";
@@ -377,6 +390,7 @@ export class SceneLink {
   end(message) {
     this.disconnect();
     this.sound.load(null);
+    kept = unkept();
     Object.assign(this, { scene: null, free: false, notice: null, error: message, inFlight: new Map(), wanted: null });
     this.changed();
     this.ended();
@@ -405,7 +419,8 @@ export class SceneLink {
       due: play ? play.dueOf(frame) : null });
     if (play && this.wanted.kind !== "play") play.moved = true;
     this.wanted = null;
-    this.ws.send(JSON.stringify({ id, session: this.scene.session, frame, camera, encoding: this.encoding }));
+    this.ws.send(JSON.stringify({ id, session: this.scene.session, frame, camera, encoding: this.encoding,
+      ...(this.hud ? {} : { hud: false }) }));
     this.drawing = true;
     this.changed();
   }
@@ -490,7 +505,8 @@ export class SceneLink {
     this.timings.drawn({ at: drawnAt, input_ms: moving ? header.input_ms : null, decode_ms: decodeMs,
       trip_ms: header.trip_ms, server_ms: header.server_ms, timings: header.timings, encoding: header.encoding,
       width: header.width, height: header.height }, moving);
-    Object.assign(this, { shown: header, notice: header.reason || null });
+    // hud_reason: why a picture asked for without the HUD still has it (the server's sentence).
+    Object.assign(this, { shown: header, notice: header.reason || header.hud_reason || null });
     this.changed();
     this.pump();
     if (this.autoplay) this.play();
@@ -538,17 +554,22 @@ export class SceneLink {
   pose(frame) { return this.ask("pose", { frame }); }
 
   // ---- the scene's ghosts (sceneghosts.js): the page sends the whole list each time, and the lab's
-  // answer says which it draws (every picture after it shows them) and why it refused the rest. The
-  // rows show the list as asked until the answer comes; only the newest list's answer is kept. The
-  // picture on screen is asked for again, so an added ghost appears without a step.
+  // answer says which it draws (every picture after it shows them) and why it refused the rest.
+  // `ghosts` is what the lab draws; `asked` the list on its way (a ghost new to the lab may take a
+  // download first), which the rows show as adding or removing until the answer comes. Only the
+  // newest list's answer is kept. The picture on screen is asked for again, so an added ghost
+  // appears without a step (the lab never sends a picture by itself).
+  get wantedGhosts() { return this.asked ?? this.ghosts; }
+
   async setGhosts(list) {
-    const serial = ++this.ghostSerial, before = this.ghosts;
-    Object.assign(this, { ghosts: list, ghostNote: null });
+    const serial = ++this.ghostSerial;
+    Object.assign(this, { asked: list, ghostNote: null });
     this.changed();
     const answer = await this.ask("ghosts", { set: list.map(({ ref, label }) => ({ ref, label })) });
     if (serial !== this.ghostSerial) return;
+    this.asked = null;
     if (answer.kind !== "ghosts") {
-      Object.assign(this, { ghosts: before, ghostNote: answer.reason || "The scene did not take the ghosts. Try again." });
+      this.ghostNote = answer.reason || "The scene did not take the ghosts. Try again.";
       this.changed();
       return;
     }
@@ -914,6 +935,14 @@ export class SceneLink {
     this.play();
   }
 
+  // The picture on screen is asked for again, with or without the HUD, and every picture after it.
+  setHud(on) {
+    this.hud = on;
+    try { localStorage.setItem(HUD_PREFERENCE, on ? "on" : "off"); } catch { /* kept for this visit only */ }
+    this.want("input");
+    this.changed();
+  }
+
   setLoop(on) {
     this.loop = on;
     try { localStorage.setItem(LOOP_PREFERENCE, on ? "on" : "off"); } catch { /* kept for this visit only */ }
@@ -1231,6 +1260,9 @@ function CameraBar({ link, tuning, setTuning }) {
     <button type="button" disabled=${!link.moved} onclick=${(event) => link.resetView(event.timeStamp)}
         title=${link.free ? "Back to where Free camera began" : "Available once you move the free camera"}>
       Reset view</button>
+    <button type="button" aria-pressed=${link.hud} onclick=${() => link.setHud(!link.hud)}
+        title=${link.hud ? "Hide the lives, coins, stars and timer drawn over the picture"
+          : "Show the lives, coins, stars and timer over the picture"}>HUD</button>
   </div>
   <div class="scene-lab-bar" aria-label="Flight and pictures">
     ${available && html`<${SpeedControl} link=${link} />`}

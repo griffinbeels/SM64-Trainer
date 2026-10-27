@@ -83,6 +83,7 @@
 .scene-lab-ghost { display: grid; grid-template-columns: 3.4ch minmax(0, 1fr) 7.5ch 5.6rem; align-items: center; gap: 2px 8px;
   padding: 3px 4px 3px 8px; border: 1px solid transparent; border-radius: 8px; background: var(--surface-2); }
 .scene-lab-ghost.is-shown { border-color: var(--gold); background: rgba(240,189,50,.08); }
+.scene-lab-ghost.is-waiting { border-color: var(--border-soft); border-style: dashed; }
 .scene-lab-ghost-rank { color: var(--muted); font-size: .78rem; font-variant-numeric: tabular-nums; }
 .scene-lab-ghost-player { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 .scene-lab-ghost-player small { color: var(--muted); font-weight: 400; }
