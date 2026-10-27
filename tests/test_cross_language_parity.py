@@ -987,3 +987,63 @@ def test_the_strategy_order_agrees():
     # unproven furthest left, ties in arrival order.
     assert python[0][0] == ["Custom", "Empty", "Owl", "Mad Owl", "No Mario", "Standard",
                             "Twin", "TJ Owlless", "DJ Owlless", "Sideflip"]
+
+
+# --- the Scene viewer's sound, as the page plays it and as an export mixes it --
+
+SCENEAUDIO_JS = UI / "components" / "sceneaudio.js"
+SCENEWORKLET_JS = UI / "components" / "sceneaudioworklet.js"
+
+
+def test_a_scene_exports_sound_follows_the_pages_map_and_switches():
+    """tools/scene_lab/export_sound.py mixes a recording's sound for its video the way the page
+    played it (M4 round 6, item 3): soundMap's runs, sampleAt's sample for a recorded time and
+    trackFor's choice of track are the page's (sceneaudio.js, sceneaudioworklet.js). Disagree and the
+    video's sound drifts off its pictures, or plays music he had switched off. The tables hit every
+    branch: a run broken by a picture with no sound, a sample off by more than joinMs, a last
+    picture held past a game frame, and recorded times inside, between and past the runs."""
+    import sys
+    sys.path.insert(0, str(REPO / "tools" / "scene_lab"))
+    import export_sound
+
+    tables = [
+        ([0, 1600, 3200, 4800, -1, 8000, 9600, 11300, 12900], [0, 33.3, 66.7, 100, 133.3, 166.7, 200, 233.3, 266.7]),
+        ([500, 2100, 2101, 3701], [0, 33.4, 34, 120]),          # a held picture, then one past a game frame
+        ([-1, -1], [0, 33]),
+    ]
+    probes = [-5, 0, 10, 33.3, 50, 99.9, 120, 140, 170, 210, 266, 300, 500]
+    js = run_node(f"import {{ sampleAt }} from {SCENEWORKLET_JS.as_uri()!r};\n"
+                  f"{declaration(SCENEAUDIO_JS, 'SCENE_SOUND')}\n"
+                  f"{function_declaration(SCENEAUDIO_JS, 'soundMap')}\n"
+                  f"{function_declaration(SCENEAUDIO_JS, 'trackFor')}\n"
+                  f"const tables = {json.dumps(tables)}, probes = {json.dumps(probes)};\n"
+                  "console.log(JSON.stringify({maps: tables.map(([s, t]) => soundMap(s, t, 48000, 30).map((r) => ({"
+                  "p0: r.p0, p1: r.p1, kp: [...r.kp], ks: [...r.ks]}))), at: tables.map(([s, t]) => {"
+                  "const runs = soundMap(s, t, 48000, 30); return probes.map((p) => { const a = sampleAt(runs, p);"
+                  "return a ? [a.s, a.edge] : null; }); }), tracks: [[false,true,true],[false,false,false],"
+                  "[true,true,true],[true,false,true],[true,true,false],[true,false,false]].map(([a,b,c]) => trackFor(a,b,c))}));")
+    for (samples, times), runs, at in zip(tables, js["maps"], js["at"], strict=True):
+        python = export_sound.sound_map(samples, times, 48000, 30)
+        assert len(python) == len(runs)
+        for mine, theirs in zip(python, runs, strict=True):
+            assert (mine.p0, mine.p1) == pytest.approx((theirs["p0"], theirs["p1"]))
+            assert list(mine.kp) == pytest.approx(theirs["kp"]) and list(mine.ks) == pytest.approx(theirs["ks"])
+        s, edge = export_sound.sample_at(python, probes)
+        for value, near, theirs in zip(s.tolist(), edge.tolist(), at, strict=True):
+            assert (value != value) if theirs is None else (value, near) == pytest.approx(tuple(theirs))
+    assert js["tracks"] == [export_sound.track_for(*case) for case in
+                            [(False, True, True), (False, False, False), (True, True, True), (True, False, True),
+                             (True, True, False), (True, False, False)]]
+
+
+def test_the_scene_recordings_format_version_agrees():
+    """scenerecord.js writes a scene recording and tools/scene_lab/scene_export.py reads it (M4 round 6,
+    item 3); the version names the format, and the reader refuses one it does not know. Change the
+    entries' meaning on one side without the other and every recording either fails or is misread."""
+    import sys
+    sys.path.insert(0, str(REPO / "tools" / "scene_lab"))
+    import scene_export
+
+    js = run_node(f"{declaration(UI / 'components' / 'scenerecord.js', 'RECORDING')}\n"
+                  "console.log(JSON.stringify(RECORDING.version));")
+    assert js == scene_export.TIMELINE_VERSION

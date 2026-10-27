@@ -76,8 +76,9 @@ import { SCENE_CAMERA_DEFAULTS, SCENE_CAMERA_GROUPS, SCENE_CAMERA_TUNABLES, scen
 import { cameraOf, dollied, flightSpeed, flown, flyToTarget, focusedOn, glideAt, lookingAt, looked,
   orbitFromPose, slid, speedStepped, turned, worldPoint } from "./scenecamera.js";
 import { SceneSound, SoundBar } from "./sceneaudio.js";
+import { RecordBar } from "./scenerecord.js";
 import { CameraPresets, CameraSlots, placeKey, placeOf, presetCamera } from "./scenepresets.js";
-import { pictureAt, playLength, recordedTimes } from "./sceneclock.js";
+import { heardInto, pictureAt, playLength, recordedTimes } from "./sceneclock.js";
 import { CinematicBar, orbitPhase, rigChanged, rigHint, rigName, rigRequest, seenOnScreen, startRig } from "./scenerigs.js";
 
 const html = htm.bind(h);
@@ -435,7 +436,7 @@ export class SceneLink {
     if (this.inFlight.size >= PICTURES_IN_FLIGHT || !this.wanted || !ready) return;
     const play = this.playback, frame = this.wanted.frame ?? (play ? play.asked : this.frame);
     const id = ++this.sequence, camera = this.cameraNow();
-    this.inFlight.set(id, { ...this.wanted, id, frame, free: !!camera, sent: performance.now(), play,
+    this.inFlight.set(id, { ...this.wanted, id, frame, camera, free: !!camera, sent: performance.now(), play,
       due: play ? play.dueOf(frame) : null });
     if (play && this.wanted.kind !== "play") play.moved = true;
     this.wanted = null;
@@ -445,8 +446,9 @@ export class SceneLink {
     this.changed();
   }
 
-  // The camera the next picture asks for, as sent: the free camera's, a cinematic camera, a ghost's view, else the
-  // recorded one (null). The one reader of the camera mode (a recording reads it every display frame).
+  // The camera a picture asked for now is drawn from (interface D): the free camera's pose, a cinematic
+  // camera, a ghost's view, or null for the recorded camera. A recording (scenerecord.js) reads it every
+  // display frame.
   cameraNow() {
     if (this.free && this.orbit) return cameraOf(this.orbit);
     if (this.rig) return rigRequest(this.rig, sceneCameraTuning());
@@ -480,6 +482,7 @@ export class SceneLink {
   stopPlay() {
     const play = this.playback;
     if (!play) return;
+    this.pausedOn = heardInto(play, this.frame, performance.now(), this.scene?.session);
     Object.assign(this, { playback: null, playing: false });
     for (const hold of play.holds.splice(0)) hold.resolve(false);
     if (this.wanted?.frame != null) {
@@ -522,9 +525,11 @@ export class SceneLink {
     const drawnAt = performance.now();
     if (request?.play) {
       this.frame = header.frame;
-      this.sound.shown(header.frame);
+      // A resumed play's first picture was on screen before its clock started: it says nothing about lateness.
+      if (!(request.play.resumeMs && header.frame === request.play.from)) this.sound.shown(header.frame);
     }
     if (request) {
+      header.sentCamera = request.camera;          // what it answers: a recording's camera_used (scenerecord.js)
       header.trip_ms = received - request.sent;
       header.input_ms = drawnAt - request.inputTime;
       if (request.kind !== "play") this.latencies = [...this.latencies.slice(-99), header.input_ms];
@@ -1052,6 +1057,7 @@ export class SceneLink {
 
   seek(next, kind = "input", time) {
     if (kind === "input") this.interrupt();
+    this.pausedOn = null;                // another picture: Play starts at its beginning
     this.frame = clamp(next, 0, (this.scene?.frames.length || 1) - 1);
     this.changed();
     this.want(kind, time);
@@ -1076,6 +1082,7 @@ export class SceneLink {
   // Restart while playing, and Loop at the end: the play begins again on the first frame.
   playFromStart() {
     this.stopPlay();
+    this.pausedOn = null;
     this.frame = 0;
     this.play();
   }
@@ -1107,14 +1114,21 @@ export class SceneLink {
   //
   // A scene still being written plays on as it grows: at its newest picture the clock waits
   // (heldAt) and goes on from there when more arrives (grew), never skipping ahead to catch up.
+  //
+  // Pause holds the clock where it is: Play on the same picture goes on from the moment it paused
+  // (resumeMs into that picture), so a held picture never plays its sound twice and the music
+  // carries on from where it stopped. A step, a seek or Restart starts the picture over.
   play() {
     const scene = this.scene;
     this.autoplay = false;
     if (!scene) return;
     this.sound.arm();
     const from = this.frame >= scene.frames.length - 1 && !scene.growing ? 0 : this.frame, times = recordedTimes(scene);
-    const play = { from, start: performance.now() + this.sound.lead(), times, length: playLength(times, from, scene.fps),
-      asked: from, frameAt: null, frameMs: 1000 / 60, gaps: [], holds: [], heldAt: null,
+    const held = this.pausedOn, resumeMs = held?.session === scene.session && held.frame === from ? held.ms : 0;
+    this.pausedOn = null;
+    const play = { from, start: performance.now() + this.sound.lead() - resumeMs, resumeMs, times,
+      length: playLength(times, from, scene.fps), asked: from, frameAt: null, frameMs: 1000 / 60, gaps: [], holds: [],
+      heldAt: null,
       dueOf: (frame) => play.start + play.times[frame] - play.times[from],
       grew: (grown) => {
         play.times = recordedTimes(grown);
@@ -1516,6 +1530,7 @@ function Player({ link, canvas, surface, ghosts }) {
     ${link.notice && html`<p class="scene-lab-reason" role="status">${link.notice}</p>`}
     <${Transport} link=${link} />
     <${SoundBar} sound=${link.sound} frame=${link.frame} />
+    <${RecordBar} link=${link} />
     <${CameraBar} link=${link} tuning=${tuning} setTuning=${setTuning} />
     <${CameraSlots} link=${link} />
     <${Readout} link=${link} />

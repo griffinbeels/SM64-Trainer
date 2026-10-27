@@ -61,6 +61,14 @@
 .scene-lab-sound-note { min-width: 0; color: var(--muted); font-size: .8rem; line-height: 1.5; }
 .scene-lab-sound-note.is-lost { color: var(--gold-soft); }
 .scene-lab-sound-sync { margin-left: auto; }
+/* The Record row (components/scenerecord.js): Record or Stop, how long, then the video's progress. */
+.scene-lab-record-dot { color: var(--coral); fill: currentColor; }
+.scene-lab-record button.is-recording { border-color: var(--coral); color: var(--coral); }
+.scene-lab-record-time { color: var(--coral); font-variant-numeric: tabular-nums; }
+.scene-lab-record progress { flex: 0 1 160px; min-width: 80px; accent-color: var(--gold); }
+.scene-lab-record-note { min-width: 0; overflow-wrap: anywhere; color: var(--muted); font-size: .85rem; line-height: 1.5; }
+.scene-lab-record-note.is-bad { color: var(--coral); }
+.scene-lab-record-link { color: var(--gold-soft); white-space: nowrap; }
 /* The Cameras strip (components/scenepresets.js): nine slots in one row, in the order of the number
    keys that cut to them. A slot is its number over its name; rename and delete sit in its corner. */
 .scene-lab-cameras { display: grid; gap: 6px; min-width: 0; }
