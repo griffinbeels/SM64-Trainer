@@ -24,8 +24,9 @@ A ghost sounds by the in-game ghost's rules (docs/ghost-native-runtime.md, "Ghos
   STAR_FADE_FRAMES, as ghost_viewer.cpp choose shows it.
 
 Timing: scene frame k shows ghost frame g(k) = global_timer(k) - global_timer(origin)
-(stage_ghosts.ghost_frame), and its picture appears at the recording's sample S[k] (scene_audio,
-"as heard"). The ghost's game frame g sounds from its tick's first engine sample, so the track
+(stage_ghosts.ghost_frame), and its picture plays the recording's sample S[k] (scene_audio: on
+its pictures where the scene measured Project64's delay, else as heard). The ghost's game frame g
+sounds from its tick's first engine sample, so the track
 maps each recording sample to an engine position through the knots (S[k], start of tick g(k)),
 linearly between them, and reads the engine's 32 kHz output there (stems_check.interp): a jump
 sound lands on the picture of the jump. Placement is read every PLACE_EVERY scene frames and
@@ -39,8 +40,10 @@ changes a gain within 64 samples. Mixing on the server instead would cost a new 
 mute. Measured 2026-10-27 on his 655-frame HMC attempt scene with one of his own runs: 1.37 s for
 the first block (the stage's camera and Mario, 110 scene-state reads: 1.0 s; the engine, 656
 ticks and 51 cues: 88 ms; laying it on 1.2 M samples: 0.26 s), every later block 0.05 ms, 4.8 MB
-held per ghost. The stage's own sound is "as heard" (scene_audio.SOUND_SHIFT_MS 0): on that scene
-it lands 148 ms after its picture, Project64's audio delay; a ghost's lands on its picture.
+held per ghost. That scene has no stems fit, so its own sound plays as heard: 148 ms after its
+picture, Project64's audio delay, while its own run's ghost lands on the picture. A scene with a
+measured delay plays its sound on its pictures too (scene_audio.measured_delay), and the ghosts'
+tracks follow its samples (the cache key carries the shift).
 """
 from __future__ import annotations
 
@@ -318,7 +321,8 @@ class SceneGhostSounds:
 
     def track(self, scene, ghost) -> np.ndarray:
         layer = scene.sound.layer
-        key = (ghost.ref, scene.ghost_origin, layer.total_samples, round(scene.ghost_look.volume, 4))
+        key = (ghost.ref, scene.ghost_origin, layer.total_samples, getattr(scene.sound, "shift_ms", 0.0),
+               round(scene.ghost_look.volume, 4))
         with self.lock:
             found = self.tracks.get(key)
             if found is None:

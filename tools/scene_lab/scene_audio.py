@@ -9,13 +9,19 @@ frame's sample is the one sounding at its present through the layer's stored clo
 (audio_clock.locate), so the page needs no clock of its own: it plays sample S[k] when frame k
 appears and follows the pictures' own clock between frames.
 
-Timing is "as heard": a frame plays the sound the runner heard while its picture was on screen,
-Project64's own audio delay included. SOUND_SHIFT_MS is the one place that changes that: set to
-Project64's measured delay, each sound plays with its game event instead. Griffin has not chosen
-yet, and the next live session measures the delay.
+Timing is on the pictures where the scene measured Project64's audio delay, else "as heard"
+(the lead's decision, round 5 item 4, 2026-10-27): with a stage ghost's sound on its pictures
+(ghost_sound.py), a stage heard 148 ms late (take 2239-7) echoed its own run's ghost. A scene whose
+stems fit placed the game's output in its recording carries the delay from each VI to when the
+recording heard it (stems_layer.place's envelope delay, "delay_ms" in its stats): every frame then
+plays the sample heard that much after its picture, so a sound lands on the picture of its frame
+(within the VI or so between a frame's sound task and its picture). Without that fit the scene
+plays as heard: the sound the runner heard while its picture was on screen, Project64's delay
+included (SOUND_SHIFT_MS), and describe()'s "timing" says which, in words. The page shows nothing
+of it: it plays samples per frame either way.
 
-describe() gives {available, rate, block_samples, total_samples, blocks, codec, shift_ms, samples,
-lost, stems}: `samples` per frame (-1 where the frame's picture has no sound: before or after the
+describe() gives {available, rate, block_samples, total_samples, blocks, codec, shift_ms, timing,
+samples, lost, stems}: `samples` per frame (-1 where the frame's picture has no sound: before or after the
 recording, or in a gap), `lost` the frames whose sound span (to the next frame's sample) touches
 a marked loss. The stored stream holds silence there, so it plays as silence, and the page says
 so. A block is served whole, as the .flac file the layer's block makes with its STREAMINFO (or a
@@ -46,7 +52,11 @@ import audio_clock as ac  # noqa: E402
 import audio_layer as al  # noqa: E402
 
 log = logging.getLogger("sm64.scene_lab")
-SOUND_SHIFT_MS = 0.0          # 0: as heard. Project64's audio delay here: each sound with its game event
+SOUND_SHIFT_MS = 0.0          # without a measured delay: as heard
+MAX_DELAY_MS = 1500.0         # stems_layer.DELAY_S's far end: a measured delay past it is not one
+ON_PICTURES = "This scene's sound plays on its pictures: Project64's audio delay, measured here at {:.0f} ms, is taken out."
+AS_HEARD = ("This scene's sound plays as it was heard: Project64's audio delay was not measured here, so each "
+            "sound comes a little after its picture.")
 NO_SOUND = "This recording has no sound."
 NO_STEMS = "This scene was saved before music and sound effects could be split."
 NOT_SPLIT = "This scene's music and sound effects can't be separated."
@@ -61,19 +71,34 @@ def absent() -> dict:
     return {"available": False, "reason": NO_SOUND}
 
 
+def measured_delay(stems) -> float | None:
+    """Project64's audio delay in this scene, in ms: from each VI to when the recording heard its
+    sound, as the stems fit measured it (stems_layer.place; only a fit that placed the game's
+    output records it), or None without one."""
+    delay = stems.stats.get("delay_ms") if stems is not None else None
+    return float(delay) if type(delay) in (int, float) and 0.0 <= delay <= MAX_DELAY_MS else None
+
+
 class SceneSound:
     """One package's sound, mapped to the viewer's frames."""
 
-    def __init__(self, layer: al.Layer, samples: list[int], lost: list[int], shift_ms: float, stems=None):
+    def __init__(self, layer: al.Layer, samples: list[int], lost: list[int], shift_ms: float, stems=None,
+                 measured: bool = False):
         self.layer, self.samples, self.lost, self.shift_ms = layer, samples, lost, shift_ms
         self.stems = stems                        # stems_layer.Stems, or None when the package has none
+        self.measured = measured                  # shift_ms is this scene's measured Project64 delay
         self.checked: set[tuple[str, int]] = set()   # (track, block) whose PCM matched its hash
 
     @classmethod
-    def of(cls, package, presents: list[int | None], shift_ms: float = SOUND_SHIFT_MS) -> SceneSound | None:
+    def of(cls, package, presents: list[int | None], shift_ms: float | None = None) -> SceneSound | None:
+        """`shift_ms` None: the scene's measured delay (measured_delay), else as heard."""
         layer = package.audio
         if layer is None:
             return None
+        stems = getattr(package, "stems", None)
+        measured = shift_ms is None and measured_delay(stems) is not None
+        if shift_ms is None:
+            shift_ms = measured_delay(stems) if measured else SOUND_SHIFT_MS
         pictures = {picture.sequence: picture for picture in layer.pictures}
         shift = round(shift_ms * layer.frequency / 1000)
         samples = []
@@ -84,16 +109,17 @@ class SceneSound:
                 continue
             status, sample = ac.locate(picture.ticks + layer.offset_ticks + shift, layer.segments, layer.losses)
             samples.append(sample if status in (ac.COVERED, ac.LOSS) else -1)
-        stems = getattr(package, "stems", None)
         if stems is not None and not stems.available:
             log.info("scene sound: music and sound effects not split: %s %s", stems.reason, stems.stats)
-        return cls(layer, samples, lost_frames(samples, layer.losses), shift_ms, stems)
+        return cls(layer, samples, lost_frames(samples, layer.losses), shift_ms, stems, measured)
 
     def describe(self) -> dict:
         layer = self.layer
         return {"available": True, "rate": layer.rate, "block_samples": layer.block_samples,
                 "total_samples": layer.total_samples, "blocks": len(layer.blocks),
                 "codec": "flac" if layer.codec == al.FLAC else "stored", "shift_ms": self.shift_ms,
+                "timing": {"on_pictures": self.measured,
+                           "why": ON_PICTURES.format(self.shift_ms) if self.measured else AS_HEARD},
                 "samples": self.samples, "lost": self.lost, "stems": self._stems()}
 
     def _stems(self) -> dict:

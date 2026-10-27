@@ -2211,8 +2211,12 @@ picture publishes that picture's ghosts and each one's frame (`picture`).
   page's worklet mixes it on the stage's clock with a gain per ghost (Mute).
   The server renders it once, on the first block asked: on his 655-frame HMC
   take 1.4 s (the stage's camera reads 1.0 s, the engine 88 ms). The stage's
-  own sound is "as heard": on that take it lands 148 ms after its picture
-  (Project64's audio delay), while a ghost's lands on its picture.
+  own sound plays on its pictures too where its stems fit measured
+  Project64's audio delay (`scene_audio.measured_delay`): a coin and its own
+  run's ghost's coin land 10 ms apart on a split scene (SM64's coin on both
+  sides, the coin's sound made a VI before its picture). Without that fit it
+  plays as heard: that take, which has none, lands its sound 148 ms after its
+  picture.
 - **Threads.** The host calls the table between lists; GLideN64 runs each list
   on its own thread while the host's call waits. An SRW lock hands each
   picture's ghosts and the status across, a loaded clip is immutable (a list
