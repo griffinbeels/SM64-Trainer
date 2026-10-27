@@ -16,6 +16,8 @@ one reader, and without it this module is never imported and no route is added. 
     POST /api/scene-lab/close
     WS   /api/scene-lab/ws        pictures and poses of the open scene (protocol below)
     GET  /api/scene-lab/audio/{block}?session=N[&track=music|effects|ghost:<ref>]   one block of the open scene's sound
+    POST /api/scene-lab/export, GET /export/{job}, POST /export/{job}/cancel   a recording made into a video
+                                  (server/scene_exports.py)
 
 The lab config is a private JSON file of absolute paths: {"rom", "packages" (a folder of
 .sm64scene files), "pj64_plugin", "map" (the free camera's MappingUS.map), and optionally
@@ -1001,6 +1003,7 @@ def mount_scene_lab(app, config_path, **options) -> SceneLab:
     SceneLab's (tests and e3_measure.py inject doubles and short timers), and `ghost_sources`,
     what the stage and the ghost catalog read: {"tracker", "replay", "ghost", "community"} (scene_ghosts.py)."""
     sources = options.pop("ghost_sources", None) or {}
+    export_options = options.pop("export_options", None) or {}
     lab = SceneLab(Path(config_path), **options)
     from sm64_events.server.scene_ghosts import SceneGhosts
     lab.ghosts = SceneGhosts(sources.get("tracker"), scenes=lambda: lab.scenes, replay=sources.get("replay"),
@@ -1008,6 +1011,9 @@ def mount_scene_lab(app, config_path, **options) -> SceneLab:
     router = APIRouter(prefix="/api/scene-lab")
     _mount_ghost_routes(router, lab)
     _mount_preset_routes(router, lab)
+    from sm64_events.server.scene_exports import SceneExports, mount_export_routes
+    lab.exports = SceneExports(lab, **export_options)      # a recording made into a video (scene_exports.py)
+    mount_export_routes(router, lab.exports)
 
     @router.get("")
     def probe():
@@ -1062,6 +1068,7 @@ def mount_scene_lab(app, config_path, **options) -> SceneLab:
             try:
                 yield state
             finally:
+                await asyncio.to_thread(lab.exports.shutdown)
                 await lab.shutdown()
 
     app.router.lifespan_context = lifespan
