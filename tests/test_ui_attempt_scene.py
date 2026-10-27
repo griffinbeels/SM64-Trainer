@@ -125,7 +125,9 @@ def _stub_attempt_api(app, lab, seen: dict) -> None:
 
 
 @contextmanager
-def _served(tmp_path, monkeypatch, *, lab_on: bool):
+def _served(tmp_path, monkeypatch, *, lab_on: bool, extra=None):
+    """The real app on the UI fixture; with the lab on, `extra(app, lab, seen)` may add stubs of its own
+    after this file's (a later route wins)."""
     seen = {"asks": [], "cutting_asks": {}, "opened": [], "host_pids": []}
     if lab_on:
         config = _lab(tmp_path / "lab")
@@ -139,6 +141,8 @@ def _served(tmp_path, monkeypatch, *, lab_on: bool):
                 "host_factory": scene_session.command_host(fake_viewer_host.command()),
                 "evaluator_factory": lambda package, rom: fake_viewer_host.FakeEvaluator()})
             _stub_attempt_api(app, lab, seen)
+            if extra is not None:
+                extra(app, lab, seen)
             return app
         monkeypatch.setattr(ui_fixture, "create_app", create_app)
     else:

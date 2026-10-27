@@ -6,14 +6,16 @@
 // feels with are pinned to REFERENCE below, never to the shipped defaults
 // (the Tune controls panel rewrites those).
 import { h } from "preact";
-import { render, cleanup, fireEvent, waitFor } from "@testing-library/preact";
+import { render, cleanup, fireEvent, waitFor, within } from "@testing-library/preact";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { DRAG_DEAD_ZONE, LOCK_NOTES, LOOP_PREFERENCE, MOVING_WINDOW, PICTURES_IN_FLIGHT, SHARED_WAIT, STILL_MS,
-  SceneViewer, hintFor, movingSummary, pictureFraction, sceneTitle, speedWords, throttledNotes,
+  STAGE_WORDS, SceneViewer, hintFor, movingSummary, pictureFraction, sceneTitle, speedWords, throttledNotes,
 } from "../../src/sm64_events/ui/components/sceneviewer.js";
 import { cameraOf, dollied, easeInOut, flightSpeed, flown, flyToTarget, glideAt, lookingAt, looked, orbitFromPose, slid,
   speedStepped, turned, worldPoint } from "../../src/sm64_events/ui/components/scenecamera.js";
 import { SCENE_CAMERA_DEFAULTS, setSceneCameraTuning } from "../../src/sm64_events/ui/scenecameratuning.js";
+import { stageDefault, targetQuery } from "../../src/sm64_events/ui/components/scenestage.js";
+import { SEARCH_WAIT } from "../../src/sm64_events/ui/components/sceneghosts.js";
 
 const REFERENCE = { orbitPerPixel: 0.01, steepestDegrees: 80, levelPerPixel: 0.1, panPerPixel: 0.002,
   dollyPerWheel: 0.002, closestDistance: 40, farthestDistance: 20000, flightSpeed: 1000, lookPerPixel: 0.004,
@@ -23,6 +25,8 @@ const FRAMES = Array.from({ length: 5 }, (_, i) => ({ level: 9, area: 1, game_fr
 const POSE = { focus: [10, 200, -30], position: [10, 500, 1170], roll: 0, fov: 45, mario: [40, 80, -60] };
 const PER_DEGREE = 65536 / 360;
 let sockets, opened, fetches, frames, locked, lockRequests;
+// A test's own answers by URL prefix, asked before the scripted server's (the selector and ghost tests).
+let routes;
 // The page's clock is the test's: performance.now() reads `clock.now`, which only tick() (an
 // animation frame) and the test itself move, as one clock serves both in a browser. A step's
 // time is then the test's and never the machine's, so a loaded machine cannot change a result.
@@ -66,8 +70,10 @@ beforeEach(() => {
     free_camera: { available: true, reason: null } };
   globalThis.WebSocket = FakeSocket;
   globalThis.requestAnimationFrame = (step) => { frames.push(step); return frames.length; };
+  routes = new Map();
   globalThis.fetch = vi.fn((url, options = {}) => {
     fetches.push([url, options.method || "GET", options.body]);
+    for (const [prefix, answer] of routes) if (url.startsWith(prefix)) return answer(url, options);
     if (url === "/api/local-access") return respond({}, 404);
     if (url === "/api/scene-lab/status") return respond({ ready: true, problems: [], hold: null, session: null,
       ended: null, packages: [{ name: "bob-minute.sm64scene", bytes: 11 << 20 }] });
@@ -93,7 +99,7 @@ beforeEach(() => {
   Object.defineProperty(document, "pointerLockElement", { configurable: true, get: () => locked });
   document.exitPointerLock = vi.fn(() => { locked = null; document.dispatchEvent(new Event("pointerlockchange")); });
 });
-afterEach(() => { cleanup(); setSceneCameraTuning(null); vi.restoreAllMocks(); });
+afterEach(() => { cleanup(); setSceneCameraTuning(null); vi.restoreAllMocks(); SEARCH_WAIT.ms = 250; });
 
 // Turns of the event loop until `check` passes, then its value: like waitFor, with no deadline
 // on the wall clock, so a busy machine only makes it slower, never wrong.
@@ -1479,6 +1485,285 @@ test("without a free camera the controls say why instead of doing nothing", asyn
   expect(fireEvent.keyDown(root, { key: "w", code: "KeyW" })).toBe(true);     // W is nobody's: not taken
   await settled();
   expect(socket.sent.length).toBe(sent);
+});
+
+// ------------------------------------------------------------------ the Course/Star/Strategy selector and the ghost panel
+// His round 4, items 2 and 3: "We should include our Course/Star/Strategy selector on this screen. By
+// default, it opens to whatever the user currently has selected in the practice log (or how they got
+// here)"; "A PAGINATED LIST OF GHOSTS THAT WE COULD LOAD INTO THIS SCENE ... If I add a ghost, it should
+// immediately appear in the scene without needing to reload." The lab's routes and the socket's
+// "ghosts" answer are scripted here with the agreed shapes (interfaces A and B).
+
+const WHOMP = { course_id: 2, course_name: "Whomp's Fortress" };
+const TOP_OF_FORTRESS = { ...WHOMP, star_id: 1, star_name: "To the Top of the Fortress" };
+const VIEW = { catalog: { courses: [] }, segments: [],
+  stars: [{ ...WHOMP, star_id: 4, star_name: "Fall onto the Caged Island",
+    attempts: [{ id: 12, igt: "11\"43", strat_tag: "TJ Owlless" }] }],
+  target: { kind: "star", ...TOP_OF_FORTRESS, segment_id: null, strat_tag: "Single Jump" } };
+const NO_SCENE = "None of your runs of this has a saved scene.";
+const stageOf = (strat, attempt) => ({ target: { ...TOP_OF_FORTRESS, segment_id: null, strat, strat_name: strat },
+  attempt, time: attempt ? "11\"03" : null, reason: attempt ? null : NO_SCENE, scenes: [] });
+// The lab's sessions count up across the whole file, as one server's do: no two tests share a scene.
+let sessionSerial = 100;
+
+const queries = (path) => fetches.filter(([url]) => url.startsWith(path))
+  .map(([url]) => Object.fromEntries(new URL(url, "http://page").searchParams));
+const opens = () => fetches.filter(([url]) => url === "/api/scene-lab/open").map(([, , body]) => JSON.parse(body));
+const selectorWords = (page) => {
+  const root = page.container.querySelector(".scene-lab-stage-picker");
+  return { name: root.querySelector(".scene-lab-target-words strong")?.textContent,
+    course: root.querySelector(".scene-lab-target-words small")?.textContent ?? null,
+    strat: root.querySelector("select")?.value ?? null,
+    note: root.querySelector(".scene-lab-stage-note")?.textContent ?? null };
+};
+
+// The viewer arriving with Practice's `view`; the lab answers a stage per strategy (`stage`: Single
+// Jump's fastest is attempt 40, TJ Owlless's 44, and Nothing saved has none) and opens any attempt as
+// a new session.
+const STAGES = { "Single Jump": 40, "TJ Owlless": 44, "Nothing saved": null };
+function arrive(view = VIEW, stage = (strat) => stageOf(strat || "Single Jump", STAGES[strat || "Single Jump"])) {
+  routes.set("/api/scene-lab/stage", (url) => respond(stage(new URL(url, "http://page").searchParams.get("strat"))));
+  routes.set("/api/target/strategies", () => respond({ strategies: [{ name: "Single Jump" }, { name: "TJ Owlless" },
+    { name: "Nothing saved" }] }));
+  routes.set("/api/scene-lab/open", (url, options) => respond({ ...opened, session: ++sessionSerial,
+    attempt: JSON.parse(options.body).attempt }));
+  return render(h(SceneViewer, { t: { view } }));
+}
+
+// The newest scene's socket, open, its first picture drawn.
+async function sceneUp(count) {
+  await until(() => expect(sockets.length).toBe(count));
+  const socket = sockets[count - 1];
+  socket.open();
+  await until(() => expect(socket.pictures().length).toBeGreaterThan(0));
+  await socket.picture(socket.pictures()[0]);
+  return socket;
+}
+
+test("the selector starts on the scene's own target, else the Ghost button's attempt, else Practice's, else nothing", () => {
+  const lab = { ...WHOMP, star_id: 3, strat: "Lab strat" };
+  expect(stageDefault({ attempt: 12, target: lab }, VIEW)).toBe(lab);
+  expect(stageDefault({ attempt: 12 }, VIEW)).toEqual({ ...WHOMP, star_id: 4, star_name: "Fall onto the Caged Island",
+    strat: "TJ Owlless" });
+  expect(stageDefault({ name: "lab.sm64scene" }, VIEW)).toBeNull();                  // a lab recording: never Practice's
+  expect(stageDefault(null, VIEW)).toEqual({ ...TOP_OF_FORTRESS, strat: "Single Jump" });
+  expect(stageDefault(null, { target: { kind: "star", course_id: null, star_id: null } })).toBeNull();
+  expect(stageDefault(null, { target: { kind: "segment", segment_id: 9, strat_tag: null } })).toEqual(
+    { segment_id: 9, strat: null });
+  expect(stageDefault(null, undefined)).toBeNull();
+  expect(String(targetQuery({ course_id: 2, star_id: 1, strat: "Single Jump" }))).toBe("course=2&star=1&strat=Single+Jump");
+  expect(String(targetQuery({ course_id: null, segment_id: 9, strat: null }))).toBe("segment=9");
+});
+
+test("arriving with no scene open opens the stage of what Practice has selected, paused, and the selector names it", async () => {
+  const page = arrive();
+  const socket = await sceneUp(1);
+  expect(queries("/api/scene-lab/stage")).toEqual([{ course: "2", star: "1", strat: "Single Jump" }]);
+  expect(opens()).toEqual([{ attempt: 40 }]);
+  await until(() => expect(selectorWords(page)).toEqual({ name: "To the Top of the Fortress", course: "Whomp's Fortress",
+    strat: "Single Jump", note: null }));
+  expect(page.queryByRole("button", { name: "Open" })).toBeNull();                 // the lab's file list stays away
+  expect(socket.pictures()[0]).toMatchObject({ frame: 0, camera: null });
+  await settled();
+  expect(page.getByRole("button", { name: "Play" })).toBeTruthy();
+});
+
+test("with nothing selected anywhere the selector asks for a choice and opens nothing", async () => {
+  const page = arrive({ ...VIEW, target: { kind: "star", course_id: null, star_id: null } });
+  await until(() => expect(selectorWords(page).note).toBe(STAGE_WORDS.prompt));
+  await settled();
+  expect(queries("/api/scene-lab/stage")).toEqual([]);
+  expect(selectorWords(page).name).toBe("Choose a star");
+  expect(page.getByRole("button", { name: "Open" })).toBeTruthy();                  // the lab's own recordings
+});
+
+test("a strategy picked in the selector opens its stage, or says why there is none and closes the other's scene", async () => {
+  const page = arrive();
+  await sceneUp(1);
+  const strategy = await until(() => page.getByRole("combobox", { name: "Strategy" }));
+  fireEvent.change(strategy, { target: { value: "Nothing saved" } });
+  await until(() => expect(selectorWords(page).note).toBe(NO_SCENE));
+  expect(queries("/api/scene-lab/stage").at(-1)).toEqual({ course: "2", star: "1", strat: "Nothing saved" });
+  await until(() => expect(fetches.some(([url, method]) => url === "/api/scene-lab/close" && method === "POST")).toBe(true));
+  expect(page.container.querySelector(".scene-lab-player")).toBeNull();
+  expect(selectorWords(page).strat).toBe("Nothing saved");
+  expect(page.queryByRole("button", { name: "Open" })).toBeNull();
+  expect(page.container.textContent).not.toContain("closed");                       // only the lab's reason
+  fireEvent.change(page.getByRole("combobox", { name: "Strategy" }), { target: { value: "TJ Owlless" } });
+  await sceneUp(2);
+  expect(opens()).toEqual([{ attempt: 40 }, { attempt: 44 }]);
+  expect(selectorWords(page)).toMatchObject({ strat: "TJ Owlless", note: null });
+});
+
+test("the selector's course picker is Practice's grid: a star picked there opens its stage, and the dialog keeps its keys", async () => {
+  const catalog = { courses: [{ id: 2, name: "Whomp's Fortress",
+    stars: ["Chip off Whomp's Block", "To the Top of the Fortress", "Shoot into the Wild Blue"] }] };
+  const page = arrive({ ...VIEW, catalog });
+  const socket = await sceneUp(1);
+  await until(() => expect(selectorWords(page).name).toBe("To the Top of the Fortress"));
+  fireEvent.click(page.container.querySelector(".scene-lab-target"));
+  const dialog = await until(() => page.getByRole("dialog"));
+  const sent = socket.sent.length;
+  const course = within(dialog).getByRole("button", { name: /Whomp's Fortress/ });
+  course.focus();
+  for (const [key, code] of [["w", "KeyW"], ["ArrowRight", "ArrowRight"], [".", "Period"], [" ", "Space"]]) {
+    fireEvent.keyDown(course, { key, code });
+  }
+  await tick(clock.now + 100);
+  expect(socket.sent.length).toBe(sent);                                            // no flight, no step, no Play
+  fireEvent.click(course);
+  fireEvent.click(await until(() => within(page.getByRole("dialog")).getByRole("button", { name: /Shoot into the Wild Blue/ })));
+  await until(() => expect(queries("/api/scene-lab/stage").length).toBe(2));
+  expect(queries("/api/scene-lab/stage")[1]).toEqual({ course: "2", star: "2" });   // no strategy: the lab's choice
+  expect(page.queryByRole("dialog")).toBeNull();
+});
+
+test("from the Ghost button the selector names that attempt's target at once, then the lab's own", async () => {
+  const lab = { ...WHOMP, star_id: 4, star_name: "Fall onto the Caged Island (lab)", segment_id: null, strat: "TJ Owlless" };
+  routes.set("/api/scene-lab/open", () => respond({ ...opened, session: ++sessionSerial, attempt: 12, target: lab }));
+  routes.set("/api/target/strategies", () => respond({ strategies: [{ name: "TJ Owlless" }] }));
+  const page = render(h(SceneViewer, { t: { view: VIEW, sceneLab: { intent: { attempt: 12 }, clearIntent: () => {} } } }));
+  expect(selectorWords(page)).toMatchObject({ name: "Fall onto the Caged Island", course: "Whomp's Fortress" });
+  await sceneUp(1);
+  await until(() => expect(selectorWords(page).name).toBe("Fall onto the Caged Island (lab)"));
+  expect(queries("/api/scene-lab/stage")).toEqual([]);                              // the Ghost button's attempt is the stage
+});
+
+// The lab's lists: 23 of yours (the first is the stage's own run), 12 top ghosts per strategy, one
+// player found, and that player's three.
+function ghostRoutes() {
+  const yours = Array.from({ length: 23 }, (_, i) => ({ ref: `yours-${i}`, player: "You", time: `${11 + i}"03`,
+    frames: 330 + i, rank: null, recorded_utc: `2026-10-${String(1 + i).padStart(2, "0")}T12:00:00Z`, more: 0,
+    yours: true, attempt: i === 0 ? 40 : 900 + i }));
+  routes.set("/api/scene-lab/ghosts", (url) => {
+    const query = new URL(url, "http://page").searchParams, page = Number(query.get("page"));
+    const rows = {
+      yours: () => (query.get("sort") === "newest" ? [...yours].reverse() : yours),
+      top: () => Array.from({ length: 12 }, (_, i) => ({ ref: `top-${query.get("strat")}-${i}`, player: `Player ${i + 1}`,
+        time: `10"${String(i).padStart(2, "0")}`, rank: i + 1, more: 0, yours: false })),
+      search: () => [{ ref: "best-sully", player: "SullyLikesBigChungus", time: "10\"50", rank: null, more: 2 }],
+      player: () => [0, 1, 2].map((i) => ({ ref: `${query.get("player")}-${i}`, player: query.get("player"),
+        time: `10"5${i}`, rank: null, more: 0 })),
+    }[query.get("section")]();
+    return respond({ items: rows.slice((page - 1) * 10, page * 10), page,
+      pages: Math.max(1, Math.ceil(rows.length / 10)), reason: null });
+  });
+}
+const ghostRow = (page, ref) => page.container.querySelector(`li[data-ref="${ref}"]`);
+const ghostsSent = (socket) => socket.sent.filter((message) => message.kind === "ghosts");
+const asked = (section) => queries("/api/scene-lab/ghosts").filter((query) => query.section === section);
+
+test("the ghost panel pages and sorts your ghosts, the stage's own run is the stage, and Top ghosts has its own strategy", async () => {
+  ghostRoutes();
+  const page = arrive();
+  await sceneUp(1);
+  await until(() => expect(ghostRow(page, "yours-1")).not.toBeNull());
+  expect(asked("yours")).toEqual([{ section: "yours", course: "2", star: "1", strat: "Single Jump", sort: "fastest", page: "1" }]);
+  expect(ghostRow(page, "yours-0").textContent).toContain("The stage");
+  expect(ghostRow(page, "yours-0").querySelector("button")).toBeNull();
+  const yours = page.getByRole("region", { name: "Your ghosts" });
+  expect(yours.textContent).toContain("Page 1 of 3");
+  fireEvent.click(within(yours).getByRole("button", { name: "Next" }));
+  await until(() => expect(yours.querySelector("li").dataset.ref).toBe("yours-10"));
+  expect(asked("yours").at(-1)).toMatchObject({ page: "2", sort: "fastest" });
+  fireEvent.change(within(yours).getByRole("combobox", { name: "Sort your ghosts" }), { target: { value: "newest" } });
+  await until(() => expect(yours.querySelector("li").dataset.ref).toBe("yours-22"));
+  expect(asked("yours").at(-1)).toMatchObject({ page: "1", sort: "newest" });
+
+  const top = page.getByRole("region", { name: "Top ghosts" });
+  await until(() => expect(top.querySelectorAll("li").length).toBe(10));
+  expect([...top.querySelectorAll(".scene-lab-ghost-rank")].map((rank) => rank.textContent).slice(0, 3)).toEqual(["#1", "#2", "#3"]);
+  fireEvent.change(within(top).getByRole("combobox", { name: "Strategy for top ghosts" }), { target: { value: "TJ Owlless" } });
+  await until(() => expect(top.querySelector("li").dataset.ref).toBe("top-TJ Owlless-0"));
+  expect(asked("top").at(-1)).toMatchObject({ strat: "TJ Owlless", page: "1" });
+  expect(selectorWords(page).strat).toBe("Single Jump");                              // the stage keeps its strategy
+  expect(queries("/api/scene-lab/stage").length).toBe(1);
+});
+
+test("Find a player asks once typing stops, lists each player's best, and more opens their slower ghosts", async () => {
+  ghostRoutes();
+  const page = arrive();
+  await sceneUp(1);
+  SEARCH_WAIT.ms = 30;
+  const find = await until(() => page.getByRole("searchbox", { name: "Find a player by name" }));
+  for (const typed of ["s", "su", "sul"]) fireEvent.input(find, { target: { value: typed } });
+  await until(() => expect(ghostRow(page, "best-sully")).not.toBeNull());
+  expect(asked("search").map((query) => query.q)).toEqual(["sul"]);
+  expect(asked("search")[0]).toMatchObject({ course: "2", star: "1", strat: "Single Jump", page: "1" });
+  fireEvent.click(within(ghostRow(page, "best-sully")).getByRole("button", { name: "2 more" }));
+  await until(() => expect(ghostRow(page, "SullyLikesBigChungus-2")).not.toBeNull());
+  expect(asked("player").at(-1)).toMatchObject({ player: "SullyLikesBigChungus", page: "1" });
+  fireEvent.click(within(ghostRow(page, "best-sully")).getByRole("button", { name: "Fewer" }));
+  await until(() => expect(ghostRow(page, "SullyLikesBigChungus-2")).toBeNull());
+});
+
+test("Add and Remove send the whole list; the lab's answer selects rows, gives a refusal its reason, and the picture is asked again", async () => {
+  ghostRoutes();
+  const page = arrive();
+  const socket = await sceneUp(1);
+  await until(() => expect(ghostRow(page, "top-Single Jump-1")).not.toBeNull());
+  const pictures = socket.pictures().length;
+  fireEvent.click(within(ghostRow(page, "top-Single Jump-0")).getByRole("button", { name: /^Add/ }));
+  await until(() => expect(ghostsSent(socket).length).toBe(1));
+  expect(ghostsSent(socket)[0]).toMatchObject({ session: sessionSerial, set: [{ ref: "top-Single Jump-0", label: "Player 1" }] });
+  expect(ghostRow(page, "top-Single Jump-0").classList.contains("is-shown")).toBe(true);   // as asked, until answered
+  await settled();
+  expect(socket.pictures().length).toBe(pictures);                                       // nothing redrawn before
+  socket.text({ id: ghostsSent(socket)[0].id, kind: "ghosts", shown: ["top-Single Jump-0"], refused: [] });
+  await until(() => expect(socket.pictures().length).toBe(pictures + 1));
+  expect(socket.pictures().at(-1)).toMatchObject({ frame: 0 });                            // the picture on screen again
+  await socket.picture(socket.pictures().at(-1));
+
+  fireEvent.click(within(ghostRow(page, "top-Single Jump-1")).getByRole("button", { name: /^Add/ }));
+  await until(() => expect(ghostsSent(socket).length).toBe(2));
+  expect(ghostsSent(socket)[1].set.map((ghost) => ghost.ref)).toEqual(["top-Single Jump-0", "top-Single Jump-1"]);
+  socket.text({ id: ghostsSent(socket)[1].id, kind: "ghosts", shown: ["top-Single Jump-0"],
+    refused: [{ ref: "top-Single Jump-1", reason: "Recorded on another version of the course." }] });
+  await until(() => expect(ghostRow(page, "top-Single Jump-1").textContent).toContain("Recorded on another version of the course."));
+  expect(ghostRow(page, "top-Single Jump-1").classList.contains("is-shown")).toBe(false);
+  expect(within(ghostRow(page, "top-Single Jump-1")).getByRole("button", { name: /^Add/ })).toBeTruthy();
+
+  fireEvent.click(within(ghostRow(page, "top-Single Jump-0")).getByRole("button", { name: /^Remove/ }));
+  fireEvent.click(within(ghostRow(page, "yours-2")).getByRole("button", { name: /^Add/ }));
+  await until(() => expect(ghostsSent(socket).length).toBe(4));
+  expect(ghostsSent(socket)[2].set).toEqual([]);
+  expect(ghostsSent(socket)[3].set.map((ghost) => ghost.ref)).toEqual(["yours-2"]);
+  socket.text({ id: ghostsSent(socket)[3].id, kind: "ghosts", shown: ["yours-2"], refused: [] });
+  socket.text({ id: ghostsSent(socket)[2].id, kind: "ghosts", shown: [], refused: [] });     // an older list's, late
+  await settled();
+  expect(ghostRow(page, "yours-2").classList.contains("is-shown")).toBe(true);
+  expect(ghostRow(page, "top-Single Jump-0").classList.contains("is-shown")).toBe(false);
+  expect(page.getByRole("region", { name: "Ghosts" }).textContent).toContain("1 in the scene.");
+  fireEvent.click(page.getByRole("button", { name: "Remove all" }));
+  await until(() => expect(ghostsSent(socket).at(-1).set).toEqual([]));
+});
+
+test("the same scene left and come back to draws its ghosts again; a new stage starts with none", async () => {
+  ghostRoutes();
+  const first = arrive();
+  const socket = await sceneUp(1);
+  await until(() => expect(ghostRow(first, "yours-2")).not.toBeNull());
+  fireEvent.click(within(ghostRow(first, "yours-2")).getByRole("button", { name: /^Add/ }));
+  await until(() => expect(ghostsSent(socket).length).toBe(1));
+  socket.text({ id: ghostsSent(socket)[0].id, kind: "ghosts", shown: ["yours-2"], refused: [] });
+  await until(() => expect(ghostRow(first, "yours-2").classList.contains("is-shown")).toBe(true));
+  const scene = { ...opened, session: sessionSerial, attempt: 40 };
+  cleanup();
+  routes.set("/api/scene-lab/status", () => respond({ ready: true, problems: [], hold: null, session: scene, ended: null,
+    packages: [] }));
+  const again = render(h(SceneViewer, { t: { view: VIEW } }));
+  await until(() => expect(sockets.length).toBe(2));
+  sockets[1].open();
+  await until(() => expect(ghostsSent(sockets[1]).length).toBe(1));
+  expect(ghostsSent(sockets[1])[0].set.map((ghost) => ghost.ref)).toEqual(["yours-2"]);
+  await until(() => expect(ghostRow(again, "yours-2")?.classList.contains("is-shown")).toBe(true));
+  routes.delete("/api/scene-lab/status");
+  fireEvent.change(await until(() => again.getByRole("combobox", { name: "Strategy" })), { target: { value: "TJ Owlless" } });
+  const fresh = await sceneUp(3);
+  await settled();
+  expect(ghostsSent(fresh)).toEqual([]);
+  await until(() => expect(ghostRow(again, "yours-2")).not.toBeNull());
+  expect(ghostRow(again, "yours-2").classList.contains("is-shown")).toBe(false);
 });
 
 test("a closed scene shows the server's reason and offers Open again", async () => {

@@ -42,6 +42,9 @@
 // The recording's sound (sceneaudio.js) follows the picture clock: SceneLink
 // tells it when Play starts, each picture it draws, and every stop.
 //
+// Above the player, the stage picker (scenestage.js) chooses which recording
+// is the stage; below it, the ghost panel (sceneghosts.js) adds ghosts into it.
+//
 // Play stops only when the person pauses (Pause, Space, a step, the slider):
 // moving the camera, by any of the ways above, keeps it playing. Restart goes
 // to the first frame and keeps playing or stays paused; Loop plays on from the
@@ -53,6 +56,8 @@ import htm from "htm";
 import { Icon } from "./icons.js";
 import { getJSON, send } from "../api.js";
 import { displayName } from "../entitysection.js";
+import { GhostPanel } from "./sceneghosts.js";
+import { StagePicker, attemptIn, stageDefault, targetKey, targetQuery, useStrategies } from "./scenestage.js";
 import { ControlGroups } from "../tunecontrols.js";
 import { postObservation } from "../uilog.js";
 import { SCENE_CAMERA_DEFAULTS, SCENE_CAMERA_GROUPS, SCENE_CAMERA_TUNABLES, sceneCameraTuning,
@@ -255,13 +260,15 @@ export function sceneTitle(scene, view) {
   return [named.context, named.name, attempt.strat_tag, time].filter(Boolean).join(" · ");
 }
 
-function attemptIn(view, id) {
-  for (const section of [...(view?.stars || []), ...(view?.segments || [])]) {
-    const attempt = (section.attempts || []).find((row) => row.id === id);
-    if (attempt) return { section, attempt };
-  }
-  return null;
+// What the page last showed for a scene -- the stage picker's target and the scene's ghosts -- so a page
+// that leaves and comes back to the same scene shows them again (the page's own state goes with it).
+let kept = { scene: null, target: null, ghosts: [] };
+const sceneKey = (scene) => (scene ? `${scene.session}|${scene.attempt ?? scene.name}` : null);
+function keep(scene, fields) {
+  if (kept.scene !== sceneKey(scene)) kept = { scene: sceneKey(scene), target: null, ghosts: [] };
+  Object.assign(kept, fields);
 }
+const keptFor = (scene) => (kept.scene === sceneKey(scene) ? kept : { target: null, ghosts: [] });
 
 // The open scene's requests and camera: up to PICTURES_IN_FLIGHT pictures in
 // flight, the newest input waiting behind them, input time kept from the
@@ -276,8 +283,8 @@ export class SceneLink {
       wanted: null, sequence: 0, questions: new Map(), latencies: [], pending: [0, 0, false], drag: null,
       entering: null, arrived: 0, drawnSeq: 0, looking: null, flight: idleFlight(), speed: 1, picking: false,
       finding: false, glide: null, serial: 0, noticeTimer: null, moving: null, shared: new Map(), playback: null,
-      readies: [], coldId: 0, autoplay: false, loop: savedLoop(),
-      sound: new SceneSound({ changed: () => this.changed() }) });
+      readies: [], coldId: 0, autoplay: false, loop: savedLoop(), ghosts: [], refusedGhosts: new Map(),
+      ghostNote: null, ghostSerial: 0, sound: new SceneSound({ changed: () => this.changed() }) });
     this.timings = new MovingTimings((summary) => { this.moving = summary; this.changed(); });
     this.onShared = (event) => this.sharedArrived(event);
   }
@@ -297,12 +304,17 @@ export class SceneLink {
     ws.binaryType = "arraybuffer";
     ws.onmessage = (event) => (typeof event.data === "string"
       ? this.onText(JSON.parse(event.data)) : this.onPicture(event.data));
-    ws.onopen = () => this.want("input");
+    ws.onopen = () => {
+      this.want("input");
+      if (this.ghosts.length) this.setGhosts(this.ghosts);    // the same scene again: its ghosts again
+    };
     ws.onclose = () => { if (this.ws === ws) this.end("The connection to the scene viewer closed."); };
     // A scene's first picture carries the session's cold start (a seek from nothing), so it never
     // counts towards how far ahead a play asks: a Play started on it would skip the opening frames.
+    // A new scene starts with no ghosts.
     Object.assign(this, { ws, scene, frame: 0, free: false, orbit: null, entry: null, inFlight: new Map(),
-      wanted: null, notice: null, error: null, speed: 1, moving: null, readies: [], coldId: this.sequence + 1 });
+      wanted: null, notice: null, error: null, speed: 1, moving: null, readies: [], coldId: this.sequence + 1,
+      ghosts: keptFor(scene).ghosts, refusedGhosts: new Map(), ghostNote: null });
     if (this.sharedAvailable) {
       webview().addEventListener("sharedbufferreceived", this.onShared);
       this.encoding = "shared";
@@ -524,6 +536,30 @@ export class SceneLink {
   }
 
   pose(frame) { return this.ask("pose", { frame }); }
+
+  // ---- the scene's ghosts (sceneghosts.js): the page sends the whole list each time, and the lab's
+  // answer says which it draws (every picture after it shows them) and why it refused the rest. The
+  // rows show the list as asked until the answer comes; only the newest list's answer is kept. The
+  // picture on screen is asked for again, so an added ghost appears without a step.
+  async setGhosts(list) {
+    const serial = ++this.ghostSerial, before = this.ghosts;
+    Object.assign(this, { ghosts: list, ghostNote: null });
+    this.changed();
+    const answer = await this.ask("ghosts", { set: list.map(({ ref, label }) => ({ ref, label })) });
+    if (serial !== this.ghostSerial) return;
+    if (answer.kind !== "ghosts") {
+      Object.assign(this, { ghosts: before, ghostNote: answer.reason || "The scene did not take the ghosts. Try again." });
+      this.changed();
+      return;
+    }
+    const shown = new Set(answer.shown || []), refused = new Map(this.refusedGhosts);
+    for (const ghost of list) refused.delete(ghost.ref);
+    for (const { ref, reason } of answer.refused || []) refused.set(ref, reason);
+    Object.assign(this, { ghosts: list.filter((ghost) => shown.has(ghost.ref)), refusedGhosts: refused });
+    keep(this.scene, { ghosts: this.ghosts });
+    this.want("input");
+    this.changed();
+  }
 
   say(notice) { this.notice = notice; this.changed(); }
 
@@ -975,6 +1011,9 @@ function ownKey(target, key) {
   return type === "range" && SLIDER_KEYS.has(key);
 }
 
+// An open dialog (the stage picker's course grid) keeps every key and click it gets.
+const inDialog = (target) => !!target?.closest?.('[role="dialog"]');
+
 // A field that takes typing keeps every key: text and number fields, selects, contenteditable.
 export function typesInto(target) {
   const tag = target?.tagName;
@@ -990,7 +1029,7 @@ export function typesInto(target) {
 // combinations are the browser's: reload, copy, devtools. Keys are let go
 // wherever focus has gone since (useSceneLink).
 function onKey(link, event, canvas) {
-  if (event.ctrlKey || event.metaKey || typesInto(event.target)) return;
+  if (event.ctrlKey || event.metaKey || typesInto(event.target) || inDialog(event.target)) return;
   const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
   if (key === "Escape") return endLook(link, canvas, "Esc", true);
   if (link.moveKey(event)) return event.preventDefault();
@@ -1095,6 +1134,8 @@ function openerReason(status) {
   return status.packages?.length ? null : "No scene packages in the lab's folder yet.";
 }
 
+// The lab folder's recordings by file: a lab tool, shown only while no scene is open and the
+// stage picker has nothing chosen.
 function Opener({ status, opening, open }) {
   const [choice, setChoice] = useState("");
   const packages = status?.packages || [];
@@ -1272,7 +1313,8 @@ export function TunePanel() {
   </section>`;
 }
 
-function Player({ link, canvas, surface }) {
+// `ghosts`: the ghost panel, right under the player card.
+function Player({ link, canvas, surface, ghosts }) {
   const [tuning, setTuning] = useState(false);
   const classes = [link.freeAvailable && "is-movable", link.picking && "is-picking", link.looking && "is-flying"];
   return html`<section class="practice-card scene-lab-player">
@@ -1289,6 +1331,7 @@ function Player({ link, canvas, surface }) {
     <${CameraBar} link=${link} tuning=${tuning} setTuning=${setTuning} />
     <${Readout} link=${link} />
   </section>
+  ${ghosts}
   ${tuning && html`<${TunePanel} />`}`;
 }
 
@@ -1333,14 +1376,90 @@ function useSceneLink(canvas, refresh) {
   return link.current;
 }
 
+export const STAGE_WORDS = {
+  prompt: "Choose a course and star to watch one of your attempts.",
+  finding: "Finding your fastest attempt with a saved scene...",
+  none: "None of your attempts at this has a saved scene.",
+};
+
+// The page's heading: the open scene's title and Close, else (`lab`: nothing chosen) the lab
+// folder's recordings; `children` (the stage picker) take their own row under it.
+function Hero({ t, link, lab, status, opening, open, close, children }) {
+  const title = link.scene ? sceneTitle(link.scene, t?.view) : null;
+  return html`<header class="practice-card workshop-hero">
+    <div class="workshop-title">
+      <span class="workshop-title-icon"><${Icon} name="ghost" size=${22} /></span>
+      <div><span class="eyebrow">Lab</span><h2>Scene viewer</h2></div>
+    </div>
+    ${link.scene ? html`<div class="scene-lab-open">
+        <span class="scene-lab-title" title=${title}>${title}</span>
+        <button type="button" onclick=${close} title="Close this recording and stop the renderer">Close</button>
+      </div>`
+      : lab && html`<${Opener} status=${status} opening=${opening} open=${open} />`}
+    ${children}
+  </header>`;
+}
+
+// The page's one keyboard owner, wired to its root (onKey): arriving gives the viewer the keyboard
+// (from the sidebar, or the Ghost button's open), and a key pressed while nothing on the page has
+// focus (a clicked control went away) is its too. Returns the root's handlers.
+function useKeyboardOwner(link, surface, canvas) {
+  const pointed = useRef(null);
+  useEffect(() => {
+    surface.current?.focus({ preventScroll: true });
+    const stray = (event) => { if (event.target === document.body) onKey(link, event, canvas.current); };
+    document.addEventListener("keydown", stray);
+    return () => document.removeEventListener("keydown", stray);
+  }, []);
+  const back = () => surface.current?.focus({ preventScroll: true });
+  return {
+    onkeydown: (event) => {
+      pointed.current = null;        // a key reaching the page: whatever has focus is used from the keyboard
+      onKey(link, event, canvas.current);
+    },
+    // A mouse click on one of the page's controls hands the keyboard back to the viewer, so Space
+    // plays after clicking Free camera; a control pressed from the keyboard (detail 0) keeps it.
+    onclick: (event) => {
+      if (event.detail > 0 && !typesInto(event.target) && !inDialog(event.target)) back();
+    },
+    // A select's choice made with the mouse does the same (its letters would otherwise pick an
+    // option by its first letter: E and S switch Pictures to "Exact..."); one reached with Tab
+    // keeps its keys.
+    onpointerdown: (event) => { pointed.current = event.target; },
+    onchange: (event) => { if (event.target.tagName === "SELECT" && pointed.current === event.target) back(); },
+    // Focus leaving for the rest of the page, or for a field that types, lets go of every key.
+    onfocusout: (event) => {
+      const next = event.relatedTarget;
+      if (!next || !surface.current?.contains(next) || typesInto(next)) link.releaseKeys();
+    },
+  };
+}
+
+// One observation per summary, read off the page once it shows it. Not useUiLog: that runs on
+// every render, and this page renders every picture, which would claim the practice page's
+// latency marks (ui/latency.js) dozens of times a second.
+function useMovingObservations(link, surface) {
+  useEffect(() => {
+    const observation = link.moving && readSceneViewer(surface.current);
+    if (observation) postObservation(observation);
+  }, [link.moving]);
+}
+
 // `t.sceneLab.intent` (app.js): the Practice log's Ghost button names an
 // attempt; the viewer opens that attempt's scene and plays it, once per click.
+// The stage picker (scenestage.js) starts on the target of the scene on screen,
+// else, with none open, on what the Practice log has selected, whose stage
+// it then opens; a choice there opens that target's stage.
 export function SceneViewer({ t }) {
   const lab = t?.sceneLab, intent = lab?.intent;
   const [status, setStatus] = useState(null);
   const [opening, setOpening] = useState(false);
-  const canvas = useRef(null), surface = useRef(null), refresh = useRef(null), pointed = useRef(null);
+  const [target, setTarget] = useState(null);         // what the stage picker shows
+  const [stageNote, setStageNote] = useState(null);   // "Finding...", or why a target has no stage
+  const canvas = useRef(null), surface = useRef(null), refresh = useRef(null);
+  const asked = useRef(0);                            // the newest choice; older answers are dropped
   const link = useSceneLink(canvas, refresh);
+  const strategies = useStrategies(targetKey(target));
   refresh.current = async () => {
     try {
       const next = await getJSON(`${ROOT}/status`);
@@ -1350,39 +1469,70 @@ export function SceneViewer({ t }) {
   };
   useEffect(() => {
     if (intent) return;              // the attempt below replaces whatever scene was open
-    refresh.current().then((next) => { if (next?.session) link.connect(next.session); });
+    refresh.current().then((next) => {
+      if (next?.session) {
+        link.connect(next.session);
+        setTarget(keptFor(next.session).target || stageDefault(next.session, t?.view));
+      } else {
+        const practiced = stageDefault(null, t?.view);
+        if (practiced) choose(practiced);
+      }
+    });
   }, []);
   useEffect(() => {
     if (!intent) return;
     lab.clearIntent();
-    open({ attempt: intent.attempt }, { play: true });
+    asked.current += 1;              // a stage still being found is no longer wanted
+    setStageNote(null);
+    const named = stageDefault({ attempt: intent.attempt }, t?.view);
+    setTarget(named);
+    open({ attempt: intent.attempt }, { play: true }).then((scene) => {
+      if (!scene) return;
+      setTarget(scene.target || named);
+      keep(scene, { target: scene.target || named });
+    });
   }, [intent]);
-  // Arriving gives the viewer the keyboard (from the sidebar, or the Ghost button's open), and a
-  // key pressed while nothing on the page has focus (a clicked control went away) is its too.
-  useEffect(() => {
-    surface.current?.focus({ preventScroll: true });
-    const stray = (event) => { if (event.target === document.body) onKey(link, event, canvas.current); };
-    document.addEventListener("keydown", stray);
-    return () => document.removeEventListener("keydown", stray);
-  }, []);
-  // One observation per summary, read off the page once it shows it. Not useUiLog: that runs on
-  // every render, and this page renders every picture, which would claim the practice page's
-  // latency marks (ui/latency.js) dozens of times a second.
-  useEffect(() => {
-    const observation = link.moving && readSceneViewer(surface.current);
-    if (observation) postObservation(observation);
-  }, [link.moving]);
-  // `body`: {package} from the picker, or {attempt} from the Ghost button. A refusal shows the
-  // server's own sentence either way.
+  // A target from the stage picker (or the Practice log's, on arriving): the lab's stage for it opens,
+  // or the lab's reason shows and the scene of another target closes.
+  async function choose(next) {
+    const serial = ++asked.current;
+    setTarget(next);
+    setStageNote(STAGE_WORDS.finding);
+    let answer;
+    try {
+      answer = await getJSON(`${ROOT}/stage?${targetQuery(next)}`);
+    } catch (problem) {
+      if (serial === asked.current) setStageNote(problem.message);
+      return;
+    }
+    if (serial !== asked.current) return;
+    const staged = { ...next, ...answer.target };
+    setTarget(staged);
+    if (answer.attempt == null) {
+      setStageNote(answer.reason || STAGE_WORDS.none);
+      if (link.scene) await close();
+      return;
+    }
+    setStageNote(null);
+    const scene = link.scene?.attempt === answer.attempt ? link.scene : await open({ attempt: answer.attempt });
+    if (scene && serial === asked.current) keep(scene, { target: staged });
+  }
+  const owner = useKeyboardOwner(link, surface, canvas);
+  useMovingObservations(link, surface);
+  // `body`: {package} from the lab's list, or {attempt} from the Ghost button or the stage picker. A
+  // refusal shows the server's own sentence either way. The opened scene, or null.
   async function open(body, { play = false } = {}) {
     setOpening(true);
     link.fail(null);
+    let scene = null;
     try {
-      link.connect(await send("POST", `${ROOT}/open`, body), { play });
+      scene = await send("POST", `${ROOT}/open`, body);
+      link.connect(scene, { play });
       surface.current?.focus();
     } catch (problem) { link.fail(problem.message); }
     setOpening(false);
     refresh.current();
+    return scene;
   }
   async function close() {
     endLook(link, canvas.current, "closed", true);
@@ -1392,42 +1542,15 @@ export function SceneViewer({ t }) {
     try { await send("POST", `${ROOT}/close`); } catch (problem) { link.fail(problem.message); }
     refresh.current();
   }
-  const keys = (event) => {
-    pointed.current = null;          // a key reaching the page: whatever has focus is used from the keyboard
-    onKey(link, event, canvas.current);
-  };
-  // A mouse click on one of the page's controls hands the keyboard back to the viewer, so Space
-  // plays after clicking Free camera; a control pressed from the keyboard (detail 0) keeps it.
-  // A select's choice made with the mouse does the same (its letters would otherwise pick an
-  // option by its first letter: E and S switch Pictures to "Exact..."); one reached with Tab
-  // keeps its keys.
-  const clicked = (event) => {
-    if (event.detail > 0 && !typesInto(event.target)) surface.current?.focus({ preventScroll: true });
-  };
-  const pointedAt = (event) => { pointed.current = event.target; };
-  const chosen = (event) => {
-    if (event.target.tagName === "SELECT" && pointed.current === event.target) surface.current?.focus({ preventScroll: true });
-  };
-  // Focus leaving for the rest of the page, or for a field that types, lets go of every key.
-  const left = (event) => {
-    const next = event.relatedTarget;
-    if (!next || !surface.current?.contains(next) || typesInto(next)) link.releaseKeys();
-  };
-  return html`<div class="workshop-page scene-lab" ref=${surface} tabindex="-1" onkeydown=${keys}
-      onclick=${clicked} onpointerdown=${pointedAt} onchange=${chosen} onfocusout=${left}>
-    <header class="practice-card workshop-hero">
-      <div class="workshop-title">
-        <span class="workshop-title-icon"><${Icon} name="ghost" size=${22} /></span>
-        <div><span class="eyebrow">Lab</span><h2>Scene viewer</h2></div>
-      </div>
-      ${link.scene ? html`<div class="scene-lab-open">
-          <span class="scene-lab-title" title=${sceneTitle(link.scene, t?.view)}>${sceneTitle(link.scene, t?.view)}</span>
-          <button type="button" onclick=${close} title="Close this recording and stop the renderer">Close</button>
-        </div>`
-        : html`<${Opener} status=${status} opening=${opening} open=${open} />`}
-    </header>
+  return html`<div class="workshop-page scene-lab" ref=${surface} tabindex="-1" ...${owner}>
+    <${Hero} t=${t} link=${link} lab=${!target} status=${status} opening=${opening} open=${open} close=${close}>
+      <${StagePicker} t=${t} target=${target} strategies=${strategies} onChoose=${choose}
+        note=${stageNote || (!target && !link.scene ? STAGE_WORDS.prompt : null)} />
+    <//>
     ${link.error && html`<p class="scene-lab-error" role="status">${link.error}</p>`}
-    ${!link.scene && status?.ended && !link.error && html`<p class="scene-lab-reason">${status.ended.message}</p>`}
-    ${link.scene && html`<${Player} link=${link} canvas=${canvas} surface=${surface} />`}
+    ${!link.scene && status?.ended && !link.error && !stageNote
+      && html`<p class="scene-lab-reason">${status.ended.message}</p>`}
+    ${link.scene && html`<${Player} link=${link} canvas=${canvas} surface=${surface}
+      ghosts=${html`<${GhostPanel} link=${link} target=${target} strategies=${strategies} />`} />`}
   </div>`;
 }

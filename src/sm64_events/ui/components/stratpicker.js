@@ -36,6 +36,21 @@ function strategyOptions(shown, strategies) {
   return shown && !known.includes(shown) ? [...known, shown] : known;
 }
 
+// The dropdown's options: the blank sentinel, the strategies (grouped under
+// their exit-star headings when the server sent groups), then "+ new strat…"
+// unless `allowNew` is false.
+function optionList({ allowBlank, blankLabel, grouped, strays, options, allowNew }) {
+  return html`${allowBlank ? html`<option value="">${blankLabel}</option>` : null}
+    ${grouped.length
+      ? html`${grouped.map((g) => html`<optgroup label=${g.label}>
+            ${g.strategies.map((s) => html`
+              <option value=${s.name}>${s.leaf}</option>`)}
+          </optgroup>`)}
+        ${strays.map((s) => html`<option value=${s}>${s}</option>`)}`
+      : options.map((s) => html`<option value=${s}>${s}</option>`)}
+    ${allowNew === false ? null : html`<option value="__new">+ new strat…</option>`}`;
+}
+
 /**
  * THE active-strategy write, shared by this picker and the Lineup's strategy
  * buttons (ui/components/lineup.js): one door to POST /api/strat, so a pick
@@ -71,10 +86,14 @@ async function submitStrategy(submit, identity, tag, timerMode, onNotice) {
 // strategy's stored name is variant-qualified and the qualifier is exactly
 // what the heading already says. Nothing here derives the grouping: the split
 // happens once, in ranks/standards.py, and arrives ready to render.
+// `allowNew=false` drops "+ new strat…": the Scene viewer's stage picker chooses
+// among strategies that have recordings and creates none. `label` names the
+// dropdown for a page where no visible label sits beside it.
 export function StratPicker({ entity, identity, strategies, active, onChanged,
                               submit, blankLabel = "— no strat —",
                               highlightUnset = true, allowBlank = true,
-                              groups = null, timerMode = "igt", onNotice }) {
+                              groups = null, timerMode = "igt", onNotice,
+                              allowNew, label }) {
   // Bumped to force the <select> to remount and re-read `active`. A native
   // <select> change updates the DOM immediately, but if the write is dropped
   // (or cancelled) `active` stays null, so its `value` prop never changes and
@@ -155,17 +174,9 @@ export function StratPicker({ entity, identity, strategies, active, onChanged,
   const nothingToPick = options.length === 0;
   return html`<select key=${`strat-${nonce}`}
       class="meta ${!shown && highlightUnset && !nothingToPick ? "needs-strat" : ""}"
-      value=${shown || ""}
+      value=${shown || ""} aria-label=${label}
       onchange=${(changeEvent) => setStrat(changeEvent.target.value)}>
-    ${allowBlank ? html`<option value="">${blankLabel}</option>` : null}
-    ${grouped.length
-      ? html`${grouped.map((g) => html`<optgroup label=${g.label}>
-            ${g.strategies.map((s) => html`
-              <option value=${s.name}>${s.leaf}</option>`)}
-          </optgroup>`)}
-        ${strays.map((s) => html`<option value=${s}>${s}</option>`)}`
-      : options.map((s) => html`<option value=${s}>${s}</option>`)}
-    <option value="__new">+ new strat…</option>
+    ${optionList({ allowBlank, blankLabel, grouped, strays, options, allowNew })}
   </select>
   ${showModal ? html`<${StratModal} entity=${entity} existing=${options}
       onSaved=${(stratName) => { setShowModal(false); setStrat(stratName); }}
