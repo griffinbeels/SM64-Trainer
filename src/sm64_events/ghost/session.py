@@ -450,6 +450,12 @@ class GhostSession:
         return {**NO_TARGET, **self._native_answer}
 
 
+    @property
+    def rivals(self):
+        """The rival race (`ghost/rivals.py`), or None in a window without a population: the
+        Scene viewer's ghost catalog lists its population and judges ownership through it."""
+        return self._rivals
+
     def library(self) -> GhostLibrary:
         """The current PB, saved runs, template attempts and imported ghosts."""
         return GhostLibrary(template_store(self._inputs), self._db(),

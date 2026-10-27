@@ -1452,6 +1452,38 @@ sentence. The server keeps the scenes of his last 20 [[attempt]]s while it is up
 - **Not** -- the replay's video of an [[attempt]], which the [[recorder]] keeps;
   this scene redraws the game's graphics, and its camera can move
 
+### Viewer stage
+
+The [[attempt scene]] the [[scene viewer]] shows as the world: its level, its
+sound and its recorded camera. The viewer draws each added [[ghost]] into it from
+that [[ghost]]'s own recording, starting on the stage's first [[frame]]. It is the
+scene he opened; for a [[star]] or [[segment]] and [[strategy]] he picks, it is his
+fastest finished [[attempt]] that still has a scene (a [[reset]] only when nothing
+finished has one), else one sentence saying there is none yet. The [[strategy]] starts as the one he
+last chose for that [[target]].
+
+- **Lives** -- the stage choice (`src/sm64_events/server/scene_ghosts.py`), served
+  to the page by the lab's routes (`src/sm64_events/server/scene_lab_api.py`)
+- **Not** -- the stage banner's place (where Mario stands now); and not a merged
+  world: other [[ghost]]s never bring their own level or camera
+
+### Scene ghosts
+
+The [[ghost]]s the [[scene viewer]] can add to its [[viewer stage]], in four lists: yours
+(fastest or newest first), top (each player's best, fastest first), a search by
+player name (each match's best) and one player's (fastest first), ten to a page.
+Each shows its time, its place among every player's best (ties share a place)
+and its [[rank]] on the [[strategy]]'s [[ladder]]. The lists hold a recording only
+when the in-game race would play it, judged by the race's own checks; they leave
+anything else out and count it, never showing it with a warning.
+
+- **Lives** -- the lists, and the loader that hands the renderer a listed
+  [[ghost]]'s recording and the name its in-game name box shows
+  (`src/sm64_events/server/scene_ghosts.py`), served to the page by the lab's
+  routes (`src/sm64_events/server/scene_lab_api.py`)
+- **Not** -- the [[lineup]], which picks who you race in the game; nothing here
+  changes the race or the practice [[target]]
+
 ### Practice ROM
 
 The cartridge the practice tooling works on: Usamune v1.93u (US) or a JP
