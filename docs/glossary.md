@@ -1459,8 +1459,9 @@ anything else out and count it, never showing it with a warning.
 
 - **Lives** -- the lists, and the loader that hands the renderer a listed
   [[ghost]]'s recording and the name its in-game name box shows
-  (`src/sm64_events/server/scene_ghosts.py`), served to the page by the lab's
-  routes (`src/sm64_events/server/scene_lab_api.py`)
+  (`src/sm64_events/server/scene_ghosts.py`); other players' through the race's
+  community client, cache first (`src/sm64_events/server/scene_community.py`);
+  served to the page by the lab's routes (`src/sm64_events/server/scene_lab_api.py`)
 - **Not** -- the [[lineup]], which picks who you race in the game; nothing here
   changes the race or the practice [[target]]
 
