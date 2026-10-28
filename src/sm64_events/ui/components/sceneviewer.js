@@ -48,9 +48,16 @@
 // view on its row): the stage seen from that ghost's own recorded camera, which
 // the lab finds for every picture, so it follows the ghost through Play, steps
 // and seeks. Free camera from a ghost's view starts at that camera. The
-// Cinematic row (scenerigs.js) adds Front, Side and Orbit, which the lab
-// works out from the followed runner's path for every picture; Free camera
-// from one starts at the camera its picture names (camera_used).
+// Cinematic row (scenerigs.js) adds Front, Side, Orbit, Chase, Overhead and
+// Tripod, which the lab works out from the followed runner's path for every
+// picture; Free camera from one starts at the camera its picture names
+// (camera_used).
+//
+// The Tilt and lens row (scenelens.js) turns and zooms whichever camera is on
+// screen: a cinematic camera's own, else the free camera's (from the recorded
+// camera or a ghost's view it starts Free camera first, as W A S D do). Z and C
+// tilt while held, X levels, - and = change the lens while held, and Ctrl with
+// the wheel changes it too; Reset view puts the free camera's back as well.
 //
 // Under the camera controls, the Cameras strip (scenepresets.js) keeps named cameras in slots 1-9
 // for the course and area on screen: keys 1-9 or a click cut to one as a free camera (cutTo), and
@@ -73,13 +80,15 @@ import { ControlGroups } from "../tunecontrols.js";
 import { postObservation } from "../uilog.js";
 import { SCENE_CAMERA_DEFAULTS, SCENE_CAMERA_GROUPS, SCENE_CAMERA_TUNABLES, sceneCameraTuning,
   setSceneCameraTuning } from "../scenecameratuning.js";
-import { cameraOf, dollied, flightSpeed, flown, flyToTarget, focusedOn, glideAt, lookingAt, looked,
-  orbitFromPose, slid, speedStepped, turned, worldPoint } from "./scenecamera.js";
+import { cameraOf, dollied, flightSpeed, flown, flyToTarget, focusedOn, glideAt, lensed, lookingAt, looked,
+  orbitFromPose, slid, speedStepped, tiltAndLens, tilted, turned, wheelLens, worldPoint } from "./scenecamera.js";
+import { LensBar } from "./scenelens.js";
 import { SceneSound, SoundBar } from "./sceneaudio.js";
 import { RecordBar } from "./scenerecord.js";
 import { CameraPresets, CameraSlots, placeKey, placeOf, presetCamera } from "./scenepresets.js";
 import { heardInto, pictureAt, playLength, recordedTimes } from "./sceneclock.js";
-import { CinematicBar, orbitPhase, rigChanged, rigHint, rigName, rigRequest, seenOnScreen, startRig } from "./scenerigs.js";
+import { CinematicBar, orbitFolded, orbitPhase, rigChanged, rigHint, rigName, rigRequest, seenOnScreen,
+  startRig } from "./scenerigs.js";
 
 const html = htm.bind(h);
 const ROOT = "/api/scene-lab";
@@ -97,12 +106,18 @@ const sameOrbit = (a, b) => !!a && !!b && a.yaw === b.yaw && a.pitch === b.pitch
 // The flight keys, by physical key so they sit under the left hand on any layout.
 export const FLIGHT_KEYS = { KeyW: ["forward", 1], KeyS: ["forward", -1], KeyD: ["right", 1], KeyA: ["right", -1],
   KeyE: ["up", 1], KeyQ: ["up", -1] };
+// Tilt and lens while held, beside them: Z and C turn the picture counterclockwise and clockwise, - and
+// = widen and lengthen the lens. They act on a cinematic camera too, where the flight keys start Free camera.
+export const LENS_KEYS = { KeyZ: ["tilt", -1], KeyC: ["tilt", 1], Minus: ["zoom", -1], Equal: ["zoom", 1],
+  NumpadSubtract: ["zoom", -1], NumpadAdd: ["zoom", 1] };
+const HELD_KEYS = { ...FLIGHT_KEYS, ...LENS_KEYS };
 const idleFlight = () => ({ keys: new Set(), fast: false, slow: false, ticking: false, last: 0, input: null });
 function movementOf(keys) {
-  const move = { forward: 0, right: 0, up: 0 };
-  for (const code of keys) { const [axis, sign] = FLIGHT_KEYS[code]; move[axis] += sign; }
+  const move = { forward: 0, right: 0, up: 0, tilt: 0, zoom: 0 };
+  for (const code of keys) { const [axis, sign] = HELD_KEYS[code]; move[axis] += sign; }
   return move;
 }
+const flies = (keys) => [...keys].some((code) => FLIGHT_KEYS[code]);
 const WHEEL_LINE = 40, WHEEL_PAGE = 800, WHEEL_NOTCH = 100;   // deltaMode 1 and 2 in pixels; Chromium's notch
 const GLIDE_LEAD_MS = 40;     // a double-click's flight is at most this far along when its first picture goes out
 const wheelPixels = (event) => event.deltaY * (event.deltaMode === 1 ? WHEEL_LINE : event.deltaMode === 2 ? WHEEL_PAGE : 1);
@@ -308,7 +323,7 @@ export class SceneLink {
       entering: null, arrived: 0, drawnSeq: 0, looking: null, flight: idleFlight(), speed: 1, picking: false,
       finding: false, glide: null, serial: 0, noticeTimer: null, moving: null, shared: new Map(), playback: null,
       readies: [], coldId: 0, autoplay: false, loop: savedLoop(), hud: savedHud(), ghosts: [], refusedGhosts: new Map(),
-      view: null, rig: null, lastRig: null, follow: "stage", rigPath: null,
+      view: null, rig: null, lastRig: null, follow: "stage", rigPath: null, orbitSince: null,
       asked: null, ghostPages: new Map(), ghostNote: null, ghostSerial: 0,
       sound: new SceneSound({ changed: () => this.changed(), observe: (note) => this.observe(note) }),
       presets: new CameraPresets({ changed: () => this.changed() }) });
@@ -345,7 +360,7 @@ export class SceneLink {
     Object.assign(this, { ws, scene, frame: 0, free: false, orbit: null, entry: null, inFlight: new Map(),
       wanted: null, notice: null, error: null, speed: 1, moving: null, readies: [], coldId: this.sequence + 1,
       ghosts: keptFor(scene).ghosts, asked: null, refusedGhosts: new Map(), ghostNote: null, view: null, rig: null,
-      follow: "stage" });
+      follow: "stage", orbitSince: null });
     keep(scene, {});
     this.ghostPages = kept.pages;
     this.presets.forget();
@@ -412,7 +427,8 @@ export class SceneLink {
     this.disconnect();
     this.sound.load(null);
     kept = unkept();
-    Object.assign(this, { scene: null, free: false, notice: null, error: message, inFlight: new Map(), wanted: null });
+    Object.assign(this, { scene: null, free: false, notice: null, error: message, inFlight: new Map(), wanted: null,
+      orbitSince: null });
     this.changed();
     this.ended();
   }
@@ -435,7 +451,7 @@ export class SceneLink {
     const ready = this.ws && this.ws.readyState === WebSocket.OPEN && this.scene;
     if (this.inFlight.size >= PICTURES_IN_FLIGHT || !this.wanted || !ready) return;
     const play = this.playback, frame = this.wanted.frame ?? (play ? play.asked : this.frame);
-    const id = ++this.sequence, camera = this.cameraNow();
+    const id = ++this.sequence, camera = this.cameraNow(frame);
     this.inFlight.set(id, { ...this.wanted, id, frame, camera, free: !!camera, sent: performance.now(), play,
       due: play ? play.dueOf(frame) : null });
     if (play && this.wanted.kind !== "play") play.moved = true;
@@ -448,10 +464,10 @@ export class SceneLink {
 
   // The camera a picture asked for now is drawn from (interface D): the free camera's pose, a cinematic
   // camera, a ghost's view, or null for the recorded camera. A recording (scenerecord.js) reads it every
-  // display frame.
-  cameraNow() {
+  // display frame. An orbit circling a paused scene carries its clock at `now` (interface H's clock_ms).
+  cameraNow(frame = this.frame, now = performance.now()) {
     if (this.free && this.orbit) return cameraOf(this.orbit);
-    if (this.rig) return rigRequest(this.rig, sceneCameraTuning());
+    if (this.rig) return rigRequest(this.rig, sceneCameraTuning(), this.orbitSince == null ? null : this.orbitMs(frame, now));
     return this.view ? { ghost: this.view } : null;
   }
 
@@ -484,6 +500,7 @@ export class SceneLink {
     if (!play) return;
     this.pausedOn = heardInto(play, this.frame, performance.now(), this.scene?.session);
     Object.assign(this, { playback: null, playing: false });
+    this.holdOrbit();
     for (const hold of play.holds.splice(0)) hold.resolve(false);
     if (this.wanted?.frame != null) {
       if (this.wanted.kind === "play") this.wanted = null;
@@ -540,6 +557,7 @@ export class SceneLink {
       width: header.width, height: header.height }, moving);
     // hud_reason: why a picture asked for without the HUD still has it (the server's sentence).
     Object.assign(this, { shown: header, notice: header.reason || header.hud_reason || null });
+    this.holdOrbit();
     this.changed();
     this.pump();
     if (this.autoplay) this.play();
@@ -647,11 +665,11 @@ export class SceneLink {
   }
 
   async readEntry() {
-    const seen = this.viewOnScreen();
+    const seen = this.viewOnScreen(), chosen = !!seen && !!this.rig;     // a cinematic camera's tilt was set
     const answer = seen ? { pose: seen } : await this.pose(this.frame);
     if (this.free) return;                  // a cut to a saved camera got there first
     const pose = answer.pose, orbit = pose && orbitFromPose(pose.focus, pose.position, { roll: pose.roll ?? 0,
-      fov: pose.fov ?? null });
+      fov: pose.fov ?? null, levels: !chosen });
     if (!orbit) return this.say(answer.reason || "The free camera is unavailable for this frame.");
     const [dx, dy, sliding] = this.pending, tuning = sceneCameraTuning();
     Object.assign(this, { pending: [0, 0, false], free: true, view: null, rig: null, entry: orbit,
@@ -686,15 +704,33 @@ export class SceneLink {
     const serial = this.serial, next = startRig(kind, this.lastRig, sceneCameraTuning(), this.follow);
     this.awaitRigPath();
     if (kind === "orbit" && this.rig?.kind !== "orbit") next.phase = await this.orbitStart(next);
+    if (kind === "tripod") {
+      const stand = await this.tripodStart();
+      if (serial !== this.serial) return;
+      if (!stand.camera) return this.say(stand.reason || "The tripod has nowhere to stand in this picture.");
+      Object.assign(next, { position: stand.camera.position, roll: stand.camera.roll ?? 0, fov: stand.camera.fov ?? null });
+    }
     if (serial !== this.serial) return;               // another input came first
     Object.assign(this, { free: false, view: null, rig: next, lastRig: next, notice: null, picking: false });
+    this.holdOrbit();
     this.want("input", time);
     this.changed();
   }
 
+  // Where a tripod chosen now stands: the camera on screen, its place, tilt and lens, so the picture
+  // only turns to find the runner (the free camera's, the one the lab drew, else the recorded pose).
+  async tripodStart() {
+    if (this.free && this.orbit) return { camera: cameraOf(this.orbit) };
+    const seen = this.viewOnScreen();
+    if (seen) return { camera: seen };
+    const answer = await this.pose(this.frame);
+    return { camera: answer.pose, reason: answer.reason };
+  }
+
   setRig(changes, time) {
     if (!this.rig) return;
-    this.rig = this.lastRig = rigChanged(this.rig, changes, this.secondsAt(this.frame));
+    this.rig = this.lastRig = rigChanged(this.rig, changes, this.orbitMs() / 1000);
+    this.holdOrbit();
     this.want("input", time);
     this.changed();
   }
@@ -705,8 +741,41 @@ export class SceneLink {
     else this.changed();
   }
 
-  // When the picture `frame` shows on the scene's own clock (sceneclock.js), as the lab counts an orbit.
-  secondsAt(frame) { return (recordedTimes(this.scene)[frame] ?? 0) / 1000; }
+  // An orbit's clock at `frame`, in ms: when that picture shows on the scene's own clock (sceneclock.js),
+  // as the lab counts an orbit, plus the time it has circled the scene paused (Orbit while paused).
+  orbitMs(frame = this.frame, now = performance.now()) {
+    const shows = recordedTimes(this.scene)[frame] ?? 0;
+    return this.orbitSince == null ? shows : shows + Math.max(0, now - this.orbitSince);
+  }
+
+  // Orbit while paused: with an orbit on that setting and the scene paused, the picture on screen is
+  // asked for again every display frame with the orbit's clock running from the pause (cameraNow), so
+  // the camera circles the held picture at its speed. Once that ends (Play, the setting off, another
+  // camera), the time it circled goes into the orbit's phase: Play turns on from the angle on screen.
+  // It circles only while the lab draws the orbit: a picture it could not (Mario's path not read yet,
+  // no Mario in this frame) waits for the next one that does, instead of asking 60 times a second.
+  get orbitHeld() {
+    const rig = this.rig, shown = this.shown;
+    return !!(this.scene && this.ws && !this.playing && rig?.kind === "orbit" && rig.whilePaused && rig.speed
+      && shown?.rig?.kind === "orbit" && shown.camera === "free");
+  }
+
+  holdOrbit(now = performance.now()) {
+    if (this.orbitHeld === (this.orbitSince != null)) return;
+    if (this.orbitSince != null) {
+      if (this.rig?.kind === "orbit") this.rig = this.lastRig = orbitFolded(this.rig, Math.max(0, now - this.orbitSince));
+      this.orbitSince = null;
+      return;
+    }
+    const since = this.orbitSince = now;
+    const tick = () => {
+      if (this.orbitSince !== since) return;
+      if (!this.orbitHeld) return this.holdOrbit();
+      this.want("move");
+      this.animate(tick);
+    };
+    this.animate(tick);
+  }
 
   // The phase that puts a new orbit's camera where the camera on screen stands, seen from its runner:
   // the cinematic picture on screen names both; else the recorded pose (the stage's Mario only).
@@ -714,7 +783,7 @@ export class SceneLink {
     const seen = seenOnScreen(this.shown, rig.target);
     const pose = seen.from && seen.target ? null : (await this.pose(this.frame)).pose;
     return orbitPhase(seen.from ?? pose?.position, seen.target ?? (rig.target === "stage" ? pose?.mario : null),
-      rig.speed, this.secondsAt(this.frame));
+      rig.speed, this.orbitMs() / 1000);
   }
 
   // Mario's path: the lab starts reading it in a process of its own as the scene opens, and a cinematic
@@ -729,6 +798,43 @@ export class SceneLink {
 
   // A Tune controls change: a cinematic camera on screen is drawn again with it.
   tuned() { if (this.rig) this.want("input"); }
+
+  // ---- Tilt and lens (scenelens.js): the cinematic camera's own, else the free camera's, which the
+  // recorded camera or a ghost's view starts from the picture on screen first.
+  async setTilt(degrees, time) {
+    if (this.rig) return this.setRig({ roll: tilted({}, degrees).roll }, time);
+    this.interrupt();
+    await this.enterFree();
+    if (!this.free) return;
+    this.orbit = tilted(this.orbit, degrees);
+    this.want("move", time);
+    this.changed();
+  }
+
+  async setLens(mm, time) {
+    if (this.rig) return this.setRig({ fov: lensed({}, mm).fov }, time);
+    this.interrupt();
+    await this.enterFree();
+    if (!this.free) return;
+    this.orbit = lensed(this.orbit, mm);
+    this.want("move", time);
+    this.changed();
+  }
+
+  // Ctrl with the wheel (a touchpad pinch): the lens of the camera on screen.
+  async zoomByWheel(wheel, time) {
+    if (this.rig) return this.setRig({ fov: wheelLens(this.rig.fov ?? sceneCameraTuning().rigFov, wheel,
+      sceneCameraTuning()) }, time);
+    this.interrupt();
+    await this.enterFree();
+    if (!this.free) return;
+    this.orbit = { ...this.orbit, fov: wheelLens(this.orbit.fov, wheel, sceneCameraTuning()) };
+    this.want("move", time);
+    this.changed();
+  }
+
+  // X: level the camera on screen (the recorded camera has nothing to level).
+  level(time) { if (this.rig || this.free) this.setTilt(0, time); }
 
   // A ghost's view: the stage from that ghost's own recorded camera, following it as the scene
   // plays, steps and seeks (the lab finds its camera for each picture). Free camera from here
@@ -748,7 +854,7 @@ export class SceneLink {
   // flies on from there.
   cutTo(camera, time) {
     const orbit = this.freeAvailable && orbitFromPose(camera.focus, camera.position, { roll: camera.roll ?? 0,
-      fov: camera.fov ?? null });
+      fov: camera.fov ?? null, levels: false });
     if (!orbit) return;
     this.interrupt();
     Object.assign(this, { free: true, view: null, rig: null, orbit, entry: orbit, pending: [0, 0, false], picking: false,
@@ -896,11 +1002,13 @@ export class SceneLink {
   // camera's. The first press in the recorded camera enters the free camera
   // from the picture on screen, and the key moves it once it is in. A key let
   // go of by Esc, R or leaving the page stays still until pressed again: its
-  // held-down repeats never restart it.
+  // held-down repeats never restart it. The tilt and lens keys (LENS_KEYS) turn
+  // and zoom a cinematic camera where it is; with one on, only a flight key
+  // starts Free camera.
   moveKey(event) {
     const flight = this.flight, code = event.code;
     Object.assign(flight, { fast: event.shiftKey, slow: event.altKey });
-    if (!FLIGHT_KEYS[code]) return false;
+    if (!HELD_KEYS[code]) return false;
     if (event.type !== "keydown") {
       flight.keys.delete(code);
       return true;
@@ -910,7 +1018,7 @@ export class SceneLink {
     this.interrupt();
     if (flight.input == null) flight.input = event.timeStamp;
     flight.keys.add(code);
-    if (this.free) this.flightOn(performance.now());
+    if (this.free || (this.rig && !flies(flight.keys))) this.flightOn(performance.now());
     else this.enterFree();
     return true;
   }
@@ -919,22 +1027,43 @@ export class SceneLink {
 
   // One step of flight per animation frame, at a constant speed for the time
   // that passed (a stall moves at most a tenth of a second); stops the frame
-  // the last key is let go, or once releaseKeys has let go of this flight.
+  // the last key is let go, or once releaseKeys has let go of this flight. The
+  // tilt and lens keys turn and zoom in the same step, the free camera's or a
+  // cinematic camera's (Shift and Alt pace them as they pace flight).
   flightOn(time) {
     const flight = this.flight;
-    if (flight.ticking || !this.free || !flight.keys.size) return;
+    if (flight.ticking || !(this.free || this.rig) || !flight.keys.size) return;
     Object.assign(flight, { ticking: true, last: time });
     const tick = (now) => {
       if (this.flight !== flight) return;
-      if (!this.free || !flight.keys.size) { flight.ticking = false; return; }
-      const seconds = clamp((now - flight.last) / 1000, 0, 0.1), tuning = sceneCameraTuning();
+      if (!(this.free || this.rig) || !flight.keys.size) { flight.ticking = false; return; }
+      const seconds = clamp((now - flight.last) / 1000, 0, 0.1);
       flight.last = now;
-      this.orbit = flown(this.orbit, movementOf(flight.keys), seconds, flightSpeed(this.speed, flight, tuning), tuning);
-      this.want("move", Math.min(flight.input ?? now, performance.now()));
+      if (this.heldFor(movementOf(flight.keys), seconds, flight)) {
+        this.want("move", Math.min(flight.input ?? now, performance.now()));
+      }
       flight.input = null;
       this.animate(tick);
     };
     this.animate(tick);
+  }
+
+  // `seconds` of the held keys `move`: the free camera flies, tilts and zooms, a cinematic camera
+  // tilts and zooms. True when the camera changed.
+  heldFor(move, seconds, flight) {
+    const tuning = sceneCameraTuning(), turning = move.tilt || move.zoom;
+    const pace = (flight.fast ? tuning.fastMultiplier : 1) * (flight.slow ? tuning.slowMultiplier : 1);
+    if (this.free) {
+      const flownTo = flown(this.orbit, move, seconds, flightSpeed(this.speed, flight, tuning), tuning);
+      this.orbit = turning ? { ...flownTo, ...tiltAndLens(flownTo, move, seconds, pace, tuning),
+        levels: move.tilt ? false : flownTo.levels } : flownTo;
+      return true;
+    }
+    if (!turning) return false;
+    const rig = this.rig;
+    this.rig = this.lastRig = { ...rig, ...tiltAndLens({ roll: rig.roll ?? 0, fov: rig.fov ?? tuning.rigFov }, move,
+      seconds, pace, tuning) };
+    return true;
   }
 
   // ---- looking around: only while the right button is held on the picture
@@ -1140,6 +1269,7 @@ export class SceneLink {
         }
       } };
     Object.assign(this, { playback: play, playing: true, frame: from });
+    this.holdOrbit();
     const tick = (frameTime) => {
       if (this.playback !== play) return;
       if (play.frameAt != null) {
@@ -1187,6 +1317,7 @@ const KEYS = {
   f: (link, event) => link.lookAtMario(event.timeStamp),
   r: (link, event) => link.recorded(event.timeStamp),
   m: (link) => link.sound.toggleMute(),
+  x: (link, event) => link.level(event.timeStamp),
   ...Object.fromEntries([1, 2, 3, 4, 5, 6, 7, 8, 9].map((slot) =>
     [String(slot), (link, event) => link.recallSlot(slot, event.timeStamp)])),
 };
@@ -1310,8 +1441,9 @@ function pointerHandlers(link, surface) {
     oncontextmenu: (event) => { if (movable()) event.preventDefault(); },
     onwheel: (event) => {
       if (!movable()) return;
-      event.preventDefault();
-      if (link.looking) link.stepSpeed(-wheelPixels(event) / WHEEL_NOTCH);
+      event.preventDefault();                   // with Ctrl, the browser's own zoom too
+      if (event.ctrlKey) link.zoomByWheel(wheelPixels(event), event.timeStamp);
+      else if (link.looking) link.stepSpeed(-wheelPixels(event) / WHEEL_NOTCH);
       else link.dolly(wheelPixels(event), event.timeStamp);
     },
   };
@@ -1379,7 +1511,7 @@ export function hintFor(link) {
   if (!link.freeAvailable) return `Only the recorded camera is available: ${link.scene.free_camera.reason}`;
   if (link.picking) return "Click a surface in the picture to turn around it. Esc cancels.";
   if (link.looking) return "Move the mouse to look around. W A S D move, Q and E go down and up, Shift is faster, Alt slower, the wheel sets the speed. Let go of the right button to stop looking.";
-  if (link.free) return "W A S D move, Q and E go down and up, Shift is faster, Alt slower; hold the right button to look around. Drag to turn around the focus point, Shift-drag or middle-drag to slide, the wheel moves closer, double-click a surface to fly there. F looks at Mario, R returns to the recorded camera.";
+  if (link.free) return "W A S D move, Q and E go down and up, Shift is faster, Alt slower; hold the right button to look around. Drag to turn around the focus point, Shift-drag or middle-drag to slide, the wheel moves closer, double-click a surface to fly there. Z and C tilt, X levels, - and = (or Ctrl and the wheel) change the lens. F looks at Mario, R returns to the recorded camera.";
   if (link.rig) return rigHint(link.rig, link.ghosts);
   if (link.view) return "The stage seen from this ghost's own camera as it plays. Moving the camera starts Free camera from here; R returns to the recorded camera.";
   return "W A S D move the camera from this picture, Q and E go down and up; dragging, scrolling, double-clicking or holding the right button move it too. Left and Right (or , and .) step one frame, Space plays.";
@@ -1432,6 +1564,7 @@ function CameraBar({ link, tuning, setTuning }) {
           : "Show the lives, coins, stars and timer over the picture"}>HUD</button>
   </div>
   <${CinematicBar} link=${link} tuning=${sceneCameraTuning()} />
+  ${available && html`<${LensBar} link=${link} tuning=${sceneCameraTuning()} />`}
   <div class="scene-lab-bar" aria-label="Flight and pictures">
     ${available && html`<${SpeedControl} link=${link} />`}
     <label class="scene-lab-quality">Pictures
