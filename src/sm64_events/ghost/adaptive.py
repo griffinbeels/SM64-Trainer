@@ -51,6 +51,11 @@ class PracticeIdentity:
     # is never read from here: `ghost_region_scope` asks the standards, so a
     # default-built identity cannot widen what plays.
     region_scope: str = region_scope.REGIONAL
+    # The rank entity whose STRATEGY ladders grade this target when it has
+    # none of its own: a Bowser reds->pipe segment borrows its paired star's,
+    # as Practice does (`tracking/activestrat.py::reds_pipe_segments`). The
+    # clock, PB slot, region scope and Overall curve stay on the target's own key.
+    ladder_key: str | None = None
 
     def __post_init__(self):
         _checked_scope(self.scope)
@@ -67,13 +72,19 @@ def rank_entity_key(identity: PracticeIdentity) -> str:
     raise ValueError("A ghost belongs to a star or segment.")
 
 
+def ladder_entity_key(identity: PracticeIdentity) -> str:
+    """The rank entity whose strategy ladders grade this target: its own, or
+    the one it borrows (`PracticeIdentity.ladder_key`)."""
+    return identity.ladder_key or rank_entity_key(identity)
+
+
 def _read_context(ranks):
     return ranks.read_context() if hasattr(ranks, "read_context") else nullcontext()
 
 
 def _rank_model(ranks, key, identity, version):
     return (resolve_curve(ranks, key, version) if identity.scope == "overall"
-            else ranks.ladder_cs(key, identity.strategy, version))
+            else ranks.ladder_cs(ladder_entity_key(identity), identity.strategy, version))
 
 
 def _progress(model, frames, scope):

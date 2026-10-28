@@ -7,7 +7,7 @@ bins with identical cutoffs are unreachable and remain absent from matches.
 import hashlib
 import json
 
-from sm64_events.ghost.adaptive import MAX_STEP, _progress, _read_context, rank_entity_key
+from sm64_events.ghost.adaptive import MAX_STEP, _progress, _rank_model, _read_context, ladder_entity_key, rank_entity_key
 from sm64_events.ghost.sharing_targets import binding_index, describe
 from sm64_events.ranks.calibration import resolve_curve
 
@@ -83,10 +83,10 @@ def strategy_ghost_cutoff(ranks, identity):
     if not identity.strategy:
         return None
     with _read_context(ranks):
-        key = rank_entity_key(identity)
-        if ranks.clock_for(key) != identity.clock:
+        if ranks.clock_for(rank_entity_key(identity)) != identity.clock:
             return None
-        return slowest_cutoff_frames(ranks.ladder_cs(key, identity.strategy, identity.game_version), "strategy")
+        return slowest_cutoff_frames(ranks.ladder_cs(ladder_entity_key(identity), identity.strategy,
+                                                     identity.game_version), "strategy")
 
 
 def within_strategy_ceiling(ranks, identity, frames):
@@ -136,10 +136,8 @@ def match_windows(ranks, identity):
     covers every bin. The cloud accepts a band of the whole ladder (45 bins).
     One list therefore serves every PB and range: a new PB re-picks locally.
     """
-    key = rank_entity_key(identity)
     with ranks.read_context():
-        model = (resolve_curve(ranks, key, identity.game_version) if identity.scope == "overall"
-                 else ranks.ladder_cs(key, identity.strategy, identity.game_version))
+        model = _rank_model(ranks, rank_entity_key(identity), identity, identity.game_version)
         cutoffs = model_cutoffs(model, identity.scope)
     if not cutoffs:
         return ()
