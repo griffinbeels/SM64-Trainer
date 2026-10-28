@@ -604,6 +604,11 @@ def test_the_free_camera_warms_once_after_the_first_picture_while_the_page_is_id
                 time.sleep(0.02)
             assert len(made.made) == 1 and made.posed == 1                    # warmed, from the recorded camera
             assert made.at >= replies[-1] - 0.05                              # after the last picture went out
+            # Then, Mario's path read, the cinematic cameras' runner and Front's first windows.
+            session = app.state.scene_lab.session
+            while not session.rigs.tracks and time.monotonic() < deadline:
+                time.sleep(0.02)
+            assert session.rigs.tracks and session.rigs.rig.kind == "front" and session.rigs.pulls
             socket.send_json({"id": 9, "session": opened["session"], "frame": 2, "encoding": "raw",
                               "camera": {"focus": [0.0, 100.0, 0.0], "position": [0.0, 400.0, 900.0]}})
             assert _picture_header(socket)["camera"] == "free"

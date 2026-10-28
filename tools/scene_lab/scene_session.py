@@ -819,12 +819,13 @@ class SceneSession:
         if not isinstance(hud, bool):
             raise ValueError("hud is true or false")
         view, camera = self._ghost_view(index, camera)
+        rig_started = time.perf_counter()
         rig, camera = self._rig_view(frame, camera)
         free = None if camera is None else world_camera(camera)
         if free is not None:
             self._ahead_generation += 1          # the look-ahead stops before its next frame
         started = time.perf_counter()
-        timings: dict = {}
+        timings: dict = {} if rig is None else {"rig_ms": _ms(rig_started)}   # a cinematic camera's own work
         cuts = None if hud else []               # the HUD cut's outcome (hud.Cut) for the frame sent
         host_frame, reason = (None, None) if free is None else self._free_frame(index, free, timings, cuts)
         drawn_free = host_frame is not None
@@ -1045,10 +1046,7 @@ class SceneSession:
             return None, camera
         if len(camera) != 1:
             raise ValueError('a cinematic camera is {"rig": {...}} and nothing else')
-        if self._rig_tuning is None:
-            from sm64_events.server.tuning_api import shipped_numbers
-            self._rig_tuning = shipped_numbers("scenecamera", camera_rig.TUNING_KEYS)
-        rig = camera_rig.Rig.of(camera["rig"], self._rig_tuning)
+        rig = camera_rig.Rig.of(camera["rig"], self._shipped_rig_tuning())
         said = {"kind": rig.kind, "target": rig.target, "shot": rig.shot, "side": None, "pulled": None, "raised": None}
         if self.free_reason is not None:
             return {**said, "reason": self.free_reason}, None
@@ -1061,6 +1059,29 @@ class SceneSession:
         if shot.camera is not None:
             said.update(side=shot.side, pulled=round(shot.pulled, 3), raised=round(shot.raised, 1))
         return {**said, "reason": shot.reason}, shot.camera
+
+    def _shipped_rig_tuning(self) -> dict:
+        """The registry's rows a rig request may leave out, read once a session."""
+        if self._rig_tuning is None:
+            from sm64_events.server.tuning_api import shipped_numbers
+            self._rig_tuning = shipped_numbers("scenecamera", camera_rig.TUNING_KEYS)
+        return self._rig_tuning
+
+    def warm_rig(self, frame: int) -> None:
+        """The first cinematic camera's own work, done while nobody waits (the lab calls it once Mario's
+        path is read and the page is idle): his runner, the smoothed track of the shipped tuning and
+        Front's windows at `frame` (the first rig picture otherwise took ~90 ms of the worker,
+        measured 2026-10-27). A request with other numbers only redoes what they change."""
+        self._index(frame)
+        if self.free_reason is not None:
+            return
+        try:
+            runner = self._runner("stage")
+            if not isinstance(runner, str) and frame < len(runner):
+                self.rigs.shot(camera_rig.Rig.of({"kind": "front"}, self._shipped_rig_tuning()), runner, frame,
+                               self._walls_at)
+        except Exception as error:  # noqa: BLE001 - the first cinematic picture that needs it says why
+            log.warning("scene viewer: warming the cinematic cameras failed: %s", error)
 
     def _clock(self) -> list[float]:
         """Each frame position's time on the scene's own clock, seconds after the first picture: the

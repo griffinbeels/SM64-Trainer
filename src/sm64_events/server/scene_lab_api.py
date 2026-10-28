@@ -629,15 +629,27 @@ class SceneLab:
         that keeps the worker busy for WARM_WAIT_SECONDS (Play from the Ghost button) is never made
         to wait: the free camera then starts on first use, as before."""
         await asyncio.wait([delivered])
+        try:
+            if not await self._idle(generation):
+                return
+            await self._run(generation, "warm", frame)
+            # Then the cinematic cameras' own first work, once Mario's path is read (its child started
+            # as the scene opened): his runner, the smoothed track and Front's first windows.
+            await asyncio.wrap_future(await self._run(generation, "prepare_path"))
+            if await self._idle(generation):
+                await self._run(generation, "warm_rig", frame)
+        except (SceneClosed, LookupError, RuntimeError, OSError, ValueError):
+            pass
+
+    async def _idle(self, generation: int) -> bool:
+        """Waits until nothing is being drawn or sent for this scene; False when it closed or stayed
+        busy for WARM_WAIT_SECONDS."""
         deadline = time.monotonic() + WARM_WAIT_SECONDS
         while self.busy:
             if generation != self.generation or time.monotonic() > deadline:
-                return
+                return False
             await asyncio.sleep(WARM_POLL_SECONDS)
-        try:
-            await self._run(generation, "warm", frame)
-        except (SceneClosed, ValueError):
-            pass
+        return generation == self.generation
 
     async def _delivery_reply(self, session, work, ident):
         try:
