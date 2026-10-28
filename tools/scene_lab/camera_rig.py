@@ -29,12 +29,24 @@ the same point Look at Mario turns to). "Front" is the smoothed path's direction
 front of his face. Steps, seeks, Play backward and an export of the same request draw the same
 camera, because nothing here remembers the last picture.
 
-    front   the camera `distance` ahead of him along that direction
-    side    `distance` to his left or right ("auto": the side a wall does not block), `rigSideLead` ahead
-    orbit   `radius` from him at angle phase + speed x (the picture's time on the scene's clock), so Play,
-            a pause and an export of the same pictures agree
+    front     the camera `distance` ahead of him along that direction
+    side      `distance` to his left or right ("auto": the side a wall does not block), `rigSideLead` ahead
+    orbit     `radius` from him at angle phase + speed x (the picture's time on the scene's clock), so Play,
+              a pause and an export of the same pictures agree
+    chase     `distance` behind him along that direction (round 7)
+    overhead  above and a little behind him, looking down at `rigOverheadAngle` below level from `height`
+              above his feet (default `rigOverheadHeight`) (round 7)
+    tripod    standing at the request's `position`, turning to follow him (round 7); it never moves, so
+              a wall never moves it either
 
-Each stands `height` above the smoothed path (default his eye level), always aimed at him.
+The others stand `height` above the smoothed path (default his eye level), always aimed at him.
+
+Round 7 (his words: "I want to be able to allow users to basically do whatever angle they want / tilt
+the camera / adjust focal length / etc"): every rig draws with the request's `roll` (the game's s16
+screen roll, default 0) and `fov` (vertical degrees, default `rigFov`). The distances are set for
+`rigFov`: at another lens the camera's line to his eyes lengthens by tan(rigFov/2) / tan(fov/2) to the
+power `rigLensKeepsSize`, so at 1 he stays the same size and only the background widens or flattens,
+and at 0 the camera stays put and the lens zooms.
 
 Walls are the stage's own collision (StaticWalls: the level's static surfaces the scene state holds,
 the ones the game's camera bumps into, less the invisible ones). When a wall lies between his eyes
@@ -59,15 +71,16 @@ from pathlib import Path
 
 import numpy as np
 
-KINDS = ("front", "side", "orbit")
+KINDS = ("front", "side", "orbit", "tripod", "chase", "overhead")
 SHOTS = ("close", "medium", "wide")
 SIDES = ("auto", "left", "right")
 SHOT_KEYS = {"close": "rigCloseDistance", "medium": "rigMediumDistance", "wide": "rigWideDistance"}
 # The tuning rows a rig reads (ui/scenecameratuning.js, which owns their defaults and ranges).
 TUNING_KEYS = ("rigCloseDistance", "rigMediumDistance", "rigWideDistance", "marioHeight", "rigSmoothFrames",
                "rigAimFrames", "rigStillSpeed", "rigFov", "rigSideLead", "rigSideHoldFrames", "rigSideStayFrames", "rigWallStandoff",
-               "rigPullFrames", "rigCraneDistance", "rigOrbitRadius", "rigOrbitSpeed")
-HEIGHT_RANGE = (0.0, 3000.0)       # units above his feet
+               "rigPullFrames", "rigCraneDistance", "rigOrbitRadius", "rigOrbitSpeed", "rigLensKeepsSize",
+               "rigOverheadHeight", "rigOverheadAngle")
+HEIGHT_RANGE = (0.0, 20000.0)      # units above his feet
 RADIUS_RANGE = (50.0, 20000.0)
 SPEED_LIMIT = 720.0                # degrees a second either way
 WARP_UNITS = 600.0                 # a step this long between two pictures is a warp: the path is cut there
@@ -77,11 +90,16 @@ MIN_KEPT = 2.0                     # and never nearer than this (a camera on its
 RISE_STEP = math.radians(15.0)     # a wall makes the camera rise in these steps...
 RISE_LIMIT = math.radians(80.0)    # ...to at most this far above level (straight down rolls the picture)
 MAX_TARGET = 512
+ROLL_RANGE = (-32768, 32767)       # the game's s16 screen roll
+FOV_RANGE = (1.0, 170.0)           # degrees, as the free camera takes it (scene_session.world_camera)
+WORLD_LIMIT = 1e6                  # a tripod's place, as far out as a free camera's (scene_session.WORLD_LIMIT)
+LEAST_DROP = 10.0                  # an overhead camera stands at least this far above his eyes
 
 NO_RUNNER = "Mario's place is unknown in this picture (a level load or a menu), so it shows the recorded camera."
 GHOST_ELSEWHERE = "This ghost is not in this area of the level here, so this shows the recorded camera."
 NO_STATE = "This recording carries no scene state, so a cinematic camera has no path to follow."
 PATH_PENDING = "Getting the path ready for this camera, so this picture shows the recorded camera."
+TRIPOD_ON_HIM = "The tripod stands where Mario is, so it has nowhere to look; this shows the recorded camera."
 
 
 def _number(value) -> bool:
@@ -100,19 +118,23 @@ class Rig:
     phase: float               # orbit, degrees at the scene's first picture
     side: str                  # "auto", "left", "right"
     tuning: tuple              # (key, value) for every TUNING_KEYS row
+    roll: int = 0              # the game's s16 screen roll the picture turns by
+    fov: float = 45.0          # vertical degrees
+    position: tuple | None = None    # a tripod's place
 
     @classmethod
     def of(cls, request, defaults: dict) -> Rig:
         """`request` as the page sends it; `defaults` {key: (value, low, high)} for every TUNING_KEYS
         row (the registry's). A field left out takes its default; ValueError names a wrong one."""
         if not isinstance(request, dict):
-            raise ValueError('a cinematic camera is {"rig": {"kind": "front"|"side"|"orbit", ...}}')
-        unknown = set(request) - {"kind", "target", "shot", "height", "radius", "speed", "phase", "side", "tuning"}
+            raise ValueError('a cinematic camera is {"rig": {"kind": "front"|"side"|"orbit"|..., ...}}')
+        unknown = set(request) - {"kind", "target", "shot", "height", "radius", "speed", "phase", "side", "tuning",
+                                  "roll", "fov", "position"}
         if unknown:
             raise ValueError(f"a cinematic camera has no {sorted(unknown)[0]!r}")
         kind = request.get("kind")
         if kind not in KINDS:
-            raise ValueError('a cinematic camera\'s kind is "front", "side" or "orbit"')
+            raise ValueError('a cinematic camera\'s kind is "front", "side", "orbit", "tripod", "chase" or "overhead"')
         target = request.get("target", "stage")
         if not isinstance(target, str) or not target or len(target) > MAX_TARGET:
             raise ValueError('a cinematic camera follows "stage" (the stage\'s Mario) or a ghost in the scene')
@@ -131,7 +153,7 @@ class Rig:
             if not (_number(given) and low <= given <= high):
                 raise ValueError(f"{key} must be a number from {low:g} to {high:g}")
             values[key] = float(given)
-        height = request.get("height", values["marioHeight"])
+        height = request.get("height", values["rigOverheadHeight" if kind == "overhead" else "marioHeight"])
         radius = request.get("radius", values["rigOrbitRadius"])
         speed = request.get("speed", values["rigOrbitSpeed"])
         phase = request.get("phase", 0.0)
@@ -143,8 +165,18 @@ class Rig:
             raise ValueError(f"an orbit's speed is -{SPEED_LIMIT:g} to {SPEED_LIMIT:g} degrees a second")
         if not _number(phase):
             raise ValueError("an orbit's phase is a number of degrees")
+        roll, fov, position = request.get("roll", 0), request.get("fov", values["rigFov"]), request.get("position")
+        if not (isinstance(roll, int) and not isinstance(roll, bool) and ROLL_RANGE[0] <= roll <= ROLL_RANGE[1]):
+            raise ValueError("a cinematic camera's roll is the game's angle, a whole number from -32768 to 32767")
+        if not (_number(fov) and FOV_RANGE[0] <= fov <= FOV_RANGE[1]):
+            raise ValueError(f"a cinematic camera's fov is {FOV_RANGE[0]:g} to {FOV_RANGE[1]:g} degrees")
+        if position is not None or kind == "tripod":
+            if not (kind == "tripod" and isinstance(position, list) and len(position) == 3
+                    and all(_number(part) and abs(part) <= WORLD_LIMIT for part in position)):
+                raise ValueError("a tripod's position is three world coordinates, and only a tripod has one")
+            position = tuple(float(part) for part in position)
         return cls(kind, target, shot, float(height), float(radius), float(speed), float(phase) % 360.0, side,
-                   tuple((key, values[key]) for key in TUNING_KEYS))
+                   tuple((key, values[key]) for key in TUNING_KEYS), roll, float(fov), position)
 
     def value(self, key: str) -> float:
         return dict(self.tuning)[key]
@@ -152,6 +184,14 @@ class Rig:
     @property
     def distance(self) -> float:
         return self.radius if self.kind == "orbit" else self.value(SHOT_KEYS[self.shot])
+
+    @property
+    def lens_scale(self) -> float:
+        """How much longer the camera's line to his eyes is at this lens than at rigFov, the lens the
+        distances are set for: 1 there, and tan(rigFov/2) / tan(fov/2) to the power rigLensKeepsSize at
+        another, which keeps him the same size at 1."""
+        ratio = math.tan(math.radians(self.value("rigFov")) / 2) / math.tan(math.radians(self.fov) / 2)
+        return ratio ** self.value("rigLensKeepsSize")
 
     def track_key(self) -> tuple:
         """What the smoothed track depends on (Track.of): the same for every rig sharing it."""
@@ -298,12 +338,30 @@ def side_vectors(ahead: np.ndarray) -> dict:
 
 
 def raw_positions(rig: Rig, track: Track, frames: np.ndarray, side: np.ndarray | None = None) -> np.ndarray:
-    """Where the rig's camera stands at each of `frames` before any wall pulls it in. `side` (one
-    "left"/"right" per frame) for a side shot."""
+    """Where the rig's camera stands at each of `frames` before any wall pulls it in: its place at the
+    lens its distances are set for, then its line to his eyes (on the smoothed path) lengthened for its
+    own lens (Rig.lens_scale). `side` (one "left"/"right" per frame) for a side shot. Not a tripod's:
+    it stands where it was put (Planner.shot)."""
+    placed = _placed(rig, track, frames, side)
+    scale = rig.lens_scale
+    if scale == 1.0:
+        return placed
+    eyes = track.feet[frames] + np.array([0.0, rig.value("marioHeight"), 0.0])
+    return eyes + (placed - eyes) * scale
+
+
+def _placed(rig: Rig, track: Track, frames: np.ndarray, side) -> np.ndarray:
     feet, ahead = track.feet[frames], track.ahead[frames]
     up = np.array([0.0, rig.height, 0.0])
     if rig.kind == "front":
         return feet + ahead * rig.distance + up
+    if rig.kind == "chase":
+        return feet - ahead * rig.distance + up
+    if rig.kind == "overhead":
+        eye = rig.value("marioHeight")
+        drop = max(rig.height - eye, LEAST_DROP)
+        back = drop / math.tan(math.radians(rig.value("rigOverheadAngle")))
+        return feet - ahead * back + np.array([0.0, eye + drop, 0.0])
     if rig.kind == "side":
         vectors = side_vectors(ahead)
         sideways = np.where((np.asarray(side) == "left")[:, None], vectors["left"], vectors["right"])
@@ -443,13 +501,16 @@ class Planner:
         if rig.kind == "side" and self.sides is None:
             self.sides, self.blocked = choose_sides(rig, track, walls_at, self.blocked)
         aim = track.aim[frame]
+        if rig.kind == "tripod":
+            if np.linalg.norm(np.array(rig.position) - aim) < 1.0:
+                return Shot(None, reason=TRIPOD_ON_HIM)
+            return Shot(_drawn(rig, aim, rig.position))
         line = self._lines(rig, track, np.array([frame]), walls_at)[0]
         length = float(np.linalg.norm(line))
         kept = max(MIN_KEPT, length - self._eased(self.pulls, self._own_pulls, rig, track, frame, walls_at))
         share = min(1.0, kept / length) if length > 0 else 1.0
         position = aim + line * share
-        return Shot({"focus": [float(v) for v in aim], "position": [float(v) for v in position], "roll": 0,
-                     "fov": rig.value("rigFov")}, None if self.sides is None else str(self.sides[frame]), None,
+        return Shot(_drawn(rig, aim, position), None if self.sides is None else str(self.sides[frame]), None,
                     share, math.degrees(self._eased(self.rises, self._own_rises, rig, track, frame, walls_at)))
 
     def _carried(self, rig: Rig, runner: Runner) -> tuple | None:
@@ -527,6 +588,12 @@ class Planner:
         aims = track.aim[frames]
         room = _kept(aims, aims + lines, track.runner, frames, walls_at, rig.value("rigWallStandoff"))
         return [float(value) for value in np.linalg.norm(lines, axis=1) - room]
+
+
+def _drawn(rig: Rig, aim, position) -> dict:
+    """The camera a rig's picture is drawn from: aimed at `aim`, with the rig's own roll and lens."""
+    return {"focus": [float(v) for v in aim], "position": [float(v) for v in position], "roll": rig.roll,
+            "fov": rig.fov}
 
 
 def elevation(lines: np.ndarray) -> np.ndarray:

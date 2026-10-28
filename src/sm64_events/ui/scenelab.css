@@ -34,8 +34,9 @@
 .scene-lab-hint.is-bad { color: var(--coral); }
 /* The Cinematic rows (components/scenerigs.js): the three cameras and Follow, then the one on screen's settings. */
 .scene-lab-rigs-name { color: var(--muted); }
-.scene-lab-rigs label, .scene-lab-rig-options label { display: inline-flex; align-items: center; gap: 8px; min-width: 0;
-  color: var(--muted); }
+.scene-lab-rigs label, .scene-lab-rig-options label, .scene-lab-lens label { display: inline-flex; align-items: center;
+  gap: 8px; min-width: 0; color: var(--muted); }
+.scene-lab-rig-note { color: var(--muted); font-size: .8rem; }
 .scene-lab-rigs select, .scene-lab-rig-options select { min-width: 0; max-width: 220px; background: var(--surface-2); }
 .scene-lab-rig-shots { display: inline-flex; gap: 6px; }
 .scene-lab-bar .scene-lab-rig-range input[type=range] { flex: 0 1 120px; width: 120px; }

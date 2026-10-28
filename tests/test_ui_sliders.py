@@ -73,6 +73,18 @@ KINDS = [
      '<div class="scene-lab" style="width:900px"><div class="scene-lab-bar scene-lab-sound">'
      '<button type="button">Mute</button>{input}<span class="scene-lab-sound-note">sound</span></div></div>',
      'min="0" max="1" step="0.01"'),
+    ("scene-rig", ("components/scenerigs.js", 0), "index.html",
+     '<div class="scene-lab" style="width:900px"><div class="scene-lab-bar scene-lab-rig-options">'
+     '<label class="scene-lab-rig-range">Speed{input}<output>30°/s</output></label></div></div>',
+     'min="-180" max="180" step="1"'),
+    ("scene-tilt", ("components/scenelens.js", 0), "index.html",
+     '<div class="scene-lab" style="width:900px"><div class="scene-lab-bar scene-lab-lens">'
+     '<label class="scene-lab-rig-range">Tilt{input}<output>0°</output></label></div></div>',
+     'min="-180" max="180" step="1"'),
+    ("scene-lens", ("components/scenelens.js", 1), "index.html",
+     '<div class="scene-lab" style="width:900px"><div class="scene-lab-bar scene-lab-lens">'
+     '<label class="scene-lab-rig-range">Lens{input}<output>31 mm</output></label></div></div>',
+     'min="0" max="1000" step="1"'),
     ("scene-tune", ("tunecontrols.js", 0), "index.html",
      '<section class="practice-card scene-lab-tune" style="width:320px"><div class="scene-lab-tune-groups"><div>'
      '<div class="tune-row"><label>Fly speed</label><input type="number" value="1">{input}</div></div></div>'

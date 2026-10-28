@@ -11,8 +11,10 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { DRAG_DEAD_ZONE, HUD_PREFERENCE, LOCK_NOTES, LOOP_PREFERENCE, MOVING_WINDOW, PICTURES_IN_FLIGHT, SHARED_WAIT, STILL_MS,
   STAGE_WORDS, SceneViewer, hintFor, movingSummary, pictureFraction, sceneTitle, speedWords, throttledNotes,
 } from "../../src/sm64_events/ui/components/sceneviewer.js";
-import { cameraOf, dollied, easeInOut, flightSpeed, flown, flyToTarget, glideAt, lookingAt, looked, orbitFromPose, slid,
-  speedStepped, turned, worldPoint } from "../../src/sm64_events/ui/components/scenecamera.js";
+import { cameraOf, dollied, easeInOut, flightSpeed, flown, flyToTarget, focusedOn, fovOf, glideAt, lensOf, lookingAt,
+  looked, orbitFromPose, rollOf, slid, speedStepped, tiltAndLens, tiltOf, tilted, turned, wheelLens, worldPoint,
+} from "../../src/sm64_events/ui/components/scenecamera.js";
+import { lensAt, lensPosition } from "../../src/sm64_events/ui/components/scenelens.js";
 import { SCENE_CAMERA_DEFAULTS, sceneCameraTuning, setSceneCameraTuning } from "../../src/sm64_events/ui/scenecameratuning.js";
 import { stageDefault, targetQuery } from "../../src/sm64_events/ui/components/scenestage.js";
 import { rigRequest, rigTuning, startRig } from "../../src/sm64_events/ui/components/scenerigs.js";
@@ -21,7 +23,7 @@ import { SEARCH_WAIT, viewName } from "../../src/sm64_events/ui/components/scene
 const REFERENCE = { orbitPerPixel: 0.01, steepestDegrees: 80, levelPerPixel: 0.1, panPerPixel: 0.002,
   dollyPerWheel: 0.002, closestDistance: 40, farthestDistance: 20000, flightSpeed: 1000, lookPerPixel: 0.004,
   fastMultiplier: 5, slowMultiplier: 0.2, speedPerNotch: 1.5, levelPerSecond: 30, flyToStandoff: 300, flyToMs: 200,
-  marioHeight: 100 };
+  marioHeight: 100, tiltPerSecond: 60, lensPerSecond: 3, lensPerWheel: 0.002 };
 const FRAMES = Array.from({ length: 5 }, (_, i) => ({ level: 9, area: 1, game_frame: 1000 + i }));
 const POSE = { focus: [10, 200, -30], position: [10, 500, 1170], roll: 0, fov: 45, mario: [40, 80, -60] };
 const PER_DEGREE = 65536 / 360;
@@ -2014,7 +2016,7 @@ test("a cinematic camera is one request the lab draws: Front, its shot and heigh
   const tuning = sceneCameraTuning();
   expect(socket.pictures().at(-1).camera).toEqual({ rig: { kind: "front", target: "stage", shot: "medium",
     height: tuning.marioHeight, radius: tuning.rigOrbitRadius, speed: tuning.rigOrbitSpeed, phase: 0, side: "auto",
-    tuning: rigTuning(tuning) } });
+    roll: 0, fov: tuning.rigFov, tuning: rigTuning(tuning) } });
   const camera = within(page.container.querySelector('[aria-label="Camera"]'));
   expect([pressed(front), pressed(camera.getByRole("button", { name: "Recorded camera" })), tag(page)])
     .toEqual(["true", "false", "Front · Mario"]);
@@ -2203,6 +2205,178 @@ test("Tune controls changes how the camera moves on the next movement and SAVE s
   expect(Object.keys(JSON.parse(body).values)).toContain("orbitPerPixel");
 });
 
+// ------------------------------------------------------------------ Tilt and lens (round 7, item 3)
+// His words: "I want to be able to allow users to basically do whatever angle they want / tilt the
+// camera / adjust focal length / etc". The lab draws roll and fov as given (tests/test_scene_lab_rigs.py;
+// the renderer's own pictures are the round's GPU sheet); the page owns the words and the keys.
+
+const lensRow = (page) => within(page.container.querySelector('[aria-label="Tilt and lens"]'));
+const lensWords = (page) => page.container.querySelector(".scene-lab-lens").textContent;
+
+test("Tilt is the game's roll with its sign turned, Lens the 35 mm focal length by the picture's diagonal", () => {
+  // Measured on the renderer 2026-10-28: roll +5461 turned HMC's picture 30 degrees counterclockwise.
+  expect([rollOf(30), rollOf(-30), rollOf(15)]).toEqual([-5461, 5461, -2731]);
+  expect(tiltOf(5461)).toBeCloseTo(-30, 2);
+  expect(lensOf(45)).toBeCloseTo(31.34, 2);                       // the game's own lens
+  expect(fovOf(14)).toBeCloseTo(85.67, 2);
+  expect(fovOf(100)).toBeCloseTo(14.79, 2);
+  expect(fovOf(lensOf(45))).toBe(45);                             // exactly the game's, not a rounding of it
+  for (const mm of [14, 24, 50, 100, 200]) expect(lensAt(lensPosition(mm))).toBeCloseTo(mm, 0);
+  // A tilt you chose stays through a turn, a flight and Set focus; a recorded one levels as before.
+  const chosen = tilted(orbitFromPose(POSE.focus, POSE.position, { fov: 45 }), 20);
+  expect(turned(chosen, 30, 0, REFERENCE).roll).toBe(rollOf(20));
+  expect(flown(chosen, { forward: 1 }, 0.5, 100, REFERENCE).roll).toBe(rollOf(20));
+  expect(focusedOn(chosen, [0, 0, 0]).roll).toBe(rollOf(20));
+  const recorded = orbitFromPose(POSE.focus, POSE.position, { roll: 1000, fov: 45 });
+  expect(turned(recorded, 30, 0, REFERENCE).roll).toBeLessThan(1000);
+  expect(focusedOn(recorded, [0, 0, 0]).roll).toBe(0);
+  // A slide grabs the scene across a tilted picture: turned a quarter clockwise, dragging right moves
+  // the scene the way dragging up does on a level one.
+  const level = orbitFromPose(POSE.focus, POSE.position, { fov: 45 });
+  close(slid(tilted(level, 90), 10, 0, REFERENCE).focus, slid(level, 0, -10, REFERENCE).focus);
+});
+
+test("Tilt and Lens turn and zoom the free camera; Z C X and - = do it from the keyboard; Reset view puts both back", async () => {
+  const { page, socket, root, canvas } = await openScene();
+  const first = await enterFree(page, socket);                                  // POSE: level, the game's 45 degrees
+  expect(lensWords(page)).toContain("0°");
+  expect(lensWords(page)).toContain("31 mm · game's");
+  fireEvent.input(lensRow(page).getByRole("slider", { name: "Tilt" }), { target: { value: "15" } });
+  await until(() => expect(socket.last().camera.roll).toBe(-2731));
+  expect([socket.last().camera.fov, lensWords(page).includes("15°")]).toEqual([45, true]);
+  await socket.picture(socket.last());
+  fireEvent.input(lensRow(page).getByRole("slider", { name: "Lens" }), { target: { value: String(lensPosition(100)) } });
+  await until(() => expect(socket.last().camera.fov).toBeCloseTo(14.79, 1));
+  expect([socket.last().camera.roll, lensWords(page).includes("100 mm")]).toEqual([-2731, true]);
+  await socket.picture(socket.last());
+  // A turn keeps the tilt you set (only a recorded one levels).
+  fireEvent.pointerDown(canvas, { button: 0, pointerId: 1, clientX: 100, clientY: 100 });
+  move(canvas, { pointerId: 1, clientX: 140, clientY: 100 });
+  await until(() => expect(socket.last().camera.position).not.toEqual(first.position));
+  expect(socket.last().camera.roll).toBe(-2731);
+  fireEvent.pointerUp(canvas, { pointerId: 1 });
+  await socket.picture(socket.last());
+  // C held a tenth of a second turns it on clockwise at tiltPerSecond; X levels it.
+  clock.now = 5000;
+  fireEvent.keyDown(root, { key: "c", code: "KeyC" });
+  await tick(5100);
+  await until(() => expect(socket.last().camera.roll).toBe(rollOf(tiltOf(-2731) + 0.1 * REFERENCE.tiltPerSecond)));
+  fireEvent.keyUp(root, { key: "c", code: "KeyC" });
+  await socket.picture(socket.last());
+  fireEvent.keyDown(root, { key: "x", code: "KeyX" });
+  await until(() => expect(socket.last().camera.roll).toBe(0));
+  await socket.picture(socket.last());
+  // = held lengthens the lens by lensPerSecond a second; Ctrl and the wheel widen it.
+  const before = lensOf(socket.last().camera.fov);
+  clock.now = 6000;
+  fireEvent.keyDown(root, { key: "=", code: "Equal" });
+  await tick(6100);
+  await until(() => expect(lensOf(socket.last().camera.fov)).toBeCloseTo(before * REFERENCE.lensPerSecond ** 0.1, 6));
+  fireEvent.keyUp(root, { key: "=", code: "Equal" });
+  await socket.picture(socket.last());
+  const zoomed = lensOf(socket.last().camera.fov), standing = socket.last().camera.position;
+  expect(fireEvent.wheel(canvas, { deltaY: 100, ctrlKey: true })).toBe(false);  // never the browser's own zoom
+  await until(() => expect(lensOf(socket.last().camera.fov)).toBeCloseTo(zoomed * Math.exp(-100 * REFERENCE.lensPerWheel), 6));
+  expect(socket.last().camera.position).toEqual(standing);                     // a zoom, never a move closer
+  await socket.picture(socket.last());
+  fireEvent.click(page.getByRole("button", { name: "Reset view" }));
+  await until(() => expect(socket.last().camera).toEqual(first));
+});
+
+test("from the recorded camera, Tilt starts Free camera from the picture on screen, then turns it", async () => {
+  const { page, socket } = await openScene();
+  await socket.picture(socket.sent[0]);
+  fireEvent.input(lensRow(page).getByRole("slider", { name: "Tilt" }), { target: { value: "-30" } });
+  await until(() => expect(socket.last()).toMatchObject({ kind: "pose", frame: 0 }));
+  socket.text({ id: socket.last().id, kind: "pose", pose: { ...POSE, fov: 60 }, reason: null });
+  await until(() => expect(socket.last().camera?.roll).toBe(5461));
+  close(socket.last().camera.position, POSE.position, 9);
+  expect([socket.last().camera.fov, tag(page)]).toEqual([60, "Free camera"]);
+});
+
+test("a cinematic camera carries its own Tilt and Lens; Z turns it without leaving it; Side and Free camera keep them", async () => {
+  const { page, socket, root, canvas } = await openScene();
+  await socket.picture(socket.sent[0]);
+  fireEvent.click(rigBar(page).getByRole("button", { name: "Front" }));
+  await until(() => expect(rigAsked(socket)).toBeTruthy());
+  expect([rigAsked(socket).roll, rigAsked(socket).fov]).toEqual([0, sceneCameraTuning().rigFov]);
+  await rigDrawn(socket);
+  fireEvent.input(lensRow(page).getByRole("slider", { name: "Tilt" }), { target: { value: "-30" } });
+  await until(() => expect(rigAsked(socket).roll).toBe(5461));
+  await rigDrawn(socket);
+  fireEvent.input(lensRow(page).getByRole("slider", { name: "Lens" }), { target: { value: String(lensPosition(85)) } });
+  const fov = fovOf(lensAt(lensPosition(85)));
+  await until(() => expect(rigAsked(socket).fov).toBe(fov));
+  await rigDrawn(socket);
+  clock.now = 5000;
+  fireEvent.keyDown(root, { key: "z", code: "KeyZ" });
+  await tick(5100);
+  await until(() => expect(rigAsked(socket).roll).toBe(rollOf(tiltOf(5461) - 0.1 * REFERENCE.tiltPerSecond)));
+  fireEvent.keyUp(root, { key: "z", code: "KeyZ" });
+  expect(tag(page)).toBe("Front · Mario");                                      // still the cinematic camera
+  expect(socket.sent.some((message) => message.kind === "pose")).toBe(false);
+  await rigDrawn(socket);
+  const roll = rigAsked(socket).roll;
+  fireEvent.click(rigBar(page).getByRole("button", { name: "Side" }));
+  await until(() => expect(rigAsked(socket)?.kind).toBe("side"));
+  expect([rigAsked(socket).roll, rigAsked(socket).fov]).toEqual([roll, fov]);
+  // Free camera starts from the picture's camera_used, its tilt and lens with it, and keeps the tilt.
+  await socket.picture(socket.pictures().at(-1), { camera: "free", camera_used: { ...RIG_CAMERA, roll, fov },
+    rig: { kind: "side", target: "stage", shot: "medium", side: "left", pulled: 1 } });
+  fireEvent.click(page.getByRole("button", { name: "Free camera" }));
+  await until(() => expect(socket.pictures().at(-1).camera?.position).toBeTruthy());
+  expect([socket.pictures().at(-1).camera.roll, socket.pictures().at(-1).camera.fov]).toEqual([roll, fov]);
+  await socket.picture(socket.pictures().at(-1));
+  fireEvent.pointerDown(canvas, { button: 0, pointerId: 1, clientX: 100, clientY: 100 });
+  move(canvas, { pointerId: 1, clientX: 140, clientY: 100 });
+  await until(() => expect(socket.last().camera.position).not.toEqual(RIG_CAMERA.position));
+  expect(socket.last().camera.roll).toBe(roll);
+});
+
+test("Tripod stands where the camera on screen stands, tilt and lens too; Chase and Overhead ask for themselves", async () => {
+  const { page, socket } = await openScene();
+  const free = await enterFree(page, socket);
+  fireEvent.input(lensRow(page).getByRole("slider", { name: "Tilt" }), { target: { value: "10" } });
+  await until(() => expect(socket.last().camera.roll).toBe(rollOf(10)));
+  await socket.picture(socket.last());
+  fireEvent.click(rigBar(page).getByRole("button", { name: "Tripod" }));
+  await until(() => expect(rigAsked(socket)?.kind).toBe("tripod"));
+  close(rigAsked(socket).position, free.position, 9);
+  expect([rigAsked(socket).roll, rigAsked(socket).fov, tag(page)]).toEqual([rollOf(10), 45, "Tripod · Mario"]);
+  expect(rigOptions(page).queryByRole("slider", { name: "Height" })).toBeNull();
+  expect(page.container.querySelector(".scene-lab-rig-note").textContent).toMatch(/choose Tripod again/);
+  await rigDrawn(socket);
+  // From the recorded camera it asks the recorded pose and stands at its camera.
+  fireEvent.keyDown(document.body, { key: "r" });
+  await until(() => expect(socket.pictures().at(-1).camera).toBeNull());
+  await socket.picture(socket.pictures().at(-1));
+  fireEvent.click(rigBar(page).getByRole("button", { name: "Tripod" }));
+  await until(() => expect(socket.last()).toMatchObject({ kind: "pose" }));
+  socket.text({ id: socket.last().id, kind: "pose", pose: { ...POSE, roll: -300, fov: 52 }, reason: null });
+  await until(() => expect(rigAsked(socket)?.kind).toBe("tripod"));
+  expect([rigAsked(socket).position, rigAsked(socket).roll, rigAsked(socket).fov]).toEqual([POSE.position, -300, 52]);
+  await rigDrawn(socket);
+  // Chase: behind him, with shot sizes; no tripod place.
+  fireEvent.click(rigBar(page).getByRole("button", { name: "Chase" }));
+  await until(() => expect(rigAsked(socket)?.kind).toBe("chase"));
+  expect("position" in rigAsked(socket)).toBe(false);
+  expect(rigOptions(page).getByRole("button", { name: "Wide" })).toBeTruthy();
+  await rigDrawn(socket);
+  // Overhead starts at its own height and keeps it to itself.
+  const tuning = sceneCameraTuning();
+  fireEvent.click(rigBar(page).getByRole("button", { name: "Overhead" }));
+  await until(() => expect(rigAsked(socket)?.kind).toBe("overhead"));
+  expect(rigAsked(socket).height).toBe(tuning.rigOverheadHeight);
+  expect(rigOptions(page).queryByRole("button", { name: "Wide" })).toBeNull();
+  await rigDrawn(socket);
+  fireEvent.input(rigOptions(page).getByRole("slider", { name: "Height" }), { target: { value: "3000" } });
+  await until(() => expect(rigAsked(socket).height).toBe(3000));
+  await rigDrawn(socket);
+  fireEvent.click(rigBar(page).getByRole("button", { name: "Front" }));
+  await until(() => expect(rigAsked(socket)?.kind).toBe("front"));
+  expect(rigAsked(socket).height).toBe(tuning.marioHeight);                    // his eye level, not 3000 up
+});
+
 // ------------------------------------------------------------------ the tuning reaches every movement
 
 test("every movement reads its tuning: the shipped values when none is given, a change moves the result", () => {
@@ -2219,11 +2393,15 @@ test("every movement reads its tuning: the shipped values when none is given, a 
     ["marioHeight", (t) => lookingAt(orbit, [0, 0, 0], t)],
     ["flyToStandoff", (t) => flyToTarget(orbit, [100, 0, -200], [0, 0, 0], t)],
     ["flyToMs", (t) => glideAt(orbit, lookingAt(orbit, [0, 0, 0]), 150, t)],
+    ["tiltPerSecond", (t) => tiltAndLens(orbit, { tilt: 1 }, 0.1, 1, t)],
+    ["lensPerSecond", (t) => tiltAndLens(orbit, { zoom: 1 }, 0.1, 1, t)],
+    ["lensPerWheel", (t) => wheelLens(45, 100, t)],
     // The cinematic cameras' rows travel with every request: the lab draws what the panel shows
     // (their effect on the camera: tests/test_scene_lab_rigs.py).
     ...["rigCloseDistance", "rigMediumDistance", "rigWideDistance", "rigFov", "rigSmoothFrames", "rigAimFrames",
       "rigStillSpeed", "rigSideLead", "rigSideHoldFrames", "rigSideStayFrames", "rigWallStandoff", "rigPullFrames", "rigCraneDistance", "rigOrbitRadius",
-      "rigOrbitSpeed"].map((key) => [key, (t) => rigRequest(startRig("orbit", null, t), t)]),
+      "rigOrbitSpeed", "rigLensKeepsSize", "rigOverheadHeight", "rigOverheadAngle"].map((key) => [key,
+      (t) => rigRequest(startRig("orbit", null, t), t)]),
   ];
   expect(new Set(cases.map(([key]) => key))).toEqual(new Set(Object.keys(SCENE_CAMERA_DEFAULTS)));
   for (const [key, run] of cases) {

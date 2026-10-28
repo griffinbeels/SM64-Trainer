@@ -47,7 +47,8 @@ SHIPPED = shipped_numbers("scenecamera", camera_rig.TUNING_KEYS)
 REFERENCE = {"rigCloseDistance": 200.0, "rigMediumDistance": 500.0, "rigWideDistance": 1000.0, "marioHeight": 100.0,
              "rigSmoothFrames": 6.0, "rigAimFrames": 0.0, "rigStillSpeed": 200.0, "rigFov": 50.0, "rigSideLead": 0.0,
              "rigSideHoldFrames": 10.0, "rigSideStayFrames": 0.0, "rigWallStandoff": 50.0, "rigPullFrames": 3.0, "rigCraneDistance": 0.0,
-             "rigOrbitRadius": 600.0, "rigOrbitSpeed": 45.0}
+             "rigOrbitRadius": 600.0, "rigOrbitSpeed": 45.0, "rigLensKeepsSize": 1.0, "rigOverheadHeight": 900.0,
+             "rigOverheadAngle": 60.0}
 
 
 def rig(**fields) -> camera_rig.Rig:
@@ -83,11 +84,22 @@ def test_a_request_takes_its_defaults_from_the_registry_and_names_a_wrong_field(
     assert (plain.target, plain.shot, plain.side, plain.phase) == ("stage", "medium", "auto", 0.0)
     assert plain.height == SHIPPED["marioHeight"][0] and plain.radius == SHIPPED["rigOrbitRadius"][0]
     assert dict(plain.tuning) == {key: value for key, (value, _low, _high) in SHIPPED.items()}
+    # Round 7: level, at the registry's lens, unless the request says; Overhead starts at its own height.
+    assert (plain.roll, plain.fov, plain.position) == (0, SHIPPED["rigFov"][0], None)
+    assert camera_rig.Rig.of({"kind": "overhead"}, SHIPPED).height == SHIPPED["rigOverheadHeight"][0]
+    tripod = camera_rig.Rig.of({"kind": "tripod", "position": [1, 2, 3], "roll": -2731, "fov": 14.8}, SHIPPED)
+    assert (tripod.position, tripod.roll, tripod.fov) == ((1.0, 2.0, 3.0), -2731, 14.8)
     for wrong, word in (({"kind": "dolly"}, "kind"), ({"kind": "front", "shot": "huge"}, "shot"),
                         ({"kind": "side", "side": "up"}, "side"), ({"kind": "orbit", "speed": 1e4}, "speed"),
                         ({"kind": "orbit", "radius": 1}, "radius"), ({"kind": "front", "height": -5}, "height"),
                         ({"kind": "front", "target": ""}, "follows"), ({"kind": "front", "zoom": 2}, "zoom"),
-                        ({"kind": "front", "tuning": {"rigFov": 500}}, "rigFov"), ("front", "kind")):
+                        ({"kind": "front", "tuning": {"rigFov": 500}}, "rigFov"), ("front", "kind"),
+                        ({"kind": "front", "roll": 1.5}, "roll"), ({"kind": "front", "roll": 40000}, "roll"),
+                        ({"kind": "front", "roll": True}, "roll"), ({"kind": "front", "fov": 0.5}, "fov"),
+                        ({"kind": "front", "fov": 171}, "fov"), ({"kind": "tripod"}, "position"),
+                        ({"kind": "tripod", "position": [0, 0]}, "position"),
+                        ({"kind": "tripod", "position": [0, 0, 2e6]}, "position"),
+                        ({"kind": "front", "position": [0, 0, 0]}, "position")):
         with pytest.raises(ValueError, match=word):
             camera_rig.Rig.of(wrong, SHIPPED)
 
@@ -309,6 +321,61 @@ def test_orbit_turns_with_the_scenes_clock():
         assert shot.camera["focus"] == pytest.approx([0.0, 100.0, 0.0])
 
 
+# ------------------------------------------------------------------ round 7: tilt, lens, Chase, Overhead, Tripod
+# His words: "I want to be able to allow users to basically do whatever angle they want / tilt the camera /
+# adjust focal length / etc".
+
+def test_every_rig_draws_with_its_own_roll_and_lens_and_keeps_him_the_same_size():
+    """The picture's roll and field of view are the request's. At another lens the camera's line to his
+    eyes lengthens by tan(rigFov/2) / tan(fov/2), so distance x tan(fov/2), his size in the picture,
+    holds; rigLensKeepsSize 0 leaves the camera where it was and only zooms."""
+    r = run_along_z(n=120)
+    eyes = r.positions[60] + [0, 100, 0]
+    for kind, fields in (("front", {}), ("side", {"side": "left"}), ("orbit", {"speed": 0.0, "phase": 40.0}),
+                         ("chase", {"shot": "wide"}), ("overhead", {}), ("front", {"height": 400.0})):
+        base = shots(r, rig(kind=kind, **fields), [60])[60].camera
+        assert (base["roll"], base["fov"]) == (0, 50.0)
+        sizes = []
+        for fov in (14.8, 50.0, 85.7):
+            camera = shots(r, rig(kind=kind, roll=-2731, fov=fov, **fields), [60])[60].camera
+            assert (camera["roll"], camera["fov"]) == (-2731, fov)
+            line = np.array(camera["position"]) - eyes
+            assert np.cross(line, np.array(base["position"]) - eyes) == pytest.approx([0, 0, 0], abs=1e-6)  # same bearing
+            sizes.append(np.linalg.norm(line) * math.tan(math.radians(fov) / 2))
+            still = shots(r, rig(kind=kind, fov=fov, tuning={"rigLensKeepsSize": 0.0}, **fields), [60])[60].camera
+            assert still["position"] == pytest.approx(base["position"]) and still["fov"] == fov
+        assert sizes == pytest.approx([sizes[1]] * 3), kind
+
+
+def test_chase_rides_behind_him_and_overhead_looks_down_from_behind_at_its_angle():
+    r = run_along_z(n=120)
+    chase = shots(r, rig(kind="chase", height=100.0), [60])[60].camera
+    assert chase["position"] == pytest.approx([0.0, 100.0, 30.0 * 60 - 500.0], abs=1.0)    # medium, behind along -z
+    assert chase["focus"] == pytest.approx([0.0, 100.0, 30.0 * 60])
+    over = shots(r, rig(kind="overhead"), [60])[60].camera                                   # height 900 above his feet
+    line = np.array(over["position"]) - np.array(over["focus"])
+    assert over["position"][1] == pytest.approx(900.0, abs=1e-6)
+    assert math.degrees(camera_rig.elevation(line[None])[0]) == pytest.approx(60.0)          # rigOverheadAngle
+    assert line[2] < 0 and abs(line[0]) < 1e-6                                               # behind him: he runs up the picture
+    higher = shots(r, rig(kind="overhead", height=2000.0), [60])[60].camera
+    assert higher["position"][1] == pytest.approx(2000.0, abs=1e-6)
+
+
+def test_a_tripod_stays_where_it_was_put_and_turns_to_follow_him():
+    """Its place is the request's in every picture, walls or not; it aims at his eyes as he runs past;
+    standing on his eyes it has no direction and shows the recorded camera."""
+    r = run_along_z(n=120)
+    walls = camera_rig.StaticWalls(wall_x(150, 0, 4000))                     # between him and the tripod
+    tripod = rig(kind="tripod", position=[300.0, 400.0, 1200.0], roll=1000, fov=30.0)
+    got = shots(r, tripod, range(0, 120, 7), walls)
+    for k, shot in got.items():
+        assert shot.camera["position"] == [300.0, 400.0, 1200.0] and shot.pulled == 1.0 and shot.raised == 0.0
+        assert shot.camera["focus"] == pytest.approx(list(r.positions[k] + [0, 100, 0]))
+        assert (shot.camera["roll"], shot.camera["fov"]) == (1000, 30.0)
+    on_him = shots(r, rig(kind="tripod", position=[0.0, 100.0, 30.0 * 20]), [20])[20]
+    assert on_him.camera is None and on_him.reason == camera_rig.TRIPOD_ON_HIM
+
+
 def test_every_rig_is_the_same_camera_whatever_was_asked_before():
     """Forward, backward, shuffled, one planner or a fresh one per picture: the same cameras."""
     r = run_along_z(n=90, wobble=5.0)
@@ -316,7 +383,9 @@ def test_every_rig_is_the_same_camera_whatever_was_asked_before():
                                                    wall_x(-2000, 600, 700)]))
     order = list(range(90))
     shuffled = order[::7] + order[3::7] + order[1::7] + order[5::7] + order[2::7] + order[6::7] + order[4::7]
-    for which in (rig(kind="front"), rig(kind="side"), rig(kind="orbit", speed=60.0)):
+    for which in (rig(kind="front"), rig(kind="side"), rig(kind="orbit", speed=60.0), rig(kind="chase", roll=900),
+                  rig(kind="overhead", fov=20.0), rig(kind="tripod", position=[300.0, 400.0, 1200.0], roll=-5461),
+                  rig(kind="side", fov=90.0, roll=300)):
         forward = shots(r, which, order, walls)
         backward = shots(r, which, order[::-1], walls)
         mixed = shots(r, which, shuffled, walls)
@@ -325,7 +394,8 @@ def test_every_rig_is_the_same_camera_whatever_was_asked_before():
             assert forward[k].camera == backward[k].camera == mixed[k].camera == alone[k].camera, (which.kind, k)
     # One planner switching between rigs (the page switching cameras) keeps nothing of the last one.
     shared = camera_rig.Planner()
-    for which in (rig(kind="side"), rig(kind="front", shot="close"), rig(kind="orbit"), rig(kind="front", shot="wide")):
+    for which in (rig(kind="side"), rig(kind="front", shot="close"), rig(kind="orbit"), rig(kind="front", shot="wide"),
+                  rig(kind="tripod", position=[0.0, 300.0, 0.0]), rig(kind="chase", fov=30.0), rig(kind="overhead")):
         for k in shuffled[:30]:
             assert shared.shot(which, r, k, lambda place: walls).camera \
                 == camera_rig.Planner().shot(which, r, k, lambda place: walls).camera, (which.kind, k)
@@ -499,6 +569,29 @@ def test_every_header_says_which_camera_it_drew(config, recording):
         assert session.picture(1, free, "raw")[0]["camera_used"] == free
         plain = {"focus": [0.0, 100.0, 0.0], "position": [0.0, 400.0, 900.0]}
         assert session.picture(1, plain, "raw")[0]["camera_used"] == {**plain, "roll": None, "fov": None}
+    finally:
+        session.close()
+
+
+def test_a_rigs_tilt_and_lens_reach_the_games_drawing_and_its_header(config, recording):
+    """Interface I (round 7): a rig's roll and fov are what the game's drawing code is given and what
+    camera_used reports, so a free camera of camera_used (Free camera, a preset, an export) draws the
+    same picture; a tripod stands where its request puts it."""
+    session, made = _session(config, recording)
+    try:
+        request = {"rig": {"kind": "chase", "roll": -2731, "fov": 20.0, "tuning": {"marioHeight": 120}}}
+        header, _ = session.picture(3, request, "raw")
+        used = header["camera_used"]
+        assert header["camera"] == "free" and header["reason"] is None and (used["roll"], used["fov"]) == (-2731, 20.0)
+        drawn = made.made[0].calls[-1]
+        assert drawn[1] == (used["focus"], used["position"], -2731, 20.0)
+        again, _ = session.picture(3, used, "raw")                    # the same camera, as a free camera
+        assert again["camera_used"] == used and made.made[0].calls[-1] == drawn
+        session.picture(3, {"rig": {**request["rig"], "roll": 0}}, "raw")
+        assert made.made[0].calls[-1][1][2:] == (0, 20.0)
+        tripod, _ = session.picture(3, {"rig": {"kind": "tripod", "position": [0.0, 900.0, 900.0], "fov": 70.0}}, "raw")
+        assert tripod["camera_used"]["position"] == [0.0, 900.0, 900.0]
+        assert (tripod["camera_used"]["roll"], tripod["camera_used"]["fov"]) == (0, 70.0)
     finally:
         session.close()
 
