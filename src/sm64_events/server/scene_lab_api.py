@@ -120,6 +120,7 @@ PICTURES_IN_FLIGHT = 2        # pictures a socket has begun and not yet sent (th
 GROW_SECONDS = 0.25           # how often an open scene still being written takes its newest frames
 GROW_FAILURES = 3             # publications in a row it cannot read before it stops growing
 WARM_WAIT_SECONDS = 30.0      # how long a scene's first picture waits for an idle page to warm the free camera
+WARM_QUIET_SECONDS = 0.5      # idle = no picture asked for this long (Play asks one every frame, so it never is)
 WARM_POLL_SECONDS = 0.1
 ENDS = {"closed": "Closed.",
         "replaced": "Closed to open another scene.",
@@ -294,6 +295,7 @@ class SceneLab:
         self.described: dict | None = None
         self.generation = 0
         self.warmed = 0                                    # the newest scene whose free camera was warmed
+        self.asked_at = 0.0                                # when the page last asked for a picture
         self.lock = asyncio.Lock()
         self.sockets = self.busy = 0
         self.last_used = self.page_seen = 0.0
@@ -601,6 +603,7 @@ class SceneLab:
         compresses this one. Deliveries finish in the order they began."""
         ident, generation = message.get("id"), message.get("session")
         received = time.perf_counter()
+        self.asked_at = time.monotonic()
         loop = asyncio.get_running_loop()
         try:
             pending = await self._run(generation, "begin", message.get("frame"), message.get("camera"),
@@ -622,17 +625,24 @@ class SceneLab:
         return reply
 
     async def _warm(self, generation: int, frame, delivered: asyncio.Task) -> None:
-        """Once a scene's first picture is delivered and nothing is being drawn or sent (the page is
-        idle: a person looks before they move the camera), the worker starts the free camera's
-        evaluator and draws one view of that frame (scene_session.warm), so neither the first Free
-        camera nor the first cinematic camera pays that start, ~200 ms measured 2026-10-27. A page
-        that keeps the worker busy for WARM_WAIT_SECONDS (Play from the Ghost button) is never made
-        to wait: the free camera then starts on first use, as before."""
+        """Once a scene's first picture is delivered and the page has asked for nothing for
+        WARM_QUIET_SECONDS (a person looks before they move the camera), the worker starts the free
+        camera's evaluator and draws one view of that frame (scene_session.warm), so neither the
+        first Free camera nor the first cinematic camera pays that start, ~200 ms measured
+        2026-10-27. Each step waits for the page to be quiet again, so a click lands behind one step
+        at most. Play never goes quiet (it asks a picture every frame): "nothing in flight" was the
+        old test, true between Play's frames, and the Ghost button's Play waited ~260 ms behind the
+        warm-up right after its first picture (measured 2026-10-28; ~2 s in his live report). A page
+        that stays busy for WARM_WAIT_SECONDS is never made to wait: the free camera then starts on
+        first use, as before."""
         await asyncio.wait([delivered])
         try:
             if not await self._idle(generation):
                 return
             await self._run(generation, "warm", frame)
+            if not await self._idle(generation):
+                return
+            await self._run(generation, "warm_ahead", frame)
             # Then the cinematic cameras' own first work, once Mario's path is read (its child started
             # as the scene opened): his runner, the smoothed track and Front's first windows.
             await asyncio.wrap_future(await self._run(generation, "prepare_path"))
@@ -642,10 +652,10 @@ class SceneLab:
             pass
 
     async def _idle(self, generation: int) -> bool:
-        """Waits until nothing is being drawn or sent for this scene; False when it closed or stayed
-        busy for WARM_WAIT_SECONDS."""
+        """Waits until nothing is being drawn or sent for this scene and the page has asked for no
+        picture for WARM_QUIET_SECONDS; False when it closed or stayed busy for WARM_WAIT_SECONDS."""
         deadline = time.monotonic() + WARM_WAIT_SECONDS
-        while self.busy:
+        while self.busy or time.monotonic() - self.asked_at < WARM_QUIET_SECONDS:
             if generation != self.generation or time.monotonic() > deadline:
                 return False
             await asyncio.sleep(WARM_POLL_SECONDS)

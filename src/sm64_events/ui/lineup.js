@@ -108,7 +108,8 @@ function face(ctx, p, fresh) {
     f.append(cap, el("span", "lineup-time lineup-bone"), el("span", "lineup-name lineup-bone"));
     return f;
   }
-  cap.append(ctx.o.capNode(p, 26));
+  // A PB nothing ranks yet has no badge: never a rank it does not have.
+  if (!(p.you && p.tier == null)) cap.append(ctx.o.capNode(p, 26));
   const time = el("span", `lineup-time${fresh || p.fresh ? " is-new" : ""}`);
   time.textContent = p.frames == null ? "—" : ctx.o.fmt(p.frames);
   if (p.frames == null) time.setAttribute("aria-label", "No time yet");

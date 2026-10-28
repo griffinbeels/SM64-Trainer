@@ -1334,7 +1334,8 @@ closer; **double-click** a surface to fly to just in front of it and look at
 Mario (an eased flight any input stops); F (**Look at Mario**) turns the camera to face Mario
 where it stands, its place, tilt and field of view kept; **Set focus** then a
 click puts the focus point where the picture drew that pixel; one button puts
-the view back where Free camera began; R returns to the recorded camera. A tilted view levels as you turn or fly, never on entry.
+the view back where Free camera began, [[tilt and lens]] too; R returns to the recorded camera. A
+recorded tilt (a shake) levels as you turn or fly, never on entry; a tilt you set stays.
 Moving the camera never pauses Play; only Pause, Space, a step or the slider do. **Restart** goes to the
 first [[frame]] and keeps playing or stays paused; **Loop** (kept per viewer) plays on from the first
 [[frame]] after the last, and a scene the lab is still writing loops once it is whole; , and . step
@@ -1348,8 +1349,9 @@ first), **Top [[ghost]]s** (each player's best for a [[strategy]], with its plac
 scene's life and a name only once typing stops or on Enter; Add draws that [[ghost]] into the stage
 from the next picture, and a [[ghost]] the lab cannot draw shows its reason. **HUD** (kept per
 viewer) leaves the game's on-screen counters and timer out of every picture, the one on screen at
-once. The **Cinematic** row's [[cinematic camera]]s (Front, Side, Orbit) follow Mario or a [[stage
-ghost]] along his path. Under the camera controls, the **Cameras** strip keeps [[camera preset]]s in
+once. The **Cinematic** row's [[cinematic camera]]s (Front, Side, Orbit, Chase, Overhead, Tripod)
+follow Mario or a [[stage ghost]] along his path. The [[tilt and lens]] row turns and zooms whichever
+camera is on screen. Under the camera controls, the **Cameras** strip keeps [[camera preset]]s in
 slots 1-9.
 The page takes the keyboard when you arrive (the sidebar or the [[ghost button]])
 and after a mouse click on its controls; a field that types keeps its keys, and
@@ -1498,19 +1500,47 @@ chosen in Follow) along his path: **Front** rides in front of him, aimed at
 him, in a Close, Medium or Wide shot; **Side** tracks his profile on the side
 the stage's walls leave clear, cutting across only for a wall that would block
 it a while, and staying a while after; **Orbit** circles him at the speed and radius you set, on the
-scene's own clock, so a pause holds it still. Each stands at his eye level
-until you raise or lower it, rides a smoothed copy of his path so his wobble
-from picture to picture never shakes it, and rises over a wall (then moves in)
-instead of sitting behind it. The lab works out every picture's camera from the
-whole path, so stepping back, seeking and Play draw the same shot; Free camera
-from it starts at that camera. Its feel numbers are the Tune controls'
-Cinematic rows.
+scene's own clock, and with **Orbit while paused** (on unless you turn it off) keeps circling a paused
+picture, so Record can take an orbit of a frozen picture; Play goes on from where it is; **Chase**
+rides behind him; **Overhead** looks down at him from a height, from a little behind so he heads up
+the picture; **Tripod** stays where the camera on screen stood when you chose it and turns to follow
+him. Each but Tripod stands at his eye level (Overhead at its own height) until you raise or lower
+it, rides a smoothed copy of his path so his wobble from picture to picture never shakes it, and
+rises over a wall (then moves in) instead of sitting behind it; a Tripod never moves, walls or not.
+Each carries its own [[tilt and lens]], and a longer lens moves it back so he stays the same size.
+The lab works out every picture's camera from the whole path, so stepping back, seeking and Play
+draw the same shot; Free camera from it starts at that camera. Its feel numbers are the Tune
+controls' Cinematic rows.
 
 - **Lives** -- the camera's math (`tools/scene_lab/camera_rig.py`); Mario's
   path and the stage's walls (`tools/scene_lab/scene_session.py`, a ghost's
   pose in `tools/scene_lab/stage_ghosts.py`); the controls
   (`src/sm64_events/ui/components/scenerigs.js`)
 - **Not** -- the [[ghost's view]], which replays the camera that [[ghost]]'s own game drew
+
+### Tilt and lens
+
+How a [[scene viewer]] camera turns and zooms its picture. **Tilt** turns the
+picture about its middle, in degrees, positive clockwise: the game's own screen
+roll with its sign changed, so the world and the [[stage ghost]]s turn while the
+HUD stays upright. **Lens** is the focal length a 35 mm camera would need to see
+as much, matched by the picture's diagonal; the game's usual view is a 31 mm
+lens (45 degrees tall), 14 mm is very wide and 200 mm very tight. The game's own
+drawing code draws both, and decides from the lens which objects are in view as
+it always does. The row acts on the camera on screen: a [[cinematic camera]]'s
+own (they travel in its request, and a longer lens moves it back so Mario stays
+the same size), else the free camera's, which the recorded camera or a
+[[ghost's view]] starts from the picture first. Z and C tilt while held, X
+levels, - and = change the lens while held, and so does Ctrl with the wheel. A
+[[camera preset]] and a [[scene recording]] keep both.
+
+- **Lives** -- the conversions (`src/sm64_events/ui/components/scenecamera.js`);
+  the row (`src/sm64_events/ui/components/scenelens.js`); a cinematic
+  camera's distance for its lens (`tools/scene_lab/camera_rig.py`); the
+  game's RAM the free camera writes (`tools/scene_lab/camera_state.py`)
+- **Not** -- the game's own field-of-view changes (a cannon, a painting), which
+  only the recorded camera shows; the wheel without Ctrl, which moves the free
+  camera closer instead of zooming
 
 ### Camera preset
 
@@ -1627,7 +1657,9 @@ soon as the [[attempt]] completes, before the tap has even recorded its fade-out
 it grows on screen as the recording reaches it (about 0.3 s behind the game), and a
 Play that catches up waits on the newest picture. Its sound is the game sound the
 [[recorder]] heard, from the first picture on; its [[sound stems]] join it a few
-seconds after the [[attempt]] ends. Only an [[attempt]] no package was
+seconds after the [[attempt]] ends. Two [[attempt]]s that start together (a [[star]] and
+the [[segment]] that goes on to the pipe, both from one [[reset]]) share that writing, and
+each gets its own package, so the one that ends later is just as quick. Only an [[attempt]] no package was
 following when it began (one started before the lab) is "cutting" for a few
 seconds; one the recording does not fully hold has no scene, and says why in one
 sentence. The server keeps the scenes of his last 20 [[attempt]]s while it is up.

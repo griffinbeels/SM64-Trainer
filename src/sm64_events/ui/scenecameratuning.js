@@ -1,6 +1,7 @@
 // src/sm64_events/ui/scenecameratuning.js -- THE registry of every number that
 // decides how the Scene viewer's free camera FEELS: turning around the focus
-// point, sliding, moving closer, flying, and how fast a rolled view levels.
+// point, sliding, moving closer, flying, how fast a rolled view levels, tilting
+// and changing the lens, and the cinematic cameras' distances.
 //
 // The design asks for "the best free cam controller ever" and says plainly that
 // prior art does not prove what is easiest for this audience, so the feel is
@@ -34,7 +35,7 @@ export const SCENE_CAMERA_TUNABLES = {
   levelPerPixel: {
     group: "Orbit", label: "Level a tilted view per pixel", value: 0.05,
     min: 0, max: 2, step: 0.01, unit: "deg",
-    why: "A recorded camera can be tilted (a shake rolls the screen). Free camera starts tilted, exactly as recorded, and turning levels it by this much per pixel. Zero keeps the recorded tilt until Reset view or Look at Mario.",
+    why: "A recorded camera can be tilted (a shake rolls the screen). Free camera starts tilted, exactly as recorded, and turning levels it by this much per pixel. Zero keeps the recorded tilt until Reset view or Look at Mario. A tilt you set with Tilt never levels.",
   },
 
   // --- sliding and moving closer (Shift-drag, wheel) -----------------------
@@ -88,7 +89,24 @@ export const SCENE_CAMERA_TUNABLES = {
   levelPerSecond: {
     group: "Flight", label: "Level a tilted view per second", value: 20,
     min: 0, max: 180, step: 1, unit: "deg",
-    why: "While flying, a recorded tilt levels by this much each second.",
+    why: "While flying, a recorded tilt levels by this much each second. A tilt you set with Tilt never levels.",
+  },
+
+  // --- Tilt and Lens (Z / C tilt, X levels, - / = and Ctrl+wheel change the lens) ---
+  tiltPerSecond: {
+    group: "Tilt & lens", label: "Z and C tilt per second", value: 45,
+    min: 5, max: 360, step: 5, unit: "deg",
+    why: "Holding Z or C turns the picture this far each second, counterclockwise and clockwise, the free camera or a cinematic one; Shift and Alt make it faster and slower as they do flight. X levels it.",
+  },
+  lensPerSecond: {
+    group: "Tilt & lens", label: "- and = change the lens per second by", value: 2,
+    min: 1.05, max: 10, step: 0.05, unit: "x",
+    why: "Holding = multiplies the lens's focal length by this each second (closer in), - divides it (wider). A constant ratio feels as even at 14 mm as at 200 mm.",
+  },
+  lensPerWheel: {
+    group: "Tilt & lens", label: "Ctrl+wheel changes the lens by", value: 0.0015,
+    min: 0.0002, max: 0.01, step: 0.0001, unit: "per wheel unit",
+    why: "Ctrl with the wheel (or a touchpad pinch) multiplies the focal length by e^(this x wheel delta): one notch (100) at 0.0015 is about 16%. Scrolling down widens.",
   },
 
   // --- double-click: fly to the clicked surface, then look at Mario ----------
@@ -131,7 +149,22 @@ export const SCENE_CAMERA_TUNABLES = {
   rigFov: {
     group: "Cinematic", label: "Field of view", value: 45,
     min: 15, max: 100, step: 1, unit: "deg",
-    why: "How wide the cinematic cameras see. The game draws most of a course at 45.",
+    why: "How wide a cinematic camera sees until you change its Lens, and the lens the shot distances above are for. The game draws most of a course at 45 (a 31 mm lens).",
+  },
+  rigLensKeepsSize: {
+    group: "Cinematic", label: "Lens keeps him the same size", value: 1,
+    min: 0, max: 1, step: 0.05, unit: "share",
+    why: "At 1, a cinematic camera moves back as you lengthen its Lens and in as you widen it, so Mario stays the same size and only the background flattens or opens up. At 0 the camera stays where it is and the lens zooms. Between, a bit of each.",
+  },
+  rigOverheadHeight: {
+    group: "Cinematic", label: "Overhead: height to start with", value: 1000,
+    min: 200, max: 6000, step: 50, unit: "units",
+    why: "How high above Mario's feet the Overhead camera stands when you first choose it; its Height control changes it from there. Mario is about 160 units tall.",
+  },
+  rigOverheadAngle: {
+    group: "Cinematic", label: "Overhead: looks down at", value: 70,
+    min: 30, max: 85, step: 1, unit: "deg",
+    why: "How steeply the Overhead camera looks down at Mario, from a little behind him so he runs up the picture. Never straight down: the game's camera needs a direction to call up.",
   },
   rigSmoothFrames: {
     group: "Cinematic", label: "Smooth his path over", value: 12,
@@ -186,7 +219,7 @@ export const SCENE_CAMERA_TUNABLES = {
   rigOrbitSpeed: {
     group: "Cinematic", label: "Orbit: speed to start with", value: 30,
     min: -720, max: 720, step: 1, unit: "deg/s",
-    why: "How fast the Orbit camera circles when you first choose it, on the scene's own clock (paused, it stays put). Negative goes the other way.",
+    why: "How fast the Orbit camera circles when you first choose it, as the scene plays, and while paused with Orbit while paused on. Negative goes the other way.",
   },
 };
 

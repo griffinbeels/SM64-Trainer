@@ -51,6 +51,7 @@ STARTING = "The scene cutter is starting."
 STOPPED = "The scene cutter stopped; attempts finished meanwhile have no scene."
 GAVE_UP = "The scene cutter keeps stopping; restart the Trainer to try again."
 NO_LIVE_SOUND = "This server does not keep the game's sound for scenes."
+SCENE_STARTING = "This attempt's scene is starting; open it again in a moment."
 
 
 class SceneUnavailable(Exception):
@@ -143,6 +144,9 @@ class AttemptScenes:
         if not fresh:
             return
         cutter, notes = self.cutter, []
+        # The oldest attempt the tracker still has open: the cutter keeps a take writing past this
+        # call's attempts for one that began with them (attempt_cutter.Brain.note).
+        open_since = None if active_start is None else attempt_span.utc(active_start).isoformat()
         with self.lock:
             for attempt in fresh:
                 mark = attempt_span.AttemptMark.of(attempt)
@@ -155,7 +159,7 @@ class AttemptScenes:
                 else:
                     entry = {"state": "cutting"}
                 if cutter is not None:
-                    notes.append({"op": "complete", "attempt": mark.as_json()})
+                    notes.append({"op": "complete", "attempt": mark.as_json(), "open_since": open_since})
                 self.entries[attempt.id] = entry | {"ended": mark.ended_utc}
             dropped = self._retain()
         for note in notes:
@@ -170,8 +174,10 @@ class AttemptScenes:
         if event.type in ANCHORS:
             cutter.send({"op": "start", "kind": "anchor", "frame": event.frame,
                          "utc": event.timestamp_utc.isoformat()})
-        elif event.type == "segment_armed" and isinstance(event.payload.get("frame"), int):
-            cutter.send({"op": "start", "kind": "segment", "frame": event.payload["frame"],
+        elif event.type == "segment_armed" and event.frame > 0:
+            # The tracker's notice carries the arm's frame as the event's own (tracking/service.py's
+            # notice drain), never in its payload; frame 0 is a re-projection's badge refresh.
+            cutter.send({"op": "start", "kind": "segment", "frame": event.frame,
                          "segment_id": event.payload.get("segment_id"), "utc": event.timestamp_utc.isoformat()})
         elif event.type == "segment_disarmed":
             cutter.send({"op": "stop", "segment_id": event.payload.get("segment_id")})
@@ -179,12 +185,17 @@ class AttemptScenes:
     # ------------------------------------------------------------ the cutter's side
 
     def _take_for(self, mark) -> dict | None:
-        """The take the child began at this attempt's start (its anchor frame, at about its
-        start time), if one is writing; under the lock."""
+        """Where this attempt's scene grows when the child is writing a take from its start (its
+        anchor frame, at about its start time); under the lock. The child announces each seat
+        nobody holds yet; when another kept attempt already holds every one, the path is None
+        until the child names the seat it gives this one (attempt_cutter.Take.seat_for)."""
         if mark.anchor_frame is None:
             return None
-        return next((take for take in self.takes.values() if take["frame"] == mark.anchor_frame and abs(
-            (take["utc"] - mark.started_utc).total_seconds()) <= attempt_span.MATCH_SECONDS), None)
+        found = [take for take in self.takes.values() if take["frame"] == mark.anchor_frame and abs(
+            (take["utc"] - mark.started_utc).total_seconds()) <= attempt_span.MATCH_SECONDS]
+        held = {entry.get("path") for entry in self.entries.values()}
+        return next((take for take in reversed(found) if take["path"] not in held),
+                    {"path": None, "grow": None} if found else None)
 
     def _event(self, event: dict) -> None:
         if "live" in event:
@@ -219,7 +230,7 @@ class AttemptScenes:
                         log.info("attempt scene %s ready: %s", event["id"], {
                             key: event.get(key) for key in ("seconds", "frames", "bytes", "write_seconds",
                                                             "finish_seconds", "ready_after_decided_ms",
-                                                            "ready_after_last_ms", "take_kind", "why",
+                                                            "ready_after_last_ms", "take_kind", "seat", "why",
                                                             "cpu_ms_per_frame", "write_ms_mean", "write_ms_p95")})
             if entry is None and event.get("state") == "ready" and event.get("path"):
                 Path(event["path"]).unlink(missing_ok=True)          # retention dropped it meanwhile
@@ -400,15 +411,17 @@ class AttemptScenes:
             raise SceneUnavailable("This attempt's scene is still being cut.")
         if entry["state"] != "ready":
             raise SceneUnavailable(entry.get("reason") or "This attempt has no scene.")
+        if not entry.get("path"):                           # its take is giving it a package of its own
+            raise SceneUnavailable(SCENE_STARTING)
         path = Path(entry["path"])
-        if not path.is_file():
-            raise SceneUnavailable("This attempt's scene file is gone.")
+        if not path.is_file():                              # a take's new package appears between two frames
+            raise SceneUnavailable(SCENE_STARTING if entry.get("growing") else "This attempt's scene file is gone.")
         sidecar = Path(entry["grow"]) if entry.get("growing") and entry.get("grow") else None
         if sidecar is not None and not sidecar.is_file() and entry.get("growing"):
             with self.lock:                                 # finished meanwhile, or not yet published
                 current = self.entries.get(attempt_id) or {}
             if current.get("growing"):
-                raise SceneUnavailable("This attempt's scene is starting; open it again in a moment.")
+                raise SceneUnavailable(SCENE_STARTING)
             sidecar = None
         return path, sidecar
 

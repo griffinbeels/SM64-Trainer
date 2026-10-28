@@ -105,28 +105,32 @@ class Rivals:
         if target["kind"] == "star":
             course, star = map(int, target["entity_key"].split("-"))
             ek = entity_key(course,star)
-            signature = None
+            signature = ladder = None
         else:
             ek = entity_key(None,None,int(target["entity_key"]))
-            signature = self._signature(target)
+            signature, ladder = self._signature(target)
         scope = self.scope_for(target) if scope is None else scope
         # Strategy tab: that strategy's region scope. Overall tab: fetch both
         # ROMs when any strategy could serve, then judge each ghost by its own.
         regional = (region_scope.scope_of(ek,target.get("strat"),ranks) if scope=="strategy"
                     else region_scope.widest_scope(ek,ranks))
         return PracticeIdentity(target["kind"],target["entity_key"],ranks.clock_for(ek),
-                                version,target.get("strat"),signature,scope,regional)
+                                version,target.get("strat"),signature,scope,regional,ladder)
 
     def _signature(self, target):
-        """A segment's definition signature, read again only when the
+        """A segment's definition signature and the star ladder it borrows
+        (`reds_pipe_segments`, Practice's resolver), read again only when the
         definitions or the database change (or a forced resolve asks)."""
+        from sm64_events.tracking.activestrat import reds_pipe_segments
         database, definitions = self.tracker.db, getattr(self.tracker, "segment_defs", None)
         if (self._signature_basis is None or self._signature_basis[0] is not database
                 or self._signature_basis[1] is not definitions):
             self._signatures, self._signature_basis = {}, (database, definitions)
         if target["entity_key"] not in self._signatures:
-            self._signatures[target["entity_key"]] = describe(target["kind"],target["entity_key"],target.get("strat"),
-                                                              self.tracker.db.segment_defs()).get("signature")
+            rows = self.tracker.db.segment_defs()
+            self._signatures[target["entity_key"]] = (
+                describe(target["kind"],target["entity_key"],target.get("strat"),rows).get("signature"),
+                reds_pipe_segments(rows)[1].get(int(target["entity_key"])))
         return self._signatures[target["entity_key"]]
 
     def scope_for(self, target):

@@ -87,7 +87,7 @@ export class SceneRecorder {
     const link = this.link, sound = link.sound;
     if (this.started == null) this.started = frameTime;
     const at = playPosition(link.playback, frameTime);
-    const frame = at ? at.frame : link.frame, camera = link.cameraNow();
+    const frame = at ? at.frame : link.frame, camera = link.cameraNow(frame, frameTime);
     const ghosts = link.ghosts.map((ghost) => ghost.ref), mutes = [...sound.ghostMutes];
     const last = this.last;
     const entry = { t_ms: frameTime - this.started, scene_frame: frame, camera,

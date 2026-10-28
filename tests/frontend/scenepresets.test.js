@@ -5,10 +5,11 @@
 // another area. The lab's preset routes are a Map here (GET and PUT /api/scene-lab/camera-presets);
 // the socket, canvas and animation frames are stand-ins as in sceneviewer.test.js.
 import { h } from "preact";
-import { render, cleanup, fireEvent } from "@testing-library/preact";
+import { render, cleanup, fireEvent, within } from "@testing-library/preact";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { SceneViewer } from "../../src/sm64_events/ui/components/sceneviewer.js";
-import { cameraOf, orbitFromPose } from "../../src/sm64_events/ui/components/scenecamera.js";
+import { cameraOf, fovOf, orbitFromPose, rollOf } from "../../src/sm64_events/ui/components/scenecamera.js";
+import { lensAt, lensPosition } from "../../src/sm64_events/ui/components/scenelens.js";
 import { placeOf, sameCamera } from "../../src/sm64_events/ui/components/scenepresets.js";
 import { setSceneCameraTuning } from "../../src/sm64_events/ui/scenecameratuning.js";
 
@@ -466,6 +467,39 @@ test("a preset saved while a cinematic camera is on keeps the camera it drew (ca
   await until(() => expect(puts().length).toBe(1));
   expect(puts()[0].slots.find((entry) => entry.slot === 9).camera).toEqual(RIG_CAMERA);
   expect(socket.sent.some((message) => message.kind === "pose")).toBe(false);
+});
+
+// Round 7: "tilt the camera / adjust focal length". A saved camera keeps both, and a cut brings both back.
+test("a camera saved with a tilt and lens comes back with both, and a saved tilt stays as you turn", async () => {
+  const { page, socket, root, canvas } = await openScene();
+  await enterFree(page, socket);
+  const row = within(root.querySelector('[aria-label="Tilt and lens"]'));
+  fireEvent.input(row.getByRole("slider", { name: "Tilt" }), { target: { value: "20" } });
+  await until(() => expect(socket.last().camera.roll).toBe(rollOf(20)));
+  await socket.picture(socket.last());
+  fireEvent.input(row.getByRole("slider", { name: "Lens" }), { target: { value: String(lensPosition(85)) } });
+  await until(() => expect(socket.last().camera.fov).toBe(fovOf(lensAt(lensPosition(85)))));
+  await socket.picture(socket.last());
+  const shown = socket.last().camera;
+  fireEvent.click(page.getByRole("button", { name: "Save current view in slot 3" }));
+  await until(() => expect(puts().length).toBe(1));
+  expect(puts()[0].slots.find((entry) => entry.slot === 3).camera).toMatchObject({ roll: rollOf(20), fov: shown.fov });
+  key(root, "Escape");
+  key(root, "r");
+  await until(() => expect(socket.last().camera).toBeNull());
+  await socket.picture(socket.last());
+  key(root, "3");
+  await until(() => expect(socket.last().camera?.focus).toBeTruthy());
+  expect([socket.last().camera.roll, socket.last().camera.fov]).toEqual([rollOf(20), shown.fov]);
+  await socket.picture(socket.last());
+  // A turn keeps a saved camera's tilt: LOW's is its own, never levelled away as a recorded shake is.
+  key(root, "2");
+  await until(() => expect(socket.last().camera.roll).toBe(LOW.roll));
+  await socket.picture(socket.last());
+  fireEvent.pointerDown(canvas, { button: 0, pointerId: 1, clientX: 100, clientY: 100 });
+  fireEvent(canvas, new PointerEvent("pointerrawupdate", { bubbles: true, pointerId: 1, clientX: 160, clientY: 100 }));
+  await until(() => expect(sameCamera(socket.last().camera, cutCamera(LOW))).toBe(false));
+  expect(socket.last().camera.roll).toBe(LOW.roll);
 });
 
 test("without the free camera the slots are disabled and the strip says why, asking the lab nothing", async () => {

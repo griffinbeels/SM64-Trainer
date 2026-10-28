@@ -8,7 +8,7 @@ export function endpoint(options, pb, name, limits) {
 export function rangeDraft(options, pb, limits) {
   const draft = {...options};
   if (draft.mode === "adaptive") {
-    const cap = pb == null ? limits.max_ahead : Math.min(limits.max_ahead, limits.last_step - pb.step);
+    const cap = pb?.step == null ? limits.max_ahead : Math.min(limits.max_ahead, limits.last_step - pb.step);
     const floor = cap === 0 ? 0 : 1;
     draft.min_ahead = Math.max(floor, Math.min(cap, draft.min_ahead));
     draft.max_ahead = Math.max(draft.min_ahead, Math.min(cap, draft.max_ahead));
@@ -22,7 +22,7 @@ export function stepRange(draft, pb, limits, name, delta) {
   const key = adaptive ? `${name}_ahead` : `${name}_step`;
   const lowKey = adaptive ? "min_ahead" : "min_step";
   const highKey = adaptive ? "max_ahead" : "max_step";
-  const cap = adaptive ? (pb == null ? limits.max_ahead : Math.min(limits.max_ahead, limits.last_step - pb.step)) : limits.last_step;
+  const cap = adaptive ? (pb?.step == null ? limits.max_ahead : Math.min(limits.max_ahead, limits.last_step - pb.step)) : limits.last_step;
   const floor = adaptive && cap > 0 ? 1 : 0;
   const lo = name === "max" ? draft[lowKey] : floor;
   const hi = name === "min" ? draft[highKey] : cap;
