@@ -47,10 +47,11 @@ const turn = (degrees) => ((degrees % 360) + 360) % 360;
 // that measure it the same way: Overhead's is how high it looks down from); an orbit's first radius
 // and speed are the tuning's. A tripod's place comes from the camera on screen (SceneLink.useRig).
 export function startRig(kind, previous, tuning = SCENE_CAMERA_DEFAULTS, target = "stage") {
-  const sameHeight = (previous?.kind === "overhead") === (kind === "overhead");
-  return { kind, target, shot: previous?.shot ?? "medium", height: sameHeight ? previous?.height ?? null : null,
-    radius: previous?.radius ?? tuning.rigOrbitRadius, speed: previous?.speed ?? tuning.rigOrbitSpeed,
-    phase: previous?.phase ?? 0, side: previous?.side ?? "auto", roll: previous?.roll ?? 0, fov: previous?.fov ?? null };
+  const kept = { shot: "medium", height: null, radius: tuning.rigOrbitRadius, speed: tuning.rigOrbitSpeed, phase: 0,
+    side: "auto", roll: 0, fov: null };
+  for (const key of Object.keys(kept)) kept[key] = previous?.[key] ?? kept[key];
+  if ((previous?.kind === "overhead") !== (kind === "overhead")) kept.height = null;
+  return { kind, target, ...kept };
 }
 
 // A change of settings; a new speed keeps the orbit's angle at `seconds` (the picture on screen).

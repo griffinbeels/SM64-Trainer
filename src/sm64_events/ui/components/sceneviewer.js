@@ -998,24 +998,33 @@ export class SceneLink {
     const tick = (now) => {
       if (this.flight !== flight) return;
       if (!(this.free || this.rig) || !flight.keys.size) { flight.ticking = false; return; }
-      const seconds = clamp((now - flight.last) / 1000, 0, 0.1), tuning = sceneCameraTuning();
-      const move = movementOf(flight.keys), turning = move.tilt || move.zoom;
-      const pace = (flight.fast ? tuning.fastMultiplier : 1) * (flight.slow ? tuning.slowMultiplier : 1);
+      const seconds = clamp((now - flight.last) / 1000, 0, 0.1);
       flight.last = now;
-      if (this.free) {
-        const flownTo = flown(this.orbit, move, seconds, flightSpeed(this.speed, flight, tuning), tuning);
-        this.orbit = turning ? { ...flownTo, ...tiltAndLens(flownTo, move, seconds, pace, tuning),
-          levels: move.tilt ? false : flownTo.levels } : flownTo;
-      } else if (turning) {
-        const rig = this.rig;
-        this.rig = this.lastRig = { ...rig, ...tiltAndLens({ roll: rig.roll ?? 0, fov: rig.fov ?? tuning.rigFov }, move,
-          seconds, pace, tuning) };
+      if (this.heldFor(movementOf(flight.keys), seconds, flight)) {
+        this.want("move", Math.min(flight.input ?? now, performance.now()));
       }
-      if (this.free || turning) this.want("move", Math.min(flight.input ?? now, performance.now()));
       flight.input = null;
       this.animate(tick);
     };
     this.animate(tick);
+  }
+
+  // `seconds` of the held keys `move`: the free camera flies, tilts and zooms, a cinematic camera
+  // tilts and zooms. True when the camera changed.
+  heldFor(move, seconds, flight) {
+    const tuning = sceneCameraTuning(), turning = move.tilt || move.zoom;
+    const pace = (flight.fast ? tuning.fastMultiplier : 1) * (flight.slow ? tuning.slowMultiplier : 1);
+    if (this.free) {
+      const flownTo = flown(this.orbit, move, seconds, flightSpeed(this.speed, flight, tuning), tuning);
+      this.orbit = turning ? { ...flownTo, ...tiltAndLens(flownTo, move, seconds, pace, tuning),
+        levels: move.tilt ? false : flownTo.levels } : flownTo;
+      return true;
+    }
+    if (!turning) return false;
+    const rig = this.rig;
+    this.rig = this.lastRig = { ...rig, ...tiltAndLens({ roll: rig.roll ?? 0, fov: rig.fov ?? tuning.rigFov }, move,
+      seconds, pace, tuning) };
+    return true;
   }
 
   // ---- looking around: only while the right button is held on the picture

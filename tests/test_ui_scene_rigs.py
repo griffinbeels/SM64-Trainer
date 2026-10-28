@@ -70,14 +70,15 @@ def test_the_cinematic_row_asks_for_a_rig_names_it_fits_both_widths_and_hands_ov
             browser.close()
 
 
-# Round 7: every camera row against the card, and the page against the window (no sideways scroll).
+# Round 7: everything in every camera row against the card (a slider may overflow a label that
+# shrank), and the page against the window (no sideways scroll).
 FITS_ALL = r"""
 (() => {
   const card = document.querySelector('.scene-lab-player').getBoundingClientRect();
   const rows = [...document.querySelectorAll('.scene-lab-rigs, .scene-lab-rig-options, .scene-lab-lens')];
   const page = document.scrollingElement;
   return { rows: rows.map((row) => row.getAttribute('aria-label')), over: Math.max(...rows.flatMap((row) =>
-    [...row.children].map((child) => child.getBoundingClientRect().right - card.right))),
+    [...row.querySelectorAll('*')].map((part) => part.getBoundingClientRect().right - card.right))),
     sideways: page.scrollWidth - page.clientWidth };
 })()
 """

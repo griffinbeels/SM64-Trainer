@@ -106,6 +106,21 @@ def _number(value) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
+def _view_of(request: dict, kind: str, rig_fov: float) -> tuple[int, float, tuple | None]:
+    """A rig request's roll (default level), fov (default `rig_fov`) and a tripod's position, checked."""
+    roll, fov, position = request.get("roll", 0), request.get("fov", rig_fov), request.get("position")
+    if not (isinstance(roll, int) and not isinstance(roll, bool) and ROLL_RANGE[0] <= roll <= ROLL_RANGE[1]):
+        raise ValueError("a cinematic camera's roll is the game's angle, a whole number from -32768 to 32767")
+    if not (_number(fov) and FOV_RANGE[0] <= fov <= FOV_RANGE[1]):
+        raise ValueError(f"a cinematic camera's fov is {FOV_RANGE[0]:g} to {FOV_RANGE[1]:g} degrees")
+    if position is None and kind != "tripod":
+        return roll, float(fov), None
+    if not (kind == "tripod" and isinstance(position, list) and len(position) == 3
+            and all(_number(part) and abs(part) <= WORLD_LIMIT for part in position)):
+        raise ValueError("a tripod's position is three world coordinates, and only a tripod has one")
+    return roll, float(fov), tuple(float(part) for part in position)
+
+
 @dataclass(frozen=True)
 class Rig:
     """One cinematic camera request (interface D's {"rig": ...}), checked and with every default filled."""
@@ -165,16 +180,7 @@ class Rig:
             raise ValueError(f"an orbit's speed is -{SPEED_LIMIT:g} to {SPEED_LIMIT:g} degrees a second")
         if not _number(phase):
             raise ValueError("an orbit's phase is a number of degrees")
-        roll, fov, position = request.get("roll", 0), request.get("fov", values["rigFov"]), request.get("position")
-        if not (isinstance(roll, int) and not isinstance(roll, bool) and ROLL_RANGE[0] <= roll <= ROLL_RANGE[1]):
-            raise ValueError("a cinematic camera's roll is the game's angle, a whole number from -32768 to 32767")
-        if not (_number(fov) and FOV_RANGE[0] <= fov <= FOV_RANGE[1]):
-            raise ValueError(f"a cinematic camera's fov is {FOV_RANGE[0]:g} to {FOV_RANGE[1]:g} degrees")
-        if position is not None or kind == "tripod":
-            if not (kind == "tripod" and isinstance(position, list) and len(position) == 3
-                    and all(_number(part) and abs(part) <= WORLD_LIMIT for part in position)):
-                raise ValueError("a tripod's position is three world coordinates, and only a tripod has one")
-            position = tuple(float(part) for part in position)
+        roll, fov, position = _view_of(request, kind, values["rigFov"])
         return cls(kind, target, shot, float(height), float(radius), float(speed), float(phase) % 360.0, side,
                    tuple((key, values[key]) for key in TUNING_KEYS), roll, float(fov), position)
 

@@ -43,10 +43,7 @@ const FILM_HALF_DIAGONAL = Math.hypot(36, 24) / 2, DIAGONAL_PER_HEIGHT = 5 / 3;
 export const tiltOf = (roll) => (-(roll || 0) / PER_DEGREE) || 0;
 export const rollOf = (tilt) => clamp(Math.round(-tilt * PER_DEGREE), -32768, 32767);
 export const lensOf = (fov) => FILM_HALF_DIAGONAL / (Math.tan((fov ?? GAME_FOV) * Math.PI / 360) * DIAGONAL_PER_HEIGHT);
-export function fovOf(mm) {                       // the game's own lens comes back as exactly GAME_FOV
-  const fov = Math.atan(FILM_HALF_DIAGONAL / (mm * DIAGONAL_PER_HEIGHT)) * 360 / Math.PI;
-  return Math.abs(fov - GAME_FOV) < 1e-9 ? GAME_FOV : fov;
-}
+export const fovOf = (mm) => Math.atan(FILM_HALF_DIAGONAL / (mm * DIAGONAL_PER_HEIGHT)) * 360 / Math.PI;
 
 const sub = (a, b) => a.map((value, i) => value - b[i]);
 const add = (a, b) => a.map((value, i) => value + b[i]);
