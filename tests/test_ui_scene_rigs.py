@@ -142,6 +142,10 @@ def test_tilt_lens_and_the_new_setups_reach_the_lab_and_fit_both_widths(tmp_path
             rigs.get_by_role("button", name="Side").click()
             page.wait_for_function(f"{LAST_RIG} === 'side'")
             shoot("side")
+            rigs.get_by_role("button", name="Orbit").click()                # the widest row: Orbit while paused too
+            page.wait_for_function(f"{LAST_RIG} === 'orbit'")
+            page.locator(".scene-lab-rig-options").get_by_role("button", name="Orbit while paused").wait_for(timeout=5000)
+            shoot("orbit")
             assert errors == []
         finally:
             browser.close()
