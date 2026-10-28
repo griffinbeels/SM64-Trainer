@@ -32,7 +32,7 @@ the CPU (pick.py: the renderer's own thread holds its depth), in the camera's ow
 owns the camera's world axes and turns that into a world point; the session never does.
 
 When the evaluator cannot serve a frame (no 3D scene during a level load, a stopped run, no
-scene state in the package) the picture is the recorded one and `reason` says why. The evaluator starts on the first free-camera request.
+scene state in the package) the picture is the recorded one and `reason` says why. The evaluator starts on the first free-camera request, or before it in warm(), which the lab calls once the page is idle after the first picture.
 
 A free-camera picture sends the host only the RDRAM words that differ from what the host
 already holds (HostImage): a drag changes a few KiB of the 8 MiB, the next frame tens of KiB.
@@ -1226,6 +1226,23 @@ class SceneSession:
         timings["decode_ms"] = _ms(started)
         return viewer.Frame(f"frame {index} stage", tuple(task.task), self.outlines[index]["vi"],
                             struct.pack(f"<{2 * len(runs)}I", *(edge for run in runs for edge in run)), data)
+
+    def warm(self, frame: int) -> None:
+        """Starts what the first free or cinematic camera of this scene would start, while nobody
+        waits for it (the lab calls it once the page is idle after the first picture): the free
+        camera's evaluator and one view of `frame` from its recorded camera (pose: ~200 ms in all,
+        measured 2026-10-27), and the walls of that frame's place. Nothing where the free camera
+        cannot draw; a failure here is the first camera's to report."""
+        index = self._index(frame)
+        if self.free_reason is not None or self._evaluator is not None:
+            return
+        try:
+            self.pose(frame)
+            place = self._place(index)
+            if place is not None and self.package.states is not None:
+                self._walls_at(place)
+        except Exception as error:  # noqa: BLE001 - the first camera that needs it says why
+            log.warning("scene viewer: warming the free camera failed: %s", error)
 
     def pose(self, frame: int) -> dict:
         """The frame's recorded camera and Mario's position, or None and the reason."""
