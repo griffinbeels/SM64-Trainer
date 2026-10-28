@@ -29,6 +29,8 @@ DEFAULT_OPTIONS = {
 }
 _IDENTITY_VERSION = object()
 MATCH_SCOPES = ("strategy", "overall")
+UNRANKED = {"tier": None, "division": None, "step": None}
+"""A saved PB's rank fields when nothing on its scope grades it (`pb.saved_pb_basis`)."""
 
 
 def _checked_scope(scope):
@@ -259,6 +261,12 @@ def _valid_basis(pb):
             and type(pb.get("frames")) is int and pb["frames"] > 0)
 
 
+def _unranked(pb):
+    """A saved PB nothing on its scope grades (`UNRANKED`): it races, anchoring no range."""
+    return (isinstance(pb, dict) and pb.get("step") is None
+            and type(pb.get("frames")) is int and pb["frames"] > 0)
+
+
 def _same_as_pb(row, pb):
     if pb is None:
         return False
@@ -399,14 +407,14 @@ def select_rivals(rows, pb, options, pins: dict[str, str], previous=(), *, scope
     rival settings changed). With no saved PB the range spreads across the two
     lowest tiers. Seats the range cannot fill widen upward, then downward (`_widened`),
     including recordings already beaten by the PB. Missing chosen recordings
-    remain occupied rather than silently replaced.
+    remain occupied rather than silently replaced. An unranked PB seats only
+    the chosen recordings: no rank anchors a range around it.
     Overall permits other strategies, while every row keeps its recorded label.
     """
     scope = _checked_scope(scope)
     options, pins = checked_options(options), _checked_pins(pins)
     candidates = {row["id"]: row for row in _bounded(rows) if _ranked_row(row) and row.get("scope", scope) == scope}
     previous = tuple(row for row in _bounded(previous) if _ranked_row(row))
-    low, high = _range(pb, options)
     strategy = pb.get("current_strategy") if pb else None
     if strategy is None:
         strategy = next((row.get("current_strategy") for row in candidates.values()
@@ -417,6 +425,9 @@ def select_rivals(rows, pb, options, pins: dict[str, str], previous=(), *, scope
             if options["include_pb"] and _same_as_pb(row, pb)}
     players = set()
     result = _place_pins(pins, candidates, options["count"], used, players)
+    if _unranked(pb):
+        return tuple(result[slot] for slot in sorted(result))
+    low, high = _range(pb, options)
     bounds = dict(pb=pb, options=options, low=low, high=high, strategy=strategy, scope=scope)
     # Persisted conflicting pins keep the first playable slot. Every seat,
     # including protected choices and carried-over rows, belongs to one player.

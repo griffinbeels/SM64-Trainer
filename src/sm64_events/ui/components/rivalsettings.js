@@ -45,7 +45,7 @@ export function RivalOptions({ rivals, draft, setDraft }) {
     </div>
     ${adaptive && !pb && html`<p class="rival-empty">With no time yet, you race people from Capless 5 to Toad 1. Your first personal best moves this range.</p>`}
     ${adaptive && pb && html`<div class="rival-pb-context">${pb.step === limits.last_step ? "Your PB" : "Above your PB"}
-      <span class="rank-icon-slot" style="--icon-size:32px"><${RankIcon} tier=${pb.tier} division=${pb.division} size=${32} /></span>
+      ${pb.tier != null && html`<span class="rank-icon-slot" style="--icon-size:32px"><${RankIcon} tier=${pb.tier} division=${pb.division} size=${32} /></span>`}
     </div>`}
   </section>`;
 }

@@ -182,6 +182,13 @@ def test_no_pb_yet_seats_you_at_the_floor_with_no_ghost():
     assert you["frames"] is None and you["ghost"] is False
 
 
+def test_an_unranked_pb_shows_its_time_and_races_with_no_rank():
+    """A PB nothing ranks yet (a new strategy) races; its seat never borrows the floor's rank."""
+    you = model(lineup_session(pb_ranked=False))["people"][0]
+    assert (you["tier"], you["division"]) == (None, None)
+    assert you["frames"] == 343 and you["ghost"] is True
+
+
 def test_not_racing_your_pb_keeps_your_seat_without_a_ghost():
     you = model(lineup_session(include_pb=False))["people"][0]
     assert you["frames"] == 343 and you["ghost"] is False
