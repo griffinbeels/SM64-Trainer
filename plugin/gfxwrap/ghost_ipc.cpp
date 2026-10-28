@@ -767,16 +767,21 @@ struct Session {
             rom_loaded = read_live_rom(loaded.rom_generation, rom_bytes);
             if (rom_loaded) cached_rom_generation = loaded.rom_generation;
         }
+        // A staged preparation publishes its own reason (demand's last step):
+        // without this one an unreadable cartridge read as "preparing" for good.
         if (!rom_loaded) {
             clear_rom(); failed = loaded.revision;
+            if (loaded.prepare_generation) staged_reason = GIPC_ROM;
             reason = GIPC_ROM; state = GIPC_REFUSED; return;
         }
         cartridge_verified=ghost_assets::sha256(rom_bytes,cartridge_digest);
         if(!cartridge_verified) {
             clear_rom();failed=loaded.revision;
+            if (loaded.prepare_generation) staged_reason = GIPC_ROM;
             reason=GIPC_ROM;state=GIPC_REFUSED;return;
         }
         rom_ready = true;
+        if (staged_reason == GIPC_ROM) staged_reason = GIPC_OK;
         // Ghost sound is optional: a refused engine or device leaves drawing intact.
         if (const auto *hooks = audio_hooks.load(); hooks && !audio_running)
             audio_running = hooks->start(rom_bytes.data(), rom_bytes.size());

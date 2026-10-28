@@ -1,5 +1,6 @@
-/* Worker-only discovery of the loaded cartridge. Zilmar supplies a header,
- * never a full-ROM pointer. No emulator offsets, writes, or file selection. */
+/* Worker-only discovery of the loaded cartridge. Zilmar promises a header,
+ * not a full-ROM pointer: the header's own allocation is read first, then the
+ * process is searched. No emulator offsets, writes, or file selection. */
 #pragma once
 #include <cstddef>
 #include <cstdint>

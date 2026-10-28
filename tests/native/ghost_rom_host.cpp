@@ -20,8 +20,8 @@ void require(bool value, const char* message) {
 }
 struct Allocation {
     uint8_t* bytes;
-    explicit Allocation(size_t count) : bytes(static_cast<uint8_t*>(VirtualAlloc(
-        nullptr, count, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE))) {
+    explicit Allocation(size_t count, DWORD protect = PAGE_READWRITE) : bytes(static_cast<uint8_t*>(
+        VirtualAlloc(nullptr, count, MEM_RESERVE | MEM_COMMIT, protect))) {
         require(bytes != nullptr, "fixture allocation");
     }
     ~Allocation() { VirtualFree(bytes, 0, MEM_RELEASE); }
@@ -141,6 +141,41 @@ int main() {
                     PAGE_NOACCESS, &old) != 0, "partial cartridge guard");
             require(discover(current) == Result::missing && out.empty(),
                     "header with incomplete readable image is refused");
+        }
+        {
+            // Project64's own header opens its cartridge. That image is the one
+            // it runs: read with no search, whatever other copies exist.
+            Allocation cartridge(ghost_rom::IMAGE_BYTES), other(ghost_rom::IMAGE_BYTES);
+            image(cartridge.bytes, true); image(other.bytes, true); other.bytes[200] ^= 1;
+            require(ghost_rom::read(cartridge.bytes, current, out, validate, {ghost_rom::IMAGE_BYTES, 2000})
+                    == Result::ready, "the header's own cartridge is read with no search");
+            normalized(out);
+            require(discover(current) == Result::ambiguous && out.empty(),
+                    "a copied header still refuses differing cartridges");
+            other.bytes[100 ^ 3] = 0; // its header still matches; its image no longer qualifies
+            require(ghost_rom::read(other.bytes, current, out, validate) == Result::ready,
+                    "a header whose own image does not qualify falls back to the search");
+            normalized(out);
+        }
+        {
+            // Pages of one allocation that differ in protection are separate
+            // regions; a cartridge across them is still one image.
+            Allocation cartridge(ghost_rom::IMAGE_BYTES);
+            image(cartridge.bytes, true);
+            require(VirtualProtect(cartridge.bytes + ghost_rom::IMAGE_BYTES / 2, ghost_rom::IMAGE_BYTES / 2,
+                    PAGE_READONLY, &old) != 0, "split cartridge protection");
+            require(discover(current) == Result::ready, "a cartridge across protection changes is discovered");
+            normalized(out);
+        }
+        {
+            // Write-combined pages are a driver's device memory: never the
+            // cartridge, and slow enough to exhaust the search's deadline.
+            Allocation cartridge(ghost_rom::IMAGE_BYTES), device(ghost_rom::IMAGE_BYTES, PAGE_READWRITE | PAGE_WRITECOMBINE);
+            image(device.bytes, true); device.bytes[200] ^= 1;
+            require(discover(current) == Result::missing && out.empty(), "a write-combined copy is never read");
+            image(cartridge.bytes, false);
+            require(discover(current) == Result::ready, "a write-combined copy cannot make discovery ambiguous");
+            normalized(out);
         }
         {
             // The JP practice cartridge is discovered the same way; a header

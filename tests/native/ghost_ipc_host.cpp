@@ -689,6 +689,25 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
             check(withdrawals.load()==withdrawn && prepared_ids[1]+prepared_ids[2]==read
                   && page.status().active_generation==105,"no withdrawal, clip read or new activation either way");
         }
+        // Adaptive preparation publishes an unreadable cartridge as the plain
+        // path does, never as preparing for good; the next revision reads again.
+        ghost_ipc::rom(false);page.stopped();
+        rom[0]=0;ghost_ipc::rom(true,header_only.value);
+        {
+            const auto reopened=page.wait([&](const gipc_status& s){return s.generation>missing.generation;},
+                "a reopened ROM starts a distinct producer");
+            r.generation=reopened.generation;r.rom_generation=ghost_ipc::rom_generation();
+            r.token=127;r.revision=1;r.play_enabled=0;r.hidden=0;r.owner_suspended=0;r.mode=GP_FIXED;r.origin={};
+            r.prepare_generation=107;r.activate_generation=r.activate_start=0;r.cancel_preparation=0;
+            r.clip_count=1;set_clip(r.clips[0],1,argv[1],argv[2],48);page.send(r);
+            page.wait([](const gipc_status& s){return s.ack_revision==1 && s.state==GIPC_REFUSED && s.reason==GIPC_ROM;},
+                "an unreadable cartridge refuses staged preparation");
+            for(unsigned i=0;i<4;++i){Sleep(25);check(page.status().state==GIPC_REFUSED && page.status().reason==GIPC_ROM
+                && !page.status().prepared_generation,"the staged refusal holds without preparing");}
+            rom[0]=0x40;r.revision=2;page.send(r);
+            page.wait([](const gipc_status& s){return s.ack_revision==2 && s.prepared_generation==107 && s.reason==GIPC_OK;},
+                "the next revision reads the restored cartridge and prepares");
+        }
         ghost_ipc::rom(false);page.stopped();
         check(!page.status().prepared_generation && !page.status().active_generation,"ROM closure invalidates both generation acknowledgements");
         check(!worker_owner.load() && !wrong_thread.load(),"all worker bindings released");
