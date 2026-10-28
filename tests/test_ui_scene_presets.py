@@ -106,22 +106,34 @@ def _slot_says(page, slot: int, name: str, timeout: int = 30000) -> None:
                            f"?.textContent === {json.dumps(name)}", timeout=timeout)
 
 
-def _type_name(page, name: str) -> None:
-    """The name field has the typing (the click that opened it did not take it back); Enter keeps the name
-    and gives the keyboard back to the viewer."""
+# A step the viewer takes while the typing stays in the name field: the page draws again, as it does for
+# every picture during Play and for each answer from the lab.
+STEP_BEHIND_THE_FIELD = ("document.querySelector('.scene-lab').dispatchEvent("
+                         "new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }))")
+
+
+def _type_name(page, name: str) -> list:
+    """The name field has the typing (the click that opened it did not take it back). Halfway through, the
+    page draws again, which must not put the old name back under the typing (until 2026-10-27 it did: a
+    save's own answer landing mid-typing failed this test about 1 run in 6). Enter keeps the name and gives
+    the keyboard back to the viewer. Returns the cameras asked for meanwhile."""
     page.wait_for_function("document.activeElement.classList.contains('scene-lab-slot-name-field')", timeout=2000)
+    before = page.evaluate("window.__cameras.length")
     page.keyboard.press("Control+a")
-    page.keyboard.type(name)
+    page.keyboard.type(name[:2])
+    page.evaluate(STEP_BEHIND_THE_FIELD)
+    page.wait_for_function(f"window.__cameras.length > {before}")       # the step's picture: the page drew
+    page.keyboard.type(name[2:])
     page.keyboard.press("Enter")
+    return page.evaluate(f"window.__cameras.slice({before})")
 
 
 def _save_and_name(page, lab_root: Path, here: dict) -> None:
     """Slot 2 saves the free camera on screen and asks for its name at once; a digit typed there never cuts."""
     page.get_by_role("button", name="Save current view in slot 2").click()
-    sent = page.evaluate("window.__cameras.length")
-    _type_name(page, "Wide 7")
+    asked = _type_name(page, "Wide 7")
     _slot_says(page, 2, "Wide 7")
-    assert page.evaluate("window.__cameras.length") == sent
+    assert asked and all(_near(camera["position"], here["position"]) for camera in asked), asked   # no cut to 7
     assert page.evaluate(HAS_KEYBOARD)
     page.wait_for_timeout(300)
     assert _names(lab_root) == [(2, "Wide 7"), (7, LONG), (9, "Tower")]

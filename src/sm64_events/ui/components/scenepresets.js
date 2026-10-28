@@ -137,18 +137,27 @@ function stripNote(link, key, set) {
 }
 
 // A slot's name while it is being typed: Enter or leaving the field keeps it, Esc keeps the old one.
-// Enter and Esc hand the keyboard back to the viewer, so the number keys cut again at once.
+// Enter and Esc hand the keyboard back to the viewer, so the number keys cut again at once. The field
+// holds its own text: the page draws again for every picture (30 a second during Play) and for each
+// answer from the lab, and none of that may put the old name back under the typing. A field the strip
+// takes away (the scene moved into another area) keeps what was typed, as leaving it does.
 function NameField({ entry, done }) {
-  const field = useRef(null), finished = useRef(false);
-  useLayoutEffect(() => { field.current?.focus({ preventScroll: true }); field.current?.select(); }, []);   // before a key can land
+  const field = useRef(null), finished = useRef(false), typed = useRef(entry.name);
+  const [text, setText] = useState(entry.name);
   const finish = (keep, giveBack = false) => {
     if (finished.current) return;
     finished.current = true;
-    done(keep ? field.current.value : null);
-    if (giveBack) field.current.closest(".scene-lab")?.focus({ preventScroll: true });
+    done(keep ? typed.current : null);
+    if (giveBack) field.current?.closest(".scene-lab")?.focus({ preventScroll: true });
   };
+  useLayoutEffect(() => {                                   // before a key can land
+    field.current?.focus({ preventScroll: true });
+    field.current?.select();
+    return () => finish(true);
+  }, []);
   return html`<input ref=${field} type="text" class="scene-lab-slot-name-field" maxlength=${MAX_NAME}
-    value=${entry.name} aria-label=${`Name for camera ${entry.slot}`}
+    value=${text} aria-label=${`Name for camera ${entry.slot}`}
+    oninput=${(event) => { typed.current = event.currentTarget.value; setText(typed.current); }}
     onkeydown=${(event) => {
       if (event.key === "Enter") { event.preventDefault(); finish(true, true); }
       if (event.key === "Escape") { event.preventDefault(); finish(false, true); }

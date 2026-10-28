@@ -306,6 +306,47 @@ test("rename in place: Enter keeps the new name, Esc the old one", async () => {
   expect(puts()[0].slots).toEqual([{ slot: 1, name: "Wide hall", camera: WIDE }, { slot: 2, name: "Under the bridge", camera: LOW }]);
 });
 
+// The page draws again for every picture (30 a second during Play) and for the save's own answer: none
+// of that may put a name back while it is being typed.
+test("a name being typed keeps its letters while pictures and the lab's answers draw the page", async () => {
+  const { page, socket, strip, root } = await openScene();
+  fireEvent.click(page.getByRole("button", { name: "Save current view in slot 4" }));
+  await until(() => expect(socket.last()).toMatchObject({ kind: "pose" }));
+  socket.text({ id: socket.last().id, kind: "pose", pose: POSE, reason: null });
+  const field = await until(() => {
+    const found = strip.querySelector(".scene-lab-slot-name-field");
+    expect(found).toBeTruthy();
+    return found;
+  });
+  fireEvent.input(field, { target: { value: "Over the" } });          // typed so far
+  await until(() => expect(puts().length).toBe(1));                   // the save's answer arrives meanwhile
+  await settled();
+  key(root, "ArrowRight");                                            // and a picture is asked for and drawn
+  await socket.picture(socket.last());
+  await settled();
+  expect(field.value).toBe("Over the");
+  fireEvent.input(field, { target: { value: "Over the bridge" } });
+  key(field, "Enter");
+  await until(() => expect(puts().length).toBe(2));
+  expect(puts()[1].slots.find((entry) => entry.slot === 4).name).toBe("Over the bridge");
+});
+
+test("a name being typed when the scene moves into another area is kept for the slot it was typed into", async () => {
+  const { page, strip, root } = await openScene();
+  fireEvent.click(page.getByRole("button", { name: "Rename Low run" }));
+  const field = await until(() => {
+    const found = strip.querySelector(".scene-lab-slot-name-field");
+    expect(found).toBeTruthy();
+    return found;
+  });
+  fireEvent.input(field, { target: { value: "Under the bridge" } });
+  key(root, "End");                                                   // Play, or a step, into area 2
+  await until(() => expect(names(strip)[0]).toBe("Cannon"));
+  await until(() => expect(puts().length).toBe(1));
+  expect(puts()[0]).toEqual({ place: "9:1", slots: [{ slot: 1, name: "Wide hall", camera: WIDE },
+    { slot: 2, name: "Under the bridge", camera: LOW }] });
+});
+
 test("delete empties the slot, and Undo puts the camera back", async () => {
   const { page, strip } = await openScene();
   fireEvent.click(page.getByRole("button", { name: "Delete Wide hall" }));
