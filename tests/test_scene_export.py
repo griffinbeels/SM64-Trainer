@@ -355,8 +355,10 @@ def test_an_export_draws_every_entry_again_and_lands_beside_the_saved_replays(co
 
 def test_an_export_draws_a_tilted_and_zoomed_camera_as_the_page_showed_it(config, recording, tmp_path):
     """Round 7 (interface I): Record keeps each camera's tilt and lens. A free camera's roll and fov, and
-    the camera_used a cinematic camera's picture carried them in, are drawn again exactly; the same place
-    level and at the game's lens is another picture."""
+    the camera_used a cinematic camera's picture carried them in, are drawn again exactly. The roll stays
+    the game's s16 angle, as round 6's version-1 recordings carry it (the lead's ruling, 2026-10-28), so
+    the format's version is unchanged and an older recording draws as it did."""
+    assert scene_export.TIMELINE_VERSION == 1
     place = {"focus": [0, 0, 0], "position": [100, 300, 900]}
     tilted = {**place, "roll": -2731, "fov": 14.8}
     used = {"focus": [0.0, 50.0, 0.0], "position": [300.0, 400.0, 900.0], "roll": 5461, "fov": 85.7}

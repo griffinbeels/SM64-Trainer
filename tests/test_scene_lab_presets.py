@@ -7,6 +7,7 @@ answers empty with one sentence and is kept aside by the next write. No ROM, GPU
 lab config only names a lab folder under tmp_path.
 """
 import json
+import struct
 import sys
 from pathlib import Path
 
@@ -114,6 +115,26 @@ def test_names_keep_single_spaces_and_cameras_keep_what_the_free_camera_draws(st
     assert [entry["name"] for entry in answer["slots"]] == ["Wide hall", "No fov"]
     assert answer["slots"][1]["camera"] == {"focus": [1.0, 2.0, 3.0], "position": [1.0, 2.0, 300.0], "roll": None,
                                             "fov": None}
+
+
+# A file as round 6 wrote it, before Tilt and Lens: roll in the game's s16 units, fov in degrees.
+ROUND_6_FILE = ('{"version": 1, "areas": {"9:1": [{"slot": 2, "name": "Low run", "camera": {"focus": [-50.0, 0.0, 10.0],'
+                ' "position": [400.0, 20.0, 10.0], "roll": -1200, "fov": 30.5}}]}}')
+
+
+def test_a_file_saved_before_tilt_and_lens_reads_back_the_same_camera_and_the_game_draws_it_as_before(tmp_path):
+    """Round 7 kept `roll` in the game's units on the wire (the lead's ruling, 2026-10-28; Tilt's degrees
+    are the page's alone), so a preset saved before reads back unchanged, the file keeps version 1, and the
+    free camera puts the same roll and fov in the game's RAM it always did (camera_state.place)."""
+    import camera_state
+    import scene_session
+    (tmp_path / camera_presets.FILE_NAME).write_text(ROUND_6_FILE, encoding="utf-8")
+    camera = camera_presets.CameraPresets(tmp_path / camera_presets.FILE_NAME).slots(9, 1)["slots"][0]["camera"]
+    assert camera == LOW and camera_presets.VERSION == 1
+    ram, lakitu, fov_state = bytearray(1 << 20), 0x80033000, 0x80034000
+    camera_state.place(ram, scene_session.world_camera(camera), lakitu, fov_state)
+    assert int.from_bytes(ram[0x33000 + camera_state.LAKITU_ROLL:][:2], "big", signed=True) == -1200
+    assert struct.unpack(">f", ram[0x34000 + camera_state.FOV_VALUE:][:4])[0] == 30.5
 
 
 # ------------------------------------------------------------------ the routes (interface F)

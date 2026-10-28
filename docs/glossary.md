@@ -1500,15 +1500,17 @@ chosen in Follow) along his path: **Front** rides in front of him, aimed at
 him, in a Close, Medium or Wide shot; **Side** tracks his profile on the side
 the stage's walls leave clear, cutting across only for a wall that would block
 it a while, and staying a while after; **Orbit** circles him at the speed and radius you set, on the
-scene's own clock, so a pause holds it still; **Chase** rides behind him; **Overhead** looks down at
-him from a height, from a little behind so he heads up the picture; **Tripod** stays where the camera
-on screen stood when you chose it and turns to follow him. Each but Tripod stands at his eye level
-(Overhead at its own height) until you raise or lower it, rides a smoothed copy of his path so his
-wobble from picture to picture never shakes it, and rises over a wall (then moves in) instead of
-sitting behind it; a Tripod never moves, walls or not. Each carries its own [[tilt and lens]], and a
-longer lens moves it back so he stays the same size. The lab works out every picture's camera from
-the whole path, so stepping back, seeking and Play draw the same shot; Free camera from it starts at
-that camera. Its feel numbers are the Tune controls' Cinematic rows.
+scene's own clock, and with **Orbit while paused** (on unless you turn it off) keeps circling a paused
+picture, so Record can take an orbit of a frozen picture; Play goes on from where it is; **Chase**
+rides behind him; **Overhead** looks down at him from a height, from a little behind so he heads up
+the picture; **Tripod** stays where the camera on screen stood when you chose it and turns to follow
+him. Each but Tripod stands at his eye level (Overhead at its own height) until you raise or lower
+it, rides a smoothed copy of his path so his wobble from picture to picture never shakes it, and
+rises over a wall (then moves in) instead of sitting behind it; a Tripod never moves, walls or not.
+Each carries its own [[tilt and lens]], and a longer lens moves it back so he stays the same size.
+The lab works out every picture's camera from the whole path, so stepping back, seeking and Play
+draw the same shot; Free camera from it starts at that camera. Its feel numbers are the Tune
+controls' Cinematic rows.
 
 - **Lives** -- the camera's math (`tools/scene_lab/camera_rig.py`); Mario's
   path and the stage's walls (`tools/scene_lab/scene_session.py`, a ghost's
