@@ -616,6 +616,48 @@ def test_the_free_camera_warms_once_after_the_first_picture_while_the_page_is_id
             assert len(made.made) == 1 and made.posed == 1                    # once a scene
 
 
+class SlowEvaluators(TimedEvaluators):
+    """An evaluator that takes as long to start as a real one under load, so a picture queued
+    behind the warm-up shows it."""
+
+    def __call__(self, package, rom):
+        time.sleep(0.4)
+        return super().__call__(package, rom)
+
+
+def test_the_ghost_buttons_play_never_waits_for_the_warm_up(config, recording, tmp_path):
+    """His round-7 report: the Ghost button's Play showed its first picture, then nothing for ~2 s
+    while the sound ran. The warm-up began the moment that picture was delivered (nothing in flight
+    before Play's first request) and held the worker. Play asks a picture every frame, so the page is
+    never quiet while it plays: no picture waits behind the warm-up, which runs once Play stops."""
+    made = SlowEvaluators(recording["map"])
+    app = _routes(config, recording, tmp_path, evaluator_factory=made, path_reader_factory=rig_path.InProcessReader)
+    with TestClient(app) as client:
+        opened = client.post("/api/scene-lab/open", json={"package": "scene.sm64scene"}).json()
+        with client.websocket_connect("/api/scene-lab/ws") as socket:
+            def picture(ident, frame):
+                asked = time.perf_counter()
+                socket.send_json({"id": ident, "session": opened["session"], "frame": frame, "encoding": "raw",
+                                  "camera": None})
+                header = _picture_header(socket)
+                assert header["id"] == ident
+                return time.perf_counter() - asked
+
+            picture(1, 1)                                       # the first picture, then Play at once
+            waits, started = [], time.perf_counter()
+            for ident in range(2, 2 + 36):                      # ~1.2 s of Play, past WARM_QUIET_SECONDS
+                waits.append(picture(ident, 1 + ident % 4))
+                time.sleep(max(0.0, started + (ident - 1) / 30 - time.perf_counter()))
+            stopped = time.perf_counter()
+            assert not made.made                                # nothing warmed while Play asked
+            assert max(waits) < 0.3, waits                      # no picture waited behind a 0.4 s start
+            deadline = time.monotonic() + 10
+            while not made.made and time.monotonic() < deadline:
+                time.sleep(0.02)
+            assert len(made.made) == 1                          # warmed once Play stopped
+            assert made.at - 0.4 >= stopped + scene_lab_api.WARM_QUIET_SECONDS - 0.05
+
+
 class WarmedEvaluators(Evaluators):
     """Evaluators that can take state resolvers (attach, ahead) and a factory that notes how it
     started them (the frame they warm with), as scene_session.GameCodeEvaluator does."""
@@ -642,9 +684,10 @@ class WarmedEvaluators(Evaluators):
 
 
 def test_the_warm_up_resolves_the_next_frames_here_and_warms_the_resolvers_past_them(config, recording):
-    """warm(): the evaluator, one view of the frame on screen, the next WARM_FRAMES states here (a
-    Play from this frame asks them first), and the state resolvers started on the frames after,
-    each child warming the first of them before it says ready (its first frame is otherwise cold)."""
+    """warm(): the evaluator and one view of the frame on screen; then warm_ahead(): the next
+    WARM_FRAMES states here (a Play from this frame asks them first), and the state resolvers
+    started on the frames after, each child warming the first of them before it says ready (its
+    first frame is otherwise cold)."""
     made = WarmedEvaluators(recording["map"])
     host = scene_session.command_host(fake_viewer_host.command())
     session = scene_session.SceneSession.open(config, recording["package"], host_factory=host, evaluator_factory=made,
@@ -653,11 +696,14 @@ def test_the_warm_up_resolves_the_next_frames_here_and_warms_the_resolvers_past_
         session.picture(1, None, "raw")
         session.warm(1)
         evaluator = made.made[0]
+        assert evaluator.prepared == [] and getattr(made, "warm", None) is None   # the first step: the camera only
+        session.warm_ahead(1)
         after = session.frames[2:2 + scene_session.WARM_FRAMES]
         assert [index for index, _thread in evaluator.prepared] == after
         assert made.warm == session.frames[2 + scene_session.WARM_FRAMES]
         assert evaluator.handed[0] == made.warm
         session.warm(1)                                                     # once a scene
+        session.warm_ahead(1)
         assert len(made.made) == 1 and len(evaluator.prepared) == scene_session.WARM_FRAMES
     finally:
         session.close()

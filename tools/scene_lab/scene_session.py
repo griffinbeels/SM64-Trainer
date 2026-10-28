@@ -32,7 +32,7 @@ the CPU (pick.py: the renderer's own thread holds its depth), in the camera's ow
 owns the camera's world axes and turns that into a world point; the session never does.
 
 When the evaluator cannot serve a frame (no 3D scene during a level load, a stopped run, no
-scene state in the package) the picture is the recorded one and `reason` says why. The evaluator starts on the first free-camera request, or before it in warm(), which the lab calls once the page is idle after the first picture.
+scene state in the package) the picture is the recorded one and `reason` says why. The evaluator starts on the first free-camera request, or before it in warm() and warm_ahead(), which the lab calls once the page is idle after the first picture.
 
 A free-camera picture sends the host only the RDRAM words that differ from what the host
 already holds (HostImage): a drag changes a few KiB of the 8 MiB, the next frame tens of KiB.
@@ -129,7 +129,7 @@ MAX_HOST_RUNS = 65536         # viewer_host.c's MAX_RUNS
 LOOK_AHEAD_STEP = 4           # a free picture this many frames before the last one is a step back
 LOOK_AHEAD_FRAMES = 3         # how many frames the look-ahead resolves (the evaluator caches 4 states)
 RESOLVED_AHEAD = 6            # how many the state resolvers' children resolve (each kept as one 8 MiB state)
-WARM_FRAMES = 2               # states warm() resolves here after the frame on screen (the evaluator caches 4)
+WARM_FRAMES = 2               # states warm_ahead() resolves here after the frame on screen (the evaluator caches 4)
 FIT_WAIT_SECONDS = 1.5        # how long an opening scene waits for its sound's fit (the renderer starts meanwhile)
 SOUND_SETTLE_SECONDS = 60.0   # how long a whole scene watches for the sound the cutter adds to it
 GHOST_WARM_PICTURES = 40      # pictures the renderer may take to set its ghost overlay up (it retries per list)
@@ -453,6 +453,7 @@ class SceneSession:
         self.ghost_origin = 0                            # the package frame that is every ghost's first
         self._ghost_problem: str | None = None           # why ghosts cannot draw ("" once set up)
         self._ghosts_warm = False                        # the renderer's ghost overlay has drawn a picture
+        self._warmed_ahead = False                       # warm_ahead ran (once a scene)
         self.ghost_sounds = ghost_sound.SceneGhostSounds(map_path=getattr(evaluator_factory, "map_path", None))
         self.rigs = camera_rig.Planner()                 # the cinematic cameras' kept work (camera_rig.py)
         self._rig_tuning: dict | None = None             # the registry's rows a rig request may leave out
@@ -1251,25 +1252,33 @@ class SceneSession:
 
     def warm(self, frame: int) -> None:
         """Starts what the first free or cinematic camera of this scene would start, while nobody
-        waits for it (the lab calls it once the page is idle after the first picture): the free
-        camera's evaluator and one view of `frame` from its recorded camera (pose: ~200 ms in all,
-        measured 2026-10-27), and the walls of that frame's place. Nothing where the free camera
-        cannot draw; a failure here is the first camera's to report."""
-        index = self._index(frame)
+        waits for it (the lab calls it once the page is idle after the first picture, then
+        warm_ahead once it is idle again): the free camera's evaluator and one view of `frame` from
+        its recorded camera (pose: ~200 ms in all, measured 2026-10-27). Nothing where the free
+        camera cannot draw; a failure here is the first camera's to report."""
         if self.free_reason is not None or self._evaluator is not None:
             return
         try:
             self.pose(frame)
-            if self._evaluator is not None:
-                # The next frames' states here (a Play from this frame asks for them first, and a state
-                # resolver child's first frame is cold: ~115 ms), then the children for the ones after
-                # (_look_ahead's first start: process creation measured 0.2-1.3 s, 2026-10-27).
-                after = [self.frames[at] for at in range(frame + 1, min(len(self.frames), frame + 1 + WARM_FRAMES
-                                                                         + RESOLVED_AHEAD))]
-                for index in after[:WARM_FRAMES]:
-                    self._evaluator.prepare(index)
-                if after[WARM_FRAMES:]:
-                    self._resolve_ahead(after[WARM_FRAMES:])
+        except Exception as error:  # noqa: BLE001 - the first camera that needs it says why
+            log.warning("scene viewer: warming the free camera failed: %s", error)
+
+    def warm_ahead(self, frame: int) -> None:
+        """warm()'s second step: the next frames' states here (a Play from this frame asks for them
+        first, and a state resolver child's first frame is cold: ~115 ms), the children for the ones
+        after (_look_ahead's first start: process creation measured 0.2-1.3 s, 2026-10-27), and the
+        walls of that frame's place. Once a scene; nothing before warm() started the evaluator."""
+        if self._evaluator is None or self._warmed_ahead:
+            return
+        self._warmed_ahead = True
+        try:
+            index = self._index(frame)
+            after = [self.frames[at] for at in range(frame + 1, min(len(self.frames), frame + 1 + WARM_FRAMES
+                                                                     + RESOLVED_AHEAD))]
+            for following in after[:WARM_FRAMES]:
+                self._evaluator.prepare(following)
+            if after[WARM_FRAMES:]:
+                self._resolve_ahead(after[WARM_FRAMES:])
             place = self._place(index)
             if place is not None and self.package.states is not None:
                 self._walls_at(place)
