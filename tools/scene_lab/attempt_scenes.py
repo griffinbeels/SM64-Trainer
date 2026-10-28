@@ -174,8 +174,10 @@ class AttemptScenes:
         if event.type in ANCHORS:
             cutter.send({"op": "start", "kind": "anchor", "frame": event.frame,
                          "utc": event.timestamp_utc.isoformat()})
-        elif event.type == "segment_armed" and isinstance(event.payload.get("frame"), int):
-            cutter.send({"op": "start", "kind": "segment", "frame": event.payload["frame"],
+        elif event.type == "segment_armed" and event.frame > 0:
+            # The tracker's notice carries the arm's frame as the event's own (tracking/service.py's
+            # notice drain), never in its payload; frame 0 is a re-projection's badge refresh.
+            cutter.send({"op": "start", "kind": "segment", "frame": event.frame,
                          "segment_id": event.payload.get("segment_id"), "utc": event.timestamp_utc.isoformat()})
         elif event.type == "segment_disarmed":
             cutter.send({"op": "stop", "segment_id": event.payload.get("segment_id")})

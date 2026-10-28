@@ -294,6 +294,29 @@ def test_a_take_going_on_for_an_attempt_that_never_completes_is_given_up(recordi
     assert [path.name for path in tmp_path.iterdir()] == [Path(first["path"]).name]
 
 
+def test_a_reset_ends_a_segment_take_nobody_claimed_and_still_gets_a_take_of_its_own(recording, tmp_path,
+                                                                                      monkeypatch):
+    """A segment arms as he enters a level (40), beside the take of his last reset (20). His next
+    reset (130) ends every attempt that began before it, the segment's included (the tracker
+    re-arms it on the reset's frame), so both takes go, and the reset's own take begins: the
+    segment's take must never hold it back (MAX_TAKES) while it writes on, unclaimed."""
+    monkeypatch.setattr(attempt_cutter, "GRACE_SECONDS", 0.0)
+    run = Run(recording, tmp_path, through=60)
+    try:
+        run.start(20)
+        run.brain.note({"op": "start", "kind": "segment", "segment_id": 67, "frame": run.refs[40].global_timer,
+                        "utc": run.refs[40].utc.isoformat()})
+        run.until(lambda: sorted(take.first.index for take in run.brain.takes) == [20, 40])
+        before = list(run.brain.takes)
+        run.spool.through = 140
+        run.start(130)
+        run.until(lambda: all(take.ended for take in before) and [
+            (take.first.index, take.kind) for take in run.brain.takes if not take.ended] == [(130, "anchor")])
+    finally:
+        run.close()
+    assert not list(tmp_path.iterdir())
+
+
 def test_a_publication_an_open_scene_is_reading_waits_for_the_next(recording, tmp_path, monkeypatch):
     """Windows refuses to replace a file another process has open: his viewer reading a growing
     scene's publication as the take publishes the next costs that publication, never the scene."""

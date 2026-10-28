@@ -34,9 +34,14 @@ attempt that starts at a take's first task gets a package of its own from that t
 the star and the segment anchored on one reset are both ready at once, however far apart they
 end. An attempt with no take (it began before the recording, or at a start the stream did not
 announce) gets a take that starts behind the live edge and stays "cutting" for as long as that
-takes. A take nobody claims is abandoned: an anchor's take
-GRACE_SECONDS after a newer anchor's take began, a segment's take at its disarm, any take past
-attempt_span.MAX_SCENE_FRAMES; at most MAX_TAKES unclaimed takes write at once.
+takes. A take nobody claims is abandoned: an anchor's or a segment's take GRACE_SECONDS after a
+newer anchor (a segment's also at its disarm or re-arm), any take past
+attempt_span.MAX_SCENE_FRAMES; at most MAX_TAKES unclaimed takes nothing has superseded write at
+once. Segments arm on a level change, not only on an anchor (26 of 28 arms in his session of
+2026-10-28), and keep their arm through each reset, where their next attempt starts. Modelled
+on that session's journal: segment takes living until their disarm would have written 1,106 s,
+none claimed, and held back the new take of 28 of his 34 resets at MAX_TAKES; ended at the next
+anchor, they write 19 s in 79 min and hold back none.
 
 Why a process: the server's live poll loop shares Python's lock with every thread of its process
 (a thread offload still shares the GIL), and a take is CPU work for as long as he plays. The child
@@ -746,11 +751,14 @@ class Brain:
                 continue                                     # a take writes from there: it serves every attempt
             kind = start.get("kind", "anchor")
             for take in self.takes:
-                superseded = take.kind == "anchor" if kind == "anchor" else (
+                # A reset or load ends every attempt that began before it: an armed segment's too,
+                # which the tracker re-arms on the anchor's own frame (tracking/segments.py) or
+                # disarms. So an anchor supersedes segment takes as well as anchor takes.
+                superseded = kind == "anchor" and take.kind in ("anchor", "segment") or (
                     take.kind == "segment" and take.segment_id == start.get("segment_id"))
                 if superseded and (take.open or take.expecting) and take.abandon_at is None:
                     take.abandon_at = now + GRACE_SECONDS            # (going on for one still open: its seat too)
-            if sum(take.open for take in self.takes) >= MAX_TAKES:
+            if sum(take.open and take.abandon_at is None for take in self.takes) >= MAX_TAKES:
                 continue                                     # its attempt, if any, is cut behind the edge
             self._begin(Take(self, task, kind, start.get("segment_id")))
 

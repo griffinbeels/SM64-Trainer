@@ -197,9 +197,13 @@ def test_the_event_stream_announces_where_attempts_may_start(lab):
     tracker = _tracker()
     server.follow_attempts(tracker)
     with TestClient(app):
-        for kind, payload in (("practice_reset", {}), ("state_loaded", {}), ("star_collected", {}),
-                              ("segment_armed", {"segment_id": 4, "frame": 777}), ("segment_disarmed", {"segment_id": 4})):
-            asyncio.run(tracker.broadcaster.publish(Event(kind, 900, T0, payload)))
+        # Shaped as tracking/service.py drains the tracker's notices: the arm's frame is the
+        # event's own and the payload is {segment_id, name}; a re-projection refreshes with frame 0.
+        for kind, frame, payload in (("practice_reset", 900, {}), ("state_loaded", 900, {}), ("star_collected", 900, {}),
+                                     ("segment_armed", 777, {"segment_id": 4, "name": "BitDW Pipe Entry"}),
+                                     ("segment_armed", 0, {"segment_id": 5, "name": "Bowser 1"}),
+                                     ("segment_disarmed", 900, {"segment_id": 4, "name": "BitDW Pipe Entry"})):
+            asyncio.run(tracker.broadcaster.publish(Event(kind, frame, T0, payload)))
     assert cutters[0].notes == [
         {"op": "start", "kind": "anchor", "frame": 900, "utc": T0.isoformat()},
         {"op": "start", "kind": "anchor", "frame": 900, "utc": T0.isoformat()},
