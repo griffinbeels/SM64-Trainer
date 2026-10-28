@@ -12,6 +12,12 @@
 // exporting. Every picture's header names the camera the lab drew (camera_used): Free camera starts
 // there. An orbit's angle is its phase plus its speed times the picture's time on the scene's own
 // clock, so choosing Orbit, or a new speed, picks the phase that keeps the camera where it is.
+//
+// His words (round 7, item 2): "while paused, the orbit camera should be able to be moving around in
+// a circle around mario. This should be a setting (orbit while paused)". With it on, a paused scene's
+// orbit turns on the page's own clock instead (interface H's clock_ms: the held picture's time plus
+// the time since the pause), asked again every display frame; Play folds that time into the phase,
+// so the camera goes on from where it is.
 import { h } from "preact";
 import htm from "htm";
 import { ghostName } from "./sceneghosts.js";
@@ -34,11 +40,16 @@ const turn = (degrees) => ((degrees % 360) + 360) % 360;
 
 // A rig chosen now, following `target`: the last one's shot, height, side and orbit carried over, so
 // switching between Front, Side and Orbit keeps what you set; an orbit's first radius and speed are
-// the tuning's.
+// the tuning's, and it goes on circling while paused until that is turned off.
 export function startRig(kind, previous, tuning = SCENE_CAMERA_DEFAULTS, target = "stage") {
-  return { kind, target, shot: previous?.shot ?? "medium", height: previous?.height ?? null,
-    radius: previous?.radius ?? tuning.rigOrbitRadius, speed: previous?.speed ?? tuning.rigOrbitSpeed,
-    phase: previous?.phase ?? 0, side: previous?.side ?? "auto" };
+  const first = { shot: "medium", height: null, radius: tuning.rigOrbitRadius, speed: tuning.rigOrbitSpeed, phase: 0,
+    side: "auto", whilePaused: true };
+  return { kind, target, ...Object.fromEntries(Object.entries(first).map(([key, value]) => [key, previous?.[key] ?? value])) };
+}
+
+// The orbit's phase once `heldMs` of a paused orbit have passed: Play then turns on from that angle.
+export function orbitFolded(rig, heldMs) {
+  return { ...rig, phase: turn(rig.phase + rig.speed * heldMs / 1000) };
 }
 
 // A change of settings; a new speed keeps the orbit's angle at `seconds` (the picture on screen).
@@ -76,11 +87,12 @@ export function rigTuning(tuning = SCENE_CAMERA_DEFAULTS) {
   };
 }
 
-// The picture request's camera (interface D): {"rig": {...}}, his eye level where no height was set.
-export function rigRequest(rig, tuning = SCENE_CAMERA_DEFAULTS) {
+// The picture request's camera (interface D): {"rig": {...}}, his eye level where no height was set;
+// `clockMs` (interface H) an orbit's own clock while paused, else the picture's time turns it.
+export function rigRequest(rig, tuning = SCENE_CAMERA_DEFAULTS, clockMs = null) {
   const { kind, target, shot, radius, speed, phase, side } = rig;
   return { rig: { kind, target, shot, height: rig.height ?? tuning.marioHeight, radius, speed, phase, side,
-    tuning: rigTuning(tuning) } };
+    tuning: rigTuning(tuning), ...(clockMs == null ? {} : { clock_ms: clockMs }) } };
 }
 
 const runnerName = (rig, ghosts) => (rig.target === "stage" ? "Mario" : ghostName(ghosts, rig.target));
@@ -135,5 +147,8 @@ export function CinematicBar({ link, tuning }) {
       heightWords(rig))}
     <button type="button" disabled=${rig.height == null} onclick=${(event) => link.setRig({ height: null }, event.timeStamp)}
       title="Back to his eye level">Eye level</button>
+    ${rig.kind === "orbit" && html`<button type="button" aria-pressed=${rig.whilePaused}
+      onclick=${(event) => link.setRig({ whilePaused: !rig.whilePaused }, event.timeStamp)}
+      title="Keep circling him while the scene is paused">Orbit while paused</button>`}
   </div>`}`;
 }

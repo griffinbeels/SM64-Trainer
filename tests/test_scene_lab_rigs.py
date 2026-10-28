@@ -331,6 +331,54 @@ def test_every_rig_is_the_same_camera_whatever_was_asked_before():
                 == camera_rig.Planner().shot(which, r, k, lambda place: walls).camera, (which.kind, k)
 
 
+# ------------------------------------------------------------------ Orbit while paused: the page's clock
+
+def test_with_a_clock_a_held_picture_orbits_at_phase_plus_speed_times_that_clock():
+    """Interface H (round 7, item 2: "while paused, the orbit camera should be able to be moving around in
+    a circle around mario"): with clock_ms the angle is phase + speed x clock, whatever the picture's own
+    time, so one held picture asked with a running clock circles him; the same request is the same camera."""
+    still = runner([[0.0, 0.0, 0.0]] * 5)
+    for clock in (0.0, 250.0, 1000.0, 7777.7, -40.0):
+        orbit = rig(kind="orbit", radius=600.0, speed=90.0, phase=30.0, height=100.0, clock_ms=clock)
+        for k in (0, 3):
+            shot = camera_rig.Planner().shot(orbit, still, k, lambda place: None)
+            angle = math.radians(30.0 + 90.0 * clock / 1000)
+            assert shot.camera["position"] == pytest.approx([600 * math.sin(angle), 100.0, 600 * math.cos(angle)],
+                                                            abs=1e-6), (clock, k)
+    assert rig(kind="front", clock_ms=500.0).clock is None                     # only an orbit turns on a clock
+    with pytest.raises(ValueError, match="clock_ms"):
+        rig(kind="orbit", clock_ms="soon")
+
+
+def test_a_clock_that_is_the_pictures_own_time_draws_what_play_draws_walls_and_all():
+    """Play asks without a clock, a paused orbit with one: where the clock is the picture's own time the two
+    are the same camera (so Play goes on from a paused orbit with no jump), and a held picture's clock
+    sweeps the camera behind a wall, which pulls it in as it does in Play, in any order of asking."""
+    r = run_along_z(n=90, wobble=5.0)
+    walls = camera_rig.StaticWalls(np.concatenate([wall_x(-300, 900, 2000), wall_x(300, 1500, 1590),
+                                                   wall_x(-2000, 600, 700)]))
+    at = lambda which, k, planner=None: (planner or camera_rig.Planner()).shot(which, r, k, lambda place: walls)  # noqa: E731
+    played = rig(kind="orbit", speed=60.0, phase=20.0)
+    for k in range(0, 90, 7):
+        drawn = at(played, k)
+        clocked = at(rig(kind="orbit", speed=60.0, phase=20.0, clock_ms=float(r.seconds[k]) * 1000), k)
+        assert clocked.camera["position"] == pytest.approx(drawn.camera["position"], abs=1e-6), k
+        assert (clocked.pulled, clocked.raised) == pytest.approx((drawn.pulled, drawn.raised), abs=1e-9), k
+    # Held at frame 40 (his feet at z = 1200), a clock running 6 s turns the camera once round him: on his
+    # -x side the wall at x = -300 stands between them and pulls it in, elsewhere it keeps its radius.
+    held = [rig(kind="orbit", speed=60.0, phase=20.0, clock_ms=float(r.seconds[40]) * 1000 + j * 1000 / 60)
+            for j in range(360)]
+    forward = [at(which, 40) for which in held]
+    one = camera_rig.Planner()
+    shuffled = {j: at(held[j], 40, one) for j in [*range(0, 360, 3), *range(1, 360, 3), *range(2, 360, 3)]}
+    assert all(shuffled[j].camera == forward[j].camera for j in range(360))
+    pulled = [shot.pulled for shot in forward]
+    assert min(pulled) < 0.8 and max(pulled) == 1.0
+    turned = [math.degrees(math.atan2(s.camera["position"][0] - s.camera["focus"][0],
+                                      s.camera["position"][2] - s.camera["focus"][2])) % 360 for s in forward]
+    assert len({round(angle) for angle in turned}) > 300                     # every degree of the circle, near enough
+
+
 # ------------------------------------------------------------------ the session and the lab's routes
 
 POSES = [(100.0 * k, 50.0, -200.0, 0) for k in range(8)]          # running +x, facing +z (yaw 0)
@@ -698,3 +746,76 @@ def test_the_page_sends_every_tuning_row_a_rig_reads():
     assert _rig_tuning_sent(source) == set(camera_rig.TUNING_KEYS) == set(SHIPPED)
     dropped = source.replace("rigPullFrames: tuning.rigPullFrames,", "", 1)          # the guard can still fail
     assert _rig_tuning_sent(dropped) == set(camera_rig.TUNING_KEYS) - {"rigPullFrames"}
+
+
+# ------------------------------------------------------------------ Orbit while paused through the routes
+
+def _orbit(clock_ms=None, **fields) -> dict:
+    """An orbit as the page asks it (scenerigs.js rigRequest), on its own clock when `clock_ms` is given."""
+    return {"rig": {"kind": "orbit", "radius": 200, "speed": 90, "phase": 10, "tuning": {"rigPullFrames": 0},
+                    **fields, **({} if clock_ms is None else {"clock_ms": clock_ms})}}
+
+
+def _bearing(used: dict) -> float:
+    return math.degrees(math.atan2(used["position"][0] - used["focus"][0], used["position"][2] - used["focus"][2])) % 360
+
+
+def test_the_socket_turns_a_held_pictures_orbit_on_the_pages_clock(config, recording, tmp_path):
+    """Interface H over the real routes: one frame asked with a running clock_ms is drawn from a camera
+    turned to phase + speed x clock; the same request draws the same camera again."""
+    app = _routes(config, recording, tmp_path)
+    with TestClient(app) as client:
+        opened = client.post("/api/scene-lab/open", json={"package": "scene.sm64scene"}).json()
+        with client.websocket_connect("/api/scene-lab/ws") as socket:
+            socket.send_json({"id": 9, "session": opened["session"], "kind": "rig-path"})
+            assert json.loads(socket.receive()["text"])["ready"] is True
+            drawn = []
+            for ident, clock in enumerate((1000.0, 1250.0, 1500.0, 1250.0), start=1):
+                socket.send_json({"id": ident, "session": opened["session"], "frame": 1, "encoding": "raw",
+                                  "camera": _orbit(clock)})
+                header = _picture_header(socket)
+                assert header["camera"] == "free" and header["rig"]["pulled"] == 1.0, header
+                assert _bearing(header["camera_used"]) == pytest.approx((10 + 90 * clock / 1000) % 360, abs=1e-3)
+                drawn.append(header["camera_used"])
+            assert drawn[1] == drawn[3] and drawn[0] != drawn[1] != drawn[2]
+
+
+def test_a_recorded_paused_orbit_is_made_into_a_video_whose_camera_circles_the_held_frame(config, recording, tmp_path):
+    """Record while the orbit circles a paused picture (round 7, item 2: "take a freeze frame and grab an
+    orbital loop around mario while frozen"): each display frame's entry holds the same scene frame and the
+    orbit's clock one display frame on, silent. The export draws every entry from its own camera (a held
+    frame is reused only while its camera stays put), each exactly as the viewer's own request draws it."""
+    import test_scene_export as exports
+    (tmp_path / "packages").mkdir()
+    (tmp_path / "packages" / "scene.sm64scene").write_bytes(recording["package"].read_bytes())
+    path = tmp_path / "lab.json"
+    path.write_text(json.dumps({"rom": str(recording["rom"]), "packages": str(tmp_path / "packages"),
+                                "pj64_plugin": str(config.pj64_plugin), "map": str(recording["map"])}), encoding="utf-8")
+    from fastapi import FastAPI
+    app = FastAPI()
+    scene_lab_api.mount_scene_lab(app, path, watch_seconds=0.05, ghost_loader=Loader({}), session_options={
+        "host_factory": scene_session.command_host(fake_viewer_host.command(ram=True)),
+        "evaluator_factory": Evaluators(recording["map"])},
+        export_options={"clips_dir": tmp_path / "clips", "keep_folders": False, "jobs_dir": tmp_path / "jobs",
+                        "options": {"host": "fake", "fake_host": {"ram": True}, "encoder": {"kind": "frames"}}})
+    held = [exports._good(t_ms=k * 1000 / 60, scene_frame=2, camera=_orbit(2000 / 30 + k * 1000 / 60))
+            for k in range(12)]
+    played = [exports._good(t_ms=(12 + k) * 1000 / 60, scene_frame=3, camera=_orbit(), play_ms=100.0 + k * 1000 / 60)
+              for k in range(2)]                            # Play on: the clock folded into the phase, as the page does
+    entries = held + played
+    with TestClient(app) as client:
+        opened = client.post("/api/scene-lab/open", json={"package": "scene.sm64scene"}).json()
+        job = client.post("/api/scene-lab/export", json=exports._body(opened, entries)).json()["job"]
+        status = exports._finished(client, job)
+    assert status["state"] == "done", status
+    made = json.loads(Path(status["path"]).read_text(encoding="utf-8"))
+    session = scene_session.SceneSession.open(          # pictures that name the memory drawn, however it was sent
+        config, recording["package"], host_factory=scene_session.command_host(fake_viewer_host.command(ram=True)),
+        evaluator_factory=Evaluators(recording["map"]), path_reader_factory=rig_path.InProcessReader)
+    try:
+        expected = [session.picture(entry["scene_frame"], entry["camera"], "raw")[0]["sha256"] for entry in entries]
+    finally:
+        session.close()
+    assert made["pictures"] == expected                     # each output frame is its entry's camera, drawn
+    assert len(set(expected[:12])) == 12                     # the held frame's camera moved every display frame
+    assert status["stats"]["drawn"] == 13                     # 12 held cameras, then Play's one picture for both

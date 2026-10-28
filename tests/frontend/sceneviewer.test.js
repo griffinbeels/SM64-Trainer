@@ -2097,6 +2097,143 @@ test("Orbit starts where the camera on screen stands and keeps its angle when it
   expect(angleAt(rigAsked(socket), 2)).toBeCloseTo((bearing + 360) % 360, 6);
 });
 
+// His words (round 7, item 2): "while paused, the orbit camera should be able to be moving around in a
+// circle around mario. This should be a setting (orbit while paused)." The lab turns an orbit to
+// phase + speed x clock_ms when the request carries one (interface H), else x the picture's own time.
+const turnOf = (degrees) => ((degrees % 360) + 360) % 360;
+const orbitAngle = (rig, frame) => turnOf(rig.phase + rig.speed * (rig.clock_ms ?? frame * 1000 / 30) / 1000);
+const SHOWS_2 = 2000 / 30;                          // frame 2's time on the scene's clock (FRAMES: frame / fps)
+
+// Answers every picture request not answered yet: an orbit's as the lab draws an orbit.
+async function drawnAll(socket, answered, extra = {}) {
+  for (const request of socket.pictures()) {
+    if (answered.has(request.id)) continue;
+    answered.add(request.id);
+    const rig = request.camera?.rig;
+    await socket.picture(request, rig ? { camera: "free", camera_used: RIG_CAMERA,
+      rig: { kind: rig.kind, target: rig.target, shot: rig.shot, side: null, pulled: 1 }, ...extra } : extra);
+  }
+}
+
+// An orbit on frame 2, paused, drawn by the lab at clock.now 1000 (the held orbit's clock starts there).
+async function heldOrbit() {
+  const opened = await openScene(), { page, socket } = opened, answered = new Set();
+  await drawnAll(socket, answered);
+  for (const _ of [1, 2]) {
+    fireEvent.click(page.getByRole("button", { name: "Forward 1" }));
+    await settled();
+    await drawnAll(socket, answered);
+  }
+  fireEvent.click(rigBar(page).getByRole("button", { name: "Front" }));
+  await until(() => expect(rigAsked(socket)?.kind).toBe("front"));
+  await drawnAll(socket, answered);
+  fireEvent.click(rigBar(page).getByRole("button", { name: "Orbit" }));
+  await until(() => expect(rigAsked(socket)?.kind).toBe("orbit"));
+  expect(rigAsked(socket).clock_ms).toBeUndefined();        // nothing circles until the lab has drawn the orbit
+  await drawnAll(socket, answered);
+  return { ...opened, answered };
+}
+
+test("Orbit while paused circles the held picture once a display frame on its own clock, and Play goes on from that angle", async () => {
+  const { page, socket, answered } = await heldOrbit();
+  const toggle = rigOptions(page).getByRole("button", { name: "Orbit while paused" });
+  expect(toggle.getAttribute("aria-pressed")).toBe("true");                // on unless turned off
+  const first = rigAsked(socket);
+  await tick(1016.7);
+  expect(socket.pictures().at(-1)).toMatchObject({ frame: 2 });
+  expect(rigAsked(socket).clock_ms).toBeCloseTo(SHOWS_2 + 16.7, 6);
+  expect(orbitAngle(rigAsked(socket), 2)).toBeCloseTo(turnOf(orbitAngle(first, 2) + first.speed * 0.0167), 6);
+  await drawnAll(socket, answered);
+  // At most PICTURES_IN_FLIGHT out; display frames meanwhile leave one request waiting, which goes out
+  // with the orbit's clock at the moment a slot frees, never one per display frame missed.
+  const before = socket.pictures().length;
+  for (const at of [1033.4, 1050.1, 1066.8, 1083.5]) await tick(at);
+  expect(socket.pictures().length).toBe(before + PICTURES_IN_FLIGHT);
+  clock.now = 1090;
+  const oldest = socket.pictures().at(-2);
+  answered.add(oldest.id);
+  await socket.picture(oldest, { camera: "free", camera_used: RIG_CAMERA,
+    rig: { kind: "orbit", target: "stage", shot: "medium", side: null, pulled: 1 } });
+  await until(() => expect(socket.pictures().length).toBe(before + PICTURES_IN_FLIGHT + 1));
+  expect(rigAsked(socket).clock_ms).toBeCloseTo(SHOWS_2 + 90, 6);
+  await drawnAll(socket, answered);
+
+  // A new speed while it circles keeps the angle it is at, and the clock runs on.
+  clock.now = 1100;
+  const going = { ...rigAsked(socket), clock_ms: SHOWS_2 + 100 };
+  fireEvent.input(rigOptions(page).getByRole("slider", { name: "Speed" }), { target: { value: "-90" } });
+  await until(() => expect(rigAsked(socket).speed).toBe(-90));
+  expect(rigAsked(socket).clock_ms).toBeCloseTo(SHOWS_2 + 100, 6);
+  expect(orbitAngle(rigAsked(socket), 2)).toBeCloseTo(orbitAngle(going, 2), 6);
+  await drawnAll(socket, answered);
+  fireEvent.input(rigOptions(page).getByRole("slider", { name: "Radius" }), { target: { value: "1500" } });
+  await until(() => expect(rigAsked(socket).radius).toBe(1500));
+  expect(orbitAngle(rigAsked(socket), 2)).toBeCloseTo(orbitAngle(going, 2), 6);        // no time passed
+  await drawnAll(socket, answered);
+
+  // Play at 1200: its first picture is frame 2 without a clock, the paused turn folded into the phase.
+  clock.now = 1200;
+  const paused = { ...rigAsked(socket), clock_ms: SHOWS_2 + 200 };
+  fireEvent.click(page.getByRole("button", { name: "Play" }));
+  await until(() => expect(socket.pictures().at(-1).camera?.rig?.clock_ms).toBeUndefined());
+  const played = rigAsked(socket);
+  expect(socket.pictures().at(-1).frame).toBe(2);
+  expect(orbitAngle(played, 2)).toBeCloseTo(orbitAngle(paused, 2), 6);
+  // Pause again (nothing drawn of the play: the orbit's picture is still on screen): it circles on from
+  // there, the clock starting at the picture's own time.
+  clock.now = 1300;
+  fireEvent.click(page.getByRole("button", { name: "Pause" }));
+  await tick(1316.7);
+  await until(() => expect(rigAsked(socket).clock_ms).toBeCloseTo(SHOWS_2 + 16.7, 6));
+  expect(orbitAngle(rigAsked(socket), 2)).toBeCloseTo(turnOf(orbitAngle(played, 2) + played.speed * 0.0167), 6);
+});
+
+test("Orbit while paused off holds the camera where it is; on again while paused it circles on from there", async () => {
+  const { page, socket, answered } = await heldOrbit();
+  await tick(1016.7);
+  await drawnAll(socket, answered);
+  clock.now = 1100;
+  const circling = { ...rigAsked(socket), clock_ms: SHOWS_2 + 100 };
+  fireEvent.click(rigOptions(page).getByRole("button", { name: "Orbit while paused" }));
+  await until(() => expect(rigAsked(socket).clock_ms).toBeUndefined());
+  expect(orbitAngle(rigAsked(socket), 2)).toBeCloseTo(orbitAngle(circling, 2), 6);       // stopped where it was
+  expect(rigOptions(page).getByRole("button", { name: "Orbit while paused" }).getAttribute("aria-pressed")).toBe("false");
+  await drawnAll(socket, answered);
+  const asked = socket.pictures().length;
+  for (const at of [1116.7, 1133.4, 1150.1]) await tick(at);
+  expect(socket.pictures().length).toBe(asked);                                         // held still: nothing asked
+
+  clock.now = 1200;
+  const still = rigAsked(socket);
+  fireEvent.click(rigOptions(page).getByRole("button", { name: "Orbit while paused" }));
+  await settled();
+  await drawnAll(socket, answered);
+  await tick(1216.7);
+  expect(rigAsked(socket).clock_ms).toBeCloseTo(SHOWS_2 + 16.7, 6);
+  expect(orbitAngle(rigAsked(socket), 2)).toBeCloseTo(turnOf(orbitAngle(still, 2) + still.speed * 0.0167), 6);
+});
+
+test("a step while it circles circles on in the new picture; a picture the lab could not draw from the orbit stops the asking", async () => {
+  const { page, socket, answered } = await heldOrbit();
+  await tick(1016.7);
+  await drawnAll(socket, answered);
+  clock.now = 1100;
+  fireEvent.click(page.getByRole("button", { name: "Forward 1" }));
+  await until(() => expect(socket.pictures().at(-1).frame).toBe(3));
+  expect(rigAsked(socket).clock_ms).toBeCloseTo(3000 / 30 + 100, 6);
+  await drawnAll(socket, answered);
+  await tick(1116.7);
+  expect(socket.pictures().at(-1)).toMatchObject({ frame: 3 });
+  expect(rigAsked(socket).clock_ms).toBeCloseTo(3000 / 30 + 116.7, 6);
+  // Mario's place unknown in this picture: the lab draws the recorded camera and says why.
+  await socket.picture(socket.pictures().at(-1), { camera: "recorded", camera_used: null,
+    rig: { kind: "orbit", target: "stage", shot: "medium", side: null, pulled: null }, reason: "Mario's place is unknown" });
+  answered.add(socket.pictures().at(-1).id);
+  const asked = socket.pictures().length;
+  for (const at of [1133.4, 1150.1, 1166.8]) await tick(at);
+  expect(socket.pictures().length).toBe(asked);
+});
+
 test("the cinematic cameras follow a ghost in the scene, and Mario again once it leaves", async () => {
   ghostRoutes();
   const page = arrive();

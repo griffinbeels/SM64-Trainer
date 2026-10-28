@@ -60,6 +60,9 @@ def test_the_cinematic_row_asks_for_a_rig_names_it_fits_both_widths_and_hands_ov
                 assert fits["rows"] == 2 and fits["over"] <= 0.5, (width, fits)
                 page.locator(".scene-lab-player").screenshot(path=str(tmp_path / f"scene-rigs-orbit-{width}.png"))
             assert page.locator(".scene-lab-rig-options").get_by_role("slider", name="Speed").count() == 1
+            # Round 7, item 2: "This should be a setting (orbit while paused)", on until turned off.
+            held = page.locator(".scene-lab-rig-options").get_by_role("button", name="Orbit while paused", exact=True)
+            assert held.get_attribute("aria-pressed") == "true"
 
             page.get_by_role("button", name="Free camera").click()
             page.wait_for_function("!!window.__cameras.at(-1)?.position")

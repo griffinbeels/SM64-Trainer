@@ -186,7 +186,7 @@ export const SCENE_CAMERA_TUNABLES = {
   rigOrbitSpeed: {
     group: "Cinematic", label: "Orbit: speed to start with", value: 30,
     min: -720, max: 720, step: 1, unit: "deg/s",
-    why: "How fast the Orbit camera circles when you first choose it, on the scene's own clock (paused, it stays put). Negative goes the other way.",
+    why: "How fast the Orbit camera circles when you first choose it, as the scene plays, and while paused with Orbit while paused on. Negative goes the other way.",
   },
 };
 

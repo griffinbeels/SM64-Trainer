@@ -1498,7 +1498,8 @@ chosen in Follow) along his path: **Front** rides in front of him, aimed at
 him, in a Close, Medium or Wide shot; **Side** tracks his profile on the side
 the stage's walls leave clear, cutting across only for a wall that would block
 it a while, and staying a while after; **Orbit** circles him at the speed and radius you set, on the
-scene's own clock, so a pause holds it still. Each stands at his eye level
+scene's own clock, and with **Orbit while paused** (on unless you turn it off) keeps circling a paused
+picture, so Record can take an orbit of a frozen picture; Play goes on from where it is. Each stands at his eye level
 until you raise or lower it, rides a smoothed copy of his path so his wobble
 from picture to picture never shakes it, and rises over a wall (then moves in)
 instead of sitting behind it. The lab works out every picture's camera from the

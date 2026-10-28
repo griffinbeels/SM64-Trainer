@@ -7,6 +7,8 @@ import { render, cleanup, fireEvent, waitFor } from "@testing-library/preact";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { RECORDING, RecordBar, SceneRecorder, cameraUsed, playPosition } from "../../src/sm64_events/ui/components/scenerecord.js";
 import { SceneLink } from "../../src/sm64_events/ui/components/sceneviewer.js";
+import { startRig } from "../../src/sm64_events/ui/components/scenerigs.js";
+import { sceneCameraTuning } from "../../src/sm64_events/ui/scenecameratuning.js";
 
 const POSE = { focus: [1, 2, 3], position: [4, 5, 6], roll: 0, fov: 45 };
 let frames, fetches, statuses;
@@ -214,6 +216,45 @@ test("a preset cut while recording is in the timeline: the camera the page asks 
     expect(after.camera.focus.map((value) => Math.round(value * 1000) / 1000)).toEqual(POSE.focus);
     expect(after.camera.position.map((value) => Math.round(value * 1000) / 1000)).toEqual(POSE.position);
     expect(after.camera.fov).toBeCloseTo(POSE.fov);
+  } finally {
+    globalThis.requestAnimationFrame = animation;
+  }
+});
+
+// Round 7, item 2: "this allows us to take a freeze frame and grab an orbital loop around mario while frozen".
+test("an orbit circling a paused picture records that picture with the orbit's clock each display frame, silent", () => {
+  let now = 1000;
+  vi.spyOn(performance, "now").mockImplementation(() => now);
+  const animation = globalThis.requestAnimationFrame;
+  globalThis.requestAnimationFrame = () => 0;
+  try {
+    const orbiting = [];
+    const link = new SceneLink({ draw: () => 0, changed: () => {}, ended: () => {}, animate: (step) => orbiting.push(step) });
+    link.scene = { session: 5, fps: 30, free_camera: { available: true },
+      frames: Array.from({ length: 6 }, (_, k) => ({ recorded_ms: k * 40 })) };
+    link.ws = { readyState: WebSocket.OPEN, send: () => {} };
+    link.frame = 2;
+    link.rig = link.lastRig = startRig("orbit", null, sceneCameraTuning());
+    link.shown = { frame: 2, camera: "free", rig: { kind: "orbit" }, camera_used: POSE };     // the lab drew the orbit
+    link.holdOrbit();
+    const recorder = new SceneRecorder({ animate: (step) => frames.push(step) });
+    recorder.start(link);
+    for (const at of [1000, 1016.7, 1033.4, 1050.1]) {
+      now = at;
+      tick(at);
+    }
+    const held = recorder.entries;
+    expect(held.map((entry) => entry.scene_frame)).toEqual([2, 2, 2, 2]);
+    expect(held.map((entry) => entry.play_ms)).toEqual([null, null, null, null]);             // a held picture is silent
+    held.forEach((entry, k) => expect(entry.camera.rig.clock_ms).toBeCloseTo(80 + [0, 16.7, 33.4, 50.1][k], 6));
+    expect(new Set(held.map((entry) => entry.camera)).size).toBe(4);                      // a new camera every frame
+
+    // Play: the clock goes into the phase, so the next entry asks without one from the same angle.
+    now = 1060;
+    link.play();
+    expect(link.cameraNow().rig.clock_ms).toBeUndefined();
+    const angle = (rig, ms) => (((rig.phase + rig.speed * ms / 1000) % 360) + 360) % 360;
+    expect(angle(link.cameraNow().rig, 80)).toBeCloseTo(angle(held[0].camera.rig, 80 + 60), 6);
   } finally {
     globalThis.requestAnimationFrame = animation;
   }

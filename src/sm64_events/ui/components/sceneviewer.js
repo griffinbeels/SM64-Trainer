@@ -79,7 +79,8 @@ import { SceneSound, SoundBar } from "./sceneaudio.js";
 import { RecordBar } from "./scenerecord.js";
 import { CameraPresets, CameraSlots, placeKey, placeOf, presetCamera } from "./scenepresets.js";
 import { heardInto, pictureAt, playLength, recordedTimes } from "./sceneclock.js";
-import { CinematicBar, orbitPhase, rigChanged, rigHint, rigName, rigRequest, seenOnScreen, startRig } from "./scenerigs.js";
+import { CinematicBar, orbitFolded, orbitPhase, rigChanged, rigHint, rigName, rigRequest, seenOnScreen,
+  startRig } from "./scenerigs.js";
 
 const html = htm.bind(h);
 const ROOT = "/api/scene-lab";
@@ -308,7 +309,7 @@ export class SceneLink {
       entering: null, arrived: 0, drawnSeq: 0, looking: null, flight: idleFlight(), speed: 1, picking: false,
       finding: false, glide: null, serial: 0, noticeTimer: null, moving: null, shared: new Map(), playback: null,
       readies: [], coldId: 0, autoplay: false, loop: savedLoop(), hud: savedHud(), ghosts: [], refusedGhosts: new Map(),
-      view: null, rig: null, lastRig: null, follow: "stage", rigPath: null,
+      view: null, rig: null, lastRig: null, follow: "stage", rigPath: null, orbitSince: null,
       asked: null, ghostPages: new Map(), ghostNote: null, ghostSerial: 0,
       sound: new SceneSound({ changed: () => this.changed(), observe: (note) => this.observe(note) }),
       presets: new CameraPresets({ changed: () => this.changed() }) });
@@ -345,7 +346,7 @@ export class SceneLink {
     Object.assign(this, { ws, scene, frame: 0, free: false, orbit: null, entry: null, inFlight: new Map(),
       wanted: null, notice: null, error: null, speed: 1, moving: null, readies: [], coldId: this.sequence + 1,
       ghosts: keptFor(scene).ghosts, asked: null, refusedGhosts: new Map(), ghostNote: null, view: null, rig: null,
-      follow: "stage" });
+      follow: "stage", orbitSince: null });
     keep(scene, {});
     this.ghostPages = kept.pages;
     this.presets.forget();
@@ -412,7 +413,8 @@ export class SceneLink {
     this.disconnect();
     this.sound.load(null);
     kept = unkept();
-    Object.assign(this, { scene: null, free: false, notice: null, error: message, inFlight: new Map(), wanted: null });
+    Object.assign(this, { scene: null, free: false, notice: null, error: message, inFlight: new Map(), wanted: null,
+      orbitSince: null });
     this.changed();
     this.ended();
   }
@@ -435,7 +437,7 @@ export class SceneLink {
     const ready = this.ws && this.ws.readyState === WebSocket.OPEN && this.scene;
     if (this.inFlight.size >= PICTURES_IN_FLIGHT || !this.wanted || !ready) return;
     const play = this.playback, frame = this.wanted.frame ?? (play ? play.asked : this.frame);
-    const id = ++this.sequence, camera = this.cameraNow();
+    const id = ++this.sequence, camera = this.cameraNow(frame);
     this.inFlight.set(id, { ...this.wanted, id, frame, camera, free: !!camera, sent: performance.now(), play,
       due: play ? play.dueOf(frame) : null });
     if (play && this.wanted.kind !== "play") play.moved = true;
@@ -448,10 +450,10 @@ export class SceneLink {
 
   // The camera a picture asked for now is drawn from (interface D): the free camera's pose, a cinematic
   // camera, a ghost's view, or null for the recorded camera. A recording (scenerecord.js) reads it every
-  // display frame.
-  cameraNow() {
+  // display frame. An orbit circling a paused scene carries its clock at `now` (interface H's clock_ms).
+  cameraNow(frame = this.frame, now = performance.now()) {
     if (this.free && this.orbit) return cameraOf(this.orbit);
-    if (this.rig) return rigRequest(this.rig, sceneCameraTuning());
+    if (this.rig) return rigRequest(this.rig, sceneCameraTuning(), this.orbitSince == null ? null : this.orbitMs(frame, now));
     return this.view ? { ghost: this.view } : null;
   }
 
@@ -484,6 +486,7 @@ export class SceneLink {
     if (!play) return;
     this.pausedOn = heardInto(play, this.frame, performance.now(), this.scene?.session);
     Object.assign(this, { playback: null, playing: false });
+    this.holdOrbit();
     for (const hold of play.holds.splice(0)) hold.resolve(false);
     if (this.wanted?.frame != null) {
       if (this.wanted.kind === "play") this.wanted = null;
@@ -540,6 +543,7 @@ export class SceneLink {
       width: header.width, height: header.height }, moving);
     // hud_reason: why a picture asked for without the HUD still has it (the server's sentence).
     Object.assign(this, { shown: header, notice: header.reason || header.hud_reason || null });
+    this.holdOrbit();
     this.changed();
     this.pump();
     if (this.autoplay) this.play();
@@ -688,13 +692,15 @@ export class SceneLink {
     if (kind === "orbit" && this.rig?.kind !== "orbit") next.phase = await this.orbitStart(next);
     if (serial !== this.serial) return;               // another input came first
     Object.assign(this, { free: false, view: null, rig: next, lastRig: next, notice: null, picking: false });
+    this.holdOrbit();
     this.want("input", time);
     this.changed();
   }
 
   setRig(changes, time) {
     if (!this.rig) return;
-    this.rig = this.lastRig = rigChanged(this.rig, changes, this.secondsAt(this.frame));
+    this.rig = this.lastRig = rigChanged(this.rig, changes, this.orbitMs() / 1000);
+    this.holdOrbit();
     this.want("input", time);
     this.changed();
   }
@@ -705,8 +711,41 @@ export class SceneLink {
     else this.changed();
   }
 
-  // When the picture `frame` shows on the scene's own clock (sceneclock.js), as the lab counts an orbit.
-  secondsAt(frame) { return (recordedTimes(this.scene)[frame] ?? 0) / 1000; }
+  // An orbit's clock at `frame`, in ms: when that picture shows on the scene's own clock (sceneclock.js),
+  // as the lab counts an orbit, plus the time it has circled the scene paused (Orbit while paused).
+  orbitMs(frame = this.frame, now = performance.now()) {
+    const shows = recordedTimes(this.scene)[frame] ?? 0;
+    return this.orbitSince == null ? shows : shows + Math.max(0, now - this.orbitSince);
+  }
+
+  // Orbit while paused: with an orbit on that setting and the scene paused, the picture on screen is
+  // asked for again every display frame with the orbit's clock running from the pause (cameraNow), so
+  // the camera circles the held picture at its speed. Once that ends (Play, the setting off, another
+  // camera), the time it circled goes into the orbit's phase: Play turns on from the angle on screen.
+  // It circles only while the lab draws the orbit: a picture it could not (Mario's path not read yet,
+  // no Mario in this frame) waits for the next one that does, instead of asking 60 times a second.
+  get orbitHeld() {
+    const rig = this.rig, shown = this.shown;
+    return !!(this.scene && this.ws && !this.playing && rig?.kind === "orbit" && rig.whilePaused && rig.speed
+      && shown?.rig?.kind === "orbit" && shown.camera === "free");
+  }
+
+  holdOrbit(now = performance.now()) {
+    if (this.orbitHeld === (this.orbitSince != null)) return;
+    if (this.orbitSince != null) {
+      if (this.rig?.kind === "orbit") this.rig = this.lastRig = orbitFolded(this.rig, Math.max(0, now - this.orbitSince));
+      this.orbitSince = null;
+      return;
+    }
+    const since = this.orbitSince = now;
+    const tick = () => {
+      if (this.orbitSince !== since) return;
+      if (!this.orbitHeld) return this.holdOrbit();
+      this.want("move");
+      this.animate(tick);
+    };
+    this.animate(tick);
+  }
 
   // The phase that puts a new orbit's camera where the camera on screen stands, seen from its runner:
   // the cinematic picture on screen names both; else the recorded pose (the stage's Mario only).
@@ -714,7 +753,7 @@ export class SceneLink {
     const seen = seenOnScreen(this.shown, rig.target);
     const pose = seen.from && seen.target ? null : (await this.pose(this.frame)).pose;
     return orbitPhase(seen.from ?? pose?.position, seen.target ?? (rig.target === "stage" ? pose?.mario : null),
-      rig.speed, this.secondsAt(this.frame));
+      rig.speed, this.orbitMs() / 1000);
   }
 
   // Mario's path: the lab starts reading it in a process of its own as the scene opens, and a cinematic
@@ -1140,6 +1179,7 @@ export class SceneLink {
         }
       } };
     Object.assign(this, { playback: play, playing: true, frame: from });
+    this.holdOrbit();
     const tick = (frameTime) => {
       if (this.playback !== play) return;
       if (play.frameAt != null) {

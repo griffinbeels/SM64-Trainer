@@ -32,7 +32,9 @@ camera, because nothing here remembers the last picture.
     front   the camera `distance` ahead of him along that direction
     side    `distance` to his left or right ("auto": the side a wall does not block), `rigSideLead` ahead
     orbit   `radius` from him at angle phase + speed x (the picture's time on the scene's clock), so Play,
-            a pause and an export of the same pictures agree
+            a pause and an export of the same pictures agree; with `clock_ms` (interface H) the page's
+            clock replaces the picture's time, so a held picture can orbit ("Orbit while paused"):
+            the same rig with its phase moved by speed x (clock - the picture's time), walls and all
 
 Each stands `height` above the smoothed path (default his eye level), always aimed at him.
 
@@ -54,7 +56,7 @@ from __future__ import annotations
 
 import math
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import numpy as np
@@ -100,6 +102,7 @@ class Rig:
     phase: float               # orbit, degrees at the scene's first picture
     side: str                  # "auto", "left", "right"
     tuning: tuple              # (key, value) for every TUNING_KEYS row
+    clock: float | None = None  # orbit, the page's clock in seconds (clock_ms), else the picture's own time
 
     @classmethod
     def of(cls, request, defaults: dict) -> Rig:
@@ -107,7 +110,8 @@ class Rig:
         row (the registry's). A field left out takes its default; ValueError names a wrong one."""
         if not isinstance(request, dict):
             raise ValueError('a cinematic camera is {"rig": {"kind": "front"|"side"|"orbit", ...}}')
-        unknown = set(request) - {"kind", "target", "shot", "height", "radius", "speed", "phase", "side", "tuning"}
+        unknown = set(request) - {"kind", "target", "shot", "height", "radius", "speed", "phase", "side", "tuning",
+                                  "clock_ms"}
         if unknown:
             raise ValueError(f"a cinematic camera has no {sorted(unknown)[0]!r}")
         kind = request.get("kind")
@@ -143,8 +147,12 @@ class Rig:
             raise ValueError(f"an orbit's speed is -{SPEED_LIMIT:g} to {SPEED_LIMIT:g} degrees a second")
         if not _number(phase):
             raise ValueError("an orbit's phase is a number of degrees")
+        clock = request.get("clock_ms")
+        if clock is not None and not _number(clock):
+            raise ValueError("an orbit's clock_ms is a number of milliseconds")
         return cls(kind, target, shot, float(height), float(radius), float(speed), float(phase) % 360.0, side,
-                   tuple((key, values[key]) for key in TUNING_KEYS))
+                   tuple((key, values[key]) for key in TUNING_KEYS),
+                   clock / 1000.0 if clock is not None and kind == "orbit" else None)
 
     def value(self, key: str) -> float:
         return dict(self.tuning)[key]
@@ -339,8 +347,13 @@ class StaticWalls:
         for start in range(0, len(origins), self.CHUNK):
             o, e = origins[start:start + self.CHUNK], ends[start:start + self.CHUNK]
             lo, hi = np.minimum(o, e), np.maximum(o, e)
-            near = ((self.low[None, :, :] <= hi[:, None, :]) & (self.high[None, :, :] >= lo[:, None, :])).all(axis=2)
+            # Only the triangles whose box meets the box around every segment of the chunk are tested
+            # one segment at a time (an orbit's segments span a few metres of a whole level).
+            around = np.flatnonzero(((self.low <= hi.max(axis=0)) & (self.high >= lo.min(axis=0))).all(axis=1))
+            near = ((self.low[around][None, :, :] <= hi[:, None, :])
+                    & (self.high[around][None, :, :] >= lo[:, None, :])).all(axis=2)
             rays, tris = np.nonzero(near)
+            tris = around[tris]
             if not len(rays):
                 continue
             direction = e[rays] - o[rays]
@@ -433,6 +446,8 @@ class Planner:
     def shot(self, rig: Rig, runner: Runner, frame: int, walls_at) -> Shot:
         if not 0 <= frame < len(runner):
             raise ValueError("no such frame")
+        if rig.clock is not None:            # the page's clock: the rig whose own time at `frame` is that clock
+            rig = replace(rig, phase=(rig.phase + rig.speed * (rig.clock - runner.seconds[frame])) % 360.0, clock=None)
         track = self.track(rig, runner)
         if runner.cuts[frame] < 0 or not np.isfinite(track.feet[frame]).all():
             return Shot(None, reason=runner.reason)
