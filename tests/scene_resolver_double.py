@@ -32,6 +32,7 @@ class FakeStates:
     def __init__(self, data: bytes, rom: Path, symbol_map: Path):
         self.package = scene_package.Package(data, Path(rom).read_bytes())
         self.recorded = Counter()
+        self.first = None                       # the first frame this child resolved (its entry says)
 
     def __len__(self) -> int:
         return len(self.package)
@@ -43,7 +44,8 @@ class FakeStates:
         if index == FAILS:
             raise ValueError("this frame cannot be resolved")
         self.recorded["absent"] += 1
-        entry = {"global_timer": index, "pool": f"{os.getpid()}", "data_ptr": "80000000"}
+        self.first = index if self.first is None else self.first
+        entry = {"global_timer": index, "pool": f"{os.getpid()}", "data_ptr": "80000000", "first": self.first}
         if index == NO_SCENE:
             return SimpleNamespace(status="no scene", entry=entry)
         return SimpleNamespace(status=None, entry=entry, frame=SimpleNamespace(task_words=tuple(range(16)),

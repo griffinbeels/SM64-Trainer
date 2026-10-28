@@ -17,6 +17,7 @@ import math
 import re
 import struct
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -548,8 +549,8 @@ def test_without_mario_in_the_scene_state_a_rig_shows_the_recorded_camera(config
         session.close()
 
 
-def test_the_socket_asks_for_a_rig_in_one_picture_request(config, recording, tmp_path):
-    """Interface D through the lab's real routes: {"camera": {"rig": {...}}}, one round trip per picture."""
+def _routes(config, recording, tmp_path, **options):
+    """The lab's real routes over the fake host, Mario's path read by the real child unless `options` say."""
     (tmp_path / "packages").mkdir()
     (tmp_path / "packages" / "scene.sm64scene").write_bytes(recording["package"].read_bytes())
     path = tmp_path / "lab.json"
@@ -558,8 +559,113 @@ def test_the_socket_asks_for_a_rig_in_one_picture_request(config, recording, tmp
     from fastapi import FastAPI
     app = FastAPI()
     scene_lab_api.mount_scene_lab(app, path, watch_seconds=0.05, ghost_loader=Loader({}), session_options={
-        "host_factory": scene_session.command_host(fake_viewer_host.command()),
-        "evaluator_factory": Evaluators(recording["map"])})          # Mario's path: the real child
+        "host_factory": scene_session.command_host(fake_viewer_host.command(**options.pop("fake_host", {}))),
+        "evaluator_factory": Evaluators(recording["map"]), **options})
+    return app
+
+
+class TimedEvaluators(Evaluators):
+    """Evaluators that note when each was made and each pose asked of it."""
+
+    def __call__(self, package, rom):
+        evaluator = super().__call__(package, rom)
+        self.at, original = time.perf_counter(), evaluator.pose
+
+        def pose(index):
+            self.posed = getattr(self, "posed", 0) + 1
+            return original(index)
+        evaluator.pose = pose
+        return evaluator
+
+
+def test_the_free_camera_warms_once_after_the_first_picture_while_the_page_is_idle(config, recording, tmp_path):
+    """The lead's ask (round 6): neither the first Free camera nor the first rig pays the free camera's
+    start (~200 ms). Once a scene's first picture is delivered and nothing is being drawn, the worker
+    starts the evaluator and draws one view from the recorded camera; never while pictures are being
+    drawn (here four pictures from a slow renderer: it waits for the last), and once a scene."""
+    made = TimedEvaluators(recording["map"])
+    app = _routes(config, recording, tmp_path, evaluator_factory=made, path_reader_factory=rig_path.InProcessReader,
+                  fake_host={"delay_ms": 120})
+    with TestClient(app) as client:
+        opened = client.post("/api/scene-lab/open", json={"package": "scene.sm64scene"}).json()
+        with client.websocket_connect("/api/scene-lab/ws") as socket:
+            for ident in range(1, 5):
+                socket.send_json({"id": ident, "session": opened["session"], "frame": ident, "encoding": "raw",
+                                  "camera": None})
+            replies = []                                    # each answered id: a picture, or superseded
+            while len(replies) < 4:
+                data = socket.receive()
+                raw = data.get("bytes")
+                answer = json.loads(raw[4:4 + struct.unpack_from("<I", raw)[0]]) if raw else json.loads(data["text"])
+                replies.append((answer["id"], time.perf_counter()))
+            replies = [at for _ident, at in replies]
+            deadline = time.monotonic() + 10
+            while not made.made and time.monotonic() < deadline:
+                time.sleep(0.02)
+            assert len(made.made) == 1 and made.posed == 1                    # warmed, from the recorded camera
+            assert made.at >= replies[-1] - 0.05                              # after the last picture went out
+            # Then, Mario's path read, the cinematic cameras' runner and Front's first windows.
+            session = app.state.scene_lab.session
+            while not session.rigs.tracks and time.monotonic() < deadline:
+                time.sleep(0.02)
+            assert session.rigs.tracks and session.rigs.rig.kind == "front" and session.rigs.pulls
+            socket.send_json({"id": 9, "session": opened["session"], "frame": 2, "encoding": "raw",
+                              "camera": {"focus": [0.0, 100.0, 0.0], "position": [0.0, 400.0, 900.0]}})
+            assert _picture_header(socket)["camera"] == "free"
+            time.sleep(0.3)
+            assert len(made.made) == 1 and made.posed == 1                    # once a scene
+
+
+class WarmedEvaluators(Evaluators):
+    """Evaluators that can take state resolvers (attach, ahead) and a factory that notes how it
+    started them (the frame they warm with), as scene_session.GameCodeEvaluator does."""
+
+    class Evaluator(fake_viewer_host.FakeEvaluator):
+        def attach(self, resolvers, ahead):
+            self.resolvers = resolvers
+
+        def ahead(self, indices):
+            self.handed = list(indices)
+            return False                          # children not ready yet: the caller resolves ahead
+
+        def delivered(self, index, answer, ram):
+            pass
+
+    def __call__(self, package, rom):
+        self.made.append(self.Evaluator())
+        return self.made[-1]
+
+    def resolvers(self, package, deliver, warm=None):
+        from types import SimpleNamespace
+        self.warm = warm
+        return SimpleNamespace(close=lambda: None)
+
+
+def test_the_warm_up_resolves_the_next_frames_here_and_warms_the_resolvers_past_them(config, recording):
+    """warm(): the evaluator, one view of the frame on screen, the next WARM_FRAMES states here (a
+    Play from this frame asks them first), and the state resolvers started on the frames after,
+    each child warming the first of them before it says ready (its first frame is otherwise cold)."""
+    made = WarmedEvaluators(recording["map"])
+    host = scene_session.command_host(fake_viewer_host.command())
+    session = scene_session.SceneSession.open(config, recording["package"], host_factory=host, evaluator_factory=made,
+                                              path_reader_factory=rig_path.InProcessReader)
+    try:
+        session.picture(1, None, "raw")
+        session.warm(1)
+        evaluator = made.made[0]
+        after = session.frames[2:2 + scene_session.WARM_FRAMES]
+        assert [index for index, _thread in evaluator.prepared] == after
+        assert made.warm == session.frames[2 + scene_session.WARM_FRAMES]
+        assert evaluator.handed[0] == made.warm
+        session.warm(1)                                                     # once a scene
+        assert len(made.made) == 1 and len(evaluator.prepared) == scene_session.WARM_FRAMES
+    finally:
+        session.close()
+
+
+def test_the_socket_asks_for_a_rig_in_one_picture_request(config, recording, tmp_path):
+    """Interface D through the lab's real routes: {"camera": {"rig": {...}}}, one round trip per picture."""
+    app = _routes(config, recording, tmp_path)
     with TestClient(app) as client:
         opened = client.post("/api/scene-lab/open", json={"package": "scene.sm64scene"}).json()
         with client.websocket_connect("/api/scene-lab/ws") as socket:

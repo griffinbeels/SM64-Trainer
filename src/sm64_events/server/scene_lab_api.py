@@ -36,8 +36,8 @@ tracker's completion hook and the broadcaster's observer to it (follow_attempts)
 hook is called first and unchanged.
 
 Nothing runs until a page opens a package. The session (tools/scene_lab/scene_session.py)
-starts the renderer host after the GPU hold check and, on the first free-camera request, the
-evaluator. Each session owns two threads, and the event loop only awaits them: the worker runs
+starts the renderer host after the GPU hold check and the evaluator once its first picture is out
+and the page is idle (_warm; else on the first free-camera request). Each session owns two threads, and the event loop only awaits them: the worker runs
 every package decode, evaluator run, pose, pick and request written to the host (session.begin);
 the delivery thread takes each picture back and has the picture encoder child make its JPEG
 (session.finish) while the worker begins the next, so the game's code for one camera runs while
@@ -119,6 +119,8 @@ MAX_QUESTIONS_WAITING = 8     # poses and picks a socket holds; the oldest is an
 PICTURES_IN_FLIGHT = 2        # pictures a socket has begun and not yet sent (the page keeps as many)
 GROW_SECONDS = 0.25           # how often an open scene still being written takes its newest frames
 GROW_FAILURES = 3             # publications in a row it cannot read before it stops growing
+WARM_WAIT_SECONDS = 30.0      # how long a scene's first picture waits for an idle page to warm the free camera
+WARM_POLL_SECONDS = 0.1
 ENDS = {"closed": "Closed.",
         "replaced": "Closed to open another scene.",
         "page": "Closed because no page was showing it.",
@@ -291,6 +293,7 @@ class SceneLab:
         self.delivery: ThreadPoolExecutor | None = None    # its second thread: finish, then the reply's bytes
         self.described: dict | None = None
         self.generation = 0
+        self.warmed = 0                                    # the newest scene whose free camera was warmed
         self.lock = asyncio.Lock()
         self.sockets = self.busy = 0
         self.last_used = self.page_seen = 0.0
@@ -612,7 +615,41 @@ class SceneLab:
         self.busy += 1
         work = None if delivery is None else loop.run_in_executor(
             delivery, _delivered, session, pending, ident, generation, received, self.shared)
-        return loop.create_task(self._delivery_reply(session, work, ident))
+        reply = loop.create_task(self._delivery_reply(session, work, ident))
+        if work is not None and self.warmed != generation:
+            self.warmed = generation
+            loop.create_task(self._warm(generation, message.get("frame"), reply), name="scene-lab-warm")
+        return reply
+
+    async def _warm(self, generation: int, frame, delivered: asyncio.Task) -> None:
+        """Once a scene's first picture is delivered and nothing is being drawn or sent (the page is
+        idle: a person looks before they move the camera), the worker starts the free camera's
+        evaluator and draws one view of that frame (scene_session.warm), so neither the first Free
+        camera nor the first cinematic camera pays that start, ~200 ms measured 2026-10-27. A page
+        that keeps the worker busy for WARM_WAIT_SECONDS (Play from the Ghost button) is never made
+        to wait: the free camera then starts on first use, as before."""
+        await asyncio.wait([delivered])
+        try:
+            if not await self._idle(generation):
+                return
+            await self._run(generation, "warm", frame)
+            # Then the cinematic cameras' own first work, once Mario's path is read (its child started
+            # as the scene opened): his runner, the smoothed track and Front's first windows.
+            await asyncio.wrap_future(await self._run(generation, "prepare_path"))
+            if await self._idle(generation):
+                await self._run(generation, "warm_rig", frame)
+        except (SceneClosed, LookupError, RuntimeError, OSError, ValueError):
+            pass
+
+    async def _idle(self, generation: int) -> bool:
+        """Waits until nothing is being drawn or sent for this scene; False when it closed or stayed
+        busy for WARM_WAIT_SECONDS."""
+        deadline = time.monotonic() + WARM_WAIT_SECONDS
+        while self.busy:
+            if generation != self.generation or time.monotonic() > deadline:
+                return False
+            await asyncio.sleep(WARM_POLL_SECONDS)
+        return generation == self.generation
 
     async def _delivery_reply(self, session, work, ident):
         try:

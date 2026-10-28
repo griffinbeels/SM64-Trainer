@@ -32,7 +32,7 @@ the CPU (pick.py: the renderer's own thread holds its depth), in the camera's ow
 owns the camera's world axes and turns that into a world point; the session never does.
 
 When the evaluator cannot serve a frame (no 3D scene during a level load, a stopped run, no
-scene state in the package) the picture is the recorded one and `reason` says why. The evaluator starts on the first free-camera request.
+scene state in the package) the picture is the recorded one and `reason` says why. The evaluator starts on the first free-camera request, or before it in warm(), which the lab calls once the page is idle after the first picture.
 
 A free-camera picture sends the host only the RDRAM words that differ from what the host
 already holds (HostImage): a drag changes a few KiB of the 8 MiB, the next frame tens of KiB.
@@ -129,6 +129,7 @@ MAX_HOST_RUNS = 65536         # viewer_host.c's MAX_RUNS
 LOOK_AHEAD_STEP = 4           # a free picture this many frames before the last one is a step back
 LOOK_AHEAD_FRAMES = 3         # how many frames the look-ahead resolves (the evaluator caches 4 states)
 RESOLVED_AHEAD = 6            # how many the state resolvers' children resolve (each kept as one 8 MiB state)
+WARM_FRAMES = 2               # states warm() resolves here after the frame on screen (the evaluator caches 4)
 FIT_WAIT_SECONDS = 1.5        # how long an opening scene waits for its sound's fit (the renderer starts meanwhile)
 SOUND_SETTLE_SECONDS = 60.0   # how long a whole scene watches for the sound the cutter adds to it
 GHOST_WARM_PICTURES = 40      # pictures the renderer may take to set its ghost overlay up (it retries per list)
@@ -325,13 +326,13 @@ class GameCodeEvaluator:
         import evaluator
         return evaluator.Evaluator(package, rom, e2_georender.load_map(self.map_path), source=self.source)
 
-    def resolvers(self, package: scene_package.Package, deliver):
+    def resolvers(self, package: scene_package.Package, deliver, warm: int | None = None):
         """The state resolvers' children over a whole package's bytes (state_resolver.Resolvers),
-        or None without the ROM's path."""
+        each resolving frame `warm` before it says ready; None without the ROM's path."""
         if self.rom_path is None or not isinstance(package.data, bytes):
             return None
         import state_resolver
-        return state_resolver.Resolvers(package.data, self.rom_path, self.map_path, deliver)
+        return state_resolver.Resolvers(package.data, self.rom_path, self.map_path, deliver, warm=warm)
 
 
 def _ms(since: float) -> float:
@@ -742,7 +743,7 @@ class SceneSession:
             self._resolvers_tried = True
             start = getattr(self.evaluator_factory, "resolvers", None)
             try:
-                self._resolvers = start(self.package, evaluator.delivered) if start else None
+                self._resolvers = start(self.package, evaluator.delivered, warm=targets[0]) if start else None
             except (OSError, ValueError):                # the look-ahead thread goes on as before
                 self._resolvers = None
             if self._resolvers is not None:
@@ -818,12 +819,13 @@ class SceneSession:
         if not isinstance(hud, bool):
             raise ValueError("hud is true or false")
         view, camera = self._ghost_view(index, camera)
+        rig_started = time.perf_counter()
         rig, camera = self._rig_view(frame, camera)
         free = None if camera is None else world_camera(camera)
         if free is not None:
             self._ahead_generation += 1          # the look-ahead stops before its next frame
         started = time.perf_counter()
-        timings: dict = {}
+        timings: dict = {} if rig is None else {"rig_ms": _ms(rig_started)}   # a cinematic camera's own work
         cuts = None if hud else []               # the HUD cut's outcome (hud.Cut) for the frame sent
         host_frame, reason = (None, None) if free is None else self._free_frame(index, free, timings, cuts)
         drawn_free = host_frame is not None
@@ -1044,10 +1046,7 @@ class SceneSession:
             return None, camera
         if len(camera) != 1:
             raise ValueError('a cinematic camera is {"rig": {...}} and nothing else')
-        if self._rig_tuning is None:
-            from sm64_events.server.tuning_api import shipped_numbers
-            self._rig_tuning = shipped_numbers("scenecamera", camera_rig.TUNING_KEYS)
-        rig = camera_rig.Rig.of(camera["rig"], self._rig_tuning)
+        rig = camera_rig.Rig.of(camera["rig"], self._shipped_rig_tuning())
         said = {"kind": rig.kind, "target": rig.target, "shot": rig.shot, "side": None, "pulled": None, "raised": None}
         if self.free_reason is not None:
             return {**said, "reason": self.free_reason}, None
@@ -1060,6 +1059,29 @@ class SceneSession:
         if shot.camera is not None:
             said.update(side=shot.side, pulled=round(shot.pulled, 3), raised=round(shot.raised, 1))
         return {**said, "reason": shot.reason}, shot.camera
+
+    def _shipped_rig_tuning(self) -> dict:
+        """The registry's rows a rig request may leave out, read once a session."""
+        if self._rig_tuning is None:
+            from sm64_events.server.tuning_api import shipped_numbers
+            self._rig_tuning = shipped_numbers("scenecamera", camera_rig.TUNING_KEYS)
+        return self._rig_tuning
+
+    def warm_rig(self, frame: int) -> None:
+        """The first cinematic camera's own work, done while nobody waits (the lab calls it once Mario's
+        path is read and the page is idle): his runner, the smoothed track of the shipped tuning and
+        Front's windows at `frame` (the first rig picture otherwise took ~90 ms of the worker,
+        measured 2026-10-27). A request with other numbers only redoes what they change."""
+        self._index(frame)
+        if self.free_reason is not None:
+            return
+        try:
+            runner = self._runner("stage")
+            if not isinstance(runner, str) and frame < len(runner):
+                self.rigs.shot(camera_rig.Rig.of({"kind": "front"}, self._shipped_rig_tuning()), runner, frame,
+                               self._walls_at)
+        except Exception as error:  # noqa: BLE001 - the first cinematic picture that needs it says why
+            log.warning("scene viewer: warming the cinematic cameras failed: %s", error)
 
     def _clock(self) -> list[float]:
         """Each frame position's time on the scene's own clock, seconds after the first picture: the
@@ -1226,6 +1248,33 @@ class SceneSession:
         timings["decode_ms"] = _ms(started)
         return viewer.Frame(f"frame {index} stage", tuple(task.task), self.outlines[index]["vi"],
                             struct.pack(f"<{2 * len(runs)}I", *(edge for run in runs for edge in run)), data)
+
+    def warm(self, frame: int) -> None:
+        """Starts what the first free or cinematic camera of this scene would start, while nobody
+        waits for it (the lab calls it once the page is idle after the first picture): the free
+        camera's evaluator and one view of `frame` from its recorded camera (pose: ~200 ms in all,
+        measured 2026-10-27), and the walls of that frame's place. Nothing where the free camera
+        cannot draw; a failure here is the first camera's to report."""
+        index = self._index(frame)
+        if self.free_reason is not None or self._evaluator is not None:
+            return
+        try:
+            self.pose(frame)
+            if self._evaluator is not None:
+                # The next frames' states here (a Play from this frame asks for them first, and a state
+                # resolver child's first frame is cold: ~115 ms), then the children for the ones after
+                # (_look_ahead's first start: process creation measured 0.2-1.3 s, 2026-10-27).
+                after = [self.frames[at] for at in range(frame + 1, min(len(self.frames), frame + 1 + WARM_FRAMES
+                                                                         + RESOLVED_AHEAD))]
+                for index in after[:WARM_FRAMES]:
+                    self._evaluator.prepare(index)
+                if after[WARM_FRAMES:]:
+                    self._resolve_ahead(after[WARM_FRAMES:])
+            place = self._place(index)
+            if place is not None and self.package.states is not None:
+                self._walls_at(place)
+        except Exception as error:  # noqa: BLE001 - the first camera that needs it says why
+            log.warning("scene viewer: warming the free camera failed: %s", error)
 
     def pose(self, frame: int) -> dict:
         """The frame's recorded camera and Mario's position, or None and the reason."""

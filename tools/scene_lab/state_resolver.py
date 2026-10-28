@@ -36,6 +36,7 @@ exits 0. --evaluator names a stand-in factory(package bytes, rom path, map path)
 from __future__ import annotations
 
 import argparse
+import contextlib
 import importlib
 import json
 import os
@@ -67,7 +68,7 @@ class Resolvers:
     caller waits for deliver() (evaluator.Evaluator.state)."""
 
     def __init__(self, package: bytes, rom: Path, symbol_map: Path, deliver, *, count: int = COUNT,
-                 evaluator: str | None = None, extra_path: tuple = ()):
+                 evaluator: str | None = None, extra_path: tuple = (), warm: int | None = None):
         from sm64_events.core.childproc import python_child, quiet_spawn_kwargs
         self.deliver = deliver
         self.slots_at = -(-len(package) // 4096) * 4096    # the package's bytes first, then one slot a child
@@ -86,6 +87,8 @@ class Resolvers:
                 "--map", str(symbol_map)]
         if evaluator:
             args += ["--evaluator", evaluator]
+        if warm is not None:
+            args += ["--warm", str(int(warm))]
         argv, env = python_child("state_resolver", "--scene-lab-resolver", args, site_packages=True)
         env["PYTHONPATH"] = os.pathsep.join(filter(None, (*map(str, extra_path), str(HERE), env.get("PYTHONPATH"))))
         spawn = quiet_spawn_kwargs()
@@ -326,6 +329,7 @@ def serve(argv=None) -> int:
     for name in ("--rom", "--map"):
         parser.add_argument(name, type=Path, required=True)
     parser.add_argument("--evaluator")
+    parser.add_argument("--warm", type=int, help="a frame to resolve before saying ready")
     args = parser.parse_args(argv)
     sink = sys.stdout.buffer
 
@@ -339,6 +343,12 @@ def serve(argv=None) -> int:
     except Exception as error:  # noqa: BLE001 - the server resolves in process and shows nothing of this
         write({"error": f"{type(error).__name__}: {error}"[:500]})
         return 1
+    if args.warm is not None and hasattr(evaluator, "state"):
+        # A child's first frame is cold (the game's code translated, the state cursor seeking: ~100 ms,
+        # measured 2026-10-27); resolved before ready, the frame the server will want first is then in
+        # its cache and the ones after it a step away, so Play never waits on that first one.
+        with contextlib.suppress(Exception):    # only a warm-up: a frame that fails resolves when asked
+            evaluator.state(args.warm)
     write({"ready": len(evaluator)})
     for line in sys.stdin.buffer:
         index = None
