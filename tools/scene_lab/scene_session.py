@@ -1238,6 +1238,10 @@ class SceneSession:
             return
         try:
             self.pose(frame)
+            if self._evaluator is not None:          # the state resolvers' children too (_look_ahead's first
+                ahead = [self.frames[at] for at in range(frame + 1, min(len(self.frames), frame + 1 + RESOLVED_AHEAD))]
+                if ahead:                            # start: process creation measured 0.2-1.3 s, 2026-10-27)
+                    self._resolve_ahead(ahead)
             place = self._place(index)
             if place is not None and self.package.states is not None:
                 self._walls_at(place)
