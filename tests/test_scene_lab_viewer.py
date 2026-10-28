@@ -421,7 +421,7 @@ class ResolvedAhead(Evaluators):
         self.made.append(self.Evaluator(**self.options))
         return self.made[-1]
 
-    def resolvers(self, package, deliver):
+    def resolvers(self, package, deliver, warm=None):
         self.pools = [*getattr(self, "pools", []), self.Pool(package, deliver)]
         return self.pools[-1]
 

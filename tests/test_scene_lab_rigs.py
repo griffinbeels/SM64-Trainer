@@ -611,6 +611,53 @@ def test_the_free_camera_warms_once_after_the_first_picture_while_the_page_is_id
             assert len(made.made) == 1 and made.posed == 1                    # once a scene
 
 
+class WarmedEvaluators(Evaluators):
+    """Evaluators that can take state resolvers (attach, ahead) and a factory that notes how it
+    started them (the frame they warm with), as scene_session.GameCodeEvaluator does."""
+
+    class Evaluator(fake_viewer_host.FakeEvaluator):
+        def attach(self, resolvers, ahead):
+            self.resolvers = resolvers
+
+        def ahead(self, indices):
+            self.handed = list(indices)
+            return False                          # children not ready yet: the caller resolves ahead
+
+        def delivered(self, index, answer, ram):
+            pass
+
+    def __call__(self, package, rom):
+        self.made.append(self.Evaluator())
+        return self.made[-1]
+
+    def resolvers(self, package, deliver, warm=None):
+        from types import SimpleNamespace
+        self.warm = warm
+        return SimpleNamespace(close=lambda: None)
+
+
+def test_the_warm_up_resolves_the_next_frames_here_and_warms_the_resolvers_past_them(config, recording):
+    """warm(): the evaluator, one view of the frame on screen, the next WARM_FRAMES states here (a
+    Play from this frame asks them first), and the state resolvers started on the frames after,
+    each child warming the first of them before it says ready (its first frame is otherwise cold)."""
+    made = WarmedEvaluators(recording["map"])
+    host = scene_session.command_host(fake_viewer_host.command())
+    session = scene_session.SceneSession.open(config, recording["package"], host_factory=host, evaluator_factory=made,
+                                              path_reader_factory=rig_path.InProcessReader)
+    try:
+        session.picture(1, None, "raw")
+        session.warm(1)
+        evaluator = made.made[0]
+        after = session.frames[2:2 + scene_session.WARM_FRAMES]
+        assert [index for index, _thread in evaluator.prepared] == after
+        assert made.warm == session.frames[2 + scene_session.WARM_FRAMES]
+        assert evaluator.handed[0] == made.warm
+        session.warm(1)                                                     # once a scene
+        assert len(made.made) == 1 and len(evaluator.prepared) == scene_session.WARM_FRAMES
+    finally:
+        session.close()
+
+
 def test_the_socket_asks_for_a_rig_in_one_picture_request(config, recording, tmp_path):
     """Interface D through the lab's real routes: {"camera": {"rig": {...}}}, one round trip per picture."""
     app = _routes(config, recording, tmp_path)

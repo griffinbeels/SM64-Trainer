@@ -129,6 +129,7 @@ MAX_HOST_RUNS = 65536         # viewer_host.c's MAX_RUNS
 LOOK_AHEAD_STEP = 4           # a free picture this many frames before the last one is a step back
 LOOK_AHEAD_FRAMES = 3         # how many frames the look-ahead resolves (the evaluator caches 4 states)
 RESOLVED_AHEAD = 6            # how many the state resolvers' children resolve (each kept as one 8 MiB state)
+WARM_FRAMES = 2               # states warm() resolves here after the frame on screen (the evaluator caches 4)
 FIT_WAIT_SECONDS = 1.5        # how long an opening scene waits for its sound's fit (the renderer starts meanwhile)
 SOUND_SETTLE_SECONDS = 60.0   # how long a whole scene watches for the sound the cutter adds to it
 GHOST_WARM_PICTURES = 40      # pictures the renderer may take to set its ghost overlay up (it retries per list)
@@ -325,13 +326,13 @@ class GameCodeEvaluator:
         import evaluator
         return evaluator.Evaluator(package, rom, e2_georender.load_map(self.map_path), source=self.source)
 
-    def resolvers(self, package: scene_package.Package, deliver):
+    def resolvers(self, package: scene_package.Package, deliver, warm: int | None = None):
         """The state resolvers' children over a whole package's bytes (state_resolver.Resolvers),
-        or None without the ROM's path."""
+        each resolving frame `warm` before it says ready; None without the ROM's path."""
         if self.rom_path is None or not isinstance(package.data, bytes):
             return None
         import state_resolver
-        return state_resolver.Resolvers(package.data, self.rom_path, self.map_path, deliver)
+        return state_resolver.Resolvers(package.data, self.rom_path, self.map_path, deliver, warm=warm)
 
 
 def _ms(since: float) -> float:
@@ -742,7 +743,7 @@ class SceneSession:
             self._resolvers_tried = True
             start = getattr(self.evaluator_factory, "resolvers", None)
             try:
-                self._resolvers = start(self.package, evaluator.delivered) if start else None
+                self._resolvers = start(self.package, evaluator.delivered, warm=targets[0]) if start else None
             except (OSError, ValueError):                # the look-ahead thread goes on as before
                 self._resolvers = None
             if self._resolvers is not None:
@@ -1238,10 +1239,16 @@ class SceneSession:
             return
         try:
             self.pose(frame)
-            if self._evaluator is not None:          # the state resolvers' children too (_look_ahead's first
-                ahead = [self.frames[at] for at in range(frame + 1, min(len(self.frames), frame + 1 + RESOLVED_AHEAD))]
-                if ahead:                            # start: process creation measured 0.2-1.3 s, 2026-10-27)
-                    self._resolve_ahead(ahead)
+            if self._evaluator is not None:
+                # The next frames' states here (a Play from this frame asks for them first, and a state
+                # resolver child's first frame is cold: ~115 ms), then the children for the ones after
+                # (_look_ahead's first start: process creation measured 0.2-1.3 s, 2026-10-27).
+                after = [self.frames[at] for at in range(frame + 1, min(len(self.frames), frame + 1 + WARM_FRAMES
+                                                                         + RESOLVED_AHEAD))]
+                for index in after[:WARM_FRAMES]:
+                    self._evaluator.prepare(index)
+                if after[WARM_FRAMES:]:
+                    self._resolve_ahead(after[WARM_FRAMES:])
             place = self._place(index)
             if place is not None and self.package.states is not None:
                 self._walls_at(place)

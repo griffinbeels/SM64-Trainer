@@ -63,9 +63,10 @@ class Deliveries:
         return [index for index, _a, _r in self.got]
 
 
-def _pool(scene, deliver, evaluator="FakeStates", count=2):
+def _pool(scene, deliver, evaluator="FakeStates", count=2, warm=None):
     resolvers = state_resolver.Resolvers(scene["data"], scene["rom_path"], scene["rom_path"], deliver, count=count,
-                                         evaluator=f"scene_resolver_double:{evaluator}", extra_path=(ROOT / "tests",))
+                                         evaluator=f"scene_resolver_double:{evaluator}", extra_path=(ROOT / "tests",),
+                                         warm=warm)
     deadline = time.monotonic() + 30
     while resolvers.ready < count and time.monotonic() < deadline:
         time.sleep(0.02)
@@ -95,6 +96,20 @@ def test_frames_handed_ahead_come_back_from_below_normal_children_and_close_ends
     assert all(child.process.poll() is not None for child in resolvers.children)
     with pytest.raises(FileNotFoundError):
         state_resolver.shared_memory.SharedMemory(name=resolvers.memory.name)
+
+
+def test_each_child_resolves_the_frame_it_is_warmed_with_before_it_says_ready(scene):
+    """The scene's warm-up (scene_session.warm) names the frame Play will want first from the children:
+    each resolves it before it says ready, so its first real frame is not a cold one (~115 ms measured
+    2026-10-27 on his HMC take) and that frame is already in its cache."""
+    deliveries = Deliveries()
+    resolvers = _pool(scene, deliveries, warm=7)
+    try:
+        assert resolvers.ahead([5, 6])
+        got = deliveries.wait([5, 6])
+        assert {got[index][0]["entry"]["first"] for index in (5, 6)} == {7}
+    finally:
+        resolvers.close()
 
 
 def test_while_play_runs_ahead_of_the_children_one_child_goes_on_from_its_own_frames(scene):
