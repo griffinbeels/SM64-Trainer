@@ -906,6 +906,24 @@ def write_package(source: Source, rom: bytes, out: Path, codec: int = LZMA, bloc
     return writer.finish()
 
 
+class Outputs:
+    """The files one PackageWriter writes at once: every byte of the body goes to each, so their
+    bodies stay identical and one index describes any of them; seal writes each its own."""
+
+    def __init__(self, path: Path):
+        self.files = {path: path.open("wb")}
+
+    def write(self, data: bytes) -> None:
+        if not self.files:
+            raise ValueError("a package writer with no file to write")
+        for handle in self.files.values():
+            handle.write(data)
+
+    def flush(self) -> None:
+        for handle in self.files.values():
+            handle.flush()
+
+
 class PackageWriter:
     """write_package one frame at a time: each frame's record, blocks and state go to disk as it
     arrives, and finish() writes only what is still pending, the index and the header. So a
@@ -914,7 +932,13 @@ class PackageWriter:
     written in one go, 2026-10-26, which keeps pace while he plays and is far too slow after). The
     file is `out`.partial until finish() renames it; abandon() deletes it. finish(frames=n) keeps
     only the first n frames: a writer that follows a live recording may have taken frames past
-    the end it learns later, and their bytes stay in the body unreferenced."""
+    the end it learns later, and their bytes stay in the body unreferenced.
+
+    One writer can write several packages of the same frames, one per attempt that starts on
+    its first (attempt_cutter.py's seats): branch() adds a file that begins as a copy of the body
+    so far and gets every byte after it, seal() finishes one of them with its first n frames
+    while the writer goes on with the others, and drop() deletes one. The frames are compressed
+    once; only the bytes are written twice."""
 
     def __init__(self, source: Source, rom: bytes, out: Path, codec: int = LZMA, block_bytes: int = 256,
                  group: int = 16, checkpoint_every: int = CHECKPOINT_EVERY, rom_loads: list[dict] | None = None,
@@ -938,9 +962,9 @@ class PackageWriter:
         # growing attempt scene finds its sound in the recorder's ring by it.
         self.frequency = frequency
         self.codes: list[tuple[int, int]] | None = None
-        self.handle = self.partial.open("wb")
-        self.handle.write(bytes(HEADER.size))
-        self.chunks = ChunkWriter(self.handle, codec, HEADER.size, level)
+        self.outputs = Outputs(self.partial)
+        self.outputs.write(bytes(HEADER.size))
+        self.chunks = ChunkWriter(self.outputs, codec, HEADER.size, level)
         self.blocks = Slices(self.chunks, "blocks", CHUNK_TARGET, dedupe=True)
         self.records = Slices(self.chunks, "records", 1 << 62, dedupe=False)
         self.states = source.states and StateWriter(source.states, self.attributor, self.chunks, self.blocks,
@@ -963,41 +987,80 @@ class PackageWriter:
             self.records.flush()
 
     def finish(self, frames: int | None = None) -> dict:
+        stats = self.seal(self.partial, frames, final=True)
+        if self.partial != self.out:
+            os.replace(self.partial, self.out)
+        return stats
+
+    @property
+    def state_frames(self) -> int:
+        """Frames whose scene state is written (it runs one frame behind the captures)."""
+        return len(self.states.records.entries) if self.states else len(self.added)
+
+    def seal(self, out: Path, frames: int | None = None, *, final: bool = False) -> dict:
+        """Finishes `out`, one of this writer's files, as the package of its first `frames` frames
+        (all taken by default): writes only what is still pending, the index and the header. The
+        writer goes on with its other files; final: no frame follows, so the scene state's last
+        frame is written now (finish), else `out` must wait for state_frames to reach `frames`."""
         finishing = time.perf_counter()
-        source, stats, states, attributor, chunks = self.source, self.stats, self.states, self.attributor, self.chunks
+        source, states, attributor, chunks = self.source, self.states, self.attributor, self.chunks
         kept = len(self.added) if frames is None else frames
-        if not 0 < kept <= len(self.added):
-            self.abandon()
+        if final and states:
+            states.finish()
+        if not 0 < kept <= self.state_frames:
+            self.drop(out)
             raise ValueError(f"a package of {kept} frames from a writer that took {len(self.added)}")
-        if kept < len(self.added):                       # (Counter.update would add, not set)
+        stats = Counter(self.stats)                      # each package its own (Counter.update adds)
+        if kept < len(self.added):
             stats["frames"], stats["dropped_frames"] = kept, len(self.added) - kept
             stats["shown"] = sum(shown for shown, _ in self.added[:kept])
             stats["closure_bytes"] = sum(size for _, size in self.added[:kept])
-        with self.handle as handle:
-            if states:
-                states.finish()
-                self._codes()
-                stats.update({f"state_{name}": value for name, value in states.stats.items()})
-                stats.update(chunk_state=chunks.stored["state"], code_loads=len(self.codes))
-            self.blocks.flush()
-            self.records.flush()
-            stats.update(refused=source.refused, chunk_blocks=chunks.stored["blocks"],
-                         chunk_records=chunks.stored["records"], loads=len(attributor.loads),
-                         discovered_windows=len(attributor.static) - 1)
-            index_raw, version = self._index(kept)
-            stored = zlib.compress(index_raw, 9)
+        if states:
+            self._codes()
+            stats.update({f"state_{name}": value for name, value in states.stats.items()})
+            stats.update(chunk_state=chunks.stored["state"], code_loads=len(self.codes))
+        self.blocks.flush()
+        self.records.flush()
+        stats.update(refused=source.refused, chunk_blocks=chunks.stored["blocks"],
+                     chunk_records=chunks.stored["records"], loads=len(attributor.loads),
+                     discovered_windows=len(attributor.static) - 1)
+        index_raw, version = self._index(kept, stats)
+        stored = zlib.compress(index_raw, 9)
+        with self.outputs.files.pop(out) as handle:
             handle.write(stored)
             handle.seek(0)
             handle.write(pack_header(hashlib.sha256(self.rom).digest(), source.rdram_size, kept,
                                      chunks.offset, stored, index_raw, version))
-        if self.partial != self.out:
-            os.replace(self.partial, self.out)
-        stats.update(package_bytes=self.out.stat().st_size, index_raw_bytes=len(index_raw))
+        stats.update(package_bytes=out.stat().st_size, index_raw_bytes=len(index_raw))
         now = time.perf_counter()
         return dict(stats) | {"write_seconds": round(now - self.started, 3),
                               "finish_seconds": round(now - finishing, 3)}
 
-    def _index(self, kept: int) -> tuple[bytes, int]:
+    def branch(self, out: Path, source: Path | None = None) -> None:
+        """Writes `out` too from now on, beginning with a copy of the body written so far (from
+        `source`: one of this writer's files, or one it sealed with nothing written since), so its
+        frames so far are a package there as well (publish, seal)."""
+        self.outputs.flush()
+        source = source or next(iter(self.outputs.files))
+        handle = out.open("wb")
+        try:
+            handle.write(bytes(HEADER.size))
+            with source.open("rb") as body:
+                body.seek(HEADER.size)
+                left = self.chunks.offset - HEADER.size
+                while left:
+                    piece = body.read(min(left, 1 << 20))
+                    if not piece:
+                        raise ValueError("the package being branched is shorter than its body")
+                    handle.write(piece)
+                    left -= len(piece)
+        except BaseException:
+            handle.close()
+            out.unlink(missing_ok=True)
+            raise
+        self.outputs.files[out] = handle
+
+    def _index(self, kept: int, stats: Counter | None = None) -> tuple[bytes, int]:
         """(raw index, version) for the first `kept` frames over everything flushed so far."""
         source, states, attributor = self.source, self.states, self.attributor
         layers, layer_meta = [], []
@@ -1011,7 +1074,8 @@ class PackageWriter:
         version = VERSION if states else 0
         meta = {"schema": SCHEMAS[version], "source": source.kind, "wrapper_build": source.build,
                 "identity": [list(item) for item in source.identity], "block_bytes": self.block_bytes,
-                "group": self.group, "stats": dict(self.stats)} | ({"layers": layer_meta} if version else {})
+                "group": self.group, "stats": dict(self.stats if stats is None else stats)} | (
+                    {"layers": layer_meta} if version else {})
         origin = getattr(source, "origin_qpc", None)
         if origin is not None and self.frequency:
             meta["clock"] = {"origin_qpc": origin, "frequency": self.frequency}
@@ -1044,7 +1108,7 @@ class PackageWriter:
         if kept <= 0:
             return 0
         index_raw, version = self._index(kept)
-        self.handle.flush()
+        self.outputs.flush()
         stored = zlib.compress(index_raw, 1)
         header = pack_header(hashlib.sha256(self.rom).digest(), self.source.rdram_size, kept, self.chunks.offset,
                              stored, index_raw, version)
@@ -1054,8 +1118,16 @@ class PackageWriter:
         return kept
 
     def abandon(self) -> None:
-        self.handle.close()
-        self.partial.unlink(missing_ok=True)
+        """Deletes every package this writer has not finished."""
+        for out in list(self.outputs.files):
+            self.drop(out)
+
+    def drop(self, out: Path) -> None:
+        """Stops writing `out` and deletes it."""
+        handle = self.outputs.files.pop(out, None)
+        if handle is not None:
+            handle.close()
+        out.unlink(missing_ok=True)
 
 
 def with_resolution(data: bytes, rom: bytes, resolutions: list) -> bytes:
