@@ -27,6 +27,9 @@ PATH_FASTEST, PATH_AVERAGE = 0, 1  # gp_path_source
 
 # Renderer playback decisions consumed by the session status.
 GP_WRONG_SCENE = 5
+#: gipc_reason values (ghost_ipc.h) for a cartridge the worker could not read
+#: for Mario: GIPC_ROM, then GIPC_ROM_UNQUALIFIED, _EXHAUSTED and _AMBIGUOUS.
+GIPC_ROM_REASONS = (11, 13, 14, 15)
 
 # Sizes
 HEADER_BYTES, RECORD_BYTES, SAMPLE_BYTES = 160, 1284, 1268

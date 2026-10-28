@@ -156,6 +156,9 @@ int main() {
             require(ghost_rom::read(other.bytes, current, out, validate) == Result::ready,
                     "a header whose own image does not qualify falls back to the search");
             normalized(out);
+            SecureZeroMemory(cartridge.bytes, ghost_rom::IMAGE_BYTES);
+            require(discover(current) == Result::unqualified && out.empty(),
+                    "an image the model rejects is named, not reported missing");
         }
         {
             // Pages of one allocation that differ in protection are separate

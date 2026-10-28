@@ -704,8 +704,14 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
                 "an unreadable cartridge refuses staged preparation");
             for(unsigned i=0;i<4;++i){Sleep(25);check(page.status().state==GIPC_REFUSED && page.status().reason==GIPC_ROM
                 && !page.status().prepared_generation,"the staged refusal holds without preparing");}
-            rom[0]=0x40;r.revision=2;page.send(r);
-            page.wait([](const gipc_status& s){return s.ack_revision==2 && s.prepared_generation==107 && s.reason==GIPC_OK;},
+            // The refusal says which discovery outcome it was: two differing
+            // cartridges behind one header are not "no cartridge".
+            rom[0]=0x40;std::vector<uint8_t> twin(rom);twin[1000]^=1;r.revision=2;page.send(r);
+            page.wait([](const gipc_status& s){return s.ack_revision==2 && s.state==GIPC_REFUSED && s.reason==GIPC_ROM_AMBIGUOUS;},
+                "differing cartridges refuse preparation as ambiguous");
+            SecureZeroMemory(twin.data(),twin.size());std::vector<uint8_t>().swap(twin);
+            r.revision=3;page.send(r);
+            page.wait([](const gipc_status& s){return s.ack_revision==3 && s.prepared_generation==107 && s.reason==GIPC_OK;},
                 "the next revision reads the restored cartridge and prepares");
         }
         ghost_ipc::rom(false);page.stopped();

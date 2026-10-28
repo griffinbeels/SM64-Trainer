@@ -9,7 +9,9 @@
 
 namespace ghost_rom {
 constexpr uint32_t IMAGE_BYTES = 8u << 20;
-enum class Result { ready, missing, changed, ambiguous, exhausted };
+// unqualified: a full image behind the header failed the model's asset check
+// and none passed (a cartridge build the model does not know).
+enum class Result { ready, missing, changed, ambiguous, exhausted, unqualified };
 enum class Validation { valid, invalid, unavailable };
 struct Limits {
     uint64_t bytes = 1ull << 30;

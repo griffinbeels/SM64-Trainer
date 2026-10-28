@@ -96,7 +96,7 @@ Result read(const uint8_t* header, const std::function<bool()>& current,
     Scratch candidate_storage(IMAGE_BYTES), scratch_storage(CHUNK_BYTES + HEADER_BYTES - 1);
     auto& candidate = candidate_storage.bytes;
     auto& scratch = scratch_storage.bytes;
-    bool found = false;
+    bool found = false, rejected = false;
     MEMORY_BASIC_INFORMATION region{};
     // The emulator's header normally opens its own cartridge: Project64 keeps
     // the image in one allocation with the header at its base. An image that
@@ -121,6 +121,7 @@ Result read(const uint8_t* header, const std::function<bool()>& current,
                         out = candidate;
                         return Result::ready;
                     }
+                    rejected = true;
                 }
             }
         }
@@ -169,7 +170,7 @@ Result read(const uint8_t* header, const std::function<bool()>& current,
                     // The model's actual bounded asset parser qualifies the image.
                     const auto qualified = validate(candidate.data(), candidate.size());
                     if (qualified == Validation::unavailable) return fail(Result::exhausted);
-                    if (qualified != Validation::valid) continue;
+                    if (qualified != Validation::valid) { rejected = true; continue; }
                     if (!stable()) return fail(Result::changed);
                     if (!budget(0)) return fail(Result::exhausted);
                     if (found && candidate != out) return fail(Result::ambiguous);
@@ -180,6 +181,6 @@ Result read(const uint8_t* header, const std::function<bool()>& current,
         }
     }
     if (!stable()) return fail(Result::changed);
-    return found ? Result::ready : fail(Result::missing);
+    return found ? Result::ready : fail(rejected ? Result::unqualified : Result::missing);
 }
 }

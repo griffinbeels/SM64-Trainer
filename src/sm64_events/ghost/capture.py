@@ -10,6 +10,7 @@ from typing import Callable
 
 from sm64_events.ghost.clip import ClipError
 from sm64_events.ghost.native_channel import NativeChannel, RejectedControl
+from sm64_events.ghost.native_layout import GIPC_ROM_REASONS
 from sm64_events.ghost.native_protocol import RECORD_BYTES, Producer
 from sm64_events.memory.ghost_layout import GhostLayout
 from sm64_events.replay.capturecontrol import CaptureControl
@@ -408,7 +409,7 @@ class NativeCapture:
         report, once per distinct fault transition; transport also deduplicates.
         """
         key = (state, reason)
-        if state != 5 or reason not in {6, 7, 8, 11}:
+        if state != 5 or reason not in {6, 7, 8, *GIPC_ROM_REASONS}:
             self._reported_native_fault = None
         elif key != getattr(self, "_reported_native_fault", None):
             self._reported_native_fault = key

@@ -6,7 +6,7 @@ import string
 import threading
 
 from sm64_events.ghost.clip import INCOMPLETE_INPUTS, OLDER_POSE_FORMAT_TEXT
-from sm64_events.ghost.native_layout import GHOSTS, GP_WRONG_SCENE, LABEL_BYTES
+from sm64_events.ghost.native_layout import GHOSTS, GIPC_ROM_REASONS, GP_WRONG_SCENE, LABEL_BYTES
 from sm64_events.ghost.pb import attempt_id_of
 from sm64_events.ghost.selection import MISSING_REASON
 from sm64_events.ghost import settings
@@ -40,6 +40,9 @@ LATE_JOIN_FRAMES = 60
 #: The renderer's GIPC_BUDGET: the chosen set does not fit the clip budget (or
 #: memory) together. The files are fine; fewer or shorter ghosts would show.
 NATIVE_BUDGET_REASON = 12
+#: Every GIPC_ROM_REASONS refusal: the number reaches the ghost timeline, and
+#: the card says one sentence for all of them.
+NATIVE_ROM_REASON_TEXT = "The game ROM could not be read for Mario. Reopen the game with the Trainer graphics plugin."
 
 
 def budget_reason(ghosts: int) -> str:
@@ -616,7 +619,7 @@ class NativeGhost:
                           7: "Mario's model could not be loaded from this ROM.",
                           8: "The saved Mario poses could not be played.",
                           NATIVE_BUDGET_REASON: budget_reason(len(self._selected_asset or ())),
-                          11: "The game ROM could not be read for Mario. Reopen the game with the Trainer graphics plugin."}.get(
+                          **dict.fromkeys(GIPC_ROM_REASONS, NATIVE_ROM_REASON_TEXT)}.get(
                               status.get("reason"), "Mario playback is unavailable; try switching it off and on.")
             elif self._owner_suspended:
                 reason = "Waiting for the next attempt or a saved state."

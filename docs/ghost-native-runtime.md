@@ -1085,8 +1085,12 @@ driver's device memory reads one to two orders slower than ordinary memory
 deadline, and it never holds the cartridge. The
 immutable result is cached by ROM generation separately from the chosen clip.
 No ROM scan or file read runs on the render thread. A ROM acquisition refusal
-uses `GIPC_ROM` (11), adaptive preparation included (it once read as
-"preparing" forever); `GIPC_FILE` (6) describes clip acquisition. Neither a shared
+uses `GIPC_ROM` (11: none found, or it changed mid-read), `GIPC_ROM_UNQUALIFIED`
+(13: an image behind the header failed the model's asset check),
+`GIPC_ROM_EXHAUSTED` (14: the search ran out of bytes, time or memory) or
+`GIPC_ROM_AMBIGUOUS` (15), adaptive preparation included (it once read as
+"preparing" forever). The card words all four alike; the ghost timeline and
+error reports carry the number. `GIPC_FILE` (6) describes clip acquisition. Neither a shared
 ROM failure nor renderer readiness changes saved-recording eligibility.
 
 Losing the active origin withdraws drawing while retaining prepared assets.

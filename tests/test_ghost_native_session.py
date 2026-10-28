@@ -8,7 +8,7 @@ import pytest
 
 from sm64_events.ghost import settings
 from sm64_events.ghost.native_session import LATE_JOIN_FRAMES, NATIVE_BUDGET_REASON, NativeGhost, budget_reason
-from sm64_events.ghost.native_layout import GP_WRONG_SCENE
+from sm64_events.ghost.native_layout import GIPC_ROM_REASONS, GP_WRONG_SCENE
 from sm64_events.memory.ghost_layout import ghost_supported
 from tests.test_ghost_session import a_session, mark
 from tests.test_ui_ghost_session import controls, run_node
@@ -802,6 +802,24 @@ def test_a_set_that_does_not_fit_says_so_on_the_ghost_card(tmp_path):
 
     asyncio.run(check())
     assert budget_reason(2) == budget_reason(16) == "These ghosts are too long to show together; untick one."
+
+
+@pytest.mark.parametrize("reason", GIPC_ROM_REASONS)
+def test_an_unreadable_cartridge_says_so_on_the_ghost_card(tmp_path, reason):
+    """Each cartridge refusal reads as the ROM sentence, never "Preparing
+    Mario..." (a JP/AMD tester's card said that for a whole session)."""
+    session, source, _ = native_session(tmp_path)
+
+    async def check():
+        await session.update({"enabled": True})
+        session._native.note()
+        source.snapshot_status = lambda **_: {
+            "available": True, "state": 5, "reason": reason,
+            "producer": SimpleNamespace(configuration=2, epoch=3)}
+        assert session.payload()["window"]["reason"].startswith("The game ROM could not be read for Mario.")
+        await session.stop()
+
+    asyncio.run(check())
 
 
 def test_pose_ready_is_not_display_evidence(tmp_path):
