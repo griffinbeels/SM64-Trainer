@@ -95,14 +95,16 @@ def lineup_row(slot: int, name: str, tier: str, division: str, frames: int, *,
 
 def lineup_rivals(*, state: str = "ready", reason: str | None = None, pb_frames: int | None = 343,
                   rows: list | None = None, include_pb: bool = True, count: int = 4,
-                  scope: str = "strategy") -> dict:
+                  scope: str = "strategy", pb_ranked: bool = True) -> dict:
     """`session.rivals` in the Lineup contract (engineering-plan.md): state,
-    reason, your PB and the rival seats, with the shipped options and limits."""
-    from sm64_events.ghost.adaptive import PB_HUE_DEGREES
+    reason, your PB and the rival seats, with the shipped options and limits.
+    `pb_ranked=False` is a PB nothing on its scope grades (`adaptive.UNRANKED`)."""
+    from sm64_events.ghost.adaptive import PB_HUE_DEGREES, UNRANKED
 
     if rows is None:
         rows = [lineup_row(slot, *player) for slot, player in enumerate(LINEUP_PLAYERS)]
-    pb = None if pb_frames is None else {"frames": pb_frames, "tier": "Platinum", "division": "II", "step": 23,
+    rank = {"tier": "Platinum", "division": "II", "step": 23} if pb_ranked else UNRANKED
+    pb = None if pb_frames is None else {"frames": pb_frames, **rank,
                                           "hue_degrees": PB_HUE_DEGREES, "available": True}
     return {"state": state, "reason": reason, "scope": scope, "rows": rows if state == "ready" else [],
             "pb": pb, "status": None, "simulation": None, "strategy_name": FIXTURE_TARGET["strat"],

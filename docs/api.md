@@ -1212,7 +1212,9 @@ back empty, or this build has no cloud), `signed_out`, `offline` (this lineup's
 own list failed, or the account is in a network cooldown) or null (nothing asked
 yet: the overlay is off). Each row carries `pending: true` while its recording
 downloads; a pending row shows its player and colour but does not play. `own`
-marks the player's own recordings by identity, never by name.
+marks the player's own recordings by identity, never by name. `pb` is the saved
+PB that races; its `tier`, `division` and `step` are null when nothing on this
+scope ranks it (a strategy with no ladder yet), and then it anchors no range.
 `simulation` is an
 isolated developer profile label or null. Rows include immutable `id`, slot,
 player/name, strategy, rank/time, `pinned` and explicit `hue_degrees`.

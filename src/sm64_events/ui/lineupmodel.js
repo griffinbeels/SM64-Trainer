@@ -34,14 +34,17 @@ function strategyChoices(strategies) {
     .map(name => ({ label: name, strategy: name }));
 }
 
-/** Your own seat: always present, Capless 5 with no time until your first finish. */
+/**
+ * Your own seat: always present, Capless 5 with no time until your first finish.
+ * A PB nothing ranks yet (a strategy with no ladder) shows its time and no badge.
+ */
 export function youSeat(rivals) {
   const pb = rivals?.pb || null;
   const racing = Boolean(pb) && rivals?.options?.include_pb !== false && pb.available !== false;
+  const rank = pb ? { tier: pb.tier ?? null, division: pb.division ?? null } : RANK_FLOOR;
   return { key: "you", id: "you", you: true, name: "You",
     frames: pb && Number.isInteger(pb.frames) ? pb.frames : null,
-    tier: pb?.tier || RANK_FLOOR.tier, division: pb?.division || RANK_FLOOR.division,
-    hue: pb?.hue_degrees ?? 250, ghost: racing };
+    tier: rank.tier, division: rank.division, hue: pb?.hue_degrees ?? 250, ghost: racing };
 }
 
 // A pinned run of your own says so by identity (`own`, from the server), never
