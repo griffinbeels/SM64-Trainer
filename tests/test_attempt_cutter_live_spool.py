@@ -62,12 +62,12 @@ def test_a_take_follows_the_live_spool_and_its_scene_is_ready_while_still_record
             live_spool.open_spool(lab).tasks()) >= 2 and live_spool.open_spool(lab).tasks())
         anchor = refs[0]
         brain.note({"op": "start", "kind": "anchor", "frame": anchor.global_timer, "utc": anchor.utc.isoformat()})
-        take = _until(brain, lambda: brain.takes and brain.takes[0])
+        seat = _until(brain, lambda: brain.takes and brain.takes[0]).seats[0]
         brain.note({"op": "complete", "attempt": attempt_span.AttemptMark(
             7, anchor.global_timer, refs[1].global_timer, anchor.utc, refs[1].utc, "success").as_json()})
         growing = _until(brain, lambda: next((event for event in events if event.get("id") == 7), None))
-        assert growing["state"] == "ready" and growing["growing"] is True and growing["path"] == str(take.path)
-        published = _until(brain, lambda: take.grow.is_file() and scene_session.Growth(take.path, take.grow).read(rom))
+        assert growing["state"] == "ready" and growing["growing"] is True and growing["path"] == str(seat.path)
+        published = _until(brain, lambda: seat.grow.is_file() and scene_session.Growth(seat.path, seat.grow).read(rom))
         assert len(published) >= 1                               # the scene opens while the producer records
         for frame in frames[3:5]:                                # area 2: the next place appears
             host.send(f"frame {frame}")
@@ -85,7 +85,7 @@ def test_a_take_follows_the_live_spool_and_its_scene_is_ready_while_still_record
             assert cut.frame(index) == whole.frame(index)
             assert pk.state_fingerprint(*cut.scene_state(index)[1:]) == pk.state_fingerprint(
                 *whole.scene_state(index)[1:])
-        assert not take.grow.exists()
+        assert not seat.grow.exists()
     finally:
         brain.close()
         lease.stop()

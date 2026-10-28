@@ -1627,7 +1627,9 @@ soon as the [[attempt]] completes, before the tap has even recorded its fade-out
 it grows on screen as the recording reaches it (about 0.3 s behind the game), and a
 Play that catches up waits on the newest picture. Its sound is the game sound the
 [[recorder]] heard, from the first picture on; its [[sound stems]] join it a few
-seconds after the [[attempt]] ends. Only an [[attempt]] no package was
+seconds after the [[attempt]] ends. Two [[attempt]]s that start together (a [[star]] and
+the [[segment]] that goes on to the pipe, both from one [[reset]]) share that writing, and
+each gets its own package, so the one that ends later is just as quick. Only an [[attempt]] no package was
 following when it began (one started before the lab) is "cutting" for a few
 seconds; one the recording does not fully hold has no scene, and says why in one
 sentence. The server keeps the scenes of his last 20 [[attempt]]s while it is up.
