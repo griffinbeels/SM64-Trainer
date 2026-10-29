@@ -100,7 +100,7 @@ def test_loading_holds_one_place_per_rival_it_will_seat(count):
     assert len(holes) == count
     assert all(hole["placeholder"] for hole in holes)
     assert [hole["key"] for hole in holes] == [f"s{slot}" for slot in range(count)]
-    assert shown["lineup"] == f"{ENTITY}|{FIXTURE_TARGET['strat']}|strategy"
+    assert shown["lineup"] == f"{ENTITY}|{FIXTURE_TARGET['strat']}|overall"
 
 
 def test_loading_and_ready_share_a_lineup_so_your_seat_stays_put():
@@ -114,6 +114,7 @@ def test_ready_seats_you_then_the_rivals_with_their_marks():
             lineup_row(1, "Quinn", "Diamond", "IV", 335, pending=True),
             lineup_row(2, "Kai", "Diamond", "III", 334)]
     rows[2]["verified"] = True
+    rows[1]["strategy"] = "Cannonless"
     shown = model(lineup_session(rows=rows))
     you, *seats = shown["people"]
     assert you["you"] and you["ghost"] is True and you["tier"] == "Platinum"
@@ -122,6 +123,9 @@ def test_ready_seats_you_then_the_rivals_with_their_marks():
     assert [(s["pinned"], s["pending"], s["verified"]) for s in seats] == [
         (True, False, False), (False, True, False), (False, False, True)]
     assert [s["hue"] for s in seats] == [row["hue_degrees"] for row in rows]
+    # Every lineup races all strategies, so each seat names its own.
+    assert [p["strategy"] for p in shown["people"]] == [FIXTURE_TARGET["strat"], FIXTURE_TARGET["strat"],
+                                                        "Cannonless", FIXTURE_TARGET["strat"]]
     assert "note" not in shown
 
 
@@ -221,4 +225,4 @@ def test_the_overlay_switch_rides_on_the_model():
 
 def test_scope_is_part_of_the_lineup_identity():
     """Strategy and Overall are different lineups: switching exchanges the row."""
-    assert model(lineup_session(scope="overall"))["lineup"] != model(lineup_session())["lineup"]
+    assert model(lineup_session(scope="strategy"))["lineup"] != model(lineup_session())["lineup"]

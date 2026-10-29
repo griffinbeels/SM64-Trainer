@@ -458,6 +458,9 @@ def test_saving_with_all_visible_pins_keeps_them_and_does_not_leak_a_local_refer
 @pytest.mark.parametrize("occupied", [1,4])
 def test_saved_run_respects_persisted_pins_after_strategy_change(tmp_path,monkeypatch,occupied):
     rivals,tracker,_,population,_ = controller(tmp_path,monkeypatch)
+    # Separate lineups per strategy are the Strategy scope's; Overall shares one.
+    assert rivals._key({**TARGET,"strat":"Different"})==rivals._key(TARGET)
+    rivals.scopes[rivals._entity_key(TARGET)] = "strategy"
     protected = {str(slot):population.rows[slot]["id"] for slot in range(occupied)}
     rivals.pins[rivals._key(TARGET)] = dict(protected)
     rivals.pb_changed(TARGET)

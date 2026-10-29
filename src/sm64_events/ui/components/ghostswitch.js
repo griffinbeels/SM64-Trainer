@@ -563,7 +563,7 @@ function GhostSettingsSections({t, session, write, controls, appearance, patch, 
 function settingsBody(appearance, sameTarget, options, rivals, session) {
   const body = {...appearance};
   if (!sameTarget) delete body.nudge_frames;
-  if (options && rivals) Object.assign(body, {rivals: {scope: rivals.scope || "strategy", options}, target: session.target});
+  if (options && rivals) Object.assign(body, {rivals: {scope: rivals.scope || GHOST_SCOPE, options}, target: session.target});
   return body;
 }
 
@@ -636,12 +636,16 @@ function GhostRacing({session, controls, held, on, write, queue, entityKey}) {
       ranges=${limits.path_tuning} draft=${held.path_tuning} queue=${queue} />`;
 }
 
+/** Every lineup races all strategies (his decision, 2026-10-28); ghost/rivals.py
+ *  DEFAULT_SCOPE says the same, and a saved Strategy choice is moved onto it. */
+export const GHOST_SCOPE = "overall";
+
 /** Serial scope swaps follow the latest tab; a rejection never retries itself. */
 function useRivalScope(session, scope, entityKey, active, write) {
   const pending = useRef(false);
   const attempted = useRef(null);
   const [revision, settled] = useState(0);
-  const actual = session?.rivals?.scope || "strategy";
+  const actual = session?.rivals?.scope || GHOST_SCOPE;
   const wanted = active && session?.rivals && ghostTargetKey(session.target) === entityKey
     && (scope === "strategy" || scope === "overall")
     ? JSON.stringify([session.target,scope]) : null;
@@ -658,7 +662,7 @@ function useRivalScope(session, scope, entityKey, active, write) {
 }
 
 function racingScopeReady(session, scope, known) {
-  return known && (!session?.rivals || (session.rivals.scope || "strategy") === scope);
+  return known && (!session?.rivals || (session.rivals.scope || GHOST_SCOPE) === scope);
 }
 
 /**
@@ -728,7 +732,7 @@ function LegacyRow({ session, controls, held, on, write, queue, retry, entityKey
   </div>`;
 }
 
-export function GhostSwitch({ t, ghost, entityKey, active = true, scope = "strategy",
+export function GhostSwitch({ t, ghost, entityKey, active = true, scope = GHOST_SCOPE,
                               strategies = [], onPickStrategy }) {
   const { session, reachable, draft, write, queue, retry } = ghost;
   useRivalScope(session, scope, entityKey, active && reachable, write);

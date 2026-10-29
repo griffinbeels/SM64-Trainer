@@ -15,8 +15,9 @@ const count = (value, noun) => `${value} ${noun}${value === 1 ? "" : "s"}`;
 const targetName = row => row.target?.name || "Shared practice target";
 const methodLabel = row => `${row.strategy} · ${row.game_version.toUpperCase()} · ${row.clock.toUpperCase()}`;
 const groupKey = row => JSON.stringify([row.target, row.clock, row.game_version, row.strategy]);
-// Saved seats belong to the target/scope, across ROM browsing filters.
-const pinKey = row => JSON.stringify([row.local_target, "strategy"]);
+// Saved seats belong to the star or segment, across strategies and ROM
+// browsing filters: every Lineup races all of its strategies.
+const pinKey = row => JSON.stringify([row.local_target?.kind, row.local_target?.entity_key]);
 
 function pageURL(kind, row, cursor, entity, rom) {
   const params = new URLSearchParams();
@@ -41,7 +42,7 @@ function Method({ row }) {
 function CommunityHeader({ selected, entity, onBrowseAll, busy, back }) {
   return html`<header class="community-library-header">
     <div><h3>${selected ? targetName(selected) : "Community ghosts"}</h3>
-      <p class="meta">${selected ? html`<${Method} row=${selected} />` : "Find a recording to race and save it to that strategy’s Lineup."}</p></div>
+      <p class="meta">${selected ? html`<${Method} row=${selected} />` : "Find a recording to race and save it to that star’s Lineup."}</p></div>
     ${selected ? html`<button type="button" class="quiet-button" disabled=${busy != null} onclick=${back}><${Icon} name="arrowLeft" /> Back to ghost targets</button>`
       : entity && onBrowseAll ? html`<button type="button" class="quiet-button" onclick=${onBrowseAll}>Browse all targets</button>` : null}
   </header>`;
@@ -113,7 +114,7 @@ function useSavedRivals(onChanged, alive) {
     try {
       const data = await send("POST", "/api/ghost/rivals/saved", {
         target: row.local_target, action, id: row.id, version: row.game_version,
-        scope: "strategy", ...(slot == null ? {} : { slot }),
+        ...(slot == null ? {} : { slot }),
       });
       if (!alive.current) return;
       if (data.state === "needs_slot") {
@@ -121,7 +122,7 @@ function useSavedRivals(onChanged, alive) {
       } else if (data.state === "added" || data.state === "removed") {
         setKnownPins(previous => ({ ...previous, [pinKey(row)]: Object.values(data.pins || {}) }));
         setChoice(null);
-        setMessage(`${row.player_name} ${data.state === "added" ? "saved to" : "removed from"} ${targetName(row)} · ${methodLabel(row)} Lineup.`);
+        setMessage(`${row.player_name} ${data.state === "added" ? "saved to" : "removed from"} the ${targetName(row)} Lineup.`);
         onChanged?.(data);
       } else {
         throw new Error("The saved ghost could not be confirmed. Refresh this list before trying again.");

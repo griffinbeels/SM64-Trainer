@@ -110,11 +110,11 @@ function usePlayerGhosts(uid) {
     writing.current = true; setBusy(true); setActionError(null); setNotice(null);
     try {
       const result = await send("POST","/api/ghost/rivals/saved",{target:row.local_target,action,
-        id:row.id,scope:"strategy",version:row.game_version,...(slot == null ? {} : {slot})});
+        id:row.id,version:row.game_version,...(slot == null ? {} : {slot})});
       if (!alive.current) return;
       if (result.state === "needs_slot") setChoice({row,seats:result.seats});
       else if (["added","removed"].includes(result.state)) {
-        setChoice(null); setNotice(result.state === "added" ? "Saved to this strategy’s Lineup." : "Removed from this strategy’s Lineup.");
+        setChoice(null); setNotice(result.state === "added" ? "Saved to this star’s Lineup." : "Removed from this star’s Lineup.");
         const key = savedTargetKey(row);
         setPage(previous => ({...previous,rows:previous.rows.map(item => savedTargetKey(item) === key
           ? {...item,saved_slot:pinSlot(result.pins,item.id)} : item)}));
@@ -126,7 +126,7 @@ function usePlayerGhosts(uid) {
 }
 
 function savedTargetKey(row) {
-  return JSON.stringify([row.local_target?.kind,row.local_target?.entity_key,row.local_target?.strat,"strategy"]);
+  return JSON.stringify([row.local_target?.kind,row.local_target?.entity_key]);
 }
 
 function pinSlot(pins, id) {

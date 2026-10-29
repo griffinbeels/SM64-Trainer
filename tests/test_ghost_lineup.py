@@ -88,8 +88,11 @@ def lineup(tmp_path, cloud, *, scope="strategy"):
     sync = CommunitySync(cloud, population)
     native = Native()
     rivals = Rivals(tracker, population, native, lambda: "us", community=sync)
-    if scope != "strategy":
-        rivals.scopes[rivals._entity_key(STANDARD)] = scope
+    # Every lineup races all strategies by default; these cases name a scope,
+    # mostly Strategy, whose separate per-strategy lists they exercise.
+    if scope is not None:
+        tracker.db.set_state(module.STATE_KEY, {"version": module.STATE_VERSION,
+                                                "scopes": {rivals._entity_key(STANDARD): scope}})
     return rivals, tracker, population, sync, native
 
 
@@ -135,7 +138,7 @@ def test_no_strategy_never_raises_and_asks_nobody(tmp_path, monkeypatch, scope):
     monkeypatch.setattr(module, "saved_pb_basis", lambda *args: reads.append(args))
 
     async def scenario(rivals, tracker, population, sync, native):
-        tracker.db.set_state(module.STATE_KEY, {"version": 4, "options": {}, "scopes": {},
+        tracker.db.set_state(module.STATE_KEY, {"version": module.STATE_VERSION, "options": {}, "scopes": {},
             "pins": {rivals._strategy_key(STANDARD): {"0": "f" * 64}}})
         before = tracker.db.get_state(module.STATE_KEY, {})
         for _ in range(5):
@@ -153,6 +156,24 @@ def test_no_strategy_never_raises_and_asks_nobody(tmp_path, monkeypatch, scope):
         rivals.apply({"scope": scope})
         assert tracker.db.get_state(module.STATE_KEY, {})["pins"] == before["pins"]
     run(tmp_path, cloud, scenario, scope=scope)
+
+
+def test_the_default_lineup_races_every_strategy_from_one_list(tmp_path):
+    """His decision, 2026-10-28: "I want to be exposed to ALL ghosts by default
+    for a star." Switching strategy keeps the one Overall list and its seats."""
+    cloud = Cloud([*(cloud_row(number, frames) for number, frames in enumerate(FRAMES, 1)),
+                   *(cloud_row(number + 100, frames, "Other") for number, frames in enumerate(FRAMES, 1))])
+
+    async def scenario(rivals, tracker, population, sync, native):
+        await settle(sync, rivals, STANDARD)
+        assert rivals.payload()["scope"] == "overall" and len(rivals.rows) == 4
+        assert {row["strategy"] for row in rivals.rows} == {"Standard", "Other"}
+        before = [row["id"] for row in rivals.rows]
+        await settle(sync, rivals, OTHER)
+        assert [row["id"] for row in rivals.rows] == before
+        pools = [call for call in cloud.calls if call[1] == "/v1/pool"]
+        assert len(pools) == 1 and pools[0][2]["params"]["scope"] == "overall"
+    run(tmp_path, cloud, scenario, scope=None)
 
 
 def test_switching_strategies_asks_each_list_once_and_never_mixes_them(tmp_path):

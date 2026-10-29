@@ -32,7 +32,7 @@ def test_save_b_while_a_is_active_survives_settings_and_restart_without_touching
     try:
         result = rivals.change_saved(OTHER,{"action":"add","id":row["id"]})
         assert result["state"] == "added" and result["slot"] == 0
-        assert result["target"] == OTHER and result["scope"] == "strategy"
+        assert result["target"] == OTHER and result["scope"] == "overall"
         assert result["pins"] == {"0":row["id"]}
         assert result["seats"][0]["player_name"] == row["player_name"]
         assert result["seats"][0]["frames"] == row["frames"]
@@ -53,8 +53,9 @@ def test_save_b_while_a_is_active_survives_settings_and_restart_without_touching
 
 
 @pytest.mark.parametrize("values",[
+    # Another strategy is compatible: every lineup races all of them.
     {"entity_key":"2-3"},{"clock":"rta"},{"game_version":"jp"},
-    {"strategy":"Other"},{"valid":False},{"full_start":False},
+    {"valid":False},{"full_start":False},
     {"player_id":""},{"player_name":""},{"frames":0},
 ])
 def test_incompatible_record_cannot_mutate_any_saved_or_live_state(tmp_path, monkeypatch, values):
@@ -231,7 +232,7 @@ def test_ghost_only_missing_ladder_preflight_and_add_give_same_reason_without_ch
         availability = rivals.saved_availability(target,version="us",scope="strategy")
         assert not availability["available"] and "no local rank standards" in availability["reason"]
         with pytest.raises(ValueError,match="no local rank standards"):
-            rivals.change_saved(target,{"action":"add","id":row["id"]},version="us")
+            rivals.change_saved(target,{"action":"add","id":row["id"],"scope":"strategy"},version="us")
         assert (live_state(rivals,native),rivals.pins) == before
         assert rivals.saved_availability(OTHER,version="us") == {"available":True,"reason":None,"pins":{}}
         assert not rivals.saved_availability(OTHER,version="unknown")["available"]
@@ -260,10 +261,10 @@ def test_preflight_returns_detached_saved_pins_even_when_grading_or_clock_is_una
     rivals.pins[rivals._scope_key(target,"strategy")] = {"1":row["id"]}
     before = live_state(rivals,native),deepcopy(rivals.pins)
     try:
-        availability = rivals.saved_availability(OTHER,expected_clock="rta")
+        availability = rivals.saved_availability(OTHER,expected_clock="rta",scope="strategy")
         assert not availability["available"] and availability["pins"] == {"3":row["id"]}
         availability["pins"].clear()
-        missing_ladder = rivals.saved_availability(target)
+        missing_ladder = rivals.saved_availability(target,scope="strategy")
         assert not missing_ladder["available"] and missing_ladder["pins"] == {"1":row["id"]}
         invalid = rivals.saved_availability(OTHER,version="unknown")
         assert not invalid["available"] and invalid["pins"] == {}

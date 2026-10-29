@@ -1,4 +1,7 @@
-"""Current-strategy boundaries and the reported legacy Wild Blue PB."""
+"""Current-strategy boundaries and the reported legacy Wild Blue PB.
+
+Every lineup races all strategies by default (his decision, 2026-10-28); a
+case about the Strategy scope's own boundary names that scope."""
 from dataclasses import replace
 import json
 from types import SimpleNamespace
@@ -6,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from sm64_events.core.paths import bundled_rank_standards, bundled_sheet_ladders
-from sm64_events.ghost.adaptive import PracticeIdentity
+from sm64_events.ghost.adaptive import PracticeIdentity, rank_frames
 from sm64_events.ghost.pb import AttemptGhost
 from sm64_events.ghost.population import LocalPopulation
 from sm64_events.ghost.rivals import Rivals, STATE_KEY
@@ -32,7 +35,7 @@ def test_strategy_filter_precedes_search_page_limit_and_native_resolution(tmp_pa
     population.close()
 
 
-def test_strategy_switch_restores_only_its_own_pins_and_migrates_legacy_choices(tmp_path,monkeypatch):
+def test_legacy_choices_of_every_strategy_join_the_one_lineup_a_strategy_switch_keeps(tmp_path,monkeypatch):
     rivals,tracker,native,population,_ = controller(tmp_path,monkeypatch)
     standard = population.rows[0]
     different = {**population.rows[1], 'strategy':'Different'}
@@ -44,18 +47,19 @@ def test_strategy_switch_restores_only_its_own_pins_and_migrates_legacy_choices(
         'pins':{legacy:{'0':standard['id'],'1':different['id']}}})
     restored = Rivals(tracker,population,native,lambda:'us')
     restored.refresh(TARGET,CONTROLS,enabled=True)
-    assert restored.pins[restored._key(TARGET)]=={'0':standard['id']}
     other = {**TARGET,'strat':'Different'}
-    assert restored.pins[restored._key(other)]=={'1':different['id']}
-    restored.refresh(other,CONTROLS,enabled=True)
-    assert all(row['strategy']=='Different' for row in restored.rows)
-    restored.refresh(TARGET,CONTROLS,enabled=True)
-    assert any(row['id']==standard['id'] and row['pinned'] for row in restored.rows)
+    assert restored._key(other)==restored._key(TARGET)
+    assert restored.pins[restored._key(TARGET)]=={'0':standard['id'],'1':different['id']}
+    for target in (other,TARGET):
+        restored.refresh(target,CONTROLS,enabled=True)
+        pinned = {row['id']:row['strategy'] for row in restored.rows if row['pinned']}
+        assert pinned=={standard['id']:'Standard',different['id']:'Different'}
     assert 'strategy_only' not in restored.options
 
 
 def test_private_library_cannot_replace_current_strategy_with_another(tmp_path,monkeypatch):
     rivals,tracker,_,_,_ = controller(tmp_path,monkeypatch)
+    rivals.scopes[rivals._entity_key(TARGET)] = 'strategy'
     run = attempt(strat_tag='Different')
     tracker.db.upsert_attempt(run)
     before = json.dumps(rivals.pins),dict(rivals.local_choices)
@@ -98,12 +102,18 @@ def wild_blue_roster(tmp_path):
 
 
 def test_reported_null_rom_pb_remains_in_roster_without_community_rivals(tmp_path):
-    rivals,source,native,_,_ = wild_blue_roster(tmp_path)
-    assert rivals.pb['frames']==321 and rivals.pb['step']==19
-    assert (rivals.pb['tier'],rivals.pb['division'])==('Gold','I')
+    rivals,source,native,tracker,target = wild_blue_roster(tmp_path)
+    assert rivals.payload()['scope']=='overall'
+    assert rivals.pb['frames']==321
+    assert rivals.pb['step']==rank_frames(tracker.ranks,rivals.identity,321,version=None)['step']
     assert not rivals.rows and source['available']
     assert len(native.preparations[-1][1])==1 and native.preparations[-1][1][0].pb
     assert rivals.payload()['pb']['frames']==321
+    # On the Strategy scope's own ladder it is the reported Gold I.
+    rivals.apply(rivals.checked({'scope':'strategy'},target))
+    rivals.refresh(target,CONTROLS,enabled=True)
+    assert (rivals.pb['step'],rivals.pb['tier'],rivals.pb['division'])==(19,'Gold','I')
+    tracker.db.close()
 
 
 @pytest.mark.parametrize('baseline',[None,[],'invalid'])
@@ -159,6 +169,8 @@ def test_simulated_portable_baseline_yields_to_played_pb_and_undo_restores_it(tm
     native=NativeGhost(SimpleNamespace(recorder=None))
     rivals=Rivals(SimpleNamespace(db=db,ranks=ranks),population,native,lambda:'us')
     target={'kind':'star','entity_key':'2-2','strat':'Standard'}
+    # The simulation's donors and steps are on the Standard ladder.
+    db.set_state(STATE_KEY,{'version':5,'scopes':{rivals._entity_key(target):'strategy'}})
     try:
         source=rivals.refresh(target,CONTROLS,enabled=True)
         assert source['available'] and rivals.pb['ghost'].import_id

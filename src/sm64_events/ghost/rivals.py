@@ -14,6 +14,15 @@ from sm64_events.ranks import region_scope
 from sm64_events.ranks.standards import entity_key
 
 STATE_KEY = "ghost_rivals_v1"
+#: Every star races ghosts of every strategy (his decision, 2026-10-28: "I think
+#: we should just ALWAYS match based on *all* strategies for a given star ... it
+#: allows the user to be able to be exposed to unique / different strategies").
+#: The range still starts from your current strategy's PB on the Overall curve.
+#: "strategy" stays a valid scope for callers that name it; no card offers it.
+DEFAULT_SCOPE = "overall"
+#: Version 5 widened the saved choices: earlier states defaulted to "strategy"
+#: and kept each strategy's pinned ghosts apart (`_widened_pins`).
+STATE_VERSION = 5
 MAX_REMOTE_CHOICES = 1024
 LIMITS = {"last_step":MAX_STEP, "max_ahead":MAX_AHEAD, "counts":list(range(1,MAX_RIVALS+1))}
 NO_STRATEGY = "Choose a strategy to race ghosts."
@@ -33,6 +42,34 @@ def wire(row):
 def has_strategy(target):
     """Rivals, pins and cloud lists all belong to a chosen strategy."""
     return bool(target and target.get("strat"))
+
+
+def _widened_pins(pins):
+    """Carry each strategy's pinned ghosts into its star's Overall lineup.
+
+    Before version 5 a pin lived in one strategy's lineup, and the card raced
+    that strategy by default. Every lineup is Overall now, so a ghost the
+    player chose must not vanish from it: each one takes a free Overall slot,
+    its own slot number when it is free. The strategy entries stay as they
+    were; a choice with no free slot left waits there."""
+    widened = {key: dict(choices) for key, choices in pins.items()}
+    for key, choices in pins.items():
+        try:
+            kind, entity, strategy = json.loads(key)
+        except (ValueError, TypeError):
+            continue
+        if strategy in (None, "overall"):
+            continue
+        overall = json.dumps([kind, entity, "overall", None], separators=(",", ":"))
+        destination = widened.setdefault(overall, {})
+        for slot, identity in sorted(choices.items()):
+            if identity in destination.values():
+                continue
+            vacancy = slot if slot not in destination else next(
+                (str(n) for n in range(MAX_RIVALS) if str(n) not in destination), None)
+            if vacancy is not None:
+                destination[vacancy] = identity
+    return widened
 
 
 class ColoredGhost:
@@ -150,7 +187,7 @@ class Rivals:
         return self._signatures[target["entity_key"]]
 
     def scope_for(self, target):
-        return self.scopes.get(self._entity_key(target),"strategy") if target else "strategy"
+        return self.scopes.get(self._entity_key(target),DEFAULT_SCOPE) if target else DEFAULT_SCOPE
 
     def native_target(self, target=None):
         target = target or self.target
@@ -210,7 +247,7 @@ class Rivals:
                 changed = True
                 continue
             destination = {**target,"strat":strategy}
-            choices = self.pins.setdefault(self._strategy_key(destination),{})
+            choices = self.pins.setdefault(self._scope_key(destination,self.scope_for(target)),{})
             if identity not in choices.values():
                 vacancy = slot if slot not in choices else next((str(n) for n in range(MAX_RIVALS) if str(n) not in choices),None)
                 if vacancy is None:
@@ -283,7 +320,7 @@ class Rivals:
             self.options = checked_options(stored.get("options",{}))
             pins = stored.get("pins",{})
             self.local_choices = stored.get("local_choices",{})
-            scopes = stored.get("scopes",{})
+            scopes = stored.get("scopes",{}) if stored.get("version") == STATE_VERSION else {}
             if isinstance(scopes,dict):
                 self.scopes = {key:value for key,value in scopes.items()
                                if isinstance(key,str) and value in ("strategy","overall")}
@@ -294,10 +331,12 @@ class Rivals:
                     if slot in {"0","1","2","3"} and isinstance(value,str) and len(value)==64
                     and all(char in "0123456789abcdef" for char in value)}
                     for key,choices in pins.items() if isinstance(key,str) and isinstance(choices,dict)}
+            if stored and stored.get("version") != STATE_VERSION:
+                self.pins = _widened_pins(self.pins)
             used = {identity for choices in self.pins.values() for identity in choices.values()}
             self.local_choices = {key:value for key,value in self.local_choices.items() if key in used}
             # Older opaque IDs are private until live metadata proves otherwise.
-            remote = stored.get("remote_choices", {}) if stored.get("version") == 4 else {}
+            remote = stored.get("remote_choices", {}) if stored.get("version") in (4, STATE_VERSION) else {}
             if isinstance(remote,dict):
                 for identity,owner in islice(remote.items(), MAX_REMOTE_CHOICES):
                     if identity not in used or identity in self.local_choices:
@@ -908,5 +947,5 @@ class Rivals:
                 if key in used and key not in self.local_choices}
             while len(self.remote_choices) > MAX_REMOTE_CHOICES:
                 self.remote_choices.pop(next(iter(self.remote_choices)))
-            self.tracker.db.set_state(STATE_KEY,{"version":4,"options":self.options,"pins":self.pins,"scopes":self.scopes,
+            self.tracker.db.set_state(STATE_KEY,{"version":STATE_VERSION,"options":self.options,"pins":self.pins,"scopes":self.scopes,
                                                "local_choices":self.local_choices,"remote_choices":self.remote_choices})
