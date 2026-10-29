@@ -1067,16 +1067,30 @@ thread never touches that page. File/hash checks, ROM asset preparation and clip
 allocation belong to the worker. Drawing uses copied commands and borrowed
 immutable buffers, with model adoption/retirement at renderer boundaries.
 
-Zilmar's `GFX_INFO.HEADER` supplies only the first 64 cartridge bytes, not a
-pointer to the full ROM. [ghost_rom.cpp](../plugin/gfxwrap/ghost_rom.cpp) discovers
+Zilmar's `GFX_INFO.HEADER` promises only the first 64 cartridge bytes, not a
+pointer to the full ROM. [ghost_rom.cpp](../plugin/gfxwrap/ghost_rom.cpp) finds
 the matching full image on the worker using bounded, guarded reads of committed
-memory. It matches the entire normalized header, validates the model assets
-without binding a model, rejects differing duplicate images, excludes its own
-buffers, and rechecks header/lifecycle identity. A copied header inside a large
-readable allocation does not qualify as a cartridge. The
+memory. It first reads the header's own allocation: Project64 keeps the
+cartridge in one allocation with the header at its base, and an image that
+qualifies there is the one the emulator runs, so nothing else is read. A header
+copied elsewhere has no image behind it, and the search of the process
+follows. Both match the entire normalized header, validate the model assets
+without binding a model, exclude the worker's own buffers, and recheck
+header/lifecycle identity; the search also rejects differing duplicate images.
+A copied header inside a large readable allocation does not qualify as a
+cartridge. The search follows one allocation across pages that differ in
+protection, and never reads write-combined or uncached pages: a graphics
+driver's device memory reads one to two orders slower than ordinary memory
+(measured 2026-10-28), so a large mapping can run out the search's 2 s
+deadline, and it never holds the cartridge. The
 immutable result is cached by ROM generation separately from the chosen clip.
 No ROM scan or file read runs on the render thread. A ROM acquisition refusal
-uses `GIPC_ROM` (11); `GIPC_FILE` (6) describes clip acquisition. Neither a shared
+uses `GIPC_ROM` (11: none found, or it changed mid-read), `GIPC_ROM_UNQUALIFIED`
+(13: an image behind the header failed the model's asset check),
+`GIPC_ROM_EXHAUSTED` (14: the search ran out of bytes, time or memory) or
+`GIPC_ROM_AMBIGUOUS` (15), adaptive preparation included (it once read as
+"preparing" forever). The card words all four alike; the ghost timeline and
+error reports carry the number. `GIPC_FILE` (6) describes clip acquisition. Neither a shared
 ROM failure nor renderer readiness changes saved-recording eligibility.
 
 Losing the active origin withdraws drawing while retaining prepared assets.

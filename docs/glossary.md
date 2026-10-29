@@ -1333,8 +1333,9 @@ The active practice card's row of the people you race: your own seat first,
 then each [[ghost slot]], slowest to fastest, centred at every width (his
 words, 2026-10-16: "our pb on far left, then times get faster as we go to the
 right"). A seat is a [[rank]] cap inside a ring in that [[ghost]]'s in-game
-colour, the time and the name; a name wraps where the handle divides and is
-never cut off. A dashed ring is a [[ghost]] that cannot race yet (yours before
+colour, the time and the name, with that seat's [[strategy]] small and italic
+under the name (his words, 2026-10-28); a name wraps where the handle divides and is
+never cut off, and a long [[strategy]] ends in an ellipsis. A dashed ring is a [[ghost]] that cannot race yet (yours before
 your first time, a [[ghost]] still downloading); a lock on a ring is a pinned
 [[ghost]], which stays even once beaten, to your left. The [[lineup track]] threads
 the rings. With no [[strategy]] the row offers every one of the [[strategies]]
@@ -1661,13 +1662,20 @@ beaten. With no [[strategy]] there are no slots, no pins and no cloud request.
 
 ### Ghost matching scope
 
-The [[Strategy]] or Overall choice on the practice card. [[Strategy]] restricts
-[[ghost slot]]s to the current [[strategy]]; `Overall` admits other strategies
-and grades them on the [[Overall curve]]. Both use the current [[strategy]]'s saved
-[[personal best]] as their starting basis. Each choice remembers its own manual
-choices, and every [[ghost]] keeps its recorded [[strategy]] label.
+The [[ghost]]s a [[target]]'s [[ghost slot]]s may hold. Every [[lineup]] is
+Overall: it races every [[strategy]] of the [[target]] and grades them on the
+[[Overall curve]], from the current [[strategy]]'s saved [[personal best]] (his
+decision, 2026-10-28: "I think that actually is the better design in general").
+A player near the limit of a slower [[strategy]] meets the slowest [[ghost]]s of a
+faster one. The code still serves a caller that asks for the earlier
+[[strategy]]-only matching, which holds the slots to the current [[strategy]]; no
+card offers it, and the card's [[Strategy]]/Overall pair now picks only which
+[[rank]] shows. A [[ghost]] someone pinned in one [[strategy]]'s [[lineup]] before
+then took a free slot in the Overall [[lineup]]. Every [[ghost]] keeps its
+recorded [[strategy]] label.
 
-- **Lives** — `src/sm64_events/ghost/rivals.py` and `src/sm64_events/ui/components/practicelog.js`
+- **Lives** — `src/sm64_events/ghost/rivals.py` (DEFAULT_SCOPE, _widened_pins) and
+  `src/sm64_events/ui/components/ghostswitch.js` (GHOST_SCOPE)
 
 ### Region scope
 

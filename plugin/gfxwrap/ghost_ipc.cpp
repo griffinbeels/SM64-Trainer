@@ -124,13 +124,14 @@ struct RecoveryCache {
     uint8_t rom_digest[32]{};
     void clear(){timing.clear();owner={};marker={};std::memset(rom_digest,0,sizeof(rom_digest));}
 } recovery_cache; // Only the one active IPC worker accesses this bounded cache.
-bool read_live_rom(uint32_t generation, std::vector<uint8_t> &out) {
+// GIPC_OK with the image in out, or the refusal naming why discovery failed.
+uint32_t read_live_rom(uint32_t generation, std::vector<uint8_t> &out) {
     const uintptr_t address = rom_header.load(std::memory_order_acquire);
-    if (!address || !generation || opened.load(std::memory_order_acquire) != generation) return false;
+    if (!address || !generation || opened.load(std::memory_order_acquire) != generation) return GIPC_ROM;
     // The 8 MiB image and its scratch come from PJ64's 2 GiB too: out of
     // memory is "no ROM yet" (GIPC_ROM), never a throw into the worker.
     try {
-    return ghost_rom::read(reinterpret_cast<const uint8_t*>(address), [=] {
+    switch (ghost_rom::read(reinterpret_cast<const uint8_t*>(address), [=] {
         return opened.load(std::memory_order_acquire) == generation
             && rom_header.load(std::memory_order_acquire) == address;
     }, out, [](const uint8_t* bytes, size_t count) {
@@ -138,8 +139,14 @@ bool read_live_rom(uint32_t generation, std::vector<uint8_t> &out) {
         return result == SG_OK ? ghost_rom::Validation::valid
             : result == SG_INVALID_ROM ? ghost_rom::Validation::invalid
             : ghost_rom::Validation::unavailable;
-    }) == ghost_rom::Result::ready;
-    } catch (const std::bad_alloc &) { out.clear(); return false; }
+    })) {
+    case ghost_rom::Result::ready: return GIPC_OK;
+    case ghost_rom::Result::unqualified: return GIPC_ROM_UNQUALIFIED;
+    case ghost_rom::Result::exhausted: return GIPC_ROM_EXHAUSTED;
+    case ghost_rom::Result::ambiguous: return GIPC_ROM_AMBIGUOUS;
+    default: return GIPC_ROM;
+    }
+    } catch (const std::bad_alloc &) { out.clear(); return GIPC_ROM_EXHAUSTED; }
 }
 
 struct Session {
@@ -727,6 +734,9 @@ struct Session {
             // Retained files are bounded like their resident playback copies.
             total += asset.bytes.size();
             if (total > GP_CLIP_BUDGET + uint64_t(GIPC_GHOSTS) * sizeof(gclip_header)) {
+                if (loaded.prepare_generation) {
+                    staged_reason = GIPC_BUDGET; staged_attempted = 0; staged_retry_at = GetTickCount()+100;
+                }
                 failed = loaded.revision; reason = GIPC_BUDGET; state = GIPC_REFUSED; return;
             }
             // A copy playback lost is read back into its own entry.
@@ -756,27 +766,30 @@ struct Session {
         restore_cache(loaded);
     }
     void load_rom() {
-        bool rom_loaded = false;
+        uint32_t refused = GIPC_OK;
         if (loaded.rom_path[0]) {
             clear_rom();
-            rom_loaded = ghost_assets::read(loaded.rom_path, GIPC_PATH_CHARS, 8u << 20, rom_bytes);
-        } else if (cached_rom_generation == loaded.rom_generation && !rom_bytes.empty()) {
-            rom_loaded = true;
-        } else {
+            if (!ghost_assets::read(loaded.rom_path, GIPC_PATH_CHARS, 8u << 20, rom_bytes)) refused = GIPC_ROM;
+        } else if (cached_rom_generation != loaded.rom_generation || rom_bytes.empty()) {
             cached_rom_generation = 0;
-            rom_loaded = read_live_rom(loaded.rom_generation, rom_bytes);
-            if (rom_loaded) cached_rom_generation = loaded.rom_generation;
+            refused = read_live_rom(loaded.rom_generation, rom_bytes);
+            if (!refused) cached_rom_generation = loaded.rom_generation;
         }
-        if (!rom_loaded) {
+        // A staged preparation publishes its own reason (demand's last step):
+        // without this one an unreadable cartridge read as "preparing" for good.
+        if (refused) {
             clear_rom(); failed = loaded.revision;
-            reason = GIPC_ROM; state = GIPC_REFUSED; return;
+            if (loaded.prepare_generation) staged_reason = refused;
+            reason = refused; state = GIPC_REFUSED; return;
         }
         cartridge_verified=ghost_assets::sha256(rom_bytes,cartridge_digest);
         if(!cartridge_verified) {
             clear_rom();failed=loaded.revision;
+            if (loaded.prepare_generation) staged_reason = GIPC_ROM;
             reason=GIPC_ROM;state=GIPC_REFUSED;return;
         }
         rom_ready = true;
+        if (staged_reason == GIPC_ROM || staged_reason >= GIPC_ROM_UNQUALIFIED) staged_reason = GIPC_OK;
         // Ghost sound is optional: a refused engine or device leaves drawing intact.
         if (const auto *hooks = audio_hooks.load(); hooks && !audio_running)
             audio_running = hooks->start(rom_bytes.data(), rom_bytes.size());

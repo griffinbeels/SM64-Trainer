@@ -119,7 +119,8 @@ visibility, sound and the route drawn ahead. Your current PB supplies the defaul
 ghost; saved local recordings and imported ghosts can race alongside it. When
 that PB has no recorded Mario poses (an older or imported PB), your fastest
 recorded run races in its place, shown as **Best recorded run**; your PB stays
-the rank you chase.
+the rank you chase. The ghosts picked for you come from every strategy on that
+star, starting just above your PB, and each one's strategy shows under its name.
 
 **Share ghosts.** Open **Ghost Library · Import / Export** from a star or segment.
 Export that target's overall best, each strategy's best, all your personal bests,

@@ -1,4 +1,7 @@
-"""One Practice scope drives pool, protected choices, search and native ownership."""
+"""One Practice scope drives pool, protected choices, search and native ownership.
+
+Every lineup races all strategies by default (his decision, 2026-10-28); the
+Strategy scope stays valid for a caller that names it, and these cases name it."""
 from dataclasses import replace
 import json
 from types import SimpleNamespace
@@ -22,6 +25,8 @@ def test_existing_strategy_choices_survive_overall_switch_and_restart(tmp_path,m
     rivals,tracker,native,population,_=controller(tmp_path,monkeypatch)
     population.rows[-1]={**population.rows[-1],'strategy':'Other'}
     chosen=population.rows[1]['id']
+    assert rivals.scope_for(TARGET)=='overall'
+    switch(rivals,'strategy')
     rivals.pins[rivals._key(TARGET)]={'0':chosen}
     rivals.refresh(TARGET,CONTROLS,enabled=True,force=True)
     strategy_key=rivals._key(TARGET)
@@ -51,7 +56,7 @@ def test_invalid_scope_is_an_atomic_refusal(tmp_path,monkeypatch,scope):
     with pytest.raises(ValueError,match='Strategy or Overall'):
         rivals.checked({'scope':scope},TARGET)
     assert before==json.dumps(tracker.db.get_state(STATE_KEY,{}),sort_keys=True)
-    assert rivals.payload()['scope']=='strategy'
+    assert rivals.payload()['scope']=='overall'
 
 
 def test_stale_scope_search_actions_and_drafts_cannot_change_another_view(tmp_path,monkeypatch):
@@ -68,17 +73,42 @@ def test_stale_scope_search_actions_and_drafts_cannot_change_another_view(tmp_pa
     assert rivals.search(TARGET,'Form',scope='overall')['records']
 
 
-def test_scope_is_per_entity_and_legacy_pins_migrate_to_strategy_even_in_overall(tmp_path,monkeypatch):
+def test_scope_is_per_entity_and_legacy_pins_migrate_into_the_overall_lineup(tmp_path,monkeypatch):
     rivals,tracker,native,population,_=controller(tmp_path,monkeypatch)
     legacy=rivals._entity_key(TARGET)
     tracker.db.set_state(STATE_KEY,{'version':1,'options':rivals.options,
-        'scopes':{legacy:'overall'},'pins':{legacy:{'2':population.rows[-1]['id']}}})
+        'scopes':{legacy:'strategy'},'pins':{legacy:{'2':population.rows[-1]['id']}}})
     restored=Rivals(tracker,population,native,lambda:'us')
     restored.refresh(TARGET,CONTROLS,enabled=True)
-    assert restored.pins[restored._strategy_key(TARGET)]=={'2':population.rows[-1]['id']}
-    assert not restored.pins.get(restored._key(TARGET))
+    assert restored.scope_for(TARGET)=='overall'
+    assert restored.pins[restored._key(TARGET)]=={'2':population.rows[-1]['id']}
+    assert not restored.pins.get(restored._strategy_key(TARGET))
     other={**TARGET,'entity_key':'2-2'}
-    assert restored.scope_for(other)=='strategy'
+    assert restored.scope_for(other)=='overall'
+
+
+def test_version_4_strategy_choices_join_the_overall_lineup(tmp_path,monkeypatch):
+    """A ghost chosen in a strategy's lineup before every lineup raced all
+    strategies stays chosen: it takes a free Overall slot, and a stored
+    Strategy view no longer narrows the ghosts."""
+    rivals,tracker,native,population,_=controller(tmp_path,monkeypatch)
+    a,b,c=(row['id'] for row in population.rows[:3])
+    standard=rivals._strategy_key(TARGET)
+    other=rivals._strategy_key({**TARGET,'strat':'Other'})
+    overall=rivals._scope_key(TARGET,'overall')
+    tracker.db.set_state(STATE_KEY,{'version':4,'options':rivals.options,
+        'scopes':{rivals._entity_key(TARGET):'strategy'},
+        'pins':{standard:{'0':a,'1':b},other:{'0':b,'1':c}}})
+    restored=Rivals(tracker,population,native,lambda:'us')
+    restored.refresh(TARGET,CONTROLS,enabled=True)
+    assert restored.payload()['scope']=='overall'
+    assert restored.pins[overall]=={'0':a,'1':b,'2':c}
+    assert restored.pins[standard]=={'0':a,'1':b} and restored.pins[other]=={'0':b,'1':c}
+    restored._store()
+    assert tracker.db.get_state(STATE_KEY,{})['version']==5
+    again=Rivals(tracker,population,native,lambda:'us')
+    again.refresh(TARGET,CONTROLS,enabled=True)
+    assert again.pins[overall]=={'0':a,'1':b,'2':c}
 
 
 def test_overall_search_and_native_resolution_allow_other_strategy_only_in_that_scope(tmp_path):
@@ -173,6 +203,8 @@ def test_other_strategy_library_refusal_does_not_persist_or_poison_the_session(t
     # playback. Its pure-selection row stubs have no native clip templates.
     population.rows = []
     session._rivals=Rivals(tracker,population,native,lambda:'us')
+    # Only a Strategy lineup refuses another strategy's run; name that scope.
+    db.set_state(STATE_KEY,{'version':5,'scopes':{session._rivals._entity_key(TARGET):'strategy'}})
     async def check():
         before=await session.refresh()
         stored=db.get_state(SELECTION_KEY,None)

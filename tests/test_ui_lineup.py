@@ -318,7 +318,8 @@ def test_each_state_paints_its_people_and_words_inside_the_card(rendered, name, 
     # Folded away on purpose: the row's own collapse hides every name.
     for seat in [] if shown["off"] else shown["seats"]:
         if seat["placeholder"]:
-            assert seat["bones"] == 2 and seat["name"] is None, seat
+            # Time, name and the strategy line each wait as a bone.
+            assert seat["bones"] == 3 and seat["name"] is None, seat
             continue
         assert seat["inside"] and seat["nameOverflow"] <= 0, f"a name is cut off: {seat}"
         assert 1 <= seat["lines"] <= 2, f"{seat['name']!r} takes {seat['lines']} lines"
@@ -608,10 +609,10 @@ def test_every_endless_shimmer_is_one_the_offscreen_watcher_freezes(served, arri
             page.locator(f"{SEAT}.is-placeholder").first.wait_for()
             settle(page)
         visible = page.evaluate(LOOPING)
-        assert len(visible) == 12, f"four rings and eight bones should loop: {visible}"
+        assert len(visible) == 16, f"four rings and twelve bones should loop: {visible}"
         assert all(loop["covered"] for loop in visible), [loop for loop in visible if not loop["covered"]]
         hidden = looping_out_of_sight(page)
-        assert len(hidden) == 12
+        assert len(hidden) == 16
         assert all(loop["frozen"] for loop in hidden), [loop for loop in hidden if not loop["frozen"]]
         no_faults(seen)
 

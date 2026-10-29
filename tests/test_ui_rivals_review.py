@@ -188,7 +188,7 @@ def test_a_beaten_pinned_rival_stays_left_of_you_with_its_lock_and_is_not_dimmed
 
 UNPINNED = """card => { const s = card.querySelector('.lineup-seat[data-key="s0"]');
   return s && !s.querySelector('.lineup-lock') && s.classList.contains('is-beaten'); }"""
-UNPIN_WRITE = {"rivals": {"scope": "strategy", "action": "reset", "slot": 0}, "target": FIXTURE_TARGET}
+UNPIN_WRITE = {"rivals": {"scope": "overall", "action": "reset", "slot": 0}, "target": FIXTURE_TARGET}
 
 
 def test_the_lock_unpins_its_seat_from_the_keyboard_and_the_seat_then_dims(browser):
@@ -257,7 +257,7 @@ def test_swap_opens_under_its_seat_searches_and_races_into_that_slot(browser, tm
         page.wait_for_function(f"""[...document.querySelectorAll('{CARD} .rival-swap-who strong')]
           .map(n => n.textContent).join() === 'Alice'""")
         asked = seen["searches"][-1]
-        assert asked["player"] == ["ali"] and asked["scope"] == ["strategy"]
+        assert asked["player"] == ["ali"] and asked["scope"] == ["overall"]
         assert json.loads(asked["target"][0]) == FIXTURE_TARGET
 
         # The slower of two runs by one player, picked from the player's own list.
@@ -268,7 +268,7 @@ def test_swap_opens_under_its_seat_searches_and_races_into_that_slot(browser, tm
         recordings.select_option("b" * 64)
         popover.locator(".rival-swap-result").filter(has_text="FormFrame").get_by_role("button", name="Race").click()
         popover.wait_for(state="detached")
-        assert state["writes"] == [{"rivals": {"scope": "strategy", "action": "add", "id": "b" * 64, "slot": 1},
+        assert state["writes"] == [{"rivals": {"scope": "overall", "action": "add", "id": "b" * 64, "slot": 1},
                                     "target": FIXTURE_TARGET}]
         settle(page, """card => { const s = card.querySelector('.lineup-seat[data-key="s1"]');
           return s && s.querySelector('.lineup-lock') && s.textContent.includes('FormFrame'); }""")
@@ -411,7 +411,7 @@ def test_ghost_settings_saves_rivals_and_appearance_in_one_write_and_cancel_keep
         sheet.get_by_role("button", name="Done", exact=True).click()
         sheet.wait_for(state="detached")
         options = {**session["rivals"]["options"], "count": 3, "include_pb": False}
-        assert state["writes"] == [{"opacity": 0.5, "rivals": {"scope": "strategy", "options": options},
+        assert state["writes"] == [{"opacity": 0.5, "rivals": {"scope": "overall", "options": options},
                                     "target": FIXTURE_TARGET}]
         assert state["session"]["rivals"]["options"] == options
         # The sheet reads its own session; the card hears the change the way
@@ -486,46 +486,27 @@ def test_rapid_rank_presses_coalesce_then_midflight_reduced_motion_settles(brows
 OVERALL_ROW = {**lineup_row(0, "FormFrame", "Gold", "III", 330), "strategy": "Cannonless", "strategy_name": "Cannonless"}
 
 
-def _scope_answer(payload, scope):
+def _all_strategies(payload):
+    """The default lineup: three rivals on the card's strategy, one on another."""
     answer = deepcopy(payload)
-    answer["rivals"]["scope"] = scope
-    if scope == "overall":
-        answer["rivals"]["rows"] = [deepcopy(OVERALL_ROW)]
+    answer["rivals"]["rows"] = [*answer["rivals"]["rows"][:3], {**deepcopy(OVERALL_ROW), "slot": 3}]
     return answer
 
 
 @pytest.fixture
 def practice_scopes(browser):
-    payload = lineup_session()
+    payload = _all_strategies(lineup_session())
     with serve_ui_with_ghost(deepcopy(payload)) as (base, _state):
         context = browser.new_context(viewport={"width": 1500, "height": 1100})
         page = context.new_page()
         page.set_default_timeout(10000)
         seen = watch(page)
-        state = {"writes": [], "pending": [], "defer": False, "reject": False, "scope": "strategy", "shared": False}
+        state = {"writes": [], "shared": False}
 
         def ghost_write(route):
-            if route.request.method != "PUT":
-                route.continue_()
-                return
-            body = route.request.post_data_json
-            assert body["target"] == payload["target"]
-            state["writes"].append(body)
-            scope = body["rivals"]["scope"]
-            if state["reject"]:
-                route.fulfill(status=422, json={"detail": "Choose the current practice scope."})
-            elif state["defer"]:
-                state["pending"].append((route, scope))
-            else:
-                state["scope"] = scope
-                route.fulfill(json=_scope_answer(payload, scope))
-
-        def search(route):
-            query = parse_qs(urlparse(route.request.url).query, keep_blank_values=True)
-            assert json.loads(query["target"][0]) == payload["target"]
-            assert query["scope"][0] == state["scope"]
-            route.fulfill(json={"records": _scope_answer(payload, state["scope"])["rivals"]["rows"],
-                                "next_cursor": None})
+            if route.request.method == "PUT":
+                state["writes"].append(route.request.post_data_json)
+            route.continue_()
 
         def practice_view(route):
             response = route.fetch()
@@ -538,7 +519,6 @@ def practice_scopes(browser):
             route.fulfill(response=response, json=data)
 
         page.route("**/api/ghost", ghost_write)
-        page.route("**/api/ghost/rivals/search?*", search)
         page.route("**/api/session?*", practice_view)
         page.route("**/api/replay/available", lambda route: route.fulfill(json={"available": []}))
         try:
@@ -551,80 +531,48 @@ def seat_named(page, name):
     return page.locator(f"{CARD} .lineup-seat").filter(has=page.locator(".lineup-name-text", has_text=name))
 
 
+STRATEGY_LINES = """card => [...card.querySelectorAll('.lineup-row > .lineup-seat')].map(seat => {
+  const line = seat.querySelector('.lineup-strategy'), name = seat.querySelector('.lineup-name');
+  if (!line) return null;
+  const style = getComputedStyle(line), box = line.getBoundingClientRect(), own = seat.getBoundingClientRect();
+  return {text: line.textContent, italic: style.fontStyle === 'italic',
+          smaller: parseFloat(style.fontSize) < parseFloat(getComputedStyle(name).fontSize),
+          below: box.top >= name.getBoundingClientRect().bottom - 1,
+          inside: box.left >= own.left - 0.5 && box.right <= own.right + 0.5, oneLine: box.height < 20};
+})"""
+
+
 @pytest.mark.parametrize("width,shared", [(1500, False), (850, True)])
-def test_practice_tabs_swap_the_ghost_scope_and_back(practice_scopes, tmp_path, width, shared):
-    """Overall admits other compatible strategies; both tabs stay on the
-    active card even when their rank ladders coincide (`shared`)."""
+def test_every_seat_names_its_strategy_and_the_rank_view_never_changes_the_ghosts(
+        practice_scopes, tmp_path, width, shared):
+    """His decision, 2026-10-28: every lineup races all strategies, and each
+    ghost's strategy shows "small, in italics, under the ghost's name". The
+    card's Strategy/Overall pair now picks only the rank shown, so pressing it
+    writes nothing to the ghosts (`shared`: one ladder, so only Overall shows)."""
     page, base, state, seen, payload = practice_scopes
     state["shared"] = shared
     page.set_viewport_size({"width": width, "height": 1100})
     enter_practice(page, base)
     card = page.locator(CARD)
-    strategy = card.get_by_role("button", name="Strategy", exact=True)
-    overall = card.get_by_role("button", name="Overall", exact=True)
-    assert strategy.get_attribute("aria-pressed") == "true" and state["writes"] == []
-    overall.click()
-    seat_named(page, "FormFrame").wait_for()
-    settle(page, "card => card.querySelectorAll('.lineup-seat').length === 2")
-    assert state["writes"] == [{"target": payload["target"], "rivals": {"scope": "overall"}}]
-    _seat, popover = open_swap(page, "s0")
-    popover.get_by_text("FormFrame", exact=True).wait_for()
-    assert seen["searches"][-1]["scope"] == ["overall"]
-    page.keyboard.press("Escape")
-    popover.wait_for(state="detached")
-    assert seat_named(page, "You").locator(".lineup-time").inner_text() == '11"43'
-    assert card.locator(".rank-banner-empty").count() == 0
-    artifact(page, tmp_path, f"lineup-overall-{width}.png")
-    strategy.click()
-    seat_named(page, "Alexander_Speedruns").wait_for()
-    assert state["writes"][-1] == {"target": payload["target"], "rivals": {"scope": "strategy"}}
-    assert strategy.get_attribute("aria-pressed") == "true"
     settle(page, "card => card.querySelectorAll('.lineup-seat').length === 5")
-    assert seat_named(page, "FormFrame").count() == 0
+    lines = card.evaluate(STRATEGY_LINES)
+    strat = FIXTURE_TARGET["strat"]
+    assert [line["text"] for line in lines] == [strat, strat, strat, strat, "Cannonless"]
+    assert all(line["italic"] and line["smaller"] and line["below"] and line["inside"] and line["oneLine"]
+               for line in lines), lines
+    assert seat_named(page, "FormFrame").get_attribute("aria-label").startswith("FormFrame, Cannonless, ")
+    artifact(page, tmp_path, f"lineup-strategies-{width}.png")
+    # Who sits where, not geometry: the rank banner's swap may move the row.
+    def seated():
+        return [(seat["key"], seat["name"], seat["time"]) for seat in seats(page)]
+    before = seated()
+    for name in ("Overall", "Strategy"):
+        button = card.get_by_role("button", name=name, exact=True)
+        if button.count():
+            button.click()
+    page.wait_for_timeout(300)
+    assert state["writes"] == [] and seated() == before
     clean(seen)
-
-
-def test_rapid_practice_scope_changes_finish_on_latest_tab(practice_scopes):
-    page, base, state, seen, payload = practice_scopes
-    enter_practice(page, base)
-    card = page.locator(CARD)
-    state["defer"] = True
-    card.get_by_role("button", name="Overall", exact=True).click()
-    # The card says nothing about rivals until the session answers for the new tab.
-    page.locator(f"{CARD} .lineup-host.is-waiting").wait_for()
-    # The write reaches the server one step after the click: every write first
-    # fetches the local request capability (ui/api.js localFetch).
-    assert pump_until(page, lambda: state["pending"])
-    assert len(state["pending"]) == 1
-    card.get_by_role("button", name="Strategy", exact=True).click()
-    assert len(state["writes"]) == 1
-    pending, scope = state["pending"].pop()
-    state["defer"] = False
-    state["scope"] = scope
-    pending.fulfill(json=_scope_answer(payload, scope))
-    seat_named(page, "Alexander_Speedruns").wait_for()
-    page.locator(f"{CARD} .lineup-host:not(.is-waiting)").wait_for()
-    assert [body["rivals"]["scope"] for body in state["writes"]] == ["overall", "strategy"]
-    assert card.get_by_role("button", name="Strategy", exact=True).get_attribute("aria-pressed") == "true"
-    clean(seen)
-
-
-def test_failed_scope_swap_does_not_repeat_without_another_gesture(practice_scopes):
-    page, base, state, seen, _payload = practice_scopes
-    enter_practice(page, base)
-    card = page.locator(CARD)
-    state["reject"] = True
-    card.get_by_role("button", name="Overall", exact=True).click()
-    page.get_by_text("Choose the current practice scope.", exact=True).wait_for()
-    page.wait_for_timeout(350)
-    assert len(state["writes"]) == 1
-    state["reject"] = False
-    card.get_by_role("button", name="Strategy", exact=True).click()
-    card.get_by_role("button", name="Overall", exact=True).click()
-    seat_named(page, "FormFrame").wait_for()
-    assert len(state["writes"]) == 2
-    assert seen["failed"] == [(422, base + "/api/ghost")]
-    assert len(seen["errors"]) == 1 and "422 (Unprocessable Entity)" in seen["errors"][0]
 
 
 # --------------------------------------------------------------------------
@@ -642,7 +590,7 @@ def _reported_practice_pb(service):
 
 
 @pytest.mark.parametrize("width", WIDTHS)
-def test_reported_wild_blue_pb_reaches_the_real_lineup_and_wario_range(browser, tmp_path, monkeypatch, width):
+def test_reported_wild_blue_pb_reaches_the_real_lineup_and_its_overall_range(browser, tmp_path, monkeypatch, width):
     from tools import ui_fixture
     from tools.ghost_fixture import attach_ghost_routes
     from sm64_events.ghost.rivals import Rivals
@@ -667,7 +615,9 @@ def test_reported_wild_blue_pb_reaches_the_real_lineup_and_wario_range(browser, 
         population.rows = []
         rivals = Rivals(service, population, native, lambda: "us")
         source = rivals.refresh(target, CONTROLS, enabled=True)
-        assert rivals.pb["step"] == 19 and source["available"]
+        # Every lineup races all strategies: the range is the Overall curve's.
+        step = rivals.pb["step"]
+        assert rivals.payload()["scope"] == "overall" and source["available"]
         state["session"].update(source=source, rivals=rivals.payload())
         context = browser.new_context(viewport={"width": width, "height": 1100})
         page = context.new_page()
@@ -682,11 +632,9 @@ def test_reported_wild_blue_pb_reaches_the_real_lineup_and_wario_range(browser, 
             star = next(s for s in practice_view["stars"] if (s["course_id"], s["star_id"]) == (2, 2))
             assert (star["rank"]["rank"], star["rank"]["division"]) == ("Gold", "I")
             sheet = ghost_settings(page)
-            assert sheet.get_by_label("Wario 5", exact=True).is_visible()
-            assert sheet.get_by_label("Wario 1", exact=True).is_visible()
             assert sheet.get_by_label("Standard only").count() == 0
-            assert sheet.locator(".rival-rank").first.get_attribute("data-displayed-step") == "20"
-            assert sheet.locator(".rival-rank").last.get_attribute("data-displayed-step") == "24"
+            assert sheet.locator(".rival-rank").first.get_attribute("data-displayed-step") == str(step + 1)
+            assert sheet.locator(".rival-rank").last.get_attribute("data-displayed-step") == str(min(step + 5, 44))
             artifact(page, tmp_path, f"wild-blue-settings-{width}.png")
             clean(seen)
         finally:

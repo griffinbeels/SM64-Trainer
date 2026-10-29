@@ -97,7 +97,7 @@ export function gapText(you, next) {
 }
 
 // Downloading is a class on the seat, not a new face: the ring closes when the ghost is ready.
-const signature = p => [p.id, p.frames, p.tier, p.division, !!p.pinned, !!p.verified, p.name, !!p.placeholder].join("|");
+const signature = p => [p.id, p.frames, p.tier, p.division, !!p.pinned, !!p.verified, p.name, p.strategy, !!p.placeholder].join("|");
 const seatsOf = row => [...row.querySelectorAll(":scope > .lineup-seat")];
 const fade = (node, from, to, ms, extra = {}) => node.animate([from, to], { duration: ms, ...extra }).finished;
 
@@ -105,7 +105,8 @@ function face(ctx, p, fresh) {
   const f = el("div", "lineup-face");
   const cap = el("span", "lineup-cap");
   if (p.placeholder) {
-    f.append(cap, el("span", "lineup-time lineup-bone"), el("span", "lineup-name lineup-bone"));
+    f.append(cap, el("span", "lineup-time lineup-bone"), el("span", "lineup-name lineup-bone"),
+      el("span", "lineup-strategy lineup-bone"));
     return f;
   }
   cap.append(ctx.o.capNode(p, 26));
@@ -118,6 +119,13 @@ function face(ctx, p, fresh) {
   name.append(text);
   if (p.verified) name.append(tick());
   f.append(cap, time, name);
+  // Small and italic under the name (his words, 2026-10-28): which strategy
+  // this ghost runs, since every lineup races all of them.
+  if (p.strategy) {
+    const strategy = el("span", "lineup-strategy", { title: p.strategy });
+    strategy.textContent = p.strategy;
+    f.append(strategy);
+  }
   return f;
 }
 
@@ -145,8 +153,9 @@ function lock(ctx, p) {
 function seatLabel(p, fmt) {
   if (p.placeholder) return "Finding a ghost";
   const time = p.frames == null ? "no time yet" : fmt(p.frames);
-  if (p.you) return `You, ${time}`;
-  return `${p.name}, ${time}${p.pinned ? ", pinned" : ""}${p.pending ? ", downloading" : ""}`;
+  const strategy = p.strategy ? `, ${p.strategy}` : "";
+  if (p.you) return `You${strategy}, ${time}`;
+  return `${p.name}${strategy}, ${time}${p.pinned ? ", pinned" : ""}${p.pending ? ", downloading" : ""}`;
 }
 
 // Your best recorded run (racing while your PB has no poses) is yours, not a
