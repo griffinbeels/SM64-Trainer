@@ -224,11 +224,19 @@ function usePbRow(a, sec, t, isNew) {
   };
 }
 
+// Which grade a row's cap draws: "strategy" (its own strategy's ladder) or
+// "overall" (the entity's Overall curve). The card's rank view decides it
+// (his ask, 2026-10-29: "The practice log should show the rank icon for
+// whichever you have selected (strategy / overall)"); AttemptTable provides it.
+const RowRankKind = createContext("strategy");
+
 // The row's mark: its rank cap, else its outcome glyph (OUTCOME_LABEL above).
 function RowMark({ a }) {
+  const rankKind = useContext(RowRankKind);
   const success = a.outcome === "success";
-  const mark = a.rank
-    ? html`<${RankIcon} tier=${a.rank.rank} division=${a.rank.division} size=${22} />`
+  const rank = rankKind === "overall" ? a.overall_rank : a.rank;
+  const mark = rank
+    ? html`<${RankIcon} tier=${rank.rank} division=${rank.division} size=${22} />`
     : html`<span class=${`attempt-glyph ${success ? "good" : "badx"}`}
         aria-hidden="true">${(OUTCOME_LABEL[a.outcome] || {}).glyph || ""}</span>`;
   return html`${mark}${success ? html`<span class="sr-only">finished</span>` : ""}`;
@@ -410,8 +418,9 @@ export function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, s
 // Shared table component used by both StarSection and the unassigned block.
 // attempts: the full ordered list for stable numbering;
 // rows: the filtered/sorted subset to actually render.
-export function AttemptTable({ attempts, rows, t, focus, clearFocus, freshIds, openCompare, sec }) {
-  return html`<table class="attempt-table">
+export function AttemptTable({ attempts, rows, t, focus, clearFocus, freshIds, openCompare, sec,
+                              rankKind = "strategy" }) {
+  return html`<${RowRankKind.Provider} value=${rankKind}><table class="attempt-table">
     ${rows.map((a) => {
       const idx = attempts.indexOf(a);
       return html`<${AttemptRow} key=${a.id} a=${a} t=${t} idx=${idx}
@@ -419,7 +428,7 @@ export function AttemptTable({ attempts, rows, t, focus, clearFocus, freshIds, o
         isNew=${freshIds ? freshIds.has(a.id) : false}
         openCompare=${openCompare} sec=${sec} />`;
     })}
-  </table>`;
+  </table></${RowRankKind.Provider}>`;
 }
 
 export function HideToggle({ hidden, showHidden, setShowHidden }) {

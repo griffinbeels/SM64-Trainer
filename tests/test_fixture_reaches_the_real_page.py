@@ -341,7 +341,8 @@ def test_one_rank_banner_with_both_mode_buttons_renders(page):
         "return Array.from(document.querySelectorAll("
         "'.log-card.log-card-active .rank-mode-button'))"
         ".map(b => [b.textContent.trim(), b.getAttribute('aria-pressed')])")
-    assert buttons == [["Strategy", "true"], ["Overall", "false"]]
+    # Overall is the default view (his ask, 2026-10-29).
+    assert buttons == [["Strategy", "false"], ["Overall", "true"]]
 
 
 def test_rank_mode_button_runs_the_shared_swap_and_remembers_the_entity(page):
@@ -355,10 +356,11 @@ def test_rank_mode_button_runs_the_shared_swap_and_remembers_the_entity(page):
     is gone altogether since 2026-08-23 (a strategy swap is an exchange too),
     and this still pins that the exchange never runs a climb underneath.
     """
+    # Overall is the default view (2026-10-29), so the pick away is Strategy.
     page.evaluate(
         "Array.from(document.querySelectorAll("
         "'.log-card.log-card-active .rank-mode-button'))"
-        ".find(b => b.textContent.trim() === 'Overall').click()")
+        ".find(b => b.textContent.trim() === 'Strategy').click()")
     page.wait_ms(40)
     assert count(page, PRIMARY + ".rank-banner.is-swapping") == 1
     assert count(page, PRIMARY + ".rank-banner.is-climbing") == 0, (
@@ -368,27 +370,27 @@ def test_rank_mode_button_runs_the_shared_swap_and_remembers_the_entity(page):
         "'.log-card.log-card-active .rank-mode-button'))"
         ".filter(b => b.getAttribute('aria-pressed') === 'true')"
         ".map(b => b.textContent.trim())")
-    assert pressed == ["Overall"]
+    assert pressed == ["Strategy"]
     remembered = page.evaluate("""
 const card = document.querySelector('.log-card.log-card-active');
 const modes = JSON.parse(localStorage.getItem('sm64.practiceRankModes'));
 return [card.dataset.feedKey, modes[card.dataset.feedKey]];
 """)
-    assert remembered[1] == "overall", remembered
+    assert remembered[1] == "strategy", remembered
     page.wait_ms(500)
     assert count(page, PRIMARY + ".rank-banner.is-swapping") == 0
     assert count(page, PRIMARY + ".rank-banner.is-climbing") == 0, (
         "the hidden floor climb outlived the short rank exchange")
 
-    # Restore the module-scoped browser fixture for the rest of this file.
+    # Restore the module-scoped browser fixture (Overall) for the rest of this file.
     page.evaluate(
         "Array.from(document.querySelectorAll("
         "'.log-card.log-card-active .rank-mode-button'))"
-        ".find(b => b.textContent.trim() === 'Strategy').click()")
+        ".find(b => b.textContent.trim() === 'Overall').click()")
     page.wait_ms(40)
     assert count(page, PRIMARY + ".rank-banner.is-swapping") == 1
     assert count(page, PRIMARY + ".rank-banner.is-climbing") == 0, (
-        "returning to Strategy replayed its floor climb instead of swapping")
+        "returning to Overall replayed its floor climb instead of swapping")
     page.wait_ms(460)
 
 

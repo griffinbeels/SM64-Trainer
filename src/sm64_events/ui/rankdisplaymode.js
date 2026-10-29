@@ -24,7 +24,10 @@ function storedModes(storage) {
 }
 
 export function readRankDisplayMode(entity, storage = globalThis.localStorage) {
-  return storedModes(storage)[entity] || "strategy";
+  // Overall unless the player picked Strategy for this entity (his ask,
+  // 2026-10-29: "by default, we should show the user's rank on the 'overall'
+  // tab ... because otherwise it's very confusing what their rank is").
+  return storedModes(storage)[entity] || "overall";
 }
 
 export function writeRankDisplayMode(entity, mode,
