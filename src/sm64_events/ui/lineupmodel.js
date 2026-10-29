@@ -19,6 +19,8 @@
 // While your saved PB has no poses, your best recorded run races in its
 // colour (`rivals.best_run`, ghost/rivals.py): it gets its own seat, and
 // your seat keeps the PB's time and rank with an empty ring.
+// Every lineup races all strategies (his decision, 2026-10-28), so each seat
+// names its strategy under its name (`strategy`; null draws no line).
 import { RANK_FLOOR } from "./components/caps.js";
 
 export const LINEUP_WORDS = {
@@ -38,11 +40,14 @@ function strategyChoices(strategies) {
     .map(name => ({ label: name, strategy: name }));
 }
 
+/** The strategy you are practising, which your seat names under "You". */
+const yourStrategy = rivals => rivals?.strategy_name || null;
+
 /** Your own seat: always present, Capless 5 with no time until your first finish. */
 export function youSeat(rivals) {
   const pb = rivals?.pb || null;
   const racing = Boolean(pb) && rivals?.options?.include_pb !== false && pb.available !== false;
-  return { key: "you", id: "you", you: true, name: "You",
+  return { key: "you", id: "you", you: true, name: "You", strategy: yourStrategy(rivals),
     frames: pb && Number.isInteger(pb.frames) ? pb.frames : null,
     tier: pb?.tier || RANK_FLOOR.tier, division: pb?.division || RANK_FLOOR.division,
     hue: pb?.hue_degrees ?? 250, ghost: racing };
@@ -52,7 +57,7 @@ export function youSeat(rivals) {
 export function bestRunSeat(rivals) {
   const best = rivals?.best_run || null;
   if (!best || rivals?.options?.include_pb === false) return [];
-  return [{ key: "best", id: best.id, best: true, name: LINEUP_WORDS.bestRun,
+  return [{ key: "best", id: best.id, best: true, name: LINEUP_WORDS.bestRun, strategy: best.strategy || null,
     frames: Number.isInteger(best.frames) ? best.frames : null, tier: best.tier, division: best.division,
     hue: best.hue_degrees, ghost: best.available !== false }];
 }
@@ -61,7 +66,7 @@ export function bestRunSeat(rivals) {
 // by whatever name a recording carries -- an import credited "You" is not you.
 function rivalSeat(row) {
   return { key: `s${row.slot}`, id: row.id, name: row.own === true ? "Your run" : (row.player_name || "Chosen ghost"),
-    frames: Number.isInteger(row.frames) ? row.frames : null, tier: row.tier, division: row.division,
+    strategy: row.strategy || null, frames: Number.isInteger(row.frames) ? row.frames : null, tier: row.tier, division: row.division,
     hue: row.hue_degrees, pinned: Boolean(row.pinned), pending: Boolean(row.pending),
     verified: row.verified === true, slot: row.slot };
 }
@@ -127,7 +132,7 @@ export function lineupModel({ session, known, reachable = true, on, entityKey, s
   if (!rivals) return null;
   const strat = session.target?.strat || null;
   if (rivals.state === "no_strategy" || !strat) return noStrategyModel(on, entityKey, strategies);
-  const lineup = `${entityKey}|${strat}|${rivals.scope || "strategy"}`;
+  const lineup = `${entityKey}|${strat}|${rivals.scope || "overall"}`;
   const mine = [youSeat(rivals), ...bestRunSeat(rivals)];
   return rivals.state === "loading" ? loadingModel(on, lineup, mine, rivals) : readyModel(on, lineup, mine, rivals);
 }

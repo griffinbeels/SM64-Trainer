@@ -253,10 +253,10 @@ def test_scope_switch_revokes_native_owner_before_population_failure(tmp_path):
     source.snapshot_status = lambda **kwargs: {**served(**kwargs), **generations}
 
     def metadata_snapshot(_kind, _entity, *, clock, game_version, strategy=None, versions=None):
-        if strategy is None:
+        if strategy is not None:
             assert source.commands[-1] == {"enabled": False}
             assert native._asset is native._selected_asset is None
-            raise OSError("Overall population unavailable")
+            raise OSError("Strategy population unavailable")
         return ()
 
     population = SimpleNamespace(generation=1, metadata_snapshot=metadata_snapshot)
@@ -266,14 +266,14 @@ def test_scope_switch_revokes_native_owner_before_population_failure(tmp_path):
         await session.update(enabled=True)
         native.note()
         assert source.commands[-1]["enabled"] and source.commands[-1]["activate_generation"] == 1
-        with pytest.raises(OSError, match="Overall population unavailable"):
-            await session.update({"target": target, "rivals": {"scope": "overall"}})
-        assert session.payload()["rivals"]["scope"] == "strategy"
+        with pytest.raises(OSError, match="Strategy population unavailable"):
+            await session.update({"target": target, "rivals": {"scope": "strategy"}})
+        assert session.payload()["rivals"]["scope"] == "overall"
         assert session._pending == {}
         native.note()
         assert source.commands[-1] == {"enabled": False}
         assert native._selected_asset is None
-        await session.update({"target": target, "rivals": {"scope": "strategy"}})
+        await session.update({"target": target, "rivals": {"scope": "overall"}})
         generations["prepared_generation"] = session._rivals.generation
         native.note()
         assert not source.commands[-1]["enabled"] and source.commands[-1]["activate_generation"] == 0

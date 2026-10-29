@@ -95,7 +95,7 @@ def lineup_row(slot: int, name: str, tier: str, division: str, frames: int, *,
 
 def lineup_rivals(*, state: str = "ready", reason: str | None = None, pb_frames: int | None = 343,
                   rows: list | None = None, include_pb: bool = True, count: int = 4,
-                  scope: str = "strategy", best_run_frames: int | None = None) -> dict:
+                  scope: str = "overall", best_run_frames: int | None = None) -> dict:
     """`session.rivals` in the Lineup contract (engineering-plan.md): state,
     reason, your PB and the rival seats, with the shipped options and limits.
     `best_run_frames`: your PB has no poses and your best recorded run races
