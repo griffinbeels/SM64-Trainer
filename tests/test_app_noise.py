@@ -31,6 +31,36 @@ def test_connection_reset_quieted_everything_else_delegates():
     assert loop.delegated == [real, no_exc]
 
 
+def test_a_connection_accepted_while_the_server_closes_is_quieted():
+    """SM64-TRAINER-D: the proactor accept loop hands a connection to a server
+    uvicorn already closed, and asyncio's `Server._attach` asserts. Reproduced
+    on a real closed server; an AssertionError anywhere else still reports."""
+    import asyncio
+
+    async def closed_attach():
+        server = await asyncio.get_running_loop().create_server(asyncio.Protocol, "127.0.0.1", 0)
+        server.close()
+        await server.wait_closed()
+        try:
+            server._attach(object())
+        except AssertionError as error:
+            return error
+        raise AssertionError("asyncio no longer asserts on a closed server; drop this filter")
+
+    race = {"exception": asyncio.run(closed_attach()),
+            "message": "Exception in callback BaseProactorEventLoop._start_serving.<locals>.loop()"}
+    loop = FakeLoop()
+    _quiet_connection_resets(loop, race)
+    assert loop.delegated == []
+
+    try:
+        raise AssertionError("a real assertion")
+    except AssertionError as error:
+        elsewhere = {"exception": error, "message": "x"}
+    _quiet_connection_resets(loop, elsewhere)
+    assert loop.delegated == [elsewhere]
+
+
 def test_replay_stop_bounded_abandons_a_wedged_teardown(monkeypatch):
     """Shutdown liveness (live incident 2026-06-12: CTRL+C hung forever):
     a wedged replay teardown must not block the event loop past the

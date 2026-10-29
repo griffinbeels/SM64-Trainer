@@ -256,17 +256,41 @@ def install_force_exit_watchdog(dog: ForceExitWatchdog | None = None) -> bool:
     return installed
 
 
+def _accepted_after_close(context) -> bool:
+    """Whether this is the proactor accept loop racing shutdown: a connection
+    accepted just as the listening server closes reaches asyncio's
+    `Server._attach`, which asserts the server is still open, and CPython
+    reports it as "Exception in callback BaseProactorEventLoop._start_serving"
+    (SM64-TRAINER-D, beta.33, 2026-10-29, closing Project64 and the trainer).
+    The server and that connection are both going away; nothing is lost.
+    Recognised by the failing frame itself: `_attach` on a closed Server."""
+    error = context.get("exception")
+    if not isinstance(error, AssertionError):
+        return False
+    frame = error.__traceback__
+    while frame is not None and frame.tb_next is not None:
+        frame = frame.tb_next
+    if frame is None or frame.tb_frame.f_code.co_name != "_attach":
+        return False
+    server = frame.tb_frame.f_locals.get("self")
+    return isinstance(server, asyncio.base_events.Server) and server._sockets is None
+
+
 def _quiet_connection_resets(loop, context) -> None:
     """Scoped asyncio noise filter. Browsers abort in-flight Range requests
     whenever a <video> element seeks; on Windows' proactor loop the dead
     socket's connection_lost callback then raises ConnectionResetError
     (WinError 10054) INSIDE asyncio (sock.shutdown on an already-reset
     socket) and the default handler prints a full traceback per seek.
-    Those are normal client disconnects, not server errors. Everything
-    else still reaches the default handler unchanged."""
+    Those are normal client disconnects, not server errors; so is a
+    connection that arrives while the server closes (`_accepted_after_close`).
+    Everything else still reaches the default handler unchanged."""
     if isinstance(context.get("exception"), ConnectionResetError):
         log.debug("client connection reset (normal for video seeks): %s",
                   context.get("message"))
+        return
+    if _accepted_after_close(context):
+        log.info("a connection arrived while the server was closing; it closes with it")
         return
     loop.default_exception_handler(context)
 
