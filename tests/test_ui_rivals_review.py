@@ -562,13 +562,16 @@ def test_every_seat_names_its_strategy_and_the_rank_view_never_changes_the_ghost
                for line in lines), lines
     assert seat_named(page, "FormFrame").get_attribute("aria-label").startswith("FormFrame, Cannonless, ")
     artifact(page, tmp_path, f"lineup-strategies-{width}.png")
-    before = seats(page)
+    # Who sits where, not geometry: the rank banner's swap may move the row.
+    def seated():
+        return [(seat["key"], seat["name"], seat["time"]) for seat in seats(page)]
+    before = seated()
     for name in ("Overall", "Strategy"):
         button = card.get_by_role("button", name=name, exact=True)
         if button.count():
             button.click()
     page.wait_for_timeout(300)
-    assert state["writes"] == [] and seats(page) == before
+    assert state["writes"] == [] and seated() == before
     clean(seen)
 
 

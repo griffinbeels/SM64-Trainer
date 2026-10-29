@@ -1662,19 +1662,19 @@ beaten. With no [[strategy]] there are no slots, no pins and no cloud request.
 
 ### Ghost matching scope
 
-Which strategies' [[ghost]]s may fill a [[target]]'s [[ghost slot]]s. Every
-[[lineup]] is `Overall`: it races every [[strategy]] of the [[target]] and grades
-them on the [[Overall curve]], from the current [[strategy]]'s saved
-[[personal best]] (his decision, 2026-10-28: "I want to be exposed to ALL ghosts
-by default for a star"; a slower strategy's player meets the slowest ghosts of a
-faster one as they near their own strategy's limit). `Strategy`, the earlier
-default, restricts the slots to the current [[strategy]]; the code still serves a
-caller that names it, but no card offers it, and the card's Strategy/Overall pair
-now picks only which [[rank]] shows. A ghost chosen in a [[strategy]]'s lineup
-before this joined the Overall lineup's free slots. Every [[ghost]] keeps its
+The [[ghost]]s a [[target]]'s [[ghost slot]]s may hold. Every [[lineup]] is
+Overall: it races every [[strategy]] of the [[target]] and grades them on the
+[[Overall curve]], from the current [[strategy]]'s saved [[personal best]] (his
+decision, 2026-10-28: "I think that actually is the better design in general").
+A player near the limit of a slower [[strategy]] meets the slowest [[ghost]]s of a
+faster one. The code still serves a caller that asks for the earlier
+[[strategy]]-only matching, which holds the slots to the current [[strategy]]; no
+card offers it, and the card's [[Strategy]]/Overall pair now picks only which
+[[rank]] shows. A [[ghost]] someone pinned in one [[strategy]]'s [[lineup]] before
+then took a free slot in the Overall [[lineup]]. Every [[ghost]] keeps its
 recorded [[strategy]] label.
 
-- **Lives** — `src/sm64_events/ghost/rivals.py` (DEFAULT_SCOPE, `_widened_pins`) and
+- **Lives** — `src/sm64_events/ghost/rivals.py` (DEFAULT_SCOPE, _widened_pins) and
   `src/sm64_events/ui/components/ghostswitch.js` (GHOST_SCOPE)
 
 ### Region scope
