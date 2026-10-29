@@ -505,11 +505,14 @@ export function isCardOpen(overrides, topKey, key, childKeys = []) {
 // was. Null while no strategy is picked, so the FIRST pick still climbs from
 // the floor (that half of the 2026-07-27 ruling stands: a rank shown for the
 // first time is earned) -- routeswap.js runs no exchange from a null key, and
-// rankclimb.js does not snap for one. In the Overall view the strategy is
-// not part of the key: the entity's rank does not depend on it.
+// rankclimb.js does not snap for one. The Overall view keys on the strategy
+// too: it grades the active strategy's own PB on the Overall curve, so picking
+// another strategy moves it, and that move is an exchange like any other (it
+// snapped while the key ignored the strategy, unseen until Overall became the
+// default view, 2026-10-29).
 export function strategySwapKey(activeStrat, rankMode, hasSeparateRank) {
   if (!activeStrat) return null;
-  if (rankMode === "overall" && hasSeparateRank) return "overall";
+  if (rankMode === "overall" && hasSeparateRank) return `overall:${activeStrat}`;
   return `strategy:${activeStrat}`;
 }
 
@@ -543,7 +546,9 @@ function classificationTransition(sec, t, rankMode, hasSeparateRank) {
 // where another card would: when the two are separate ladders. (It also picked
 // the active card's ghosts until every lineup raced all strategies.)
 function rankViewFor(preferred, separate) {
-  return {rankMode: effectiveRankDisplayMode(preferred, separate),
+  const rankMode = effectiveRankDisplayMode(preferred, separate);
+  // The rows' caps grade on whatever the banner grades on, so they never disagree.
+  return {rankMode, rowRankKind: rankMode === "overall" && separate ? "overall" : "strategy",
     canChooseScope: separate,
     strategyTitle: "Show the rank for the strategy selected on this card",
     overallTitle: separate ? "Show this PB's overall rank" : "Strategy and overall use the same rank standards"};
@@ -722,7 +727,7 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
   // that one display has a genuinely different Overall measurement to offer;
   // it controls the two-button switch, never the number of banners painted.
   const hasSeparateRank = showsEntityBanner(sec);
-  const {rankMode, canChooseScope, strategyTitle, overallTitle} =
+  const {rankMode, rowRankKind, canChooseScope, strategyTitle, overallTitle} =
     rankViewFor(preferredRankMode, hasSeparateRank);
   const pickRankMode = (mode) => {
     if (!canChooseScope || mode === rankMode) return;
@@ -924,7 +929,7 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
       ${rows.length
         ? html`<${AttemptTable} attempts=${sec.attempts} rows=${shown} t=${t}
             focus=${selected ? focus : null} clearFocus=${clearFocus}
-            freshIds=${freshIds} openCompare=${openCompare} sec=${sec} />`
+            freshIds=${freshIds} openCompare=${openCompare} sec=${sec} rankKind=${rowRankKind} />`
         : html`<${AttemptLogEmpty} hasAttempts=${sec.attempts.length > 0}
             manualTiming=${manualTiming} />`}
       <div class="attempt-footer">
