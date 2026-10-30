@@ -8,6 +8,11 @@ borrows. The ghost graded against the segment's own (empty) ladder, so his
 saved PB had no rank, no basis and never raced. Every ghost grading path now
 borrows the same star ladder through `PracticeIdentity.ladder_key`; the clock,
 PB slot and region scope stay on the segment, as Practice keeps them.
+
+Since every lineup races on the Overall scope (2026-10-28, `rivals.DEFAULT_SCOPE`),
+the borrowed ladder grades a caller that names the Strategy scope. On Overall
+the segment has no curve, as on Practice's Overall tab: the PB races unranked
+and seats no rival by itself (`test_ghost_pb_unranked.py`).
 """
 from dataclasses import replace
 from types import SimpleNamespace
@@ -71,7 +76,10 @@ def test_every_pipe_strategy_pb_grades_on_the_paired_star_like_practice(tmp_path
             run = segment_run(number, segment_id, strategy, frames)
             database.upsert_attempt(run)
             save(database, run)
-            identity = rivals.identity_for({"kind": "segment", "entity_key": str(segment_id), "strat": strategy})
+            target = {"kind": "segment", "entity_key": str(segment_id), "strat": strategy}
+            overall = saved_pb_basis(database, ranks, rivals.identity_for(target))
+            assert overall["tier"] is None and overall["ghost"].attempt_id == run.id   # the default still races
+            identity = rivals.identity_for(target, scope="strategy")
             # Practice's clock, PB slot and region scope stay on the segment.
             assert identity.clock == "rta" == ranks.clock_for(segment)
             assert identity.region_scope == pb_slot(ranks, segment, strategy)["region_scope"]
@@ -98,7 +106,7 @@ def test_reported_bitdw_shig_pipe_pb_races_with_rivals_on_its_ladder(tmp_path, r
         population, native = Population(), Native()
         rivals = Rivals(SimpleNamespace(db=database, ranks=ranks), population, native, lambda: "us")
         target = {"kind": "segment", "entity_key": str(segment_id), "strat": strategy}
-        identity = rivals.identity_for(target)
+        identity = rivals.identity_for(target, scope="strategy")
         # A rival on the same segment and strategy, a little faster than his PB.
         population.rows = [{
             "id": "f" * 64, "player_id": "player:rival", "player_name": "Rival", "kind": "segment",
@@ -106,6 +114,8 @@ def test_reported_bitdw_shig_pipe_pb_races_with_rivals_on_its_ladder(tmp_path, r
             "game_version": "us", "strategy": strategy, "frames": frames - 30, "certified": True,
             "valid": True, "full_start": True, "ghost": SimpleNamespace(origin="ghost:rival")}]
         rivals.options.update(mode="fixed", min_step=0, max_step=44)
+        rivals.refresh(target, CONTROLS, enabled=True)
+        rivals.apply(rivals.checked({"scope": "strategy"}, target))
 
         answer = rivals.refresh(target, CONTROLS, enabled=True)
 

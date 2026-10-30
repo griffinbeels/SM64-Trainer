@@ -34,15 +34,18 @@ def test_connection_reset_quieted_everything_else_delegates():
 def test_a_connection_accepted_while_the_server_closes_is_quieted():
     """SM64-TRAINER-D: the proactor accept loop hands a connection to a server
     uvicorn already closed, and asyncio's `Server._attach` asserts. Reproduced
-    on a real closed server; an AssertionError anywhere else still reports."""
+    on a real closed server; an AssertionError anywhere else still reports.
+    Python 3.13 passes `_attach` the transport; 3.12 takes no argument."""
     import asyncio
+    import inspect
 
     async def closed_attach():
         server = await asyncio.get_running_loop().create_server(asyncio.Protocol, "127.0.0.1", 0)
         server.close()
         await server.wait_closed()
+        transport = (object(),) if inspect.signature(server._attach).parameters else ()
         try:
-            server._attach(object())
+            server._attach(*transport)
         except AssertionError as error:
             return error
         raise AssertionError("asyncio no longer asserts on a closed server; drop this filter")
