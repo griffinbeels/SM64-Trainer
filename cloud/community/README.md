@@ -149,8 +149,8 @@ manifest and do not become cloud-certified recordings.
 
 ## Catalog and wire details
 
-catalog.json is the unchanged root exporter output: 264 portable target/ROM entries,
-SHA256 89671c5769e024241a41290b19328b7b73f1eafddbb03b65cae1e50d3b99996e.
+catalog.json is the unchanged root exporter output: 270 portable target/ROM entries,
+SHA256 b28497c785746bb85ab82780443bd6c069aecc67b7e265f848c60ccf8817c28f.
 Shape: `{v:1,generation,entries:[{target,clock,game_version,strategies:[{name,
 cutoffs:[{step,frames}]}],overall_cutoffs:[{step,frames}]}]}`. Hash entries only as
 recursively sorted-key compact UTF-8 JSON without ASCII escaping. Inclusive maximum
