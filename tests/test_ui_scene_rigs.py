@@ -89,6 +89,29 @@ SLIDE = "([name, value]) => { const input = document.querySelector(`.scene-lab-l
         " input.value = value; input.dispatchEvent(new Event('input', { bubbles: true })); }"
 
 
+def _every_setup(page, shoot):
+    """Overhead keeps its tilt, Chase carries it, Tripod stands still; Orbit's row is the widest."""
+    rigs = page.locator(".scene-lab-rigs")
+    rigs.get_by_role("button", name="Overhead").click()
+    page.wait_for_function(f"{LAST_RIG} === 'overhead'")
+    page.evaluate(SLIDE, ["Tilt", "-20"])
+    page.wait_for_function("window.__cameras.at(-1)?.rig?.roll === 3641")
+    assert page.locator(".scene-lab-tag").inner_text() == "Overhead · Mario"
+    shoot("overhead")
+    rigs.get_by_role("button", name="Chase").click()
+    page.wait_for_function(f"({LAST_RIG}) === 'chase' && window.__cameras.at(-1).rig.roll === 3641")
+    rigs.get_by_role("button", name="Tripod").click()
+    page.wait_for_function(f"({LAST_RIG}) === 'tripod' && window.__cameras.at(-1).rig.position?.length === 3")
+    shoot("tripod")
+    rigs.get_by_role("button", name="Side").click()
+    page.wait_for_function(f"{LAST_RIG} === 'side'")
+    shoot("side")
+    rigs.get_by_role("button", name="Orbit").click()                # the widest row: Orbit while paused too
+    page.wait_for_function(f"{LAST_RIG} === 'orbit'")
+    page.locator(".scene-lab-rig-options").get_by_role("button", name="Orbit while paused").wait_for(timeout=5000)
+    shoot("orbit")
+
+
 def test_tilt_lens_and_the_new_setups_reach_the_lab_and_fit_both_widths(tmp_path, monkeypatch):
     """His words (round 7): "I want to be able to allow users to basically do whatever angle they want /
     tilt the camera / adjust focal length / etc". Tilt and Lens reach the socket as the game's roll and
@@ -126,26 +149,7 @@ def test_tilt_lens_and_the_new_setups_reach_the_lab_and_fit_both_widths(tmp_path
             page.wait_for_function("Math.abs((window.__cameras.at(-1)?.fov ?? 0) - 14.8) < 0.05")
             assert "100 mm" in lens.inner_text() and "15°" in lens.inner_text()
             shoot("free")
-
-            rigs = page.locator(".scene-lab-rigs")
-            rigs.get_by_role("button", name="Overhead").click()
-            page.wait_for_function(f"{LAST_RIG} === 'overhead'")
-            page.evaluate(SLIDE, ["Tilt", "-20"])
-            page.wait_for_function("window.__cameras.at(-1)?.rig?.roll === 3641")
-            assert page.locator(".scene-lab-tag").inner_text() == "Overhead · Mario"
-            shoot("overhead")
-            rigs.get_by_role("button", name="Chase").click()
-            page.wait_for_function(f"({LAST_RIG}) === 'chase' && window.__cameras.at(-1).rig.roll === 3641")
-            rigs.get_by_role("button", name="Tripod").click()
-            page.wait_for_function(f"({LAST_RIG}) === 'tripod' && window.__cameras.at(-1).rig.position?.length === 3")
-            shoot("tripod")
-            rigs.get_by_role("button", name="Side").click()
-            page.wait_for_function(f"{LAST_RIG} === 'side'")
-            shoot("side")
-            rigs.get_by_role("button", name="Orbit").click()                # the widest row: Orbit while paused too
-            page.wait_for_function(f"{LAST_RIG} === 'orbit'")
-            page.locator(".scene-lab-rig-options").get_by_role("button", name="Orbit while paused").wait_for(timeout=5000)
-            shoot("orbit")
+            _every_setup(page, shoot)
             assert errors == []
         finally:
             browser.close()

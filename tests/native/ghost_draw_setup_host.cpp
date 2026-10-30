@@ -83,6 +83,7 @@ void refused(Reason){}
 void setup_refused(Reason reason){compositor_failure=reason;}
 uint64_t now_ns(){return 1;}
 void forget_scopes(){}
+uint32_t faulted_generation=0;
 bool image_for_vi(const ghost_presentation::ViSource&,ghost_presentation::GhostViImage*){return false;}
 bool valid_image(const ghost_presentation::GhostViImage&){return false;}
 void presented(const ghost_presentation::GhostViImage&,uint64_t,bool){}
@@ -105,11 +106,15 @@ int main(){try {
     for(unsigned i=0;i<32;++i)begin(7,4,nullptr);
     check(compositor && creates==3 && warms==2,"same-context create failure retries and recovers");
     ++live.context_generation;end_fails=true;const auto prior_creates=creates,prior_abandons=abandons;
-    begin(7,4,nullptr);check(compositor && !compositor_ready && abandons==prior_abandons+1,
-        "failed setup close retains newly allocated names under their current owner");
-    for(unsigned i=0;i<32;++i)begin(7,4,nullptr);
-    check(compositor && compositor_ready && creates==prior_creates+2 && destroys==1,
-        "setup close recovery reclaims retained names inside the next clean gateway");
+    begin(7,4,nullptr);check(!compositor && !compositor_ready && abandons==prior_abandons+2 && faulted(),
+        "a dirty setup close abandons its names and steps the ghost aside for the context");
+    const auto aside_calls=gateway_calls;
+    for(unsigned i=0;i<64;++i)begin(7,4,nullptr);
+    check(!compositor && creates==prior_creates+1 && gateway_calls==aside_calls,
+        "a stepped-aside context asks for no setup retry and no gateway");
+    ++live.context_generation;begin(7,4,nullptr);
+    check(compositor && compositor_ready && creates==prior_creates+2 && !faulted() && !destroys,
+        "the next context sets the ghost up again");
     ++live.drawable_generation;presentation_fails=true;const auto before=presentation_calls;
     begin(7,4,nullptr);check(presentation_calls==before+1 && presentation_owner.drawable_generation!=live.drawable_generation,
         "presentation failure cannot latch its drawable as ready");

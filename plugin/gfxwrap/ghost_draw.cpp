@@ -280,6 +280,8 @@ void begin(uint32_t rom, uint32_t config_id, const gc_sample *sample) {
         }
     }
     if(!ghost_presentation::eligible()) {refused(Reason::ineligible);return;}
+    // Stepped aside for this context: no ghost GL at all, setup retries included.
+    if (faulted()) {refused(Reason::gateway_refused);return;}
     // The compositor and its programs exist before any ghost is asked for, so
     // the driver's compile lands seconds after the game starts, not on the
     // first ghost's list (a fresh shader cache cost that list 36 ms, 2026-10-02).
@@ -299,9 +301,6 @@ void begin(uint32_t rom, uint32_t config_id, const gc_sample *sample) {
         if(major<4 || (major==4 && minor<3)) {
             replay_gl::EndCapture();setup_refused(Reason::unsupported);return;
         }
-        // A refused closing gateway keeps its object/names owned. Reclaim
-        // them only inside a later clean scope on this proven same context.
-        if(compositor)ghost_compositor::destroy(compositor);
         compositor=nullptr;compositor_ready=false;
         compositor = ghost_compositor::create(dispatch, owner.context_generation);
         if (compositor) ghost_compositor::warm(compositor);
@@ -313,7 +312,6 @@ void begin(uint32_t rom, uint32_t config_id, const gc_sample *sample) {
     // Programs belong to the context. Picture admission still follows every
     // drawable change, and prepare below reallocates only a changed extent.
     owner = identity;
-    if (faulted()) return; // stepped aside for this context: no ghost GL at all
     sg_atlas_view atlas{}; uint64_t wanted_model = 0;
     // Saved playback's model, else the scene viewer host's own (only there).
     if (!ghost_playback::atlas(&atlas, &wanted_model) && !ghost_viewer::atlas(&atlas, &wanted_model)) return;

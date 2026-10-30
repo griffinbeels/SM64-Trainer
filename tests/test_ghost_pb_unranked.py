@@ -1,8 +1,9 @@
 """A PB nothing on its scope ranks still races, as "Your PB" with no rank.
 
 His rule, 2026-09-22: "Any new PB should become a ghost immediately." A
-strategy he just created has no ladder, and a Bowser reds->pipe segment's
-Overall tab has no curve (Practice shows no Overall rank there either). The
+strategy he just created has no ladder of its own (the Strategy scope; the
+default Overall scope grades it on the star's curve), and a Bowser reds->pipe
+segment's Overall tab has no curve (Practice shows no Overall rank there either). The
 saved PB used to need a rank to exist at all, so neither raced. It now races
 unranked (`adaptive.UNRANKED`) and anchors no rival range: nobody is seated
 automatically around it, while rivals he chose himself still play.
@@ -37,10 +38,13 @@ def test_a_new_strategy_with_no_ladder_races_its_pb_unranked(tmp_path, ranks):
     run = attempt(7, 650, strat_tag="My Route")
     database, rivals, native = roster(tmp_path, ranks, run)
     try:
-        basis_now = saved_pb_basis(database, ranks, rivals.identity_for(target))
+        assert saved_pb_basis(database, ranks, rivals.identity_for(target))["tier"], "Overall: the star's curve"
+        basis_now = saved_pb_basis(database, ranks, rivals.identity_for(target, scope="strategy"))
         assert {key: basis_now[key] for key in UNRANKED} == UNRANKED
         assert basis_now["frames"] == 650 and basis_now["ghost"].attempt_id == run.id
 
+        rivals.refresh(target, CONTROLS, enabled=True)
+        rivals.apply(rivals.checked({"scope": "strategy"}, target))
         answer = rivals.refresh(target, CONTROLS, enabled=True)
 
         assert answer["available"] and not rivals.rows
@@ -51,7 +55,7 @@ def test_a_new_strategy_with_no_ladder_races_its_pb_unranked(tmp_path, ranks):
         database.close()
 
 
-def test_a_reds_pipe_pb_races_on_the_overall_tab_with_no_overall_curve(tmp_path, ranks):
+def test_a_reds_pipe_pb_races_on_the_overall_lineup_with_no_overall_curve(tmp_path, ranks):
     database = Database(tmp_path / "practice.db")
     try:
         segment_id = pipe_segment(database, "seg:reds->pipe:bitdw", 17)
@@ -62,15 +66,15 @@ def test_a_reds_pipe_pb_races_on_the_overall_tab_with_no_overall_curve(tmp_path,
         native = Native()
         rivals = Rivals(SimpleNamespace(db=database, ranks=ranks), Population(), native, lambda: "us")
         target = {"kind": "segment", "entity_key": str(segment_id), "strat": strategy}
-        rivals.refresh(target, CONTROLS, enabled=True)
-        assert type(rivals.pb["step"]) is int, "the Strategy tab ranks it on the star's Pipe ladder"
-
-        rivals.apply(rivals.checked({"scope": "overall"}, target))
-        answer = rivals.refresh(target, CONTROLS, enabled=True)
+        answer = rivals.refresh(target, CONTROLS, enabled=True)    # every lineup's default: Overall
 
         assert rivals.identity.scope == "overall" and answer["available"]
         assert rivals.pb["frames"] == run.rta_frames and rivals.pb["step"] is None
         assert native.preparations[-1][1][0].pb and native.preparations[-1][1][0].attempt_id == run.id
+
+        rivals.apply(rivals.checked({"scope": "strategy"}, target))
+        rivals.refresh(target, CONTROLS, enabled=True)
+        assert type(rivals.pb["step"]) is int, "the Strategy scope ranks it on the star's Pipe ladder"
     finally:
         database.close()
 
