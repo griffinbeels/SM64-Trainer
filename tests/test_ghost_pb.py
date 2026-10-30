@@ -86,6 +86,58 @@ def test_saving_a_pb_makes_it_the_playing_ghost_immediately(tmp_path):
         archive.close()
 
 
+def test_a_pb_that_kept_no_poses_reports_why(tmp_path, caplog):
+    """A PB without Mario poses is no ghost; it must say so to error reports
+    (an AMD tester's beta.31 PBs reported nothing)."""
+    session, replay, row, archive, db, store, capture = pb_world(tmp_path)
+    replay.recorder.pose_archive = None  # this recording captured no poses
+
+    async def check():
+        await session.update({"enabled": True})
+        save_pb(db, row)
+        with caplog.at_level("ERROR", logger="sm64.ghost.state"):
+            await session.pb_changed(row, True)
+        await session.stop()
+
+    try:
+        asyncio.run(check())
+    finally:
+        archive.close()
+    errors = [record for record in caplog.records if record.name == "sm64.ghost.state" and record.levelname == "ERROR"]
+    assert [record.getMessage() for record in errors] == [
+        "A saved PB kept no Mario poses: This recording has no native Mario poses."]
+
+
+def test_the_ghost_logs_each_decision_once(tmp_path, caplog):
+    """The Debug report's Ghost timeline: what decided the ghost, one line per
+    change, ids and reasons only (an AMD tester's report could not say why)."""
+    session, _replay, row, archive, db, store, capture = pb_world(tmp_path)
+
+    async def check():
+        with caplog.at_level("INFO", logger="sm64.ghost.state"):
+            await session.update({"enabled": True})
+            await session.refresh()
+            await session.refresh()
+            save_pb(db, row)
+            await session.pb_changed(row, True)
+            session._native.note()
+            await session.refresh()
+        await session.stop()
+
+    try:
+        asyncio.run(check())
+    finally:
+        archive.close()
+    lines = [record.getMessage() for record in caplog.records if record.name == "sm64.ghost.state"]
+    key = f"star:{row.course_id}-{row.star_id}"
+    assert lines[0].startswith(f"ghost: target={key} strategy={bool(row.strat_tag)} on=True source=")
+    assert " pb=False playing=0 pb_seat=none " in lines[0]
+    assert len(set(lines)) == len(lines)  # a repeated refresh adds nothing
+    assert any(line.startswith(f"PB attempt {row.id} kept ") and line.endswith(" Mario poses")
+               and "None" not in line for line in lines)
+    assert " source=ready " in lines[-1] and " pb=True playing=1 pb_seat=pb " in lines[-1]
+
+
 def test_undoing_the_pb_removes_it_as_the_ghost(tmp_path):
     session, _replay, row, archive, db, store, capture = pb_world(tmp_path)
 

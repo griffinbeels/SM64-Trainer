@@ -583,7 +583,7 @@ disappearing, so the container is doing the work rather than a loosened check.
   Measured on real `av1_nvenc` packets and again on the native encoder's own:
   muxed unchanged, read back through `fragmentindex`, every picture decoded on
   its exact source tick. `fragmentindex` admits `av01` beside `avc1` and
-  `extract.py`'s native packet index admits `av1` beside `h264`; `virtualmp4`
+  `mediaprobe.py`'s native packet index admits `av1` beside `h264`; `virtualmp4`
   copies the sample description verbatim and needed nothing.
 - **The adapter is asked, not the model name.** `gpu_bridge_encoder.cpp` takes
   a codec in the ABI's first reserved word (H264 is zero, so an older caller

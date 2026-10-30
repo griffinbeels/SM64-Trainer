@@ -22,7 +22,12 @@ enum gipc_reason { GIPC_OK, GIPC_OWNER_GONE, GIPC_EXPIRED, GIPC_PROTOCOL,
     GIPC_NO_ROM, GIPC_LAYOUT, GIPC_FILE, GIPC_MODEL, GIPC_CLIP, GIPC_BUSY, GIPC_ORIGIN, GIPC_ROM,
     /* The set does not fit: GP_CLIP_BUDGET, or memory in PJ64's 2 GiB. The
      * clips are fine; fewer or shorter ones would show. */
-    GIPC_BUDGET };
+    GIPC_BUDGET,
+    /* Cartridge refusals finer than GIPC_ROM (still: none found, or it changed
+     * mid-read). A cartridge whose Mario assets the model does not know, the
+     * search running out of its byte/time budget or of memory, and two
+     * differing cartridges behind one header. */
+    GIPC_ROM_UNQUALIFIED, GIPC_ROM_EXHAUSTED, GIPC_ROM_AMBIGUOUS };
 #pragma pack(push, 4)
 /* One saved recording in the displayed set. Hue is per ghost; tint_enabled
  * stays global. id+SHA is the identity the worker reuses across set changes. */

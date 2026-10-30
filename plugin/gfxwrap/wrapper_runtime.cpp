@@ -33,6 +33,8 @@ extern "C" int __cdecl wr_configure(HMODULE module,const gfx_api_t *original,wr_
  const auto query4=reinterpret_cast<SourceQuery4>(GetProcAddress(module,"SM64ReplaySourceV4"));
  const auto contexts=reinterpret_cast<ContextQuery>(GetProcAddress(module,"SM64ReplayContextV1"));
  if((!query&&!query3)||!contexts)return 0;
+ // Optional diagnostics: an older renderer without it still captures.
+ gd_set_context_evidence(reinterpret_cast<rs_read_context_evidence>(GetProcAddress(module,"SM64ReplayContextEvidenceV1")));
  // V4 (the ghost copy's display source) is preferred; V3 renderers still capture clean.
  const auto display=query4?query4(RS_ABI_V4,sizeof(rs_api_v4)):nullptr;
  if(query4&&!rs_valid_v4(display))return 0;

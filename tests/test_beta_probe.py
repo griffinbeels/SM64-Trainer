@@ -81,6 +81,20 @@ def test_complete_fixture_has_bounded_token_free_receipt_and_no_profile_writes(r
     assert "helper execution" in report["not_exercised"]
 
 
+def test_the_media_read_check_reads_a_real_clip_and_fails_with_the_reads(runtime, monkeypatch):
+    """The release ships no ffprobe; saved-replay shrinking depends on the
+    bundled PyAV reading a clip. The check must exercise those reads."""
+    from sm64_events.replay import mediaprobe
+
+    def row(report):
+        return next(item for item in report["checks"] if item["name"] == "bundled_media_reads")
+
+    assert row(probe.collect_report(fixture=runtime, importer=importer))["ok"]
+    monkeypatch.setattr(mediaprobe, "_read_packets", lambda *_args: None)
+    report = probe.collect_report(fixture=runtime, importer=importer)
+    assert not row(report)["ok"] and not report["ok"]
+
+
 @pytest.fixture
 def normal_runtime(runtime):
     build = replace(runtime.build, installation="normal")

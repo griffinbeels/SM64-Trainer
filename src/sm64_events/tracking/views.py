@@ -433,6 +433,7 @@ def _attempt_json(a, clock, ranks=None, rank_clock=None, rank_ek=None,
             "jumps_total": a.jumps_total,
             "jumps_dustless": a.jumps_dustless,
             "rank": _attempt_rank(a, rank_frames, ranks, rank_ek),
+            "overall_rank": _attempt_overall_rank(a, rank_frames, ranks),
             "segment_id": a.segment_id}
 
 
@@ -556,6 +557,24 @@ def _attempt_rank(a, frames, ranks, ek=None) -> dict | None:
     # already does for the picker.
     return {"rank": progress["rank"], "division": progress["division"],
             "fitted": ranks.is_fitted(ek, a.strat_tag)}
+
+
+def _attempt_overall_rank(a, frames, ranks) -> dict | None:
+    """{"rank", "division"} for one finish on its entity's Overall curve, the
+    curve the card's Overall banner grades (`entity_rank`, same entity, the ROM
+    that set the time), so the practice log's row caps follow whichever view
+    the card shows and never disagree with its banner (his ask, 2026-10-29:
+    "The practice log should show the rank icon for whichever you have
+    selected (strategy / overall)"). The curve spans every strategy, so any
+    finish has one, with or without a strategy tag."""
+    if (ranks is None or frames is None or a.outcome != "success"
+            or (a.segment_id is None and a.course_id is None)):
+        return None
+    graded = entity_rank(ranks, entity_key(a.course_id, a.star_id, a.segment_id), frames,
+                         version=getattr(a, "game_version", None))
+    if not graded or not graded.get("rank"):
+        return None
+    return {"rank": graded["rank"], "division": graded["division"]}
 
 
 def valid_frames(history, strat, clock) -> list[int]:

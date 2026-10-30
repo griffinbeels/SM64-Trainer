@@ -92,7 +92,12 @@ def test_saved_jp_pb_offers_its_distinct_overall_rank_while_running_us():
             assert controls == [
                 {"label": "Strategy", "visible": True, "disabled": False},
                 {"label": "Overall", "visible": True, "disabled": False}], controls
-            for mode, grade in [("strategy", section["rank"]), ("overall", section["entity_rank"])]:
+            # Overall is the default view (his ask, 2026-10-29).
+            pressed = page.evaluate(f"""[...document.querySelectorAll({json.dumps(CARD + ' .rank-mode-button')})]
+              .filter(button => button.getAttribute('aria-pressed') === 'true').map(button => button.textContent.trim())""")
+            assert pressed == ["Overall"], pressed
+            for mode, grade in [("strategy", section["rank"]), ("overall", section["entity_rank"]),
+                                ("strategy", section["rank"])]:
                 label = "Strategy" if mode == "strategy" else "Overall"
                 button = CARD + f' .rank-mode-button:text-is("{label}")'
                 page.click(button)
@@ -105,5 +110,7 @@ def test_saved_jp_pb_offers_its_distinct_overall_rank_while_running_us():
                             f".find(button => button.textContent.trim() === {json.dumps(label)})")
                 _until(page, f"{selected}.getAttribute('aria-pressed') === 'true'")
                 _until(page, f"document.querySelector({json.dumps(CARD + ' .rank-banner-name')}).textContent.trim() === {json.dumps(expected)}")
+                # The PB row's cap follows the same view as the banner.
+                _until(page, f"document.querySelector({json.dumps(CARD + ' .attempt-medal .hat')}).title.toUpperCase() === {json.dumps(expected)}")
                 _capture(page, mode)
             assert page.problems() == []

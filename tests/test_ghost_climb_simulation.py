@@ -215,7 +215,7 @@ def test_explicit_full_range_stress_test_gets_four_rivals_and_pb_adds_fifth(tmp_
         assert len(ghosts) == len({ghost.origin for ghost in ghosts}) == 4
         assert len({ghost.hue_degrees for ghost in ghosts}) == 4
         assert len({provider.resolve(ghost, WILD_BLUE)[0] for ghost in ghosts}) == 4
-        assert rivals.payload()["scope"] == "strategy"
+        assert rivals.payload()["scope"] == "overall"
         # Simulate the first played/saved result only AFTER verifying empty state.
         origin = attempt()
         sid = database.insert_session(origin.started_utc)

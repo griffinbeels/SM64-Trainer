@@ -256,17 +256,41 @@ def install_force_exit_watchdog(dog: ForceExitWatchdog | None = None) -> bool:
     return installed
 
 
+def _accepted_after_close(context) -> bool:
+    """Whether this is the proactor accept loop racing shutdown: a connection
+    accepted just as the listening server closes reaches asyncio's
+    `Server._attach`, which asserts the server is still open, and CPython
+    reports it as "Exception in callback BaseProactorEventLoop._start_serving"
+    (SM64-TRAINER-D, beta.33, 2026-10-29, closing Project64 and the trainer).
+    The server and that connection are both going away; nothing is lost.
+    Recognised by the failing frame itself: `_attach` on a closed Server."""
+    error = context.get("exception")
+    if not isinstance(error, AssertionError):
+        return False
+    frame = error.__traceback__
+    while frame is not None and frame.tb_next is not None:
+        frame = frame.tb_next
+    if frame is None or frame.tb_frame.f_code.co_name != "_attach":
+        return False
+    server = frame.tb_frame.f_locals.get("self")
+    return isinstance(server, asyncio.base_events.Server) and server._sockets is None
+
+
 def _quiet_connection_resets(loop, context) -> None:
     """Scoped asyncio noise filter. Browsers abort in-flight Range requests
     whenever a <video> element seeks; on Windows' proactor loop the dead
     socket's connection_lost callback then raises ConnectionResetError
     (WinError 10054) INSIDE asyncio (sock.shutdown on an already-reset
     socket) and the default handler prints a full traceback per seek.
-    Those are normal client disconnects, not server errors. Everything
-    else still reaches the default handler unchanged."""
+    Those are normal client disconnects, not server errors; so is a
+    connection that arrives while the server closes (`_accepted_after_close`).
+    Everything else still reaches the default handler unchanged."""
     if isinstance(context.get("exception"), ConnectionResetError):
         log.debug("client connection reset (normal for video seeks): %s",
                   context.get("message"))
+        return
+    if _accepted_after_close(context):
+        log.info("a connection arrived while the server was closing; it closes with it")
         return
     loop.default_exception_handler(context)
 
@@ -832,7 +856,29 @@ def _mount_diagnostics(app, poller, broadcaster, service, monitor, replay=None, 
         capture_layer=capture_layer, ghost=ghost, setup_observer=setup_observer,
         polling_state=lambda: _polling_state(app), multiplayer=getattr(app.state, 'multiplayer', None))
     app.state.diagnostic_snapshot = snapshot
-    app.router.lifespan_context = with_diagnostics(app.router.lifespan_context, snapshot)
+
+    def debug_report(*, attached=False):
+        """The one Debug report: the Settings export and the error-report attachment."""
+        def _events():
+            if service is None or service.db is None:
+                raise RuntimeError("journal unavailable (no db attached)")
+            return service.db.recent_events(diagnostics.JOURNAL_TAIL)
+        return diagnostics.build_report(
+            version=__version__, frozen=is_frozen(), port=server_port(),
+            data_dir=str(data_root().resolve()),
+            log_file=logs_dir() / "sm64_events.log",
+            ui_log_file=uilog.log_path(),
+            perf_log_file=monitor.log_path
+            or data_root() / "data" / "perf_log.jsonl",
+            health=health, events=_events,
+            replay=getattr(getattr(replay, "recorder", None), "diagnostic_status", None),
+            setup=getattr(capture_layer, "diagnostic_status", None),
+            snapshot=lambda: snapshot.collect(local=True),
+            build={"channel": current_build().channel, "build_id": current_build().build_id},
+            attached=attached)
+
+    app.router.lifespan_context = with_diagnostics(app.router.lifespan_context, snapshot,
+                                                   report=lambda: debug_report(attached=True))
     @app.get("/health")
     def health():
         latest = poller.latest
@@ -891,23 +937,7 @@ def _mount_diagnostics(app, poller, broadcaster, service, monitor, replay=None, 
         so the existing /api/replay/reveal can open it. Lives HERE like
         /api/pause: it reads poller + broadcaster + service + monitor,
         which only this composition surface holds together."""
-        def _events():
-            if service is None or service.db is None:
-                raise RuntimeError("journal unavailable (no db attached)")
-            return service.db.events()
-        report = diagnostics.build_report(
-            version=__version__, frozen=is_frozen(), port=server_port(),
-            data_dir=str(data_root().resolve()),
-            log_file=logs_dir() / "sm64_events.log",
-            ui_log_file=uilog.log_path(),
-            perf_log_file=monitor.log_path
-            or data_root() / "data" / "perf_log.jsonl",
-            health=health, events=_events,
-            replay=getattr(getattr(replay, "recorder", None), "diagnostic_status", None),
-            setup=getattr(capture_layer, "diagnostic_status", None),
-            snapshot=lambda: snapshot.collect(local=True),
-            build={"channel": current_build().channel, "build_id": current_build().build_id})
-        out = diagnostics.write_report(diagnostics_dir(), report)
+        out = diagnostics.write_report(diagnostics_dir(), debug_report())
         return {"path": str(out), "size_bytes": out.stat().st_size}
 
 

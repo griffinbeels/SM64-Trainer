@@ -140,7 +140,7 @@ def test_discover_save_refresh_restore_and_remove_without_changing_practice(brow
     assert_layout(page)
     page.click(RECORD+":first-child .community-library-actions button")
     page.wait_for(RECORD+":first-child .community-library-saved")
-    assert session._rivals.pins[session._rivals._scope_key(TARGET,"strategy")] == {"0":session.rows[0]["id"]}
+    assert session._rivals.pins[session._rivals._scope_key(TARGET,"overall")] == {"0":session.rows[0]["id"]}
     assert browser.practice_snapshot()==before
     # Header Refresh remounts the leaf: Remove must derive from persisted pins.
     click_text(page,".library-page .workshop-hero-actions button","Refresh")
@@ -150,7 +150,7 @@ def test_discover_save_refresh_restore_and_remove_without_changing_practice(brow
     page.click(RECORD+":first-child .community-library-actions button")
     page.wait_ms(160)
     assert page.evaluate("return document.querySelector('.community-library-actions button').textContent.trim()") == "Add ghost"
-    assert session._rivals.pins[session._rivals._scope_key(TARGET,"strategy")] == {}
+    assert session._rivals.pins[session._rivals._scope_key(TARGET,"overall")] == {}
     assert browser.practice_snapshot()==before
     assert page.problems()==[]
 
@@ -159,7 +159,7 @@ def test_full_pins_picker_cancel_is_local_then_explicit_replacement_preserves_hi
     page,session = browser.page,browser.session
     rivals = session._rivals
     rivals.options["count"] = 2
-    key = rivals._scope_key(TARGET,"strategy")
+    key = rivals._scope_key(TARGET,"overall")
     rivals.pins[key] = {"0":session.rows[1]["id"],"1":session.rows[2]["id"],"3":session.rows[3]["id"]}
     rivals._store()
     before = deepcopy(rivals.pins),browser.practice_snapshot()
@@ -214,7 +214,7 @@ def test_replacing_us_pin_with_jp_updates_both_region_views_of_the_same_lineup(b
     page.wait_for(".community-library-seats")
     page.click(".community-library-seat:nth-child(2)")
     page.wait_for(RECORD+":first-child .community-library-saved")
-    assert session._rivals.pins[session._rivals._scope_key(TARGET,"strategy")] == {"0":jp["id"]}
+    assert session._rivals.pins[session._rivals._scope_key(TARGET,"overall")] == {"0":jp["id"]}
     back()
     open_region("US")
     assert page.evaluate("return document.querySelector('.community-library-actions button').textContent.trim()") == "Add ghost"

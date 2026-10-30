@@ -57,6 +57,8 @@ static void control_publish(control_page_t *page, uint32_t state, uint32_t reaso
     /* Bounded CPU snapshot only. No graphics, device or file operations. */
     gpu_startup_v1 startup;
     if (gd_read_startup(&startup)) page->gpu_startup = startup;
+    gpu_startup_context_v1 startup_context;
+    if (gd_read_startup_context(&startup_context)) page->gpu_startup_context = startup_context;
     #endif
     MemoryBarrier();
     InterlockedIncrement((volatile LONG *)&page->seq);

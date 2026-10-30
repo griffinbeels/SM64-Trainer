@@ -505,11 +505,14 @@ export function isCardOpen(overrides, topKey, key, childKeys = []) {
 // was. Null while no strategy is picked, so the FIRST pick still climbs from
 // the floor (that half of the 2026-07-27 ruling stands: a rank shown for the
 // first time is earned) -- routeswap.js runs no exchange from a null key, and
-// rankclimb.js does not snap for one. In the Overall view the strategy is
-// not part of the key: the entity's rank does not depend on it.
+// rankclimb.js does not snap for one. The Overall view keys on the strategy
+// too: it grades the active strategy's own PB on the Overall curve, so picking
+// another strategy moves it, and that move is an exchange like any other (it
+// snapped while the key ignored the strategy, unseen until Overall became the
+// default view, 2026-10-29).
 export function strategySwapKey(activeStrat, rankMode, hasSeparateRank) {
   if (!activeStrat) return null;
-  if (rankMode === "overall" && hasSeparateRank) return "overall";
+  if (rankMode === "overall" && hasSeparateRank) return `overall:${activeStrat}`;
   return `strategy:${activeStrat}`;
 }
 
@@ -539,19 +542,22 @@ function classificationTransition(sec, t, rankMode, hasSeparateRank) {
   };
 }
 
-function rankViewFor(active, preferred, separate) {
-  return {rankMode: active ? preferred : effectiveRankDisplayMode(preferred, separate),
-    canChooseScope: active || separate,
-    strategyTitle: active ? "Show this strategy's rank and ghosts"
-      : "Show the rank for the strategy selected on this card",
-    overallTitle: active ? "Show overall rank and ghosts from any strategy" : separate
-      ? "Show this PB's overall rank" : "Strategy and overall use the same rank standards"};
+// The pair only picks which rank shows, so the active card offers it exactly
+// where another card would: when the two are separate ladders. (It also picked
+// the active card's ghosts until every lineup raced all strategies.)
+function rankViewFor(preferred, separate) {
+  const rankMode = effectiveRankDisplayMode(preferred, separate);
+  // The rows' caps grade on whatever the banner grades on, so they never disagree.
+  return {rankMode, rowRankKind: rankMode === "overall" && separate ? "overall" : "strategy",
+    canChooseScope: separate,
+    strategyTitle: "Show the rank for the strategy selected on this card",
+    overallTitle: separate ? "Show this PB's overall rank" : "Strategy and overall use the same rank standards"};
 }
 
 /** The card's Strategy / Overall pair: one banner, two pressed-state buttons in its kicker. */
-function RankModeButtons({ rankMode, canChooseScope, active, strategyTitle, overallTitle, onPick }) {
+function RankModeButtons({ rankMode, canChooseScope, strategyTitle, overallTitle, onPick }) {
   return html`<span class="rank-mode-buttons" role="group"
-      aria-label=${active ? "Rank and ghosts" : "Rank view"}>
+      aria-label="Rank view">
     ${canChooseScope && html`<button type="button"
         class=${`rank-mode-button${rankMode === "strategy" ? " is-selected" : ""}`}
         aria-pressed=${rankMode === "strategy" ? "true" : "false"}
@@ -598,7 +604,7 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
   const ek = entityKey(sec);
   // A card remembers this preference by ENTITY, not by its current strategy:
   // switching from Standard to Cannonless keeps the player's chosen scope.
-  // Active practice also uses this choice for ghosts, even on a shared ladder.
+  // It never narrows the ghosts: every lineup races all strategies.
   const [preferredRankMode, setPreferredRankMode] = useState(
     () => readRankDisplayMode(ek));
   // The card's ONE ghost session, shared by the head's ghost toggle and the
@@ -721,15 +727,15 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
   // that one display has a genuinely different Overall measurement to offer;
   // it controls the two-button switch, never the number of banners painted.
   const hasSeparateRank = showsEntityBanner(sec);
-  const {rankMode, canChooseScope, strategyTitle, overallTitle} =
-    rankViewFor(active, preferredRankMode, hasSeparateRank);
+  const {rankMode, rowRankKind, canChooseScope, strategyTitle, overallTitle} =
+    rankViewFor(preferredRankMode, hasSeparateRank);
   const pickRankMode = (mode) => {
     if (!canChooseScope || mode === rankMode) return;
     writeRankDisplayMode(ek, mode);
     setPreferredRankMode(mode);
   };
   const rankModeButtons = html`<${RankModeButtons} rankMode=${rankMode} canChooseScope=${canChooseScope}
-    active=${active} strategyTitle=${strategyTitle} overallTitle=${overallTitle} onPick=${pickRankMode} />`;
+    strategyTitle=${strategyTitle} overallTitle=${overallTitle} onPick=${pickRankMode} />`;
   const shownBanner = rankMode === "strategy"
     ? sec.rank : (hasSeparateRank ? sec.entity_rank : sec.rank);
   const shownIdentity = rankMode === "strategy" ? "strategy" : "entity";
@@ -916,14 +922,14 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
           <${Icon} name="chevron" size=${18} />
         </button>
       </div>
-    </div><${GhostSwitch} t=${t} ghost=${ghost.session} entityKey=${ek} active=${active} scope=${rankMode} strategies=${sec.strategies} onPickStrategy=${ghost.pick} />
+    </div><${GhostSwitch} t=${t} ghost=${ghost.session} entityKey=${ek} active=${active} strategies=${sec.strategies} onPickStrategy=${ghost.pick} />
     <${Disclose} open=${isOpen} className="log-card-disclose">
       <div class="log-card-body">
       ${inBody && ranksBlock}
       ${rows.length
         ? html`<${AttemptTable} attempts=${sec.attempts} rows=${shown} t=${t}
             focus=${selected ? focus : null} clearFocus=${clearFocus}
-            freshIds=${freshIds} openCompare=${openCompare} sec=${sec} />`
+            freshIds=${freshIds} openCompare=${openCompare} sec=${sec} rankKind=${rowRankKind} />`
         : html`<${AttemptLogEmpty} hasAttempts=${sec.attempts.length > 0}
             manualTiming=${manualTiming} />`}
       <div class="attempt-footer">

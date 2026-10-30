@@ -125,20 +125,13 @@ def truth_glyphs(pad, row: str) -> tuple[str, str, str] | None:
 
 
 # -- pixels -----------------------------------------------------------------
-def _clip_dims(ffmpeg: str, clip: Path) -> tuple[int, int]:
-    """The clip's pixel size off the ffprobe that ships beside `ffmpeg` -- by
-    FILE name, never a whole-path replace (that renamed the D:/ffmpeg install
-    FOLDER and read nothing; the same catalogued hop-6 bug, and it reached
-    here too)."""
-    from sm64_events.replay.extract import ffprobe_beside
-    ffprobe = ffprobe_beside(ffmpeg) or "ffprobe"
-    probe = subprocess.run(
-        [ffprobe, "-v", "error", "-select_streams", "v",
-         "-show_entries", "stream=width,height", "-of", "csv=p=0", str(clip)],
-        capture_output=True, text=True, check=False)
-    first = probe.stdout.strip().splitlines()[0]        # a .ts lists a stream per line
-    width, height = (int(v) for v in first.split(",")[:2])
-    return width, height
+def _clip_dims(clip: Path) -> tuple[int, int]:
+    """The first video stream's pixel size."""
+    from sm64_events.replay.mediaprobe import probe
+    media = probe(clip)
+    if media is None or media.video is None:
+        raise ValueError(f"no readable video stream in {clip.name}")
+    return media.video.width, media.video.height
 
 
 def decode_region(ffmpeg: str, clip: Path, region, out_w: int, out_h: int,
@@ -152,7 +145,7 @@ def decode_region(ffmpeg: str, clip: Path, region, out_w: int, out_h: int,
     (diagnosed 2026-09-02: the reader's cell axis must BE the clip's frame
     axis, which is the browser's slot axis)."""
     if width is None or height is None:
-        width, height = _clip_dims(ffmpeg, clip)
+        width, height = _clip_dims(clip)
     x0, y0, x1, y1 = region
     x, y = round(width * x0), round(height * y0)
     w, h = round(width * (x1 - x0)), round(height * (y1 - y0))

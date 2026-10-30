@@ -321,3 +321,8 @@ def test_silent_native_playback_fault_reports_once_and_normal_waits_do_not(monke
     capture._report_native_fault(5, 8)
     capture._report_native_fault(5, 8)
     assert len(errors) == 1 and errors[0][1]["context"]["native_reason"] == 8
+    # Every cartridge refusal reports, each with the code that says why.
+    from sm64_events.ghost.native_layout import GIPC_ROM_REASONS
+    for reason in GIPC_ROM_REASONS:
+        capture._report_native_fault(5, reason)
+    assert [kwargs["context"]["native_reason"] for _, kwargs in errors[1:]] == list(GIPC_ROM_REASONS)

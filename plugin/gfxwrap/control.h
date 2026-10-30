@@ -47,16 +47,19 @@ typedef struct {
     uint8_t reserved_client[256 - 128 - sizeof(control_request_t)];
     char build_id[80];
     gpu_startup_v1 gpu_startup;
-    uint8_t padding[CONTROL_BYTES - 336 - sizeof(gpu_startup_v1)];
+    gpu_startup_context_v1 gpu_startup_context; /* appended; zero from older producers */
+    uint8_t padding[CONTROL_BYTES - 336 - sizeof(gpu_startup_v1) - sizeof(gpu_startup_context_v1)];
 } control_page_t;
 #ifdef __cplusplus
 static_assert(offsetof(control_page_t, request) == 128, "control request offset");
 static_assert(offsetof(control_page_t, build_id) == 256, "control build identity offset");
 static_assert(offsetof(control_page_t, gpu_startup) == 336, "optional GPU receipt offset");
+static_assert(offsetof(control_page_t, gpu_startup_context) == 784, "optional GPU context receipt offset");
 static_assert(sizeof(control_page_t) == CONTROL_BYTES, "control page size");
 #else
 _Static_assert(offsetof(control_page_t, request) == 128, "control request offset");
 _Static_assert(offsetof(control_page_t, build_id) == 256, "control build identity offset");
 _Static_assert(offsetof(control_page_t, gpu_startup) == 336, "optional GPU receipt offset");
+_Static_assert(offsetof(control_page_t, gpu_startup_context) == 784, "optional GPU context receipt offset");
 _Static_assert(sizeof(control_page_t) == CONTROL_BYTES, "control page size");
 #endif

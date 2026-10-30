@@ -1052,6 +1052,17 @@ class Database:
                              r["frame"], r["wall_time_utc"], json.loads(r["payload"]))
                     for r in rows]
 
+    def recent_events(self, limit: int) -> list[EventRow]:
+        """The newest `limit` journal rows, oldest first. The debug report reads
+        this from an error report's worker, so it never loads (or holds the
+        lock across) the whole journal."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM events ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+            return [EventRow(r["id"], r["session_id"], r["seq"], r["type"],
+                             r["frame"], r["wall_time_utc"], json.loads(r["payload"]))
+                    for r in reversed(rows)]
+
     def events_between(self, started_utc: str, ended_utc: str) -> list[EventRow]:
         """The journal rows inside a wall-clock span, inclusive at both ends,
         oldest first. An attempt's own span is bounded by two of its rows'

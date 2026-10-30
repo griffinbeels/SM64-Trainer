@@ -134,18 +134,18 @@ console.log(JSON.stringify(out));
 def test_rank_display_preference_is_per_entity_and_shared_ladders_force_overall():
     out = rank_mode_results()
     assert out == {
-        "defaultMode": "strategy",
+        "defaultMode": "overall",
         "sharedDefault": "overall",
         "firstWrite": True,
         "secondWrite": True,
         "star": "overall",
         "segment": "strategy",
-        "other": "strategy",
+        "other": "overall",
         "sharedRemembered": "overall",
         "separateRemembered": "overall",
         "invalidWrite": False,
         "afterInvalid": "overall",
-        "malformed": "strategy",
+        "malformed": "overall",
     }
 
 

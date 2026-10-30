@@ -60,6 +60,10 @@ int __cdecl gd_configure3(const rs_api_v3*,const rcl_api*,const gd_limits*);
 /* SourceV4 adds the ghost copy's display source; without it the twin lane
  * answers every request with GD_TWIN_UNAVAILABLE. */
 int __cdecl gd_configure4(const rs_api_v4*,const rcl_api*,const gd_limits*);
+/* The renderer's optional SM64ReplayContextEvidenceV1 (source_refusal.h). Set
+ * before ROM startup; null leaves the startup receipt's GL identity unknown. */
+struct rs_context_evidence;
+void __cdecl gd_set_context_evidence(int (__cdecl *)(struct rs_context_evidence*,uint32_t));
 
 /* One supervisor. Exact repeats are idempotent. Only these template fields are
  * required: owner_pid/birth, nonce_lo/hi, generation (control generation),

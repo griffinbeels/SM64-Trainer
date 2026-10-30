@@ -12,6 +12,7 @@ unsigned configured=0; uint64_t image_serial=0;
 gd_diagnostic_callback diagnostic=nullptr;
 }
 extern "C" void __cdecl gd_set_diagnostic(gd_diagnostic_callback callback){diagnostic=callback;}
+extern "C" void __cdecl gd_set_context_evidence(int (__cdecl *)(struct rs_context_evidence*,uint32_t)){}
 extern "C" int __cdecl TestDiagnostic(){
  if(!diagnostic)return 0;
  gd_diagnostic d{};d.bytes=sizeof d;d.version=GD_DIAGNOSTIC_VERSION;
@@ -49,6 +50,7 @@ extern "C" int __cdecl gd_completed(const rb_image*){return 1;}
 extern "C" HANDLE __cdecl gd_signal(){return signal;}
 // Optional renderer facts remain absent in the CPU-only delivery fixture.
 extern "C" int __cdecl gd_read_startup(gpu_startup_v1*){return 0;}
+extern "C" int __cdecl gd_read_startup_context(gpu_startup_context_v1*){return 0;}
 extern "C" int __cdecl gd_read_status(gd_status*s){*s={};s->state=state.load();s->epoch=gate.load();return 1;}
 extern "C" unsigned __cdecl TestGate(){return gate.load();}
 extern "C" unsigned __cdecl TestConfigured(){return configured;}

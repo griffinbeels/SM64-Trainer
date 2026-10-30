@@ -57,6 +57,17 @@ bool will_draw = false;
  * layer's own errors, so no renderer GL but the mirrored draw runs inside.
  * layer_color: the color pass entered the layer and the depth pass has not. */
 bool display_scope = false, layer_scope = false, layer_color = false;
+/* THE GHOST STEPS ASIDE (2026-10-24). A ghost scope that closes dirty costs
+ * the recording one invalidation of the renderer's witness, which the source
+ * then rebuilds (link_dispatch's Reconstruct). The ghost stops drawing for
+ * that context, so an error repeated every list cannot break capture every
+ * list. The renderer's own GL inside a display scope cannot be told apart and
+ * stops the ghost too; before the witness healed, it stopped ghost and
+ * capture both. The next context draws again. A drained layer error is the
+ * layer's alone and never touches the source, so it keeps its own rule. */
+uint32_t faulted_generation = 0;
+bool faulted() { return faulted_generation && faulted_generation == owner.context_generation; }
+void fault() { if (owner.context_generation) faulted_generation = owner.context_generation; }
 using GetUniform = void (APIENTRY *)(GLuint, GLint, GLint*);
 GetUniform get_uniform = nullptr;
 // This list's drawing cost (take_cost): stage times, the glue's own driver
@@ -191,7 +202,7 @@ bool close_display() {
     const auto stage = Clock::now();
     const bool clean = gateway(replay_gl::EndCapture);
     cost.close_micros += since(stage);
-    if(!clean)refused(Reason::gateway_refused);
+    if(!clean){refused(Reason::gateway_refused);fault();}
     return clean;
 }
 void forget_scopes() {
@@ -294,13 +305,15 @@ void begin(uint32_t rom, uint32_t config_id, const gc_sample *sample) {
         compositor=nullptr;compositor_ready=false;
         compositor = ghost_compositor::create(dispatch, owner.context_generation);
         if (compositor) ghost_compositor::warm(compositor);
-        if (!replay_gl::EndCapture()) {setup_refused(Reason::gateway_refused);return; }
+        if (!replay_gl::EndCapture()) { ghost_compositor::abandon(compositor); compositor = nullptr; compositor_ready=false;
+            setup_refused(Reason::gateway_refused); fault(); return; }
         if(!compositor) {setup_refused(Reason::compositor_refused);return;}
         compositor_retry=0;compositor_ready=true;
     }
     // Programs belong to the context. Picture admission still follows every
     // drawable change, and prepare below reallocates only a changed extent.
     owner = identity;
+    if (faulted()) return; // stepped aside for this context: no ghost GL at all
     sg_atlas_view atlas{}; uint64_t wanted_model = 0;
     // Saved playback's model, else the scene viewer host's own (only there).
     if (!ghost_playback::atlas(&atlas, &wanted_model) && !ghost_viewer::atlas(&atlas, &wanted_model)) return;
@@ -310,7 +323,8 @@ void begin(uint32_t rom, uint32_t config_id, const gc_sample *sample) {
         const auto result = ghost_compositor::prepare(compositor, width, height, ghost_compositor::max_poses * SG_MODEL_MAX_VERTICES,
                                                      atlas.rgba, atlas.width, atlas.height);
         const bool clean = replay_gl::EndCapture();
-        if (result == ghost_compositor::Result::ok && clean) {
+        if (!clean) { fault(); return; }
+        if (result == ghost_compositor::Result::ok) {
             prepared_width = width; prepared_height = height; model_id = wanted_model; particle_model = annotation_model = 0;
         } else refused(!clean?Reason::gateway_refused:result==ghost_compositor::Result::unsupported?Reason::unsupported:Reason::compositor_refused);
     }
@@ -322,7 +336,8 @@ void begin(uint32_t rom, uint32_t config_id, const gc_sample *sample) {
         if (!replay_gl::BeginCapture()) return;
         const auto result = ghost_compositor::prepare_particles(compositor, particles.atlas_rgba,
                                                               particles.atlas_width, particles.atlas_height);
-        if (replay_gl::EndCapture() && result == ghost_compositor::Result::ok) particle_model = model_id;
+        if (!replay_gl::EndCapture()) { fault(); return; }
+        if (result == ghost_compositor::Result::ok) particle_model = model_id;
     }
     ghost_annotation::View annotations{};uint64_t annotation_id=0;
     if(compositor && model_id && annotation_model!=model_id
@@ -330,7 +345,8 @@ void begin(uint32_t rom, uint32_t config_id, const gc_sample *sample) {
             && annotation_id==model_id) {
         if(!replay_gl::BeginCapture())return;
         const auto result=ghost_compositor::prepare_annotations(compositor,annotations.rgba,annotations.width,annotations.height);
-        if(replay_gl::EndCapture() && result==ghost_compositor::Result::ok)annotation_model=model_id;
+        if(!replay_gl::EndCapture()){fault();return;}
+        if(result==ghost_compositor::Result::ok)annotation_model=model_id;
     }
     const bool saved=sample && ghost_playback::plan(*sample);
     const bool viewer=sample && ghost_viewer::plan(*sample);
@@ -345,7 +361,7 @@ void seal(const gc_sample &sample, const ghost::WorldPass &world, bool usamune_h
     if(!list_identified)return;
     if (display_scope) cancel(); // a list seals once; never nest its scope
     if(!ghost_presentation::eligible()) {refused(Reason::ineligible);return;}
-    if (!compositor || !model_id || !ghost_presentation::clean_consumer()
+    if (faulted() || !compositor || !model_id || !ghost_presentation::clean_consumer()
             || world.context_generation != owner.context_generation
             || world.target.width != prepared_width || world.target.height != prepared_height) return;
     auto *buffer = ghost_link::raster_buffer();

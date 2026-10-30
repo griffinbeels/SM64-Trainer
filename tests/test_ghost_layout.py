@@ -48,6 +48,7 @@ def python_names():
 
 def test_every_python_value_is_the_compiled_one(native):
     python = python_names()
+    native = {name: tuple(value) if isinstance(value, list) else value for name, value in native.items()}
     wrong = {name: (python[name], native[name]) for name in native
              if name in python and (python[name].decode() if isinstance(python[name], bytes) else python[name])
              != native[name]}

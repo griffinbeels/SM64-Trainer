@@ -46,18 +46,52 @@ def test_optional_startup_receipt_preserves_identity_and_rejects_unknown_version
     assert fields.startup_receipt(startup_raw(available=0))["adapter_luid"] is None
 
 
+def context_raw(**overrides):
+    reported = 1 | 2 | 4 | 8 | 16 | 32 | 128  # created, practice, armed, installed, owner thread
+    values = dict(magic=b"SM64GPC1", version=1, size=fields.STARTUP_CONTEXT.size, epoch=7, source=1,
+                  site=14, error=0x502, flags=reported, invalidations=3, after_ms=12, contexts=1,
+                  vendor=b"ATI Technologies Inc.", renderer=b"AMD Radeon RX 6600",
+                  gl_version=b"4.6.0 Compatibility Profile Context")
+    values.update(overrides)
+    return fields.STARTUP_CONTEXT.pack(*values.values())
+
+
+def test_context_receipt_names_the_gpu_and_why_the_bindings_were_false():
+    # The gateway never opened, so the V1 strings stay empty; the context receipt names the GPU.
+    receipt = fields.startup_receipt(startup_raw(vendor=b"", renderer=b"", gl_version=b""), context_raw())
+    assert receipt["gl_vendor"] == "" and receipt["context_gl_vendor"] == "ATI Technologies Inc."
+    assert receipt["context_gl_renderer"] == "AMD Radeon RX 6600" and receipt["context_identity"] == "context_created"
+    assert receipt["bindings_site"] == 14 and receipt["bindings_site_name"] == "gateway_open_error"
+    assert receipt["bindings_cause"] == (
+        "an OpenGL error was already pending when a capture step began (GL_INVALID_OPERATION)")
+    assert (receipt["bindings_invalidations"], receipt["bindings_after_ms"], receipt["bindings_contexts"]) == (3, 12, 1)
+    # Another epoch, an unknown version, an older producer's zeros and a short read add nothing.
+    for raw in (context_raw(epoch=8), context_raw(version=2), bytes(fields.STARTUP_CONTEXT.size), b""):
+        added = fields.startup_receipt(startup_raw(), raw)
+        assert not any(key.startswith(("context_", "bindings_")) for key in added)
+    # Without a BINDINGS refusal the GPU is still named and no cause is claimed.
+    quiet = fields.startup_receipt(startup_raw(), context_raw(site=0, error=0, flags=0))
+    assert quiet["context_gl_renderer"] == "AMD Radeon RX 6600"
+    assert not any(key.startswith("bindings_") for key in quiet)
+    unnamed = fields.startup_receipt(startup_raw(), context_raw(source=0))
+    assert "context_gl_vendor" not in unnamed and unnamed["bindings_site"] == 14
+
+
 def test_control_reader_copies_optional_receipt_inside_the_existing_publication(monkeypatch):
     page = ctypes.create_string_buffer(control.PAGE_BYTES)
     control._STATUS.pack_into(page, 0, control.MAGIC, 1, control.PAGE_BYTES, 2,
                               42, 3, control.PASSIVE, 0, 4, 1, control.CAP_GPU, 1, 7, 0, 0)
     ctypes.memmove(ctypes.addressof(page) + 256, b"fixture-native\0", 15)
     ctypes.memmove(ctypes.addressof(page) + fields.STARTUP_OFFSET, startup_raw(), fields.STARTUP.size)
+    ctypes.memmove(ctypes.addressof(page) + fields.STARTUP_CONTEXT_OFFSET, context_raw(), fields.STARTUP_CONTEXT.size)
     client = control.CaptureControl.__new__(control.CaptureControl)
     client._view, client._k = ctypes.addressof(page), NS()
     monkeypatch.setattr(control, "_process_creation", lambda *args: (7, 0))
     receipt = client.status()
     assert receipt.build_id == "fixture-native"
     assert receipt.gpu_startup["gl_renderer"] == "AMD Radeon"
+    assert receipt.gpu_startup["context_gl_renderer"] == "AMD Radeon RX 6600"
+    assert receipt.gpu_startup["bindings_site"] == 14
     ctypes.memmove(client._view + fields.STARTUP_OFFSET, startup_raw(version=2), fields.STARTUP.size)
     assert client.status().gpu_startup is None
 
@@ -168,6 +202,17 @@ def test_failure_survives_cleanup_fallback_export_and_safe_automatic_reporting(t
     assert "raw_stderr" not in safe["extra"]
     first["startup"]["gl_renderer"] = "changed by caller"
     assert gate.diagnostics()["first_failure"]["startup"]["gl_renderer"] == "AMD Radeon"
+
+
+def test_automatic_context_carries_the_context_gpu_and_bindings_cause_scalars():
+    startup = fields.startup_receipt(startup_raw(vendor=b"", renderer=b"", gl_version=b""), context_raw())
+    context = fields.automatic_context({"stage": "startup", "startup": startup})
+    assert context["context_gl_renderer"] == "AMD Radeon RX 6600"
+    assert context["context_identity"] == "context_created"
+    assert context["bindings_site_name"] == "gateway_open_error"
+    assert context["bindings_cause"].startswith("an OpenGL error was already pending")
+    assert (context["bindings_site"], context["bindings_gl_error"], context["bindings_flags"]) == (14, 0x502, 191)
+    assert "nonce" not in context and "adapter_luid" not in context
 
 
 def test_a_new_producer_generation_does_not_inherit_prior_failure():

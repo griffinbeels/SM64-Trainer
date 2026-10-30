@@ -81,17 +81,22 @@ function and mask, blend factors, scissor box), `Enabled` (the capabilities
 the ghost restores) and `Texture2D`/`ActiveUnit` (per-unit 2D bindings). Each
 starts from a fresh context's defaults, or is unknown until the renderer's
 first call where no default is certain (viewport, scissor box); any GL error
-the gateway sees invalidates them with the rest of the observation.
+the gateway sees invalidates them with the rest of the observation, until the
+[witness rebuild](#witness-rebuild) asks the driver for all of them again.
 
 Context creation uses actual current handles and pixel-format double buffering,
 only for a freshly created context. Hot activation cannot manufacture defaults.
 Dispatch installation belongs to that context generation. A resize-induced
 context recreation without a function-table reload stays unavailable. A resize
-of the same context advances drawable generation while preserving bindings.
-Generation overflow invalidates observation, without wraparound reuse.
+of the same context advances drawable generation while preserving bindings,
+including while the observation is invalid, so a rebuilt witness names the
+drawable it is in. Generation overflow invalidates observation, without
+wraparound reuse.
 
 Observers add no driver queries, waits, allocations, I/O, events or capture work
-per mutation. GL capability/current-handle queries occur during preparation.
+per mutation. GL capability/current-handle queries occur during preparation
+and in the witness rebuild, which runs only when a refused witness would cost
+the recording or the ghost, at most once a second.
 This is a source-code property, not measured zero gameplay overhead.
 
 `CandidateBindings` is deliberately unqualified. Void GL calls do not report
@@ -102,6 +107,84 @@ cannot prove successful pixels. Never feed this candidate directly into a
 verified-picture path until those gates and source composition are established.
 Raw capture operations must bypass cache/observer calls and restore exact known
 state; failed/incomplete restoration must invalidate source admission.
+
+## Bindings cause
+
+Every route to a false `CandidateBindings` reports the same `0x53520001`
+refusal, so the overlay also records why (`source_refusal.h`). Each of the
+twenty sites that leave the observation unarmed records itself; the first one
+since `ContextCreated` stands, with the GL error that site read, a count, and
+the milliseconds since creation. Flags say which arming steps happened:
+created, practice ROM, armed, dispatch installed for this context, nominal,
+owner thread, context lost, and which state-witness parts are known. A BINDINGS
+refusal copies the record into the refused surface's unused bytes 52..75;
+identity, origin, swaps and source format stay zero. These are writes of
+values each site already holds: no query, wait or allocation. After a
+successful rebuild the next invalidation is recorded as a new first site;
+the `structural` flag says this context can no longer be rebuilt.
+
+`ContextCreated` also reads `GL_VENDOR`, `GL_RENDERER` and `GL_VERSION` once,
+for a practice ROM with its handles current. A context that call never saw is
+read once, at its first bindings refusal. The wrapper copies them through the
+`SM64ReplayContextEvidenceV1` export without GL; an older renderer lacks it,
+which reads as unknown. Strings are printable ASCII, bounded, NUL-padded.
+The same export counts this context's rebuild attempts and successes and
+names what the latest success repaired.
+
+## Witness rebuild
+
+Until 2026-10-24 any invalidation was one-way until the next context, so one
+GL error left pending at the first capture gateway (for example by an init
+step GLideN64's Release build never checks) cost GPU recording for the whole
+session. His ruling that day: *"Why can't we fix the GPU stuff as best we
+can? Try to do it as best we can without needing to run on my GPU."* So
+`replay_gl::Reconstruct` now rebuilds the witness from the driver's answers.
+
+- **When.** Two callers ask, then ask `CandidateBindings` again: `surface()`
+  when it is about to refuse a picture with BINDINGS, and the ghost's list
+  start (`ghost_link::begin_list`), which otherwise starts no pose capture.
+  They share one limit of one attempt a second per context, so with recording
+  off or given up after its startup deadline the ghost still heals the
+  context; the list counts the rebuild's queries as its own. The context
+  must be the armed practice-ROM context, current on its owner thread with the
+  dispatch installed for its generation, GL 3.3 or newer, not lost.
+- **Recoverable sites only** (`rs_bindings_site_recoverable`): 1-4, 11-15
+  and 17, an error flag or one call capture could not follow while every hook
+  stayed installed. Every other site is structural (hooks missing, another
+  thread, drawable or context), and any structural site since creation blocks
+  rebuilding for the context: later mutations could go unobserved.
+- **How.** Drain the driver's error flags (at most eight). The first stays the
+  renderer's pending answer; out-of-memory or a lost context ends rebuilding
+  for the context. Then ask the read and draw framebuffer bindings, the active
+  unit and its 2D texture (other units are learned again as the renderer binds
+  them), the default framebuffer's read buffer only while it is the one bound
+  for reading (GLideN64 binds it before every swap), viewport, depth range, and
+  with every render-state hook installed the program, vertex array, depth
+  function and mask, blend factors, scissor box and the eleven capabilities.
+  A query error is ours: drained, never handed to the renderer, and the
+  witness stays invalid until the next second.
+- **The renderer's answer.** A saved error is returned exactly once by the
+  renderer's next `glGetError` and never invalidates again. It no longer
+  refuses the gateway: the Release build never asks for it.
+- **The ghost steps aside.** A ghost-only scope that closes dirty (the draw
+  glue's display scope or setup, the presentation's clean save, ghost VI draw,
+  OSD mirror or display copy) stops the ghost for that context, so an error
+  repeated every list costs the source one rebuild, not one per list. A
+  drained layer error still drops only that list's layer.
+- **Evidence.** Each success writes one `bindings_reconstructed` line (at most
+  sixteen an epoch); a failure line carries `reconstruct_attempts` and
+  `reconstruct_successes`.
+
+What it cannot do: an error the renderer raises every frame still refuses
+every picture between rebuilds, and while recording is active one refused
+picture still ends that recording (`GD_SOURCE_IMAGE_MISSING`) until the
+retry gate starts a new one. A structural site, a fatal driver error, or a
+presentation whose own setup fails deterministically stays unavailable for
+the context, for the recording and the ghost alike. Pose capture resumes after
+a rebuild even when the ghost's drawing stepped aside: the fault flags stop
+only drawing. `tests/test_link_dispatch_cpu.py` runs the real overlay over a
+fake driver, with the ghost's real list start; the `heal` mode of
+`tests/test_link_source_witness.py` checks it against a real one.
 
 ## Verification
 
@@ -131,8 +214,9 @@ that crop dimensions equal the whole drawable.
 
 Source-owned BeginCapture/EndCapture are called inside the snapshot slot's
 exclusive submission interval. They perform one raw error query each; a saved
-error remains visible to the next original renderer diagnostic read. Original
-error readers (including checked templates) invalidate nominal state too. This
+error remains visible to the next original renderer diagnostic read, once, and
+a later consumed error never replaces it. Original error readers (including
+checked templates) invalidate nominal state on a fresh driver error. This
 preserves the consumed diagnostic, not identical driver error-flag behavior.
 The gateway is serialized source-renderer-thread code; delivery-worker GL uses
 raw dispatch. Context loss discards that context's saved diagnostic.

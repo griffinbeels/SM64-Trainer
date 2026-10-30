@@ -31,6 +31,27 @@ struct Scratch {
     explicit Scratch(size_t count) : bytes(count) {}
     ~Scratch() { SecureZeroMemory(bytes.data(), bytes.size()); }
 };
+// The cartridge is ordinary memory. Write-combined and uncached pages are a
+// driver's device memory: never the cartridge, and slow to read (an RTX 5090
+// driver's write-combined region read at 167 MiB/s against ~12 GiB/s for
+// ordinary pages, 2026-10-28), so a large one exhausts the search's deadline.
+bool may_hold_cartridge(const MEMORY_BASIC_INFORMATION& region) {
+    return region.State == MEM_COMMIT
+        && !(region.Protect & (PAGE_GUARD | PAGE_NOACCESS | PAGE_WRITECOMBINE | PAGE_NOCACHE));
+}
+// Where the readable span this region opens ends: it and the regions after it
+// in the same allocation. Pages of one allocation that differ in protection
+// are separate regions, and a cartridge may cross them.
+uint64_t span_end(const MEMORY_BASIC_INFORMATION& first) {
+    uint64_t end = reinterpret_cast<uintptr_t>(first.BaseAddress) + first.RegionSize;
+    MEMORY_BASIC_INFORMATION next{};
+    while (end < 0x100000000ull
+            && VirtualQuery(reinterpret_cast<const void*>(static_cast<uintptr_t>(end)), &next, sizeof(next))
+            && reinterpret_cast<uintptr_t>(next.BaseAddress) == end
+            && next.AllocationBase == first.AllocationBase && may_hold_cartridge(next))
+        end += next.RegionSize;
+    return end;
+}
 }
 namespace ghost_rom {
 uint32_t layout(const uint8_t* header) {
@@ -75,21 +96,49 @@ Result read(const uint8_t* header, const std::function<bool()>& current,
     Scratch candidate_storage(IMAGE_BYTES), scratch_storage(CHUNK_BYTES + HEADER_BYTES - 1);
     auto& candidate = candidate_storage.bytes;
     auto& scratch = scratch_storage.bytes;
-    bool found = false;
+    bool found = false, rejected = false;
     MEMORY_BASIC_INFORMATION region{};
+    // The emulator's header normally opens its own cartridge: Project64 keeps
+    // the image in one allocation with the header at its base. An image that
+    // qualifies there is the one this emulator runs, so no other copy in the
+    // process can outrank it and nothing else is read. A header copied
+    // elsewhere has no image behind it and falls through to the search.
+    {
+        const auto at = reinterpret_cast<uintptr_t>(header);
+        if (VirtualQuery(header, &region, sizeof(region)) && may_hold_cartridge(region)
+                && uint64_t(at) + IMAGE_BYTES <= span_end(region)
+                && !overlaps(at, IMAGE_BYTES, out) && !overlaps(at, IMAGE_BYTES, candidate)
+                && !overlaps(at, IMAGE_BYTES, scratch)) {
+            if (!budget(IMAGE_BYTES)) return fail(Result::exhausted);
+            if (copy(at, candidate.data(), candidate.size())) {
+                normalize(candidate);
+                if (!std::memcmp(candidate.data(), expected, HEADER_BYTES)) {
+                    if (!stable()) return fail(Result::changed);
+                    const auto qualified = validate(candidate.data(), candidate.size());
+                    if (qualified == Validation::unavailable) return fail(Result::exhausted);
+                    if (qualified == Validation::valid) {
+                        if (!stable()) return fail(Result::changed);
+                        out = candidate;
+                        return Result::ready;
+                    }
+                    rejected = true;
+                }
+            }
+        }
+    }
     for (uint64_t address = 0; address < 0x100000000ull;) {
         if (!stable()) return fail(Result::changed);
         if (!budget(0)) return fail(Result::exhausted);
         if (!VirtualQuery(reinterpret_cast<const void*>(static_cast<uintptr_t>(address)),
                 &region, sizeof(region))) break;
         const uint64_t base = reinterpret_cast<uintptr_t>(region.BaseAddress);
-        const uint64_t end = base + region.RegionSize;
-        if (end <= address) return fail(Result::exhausted);
-        address = end;
+        if (base + region.RegionSize <= address) return fail(Result::exhausted);
+        if (!may_hold_cartridge(region)) { address = base + region.RegionSize; continue; }
         // Project64's cartridge is one committed allocation. Small header copies
-        // cannot qualify; a complete 8 MiB span must remain in this readable region.
-        if (region.State != MEM_COMMIT || (region.Protect & (PAGE_GUARD | PAGE_NOACCESS))
-                || region.RegionSize < IMAGE_BYTES) continue;
+        // cannot qualify; a complete 8 MiB span must remain readable in it.
+        const uint64_t end = span_end(region);
+        address = end;
+        if (end - base < IMAGE_BYTES) continue;
         const uint64_t last = end - IMAGE_BYTES;
         for (uint64_t at = base; at <= last;) {
             if (!stable()) return fail(Result::changed);
@@ -121,7 +170,7 @@ Result read(const uint8_t* header, const std::function<bool()>& current,
                     // The model's actual bounded asset parser qualifies the image.
                     const auto qualified = validate(candidate.data(), candidate.size());
                     if (qualified == Validation::unavailable) return fail(Result::exhausted);
-                    if (qualified != Validation::valid) continue;
+                    if (qualified != Validation::valid) { rejected = true; continue; }
                     if (!stable()) return fail(Result::changed);
                     if (!budget(0)) return fail(Result::exhausted);
                     if (found && candidate != out) return fail(Result::ambiguous);
@@ -132,6 +181,6 @@ Result read(const uint8_t* header, const std::function<bool()>& current,
         }
     }
     if (!stable()) return fail(Result::changed);
-    return found ? Result::ready : fail(Result::missing);
+    return found ? Result::ready : fail(rejected ? Result::unqualified : Result::missing);
 }
 }

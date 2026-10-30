@@ -93,8 +93,8 @@ Detail: [docs/rules/ui-practice.md#practice-log-caveats-sit-before-strategy-neve
 ## Practice-log Strategy / Overall rank view
 
 The card always renders ONE banner with pressed-state `Strategy` / `Overall`
-buttons in the kicker slot; Strategy is the default and `ui/rankdisplaymode.js`
-persists the choice per entity key. A shared ladder (or no separate entity
+buttons in the kicker slot; Overall is the default (2026-10-29) and
+`ui/rankdisplaymode.js` persists the choice per entity key. The row caps follow it. A shared ladder (or no separate entity
 payload) shows only an inert selected `Overall`. Mode changes pass `rankMode` to
 `RankBanner.swapKey` and reuse `useRouteSwap` + `mareloTuning()` exactly — an
 exchange between measurements, **never a rank-up climb**.

@@ -37,10 +37,11 @@ def test_nvidia_preference_and_policy_are_preserved():
 @pytest.mark.parametrize("backend,expected", [(None, True), ("nvenc", True),
                                               ("windows", False), ("unknown", False)])
 def test_av1_format_never_implies_another_backends_nvenc_quality(monkeypatch, backend, expected):
-    monkeypatch.setattr(compress, "_probe", lambda *_args: ["av1"])
+    monkeypatch.setattr(compress.mediaprobe, "probe",
+                        lambda _clip: SimpleNamespace(video=SimpleNamespace(codec_name="av1")))
     monkeypatch.setattr(config, "VIDEO_AV1_CQ", config.ARCHIVE_AV1_CQ)
     assert compress._recorded_at_archive_quality(
-        "ffmpeg", None, config.ARCHIVE_CODECS, encoder_backend=backend) is expected
+        None, config.ARCHIVE_CODECS, encoder_backend=backend) is expected
 
 
 def test_saved_backend_provenance_reaches_the_skip_decision(saved, monkeypatch):
@@ -51,7 +52,7 @@ def test_saved_backend_provenance_reaches_the_skip_decision(saved, monkeypatch):
     sidecar.write_text(json.dumps({**meta, "encoder_backend": "windows"}))
     seen = []
 
-    def skip(_ffmpeg, _saved, _codecs, *, encoder_backend):
+    def skip(_saved, _codecs, *, encoder_backend):
         seen.append(encoder_backend)
         return True
 
@@ -77,7 +78,7 @@ def test_ghost_copy_uses_its_explicit_backend_or_the_clean_sessions(
     shutil.copy2(saved, compress.ghost_copy_of(saved))
     seen = []
 
-    def skip(_ffmpeg, _saved, _codecs, *, encoder_backend):
+    def skip(_saved, _codecs, *, encoder_backend):
         seen.append(encoder_backend)
         return True
 
@@ -160,7 +161,7 @@ def test_unavailable_vendor_routes_fall_back_and_still_pass_the_full_clip_proof(
     result = compress.shrink(ffmpeg, saved, codecs=(*VENDOR_CODECS, "libx264"))
     assert queried == list(VENDOR_CODECS)
     assert result["state"] == "ready" and result["codec"] == "libx264"
-    assert result["pictures"] == len(compress.picture_ticks(ffmpeg, saved))
+    assert result["pictures"] == len(compress.picture_ticks(saved))
     assert result["picture_times_sha256"] == result["original"]["picture_times_sha256"]
     assert result["audio_sha256"] == result["original"]["audio_sha256"]
     assert compress.file_sha256(saved) == original

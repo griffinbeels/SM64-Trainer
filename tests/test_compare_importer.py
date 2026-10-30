@@ -97,3 +97,38 @@ def test_import_bytes_distinct_content_distinct_name(tmp_path):
     assert len(calls) == 2
     assert (cache / name1).exists()
     assert (cache / name2).exists()
+
+
+def test_a_link_import_merges_with_the_importers_ffmpeg_not_path(tmp_path, monkeypatch):
+    """beta.30: a user's PC has only the bundled ffmpeg, never one on PATH, and
+    yt-dlp refused "merging of multiple formats but ffmpeg is not installed".
+    The real yt-dlp must locate the importer's ffmpeg from the options the
+    default downloader passes it."""
+    import socket
+    import yt_dlp
+    from yt_dlp.postprocessor import FFmpegMergerPP
+
+    bundled = tmp_path / "bundle" / "ffmpeg.exe"
+    bundled.parent.mkdir(); bundled.write_bytes(b"")
+    seen = {}
+
+    class RecordingYoutubeDL(yt_dlp.YoutubeDL):
+        def __init__(self, params=None, *args, **kwargs):
+            super().__init__(params, *args, **kwargs)
+            seen["merger_ffmpeg"] = FFmpegMergerPP(self)._paths.get("ffmpeg")
+
+        def download(self, urls):
+            out = self.params["outtmpl"]["default"].replace("%(ext)s", "mp4")
+            open(out, "wb").write(b"yt")
+
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", RecordingYoutubeDL)
+    monkeypatch.setattr(socket, "getaddrinfo",
+                        lambda *a, **k: [(None, None, None, "", ("142.250.0.1", 0))])
+    monkeypatch.setenv("PATH", "")
+    cache = tmp_path / "cache"; cache.mkdir()
+    imp = VideoImporter(cache, ffmpeg=str(bundled),
+                        runner=lambda cmd: open(cmd[-1], "wb").write(b"normalized"))
+
+    imp.import_video("youtube", "https://youtu.be/abc")
+
+    assert seen["merger_ffmpeg"] == str(bundled)

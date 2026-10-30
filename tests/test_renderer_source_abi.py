@@ -24,13 +24,18 @@ def abi_host(tmp_path_factory):
     (work / "GLFunctions.h").write_bytes(b"""#pragma once
 #include <windows.h>
 #include <stdint.h>
-extern unsigned refusal;
+#include "source_refusal.h"
+extern unsigned refusal, rebuilds;
 namespace renderer { struct Identity { uintptr_t context,read_drawable; uint32_t owner_thread,context_generation,drawable_generation; }; }
 namespace snapshot { struct RestoreBindings { unsigned read_framebuffer,texture_2d,source_read_buffer; }; }
 namespace replay_gl { inline bool CandidateBindings(renderer::Identity *i,snapshot::RestoreBindings *b) {
-*i={123,456,GetCurrentThreadId(),1,1};*b={17,19,0x405};return refusal!=1;}
+*i={123,456,GetCurrentThreadId(),1,1};*b={17,19,0x405};return refusal!=1 && refusal!=8;}
+// Mode 8: the witness was invalidated but heals when rebuilt; mode 1 never does.
+inline bool Reconstruct(){++rebuilds;if(refusal!=8)return false;refusal=0;return true;}
 inline bool DrawableExtent(unsigned *w,unsigned *h){*w=refusal==6?1:640;*h=480;return refusal!=3;}
 inline uint32_t SourceFormat(){return refusal==2?0:1;}
+inline void BindingsCause(rs_bindings_cause *c){*c={RS_BINDINGS_GATEWAY_OPEN_ERROR,0x502,
+RS_BINDINGS_REPORTED|RS_BINDINGS_CONTEXT_CREATED,3,41,2};}
 inline bool __cdecl BeginCapture(){return true;} inline bool __cdecl EndCapture(){return true;} }
 """)
     (work / "DisplayWindow.h").write_bytes(b"""#pragma once
@@ -47,7 +52,9 @@ inline PluginAPI &api(){static PluginAPI p;return p;}
 """)
     (work / "platform.cpp").write_bytes(b"""#include "N64.h"
 #include "renderer_boundary.h"
-unsigned origin=123,refusal=0; Registers REG{&origin};
+unsigned origin=123,refusal=0,rebuilds=0; Registers REG{&origin};
+extern "C" unsigned __cdecl SourceTestRebuilds() {return rebuilds;}
+#pragma comment(linker,"/EXPORT:SourceTestRebuilds=_SourceTestRebuilds")
 extern "C" void __cdecl SourceTestRefusal(unsigned mode) {refusal=mode;REG.VI_ORIGIN=mode==5?nullptr:&origin;}
 #pragma comment(linker,"/EXPORT:SourceTestRefusal=_SourceTestRefusal")
 extern "C" void __cdecl SourceTestLifecycle(int mode) {if(mode==1)rb_rom_open();else if(mode==0)rb_rom_closed();else rb_close();}

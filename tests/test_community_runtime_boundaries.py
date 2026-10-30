@@ -68,10 +68,10 @@ def test_identity_changes_revoke_old_native_rows_before_new_downloads(tmp_path, 
     assert old_ids
     if change == "rom":
         rivals.version_of = lambda: "jp"
-        changed = replace(IDENTITY, game_version="jp")
+        changed = replace(IDENTITY, game_version="jp", scope="overall")
     else:
         tracker.ranks.clock = "rta"
-        changed = replace(IDENTITY, clock="rta")
+        changed = replace(IDENTITY, clock="rta", scope="overall")
     population.rows = [recording("f" * 64, frames=600, clock=changed.clock,
         game_version=changed.game_version, certified=False,
         provenance="community-unverified", structurally_valid=True)]
@@ -202,7 +202,7 @@ def test_remote_choice_state_is_versioned_bounded_and_pruned_with_pins(tmp_path,
         restored.pins = {"target:0": {"0": survivor}}
         restored._store()
         state = tracker.db.get_state(module.STATE_KEY, {})
-        assert state["version"] == 4 and state["remote_choices"] == {survivor: owner}
+        assert state["version"] == module.STATE_VERSION and state["remote_choices"] == {survivor: owner}
     finally:
         tracker.db.close()
 
@@ -236,7 +236,7 @@ def test_stale_search_is_rejected_before_remote_io(tmp_path, monkeypatch, change
     session = GhostSession(tracker=tracker, inputs=None, replay=None, broadcaster=None, community=cloud)
     session._rivals = rivals
     target = {**TARGET, "entity_key": "2-2"} if change == "target" else TARGET
-    scope = "overall" if change == "scope" else None
+    scope = "strategy" if change == "scope" else None
     async def scenario():
         with pytest.raises(ValueError):
             await session.search_rivals(target, "Runner", scope=scope)

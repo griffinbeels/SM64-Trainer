@@ -10,6 +10,17 @@ import struct
 
 STARTUP_OFFSET = 336
 STARTUP = struct.Struct("<8s10I2Q80s128s96s80s")
+# gpu_startup_context_v1, appended after the V1 receipt (plugin/gfxwrap/gpu_startup.h).
+STARTUP_CONTEXT_OFFSET = 784
+STARTUP_CONTEXT = struct.Struct("<8s10I80s128s96s")
+_BINDINGS_KEYS = ("bindings_site", "bindings_gl_error", "bindings_flags", "bindings_invalidations",
+                  "bindings_after_ms", "bindings_contexts")
+# Receipt fields automatic reports may carry; the privacy allowlists still
+# decide what leaves the machine.
+STARTUP_TEXT_KEYS = ("gl_vendor", "gl_renderer", "gl_version", "missing_entry_point",
+                     "context_gl_vendor", "context_gl_renderer", "context_gl_version", "context_identity",
+                     "bindings_site_name", "bindings_cause")
+STARTUP_NUMBER_KEYS = _BINDINGS_KEYS
 _OPEN = re.compile(
     r"event=encoder_open_failure native_result=([0-9]{1,10}) stage=([a-z_]+) "
     r"encoder_state=([0-9]{1,10}|unknown) encoder_error=([0-9]{1,10}|unknown) "
@@ -20,8 +31,41 @@ _STAGES = frozenset({"adapter", "device_interface", "input_format", "shared_text
 _MF = re.compile(r"SM64_GPU_MF operation=([A-Za-z0-9_:.,()><*& \[\]-]{1,180}) hresult=([0-9a-fA-F]{8})")
 
 
-def startup_receipt(raw: bytes) -> dict | None:
-    """Decode an optional producer extension. Missing/unknown stays unknown."""
+def startup_context_receipt(raw: bytes) -> dict | None:
+    """The appended context receipt; None from an older producer.
+
+    The renderer's GL identity names the GPU even when no surface qualified.
+    The bindings cause is present only after a no-surface deadline whose
+    latest refusal was BINDINGS, from a renderer that reports one.
+    """
+    from sm64_events.replay.gpudiagnostics import bindings_cause, bindings_site_name, context_identity_source
+
+    if len(raw) != STARTUP_CONTEXT.size:
+        return None
+    magic, version, size, epoch, source, *rest = STARTUP_CONTEXT.unpack(raw)
+    numbers, strings = rest[:6], rest[6:]
+    if magic != b"SM64GPC1" or version != 1 or size != STARTUP_CONTEXT.size:
+        return None
+    result = dict(epoch=epoch)
+    if context_identity_source(source):
+        result["context_identity"] = context_identity_source(source)
+        result.update((name, value.split(b"\0", 1)[0].decode("ascii", "replace"))
+                      for name, value in zip(("context_gl_vendor", "context_gl_renderer", "context_gl_version"),
+                                             strings, strict=True))
+    site, error, flags = numbers[:3]
+    if flags & 1:
+        result.update(zip(_BINDINGS_KEYS, numbers, strict=True))
+        result["bindings_cause"] = bindings_cause(site, error, flags)
+        if site:
+            result["bindings_site_name"] = bindings_site_name(site)
+    return result
+
+
+def startup_receipt(raw: bytes, context: bytes | None = None) -> dict | None:
+    """Decode an optional producer extension. Missing/unknown stays unknown.
+
+    `context` is the appended context receipt; it joins only the same epoch.
+    """
     if len(raw) != STARTUP.size:
         return None
     magic, version, size, epoch, error, width, height, available, high, low, generation, nonce_lo, nonce_hi, *strings = STARTUP.unpack(raw)
@@ -32,6 +76,9 @@ def startup_receipt(raw: bytes) -> dict | None:
     result.update((name, value.split(b"\0", 1)[0].decode("utf-8", "replace"))
                   for name, value in zip(("gl_vendor", "gl_renderer", "gl_version", "missing_entry_point"), strings, strict=True))
     result["adapter_luid"] = [high - (1 << 32) if high >= 1 << 31 else high, low] if available else None
+    extra = startup_context_receipt(context) if context is not None else None
+    if extra and extra.pop("epoch") == epoch:
+        result.update(extra)
     return result
 
 
@@ -71,7 +118,7 @@ def automatic_context(record: dict) -> dict:
                           "native_operation", "native_hresult", "encoder_error", "driver_error"}
                and isinstance(value, (str, int, bool))}
     startup = record.get("startup") or {}
-    context.update((key, startup[key]) for key in ("gl_vendor", "gl_renderer", "gl_version", "missing_entry_point")
-                   if isinstance(startup.get(key), str))
+    context.update((key, startup[key]) for key in STARTUP_TEXT_KEYS if isinstance(startup.get(key), str))
+    context.update((key, startup[key]) for key in STARTUP_NUMBER_KEYS if type(startup.get(key)) is int)
     context["component"] = "gpu_recording"
     return context

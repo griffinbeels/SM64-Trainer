@@ -3,7 +3,7 @@ from dataclasses import replace
 import pytest
 
 from sm64_events.core import setup_gpu as G
-from sm64_events.core.capturelayer import ACTIVE, RENDERER_DLL, CaptureLayer, WRAPPER_DLL, WRAPPER_INI
+from sm64_events.core.capturelayer import ACTIVE, RENDERER_FILE, CaptureLayer, WRAPPER_DLL, WRAPPER_INI
 from sm64_events.core.onboarding import readiness
 from sm64_events.replay import capturecontrol as C
 from test_capturelayer import FakeProcesses, FakeRegistry, GRAPHICS_DLL_VALUE, REGISTRY_DLL_SUBKEY
@@ -148,8 +148,8 @@ def test_capturelayer_uses_gpu_observation_without_pixel_ring(tmp_path):
     renderer = tmp_path / "renderer.dll"
     renderer.write_bytes(b"fixture renderer")
     (plugin / WRAPPER_DLL).write_bytes(source.read_bytes())
-    (plugin / RENDERER_DLL).write_bytes(renderer.read_bytes())
-    (plugin / WRAPPER_INI).write_text("wrapped=" + RENDERER_DLL)
+    (plugin / RENDERER_FILE).write_bytes(renderer.read_bytes())
+    (plugin / WRAPPER_INI).write_text("wrapped=" + RENDERER_FILE)
     registry = FakeRegistry({(REGISTRY_DLL_SUBKEY, GRAPHICS_DLL_VALUE): WRAPPER_DLL})
     layer = CaptureLayer(registry, FakeProcesses(str(directory / "Project64.exe")),
                          tmp_path / "settings.json", source, renderer_source=renderer,

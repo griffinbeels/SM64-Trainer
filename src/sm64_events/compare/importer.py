@@ -11,6 +11,7 @@ Dedup = "load once": the cache file is named by a hash of source_ref
 file without re-downloading or re-encoding. The downloader (yt-dlp) and the
 ffmpeg runner are injected so tests never touch the network or a codec.
 """
+import functools
 import hashlib
 import ipaddress
 import logging
@@ -30,8 +31,13 @@ from sm64_events.tracking.comparisons import cache_name_for
 log = logging.getLogger("sm64.compare")
 
 
-def _default_downloader(source_ref: str, dest_dir: Path) -> Path:
-    """Fetch a YouTube URL to dest_dir at <=720p; return the downloaded file."""
+def _default_downloader(source_ref: str, dest_dir: Path, *, ffmpeg: str | None = None) -> Path:
+    """Fetch a YouTube URL to dest_dir at <=720p; return the downloaded file.
+
+    yt-dlp merges the separate video and audio streams with ffmpeg, which it
+    looks up on PATH unless told where it is. A user's PC has no ffmpeg on
+    PATH, only the one bundled with the app, so `ffmpeg` names it (beta.30:
+    "requested merging of multiple formats but ffmpeg is not installed")."""
     import yt_dlp
     # Reject private addresses reached through DNS aliases, too. Local files
     # have their own explicit import door and never pass through the web one.
@@ -45,6 +51,8 @@ def _default_downloader(source_ref: str, dest_dir: Path) -> Path:
             "outtmpl": out_tmpl, "quiet": True, "noprogress": True,
             "merge_output_format": "mp4", "noplaylist": True,
             "socket_timeout": 15, "retries": 2, "fragment_retries": 2}
+    if ffmpeg:
+        opts["ffmpeg_location"] = ffmpeg
     with yt_dlp.YoutubeDL(opts) as ydl:
         ydl.download([source_ref])
     files = list(dest_dir.glob("src.*"))
@@ -76,7 +84,7 @@ class VideoImporter:
         # Fixed-size stripes bound lock memory; all surfaces share this importer.
         self._source_locks = [threading.Lock() for _ in range(64)]
         self.ffmpeg = ffmpeg
-        self._download = downloader or _default_downloader
+        self._download = downloader or functools.partial(_default_downloader, ffmpeg=ffmpeg)
         self._run = runner or _default_runner
 
     def cache_path(self, cache_name: str) -> Path:

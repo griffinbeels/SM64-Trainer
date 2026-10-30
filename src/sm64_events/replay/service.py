@@ -32,7 +32,7 @@ from sm64_events.replay.reviewstate import ReviewStateStore
 from sm64_events.replay.compress import SavedReplayCompressor
 from sm64_events.replay.publication import (GHOST_COPY_SUFFIX, atomic_json, publish as publish_saved,
                                            recover as recover_saved, resume as resume_saved)
-from sm64_events.replay.extract import frame_times_of, video_start_of
+from sm64_events.replay.mediaprobe import frame_times_of, video_start_of
 from sm64_events.replay.config import (ReplayConfig, save_settings,
                                        validate_settings)
 from sm64_events.replay.attemptretention import AttemptHistory
@@ -955,12 +955,11 @@ class ReplayService:
         if "video_start_s" not in m:
             # Measure old scratch and saved clips alike, without rewriting
             # their archival sidecars. Assuming zero can seek one picture early.
-            m["video_start_s"] = video_start_of(
-                getattr(self.extractor, "ffmpeg", None), media_path)
+            m["video_start_s"] = video_start_of(media_path)
         if m.get("frame_times") is not None and not valid_picture_times(m["frame_times"]):
             # A malformed stored clock cannot reach JSON/the browser. Recover
             # the picture times from the video when readable; retain the sidecar.
-            measured = frame_times_of(getattr(self.extractor, "ffmpeg", None), media_path)
+            measured = frame_times_of(media_path)
             m["frame_times"] = measured if valid_picture_times(measured) else None
         retained = m
         m = self._validated_meta(retained, a)

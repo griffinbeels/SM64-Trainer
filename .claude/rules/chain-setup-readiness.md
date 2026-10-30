@@ -86,6 +86,16 @@ click; a declared transition or a settled screenshot alone cannot prove movement
 
 ## Failure catalogue
 
+- 2026-10-24, hop 1: a beta.30 tester: "wait there is 2 graphics plugins now:
+  sm64 trainer 1.0 and link v4.2(sm64 trainer)". Project64 lists every DLL in
+  `Plugin\`, and the renderer sat there as `GLideN64_SM64Trainer.dll`; picking
+  it skips capture (the 2026-09-15 entry below). It now installs as
+  `sm64_trainer_gfx.renderer`, which the wrapper loads by full path. Refresh
+  and Install move an older install: copy, rewrite both INIs, then delete
+  the DLL last, only ours by build id and never while `Graphics Dll` names it.
+  `test_capturelayer_one_plugin.py` fails if the renderer is a DLL again or
+  the older DLL survives a move.
+
 - 2026-10-22, hop 1: disposable-file reproduction of installation with an older
   VirtualStore wrapper INI returned `installation_verified: true`, left the older
   renderer selected in that shadow, and skipped automatic refresh because physical

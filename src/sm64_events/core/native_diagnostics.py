@@ -25,7 +25,7 @@ EVENT_NAMES = frozenset({
     "init_begin", "init_result", "wrapper_loaded", "wrapped_loaded", "wrapped_info",
     "rom_open_begin", "rom_open_end", "rom_closed_begin", "rom_closed_end",
     "gpu_request", "gpu_prepare", "gpu_failure", "gpu_source_refusal", "gpu_phase",
-    "gpu_cadence", "gpu_summary", "gpu_summary_phase", "gpu_summary_cadence",
+    "gpu_cadence", "gpu_summary", "gpu_summary_phase", "gpu_summary_cadence", "bindings_reconstructed",
     "callback_summary", "callback_final_window", "callback_stall", "callback_progress", "callback_pacing",
     "diagnostics_stop", "close_begin", "close_end",
 })
@@ -45,6 +45,11 @@ NUMBER_FIELDS = frozenset({
     "snapshot_busy", "durations", "duration_max_ticks", "duration_max_started_qpc", "gaps", "gap_max_ticks",
     "gap_max_started_qpc", "cpu_samples", "cpu_invalid", "cpu_thread_changes", "cpu_commit_busy",
     "queued_samples", "unsent_samples", "in_flight", "window_started_qpc", "previous_emit_ticks",
+    # gpu_failure: the bindings cause of a no-surface deadline (source_refusal.h).
+    "bindings_site", "bindings_gl_error", "bindings_flags", "bindings_invalidations",
+    "bindings_after_ms", "bindings_contexts", "reconstruct_attempts", "reconstruct_successes",
+    # bindings_reconstructed: the renderer rebuilt its witness from the driver.
+    "site", "gl_error", "attempts", "successes", "ms_since_created",
 })
 ENUM_FIELDS = {
     "callback": frozenset({"ProcessDList", "UpdateScreen", "ProcessRDPList"}),

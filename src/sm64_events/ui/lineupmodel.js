@@ -16,6 +16,11 @@
 //   * Ready: you first, then the rivals; a seat still downloading is drawn
 //     with a dashed ring (`pending`).
 //   * Nobody or offline: your seat and one sentence.
+// While your saved PB has no poses, your best recorded run races in its
+// colour (`rivals.best_run`, ghost/rivals.py): it gets its own seat, and
+// your seat keeps the PB's time and rank with an empty ring.
+// Every lineup races all strategies (his decision, 2026-10-28), so each seat
+// names its strategy under its name (`strategy`; null draws no line).
 import { RANK_FLOOR } from "./components/caps.js";
 
 export const LINEUP_WORDS = {
@@ -27,12 +32,16 @@ export const LINEUP_WORDS = {
   signedOut: "Sign in to race community ghosts.",
   unknownRom: "Load a compatible practice ROM to race ghosts.",
   unreachable: "Ghost controls couldn't load.",
+  bestRun: "Best recorded run",
 };
 
 function strategyChoices(strategies) {
   return (strategies || []).filter(name => typeof name === "string" && name)
     .map(name => ({ label: name, strategy: name }));
 }
+
+/** The strategy you are practising, which your seat names under "You". */
+const yourStrategy = rivals => rivals?.strategy_name || null;
 
 /**
  * Your own seat: always present, Capless 5 with no time until your first finish.
@@ -42,16 +51,25 @@ export function youSeat(rivals) {
   const pb = rivals?.pb || null;
   const racing = Boolean(pb) && rivals?.options?.include_pb !== false && pb.available !== false;
   const rank = pb ? { tier: pb.tier ?? null, division: pb.division ?? null } : RANK_FLOOR;
-  return { key: "you", id: "you", you: true, name: "You",
+  return { key: "you", id: "you", you: true, name: "You", strategy: yourStrategy(rivals),
     frames: pb && Number.isInteger(pb.frames) ? pb.frames : null,
     tier: rank.tier, division: rank.division, hue: pb?.hue_degrees ?? 250, ghost: racing };
+}
+
+/** The run racing in your colour while your saved PB has no poses, or none. */
+export function bestRunSeat(rivals) {
+  const best = rivals?.best_run || null;
+  if (!best || rivals?.options?.include_pb === false) return [];
+  return [{ key: "best", id: best.id, best: true, name: LINEUP_WORDS.bestRun, strategy: best.strategy || null,
+    frames: Number.isInteger(best.frames) ? best.frames : null, tier: best.tier, division: best.division,
+    hue: best.hue_degrees, ghost: best.available !== false }];
 }
 
 // A pinned run of your own says so by identity (`own`, from the server), never
 // by whatever name a recording carries -- an import credited "You" is not you.
 function rivalSeat(row) {
   return { key: `s${row.slot}`, id: row.id, name: row.own === true ? "Your run" : (row.player_name || "Chosen ghost"),
-    frames: Number.isInteger(row.frames) ? row.frames : null, tier: row.tier, division: row.division,
+    strategy: row.strategy || null, frames: Number.isInteger(row.frames) ? row.frames : null, tier: row.tier, division: row.division,
     hue: row.hue_degrees, pinned: Boolean(row.pinned), pending: Boolean(row.pending),
     verified: row.verified === true, slot: row.slot };
 }
@@ -72,12 +90,12 @@ function noStrategyModel(on, entityKey, strategies) {
     note: choices.length ? { text, choices } : { text: LINEUP_WORDS.noStrategies } };
 }
 
-/** Loading: your seat, then one empty place per rival the options ask for. */
-function loadingModel(on, lineup, you, rivals) {
+/** Loading: your seats, then one empty place per rival the options ask for. */
+function loadingModel(on, lineup, mine, rivals) {
   const count = Math.max(1, Math.min(4, rivals.options?.count || 4));
   const holes = Array.from({ length: count }, (_, slot) => ({ key: `s${slot}`, id: `s${slot}`, placeholder: true,
     frames: null, hue: null }));
-  return { on, lineup, people: [you, ...holes], loading: true };
+  return { on, lineup, people: [...mine, ...holes], loading: true };
 }
 
 /**
@@ -85,11 +103,11 @@ function loadingModel(on, lineup, you, rivals) {
  * No seats and no reason means nobody has been asked yet (the overlay was
  * off): that is about to load, so it draws as loading, never as "nobody".
  */
-function readyModel(on, lineup, you, rivals) {
+function readyModel(on, lineup, mine, rivals) {
   const seats = (rivals.rows || []).filter(row => Number.isInteger(row.slot)).map(rivalSeat);
-  if (seats.length) return { on, lineup, people: [you, ...seats] };
-  if (!rivals.reason) return loadingModel(on, lineup, you, rivals);
-  return { on, lineup, people: [you], note: { text: EMPTY_WORDS[rivals.reason] || LINEUP_WORDS.nobody } };
+  if (seats.length) return { on, lineup, people: [...mine, ...seats] };
+  if (!rivals.reason) return loadingModel(on, lineup, mine, rivals);
+  return { on, lineup, people: mine, note: { text: EMPTY_WORDS[rivals.reason] || LINEUP_WORDS.nobody } };
 }
 
 /** What a card shows when it cannot ask about rivals at all, or null when it can. */
@@ -117,7 +135,7 @@ export function lineupModel({ session, known, reachable = true, on, entityKey, s
   if (!rivals) return null;
   const strat = session.target?.strat || null;
   if (rivals.state === "no_strategy" || !strat) return noStrategyModel(on, entityKey, strategies);
-  const lineup = `${entityKey}|${strat}|${rivals.scope || "strategy"}`;
-  const you = youSeat(rivals);
-  return rivals.state === "loading" ? loadingModel(on, lineup, you, rivals) : readyModel(on, lineup, you, rivals);
+  const lineup = `${entityKey}|${strat}|${rivals.scope || "overall"}`;
+  const mine = [youSeat(rivals), ...bestRunSeat(rivals)];
+  return rivals.state === "loading" ? loadingModel(on, lineup, mine, rivals) : readyModel(on, lineup, mine, rivals);
 }

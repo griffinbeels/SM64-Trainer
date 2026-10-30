@@ -1121,9 +1121,11 @@ never reopens for it (his rule, 2026-09-16).
 
 ### Renderer
 
-The trainer's build of LINK's GLideN64 v4.2 (`GLideN64_SM64Trainer.dll`,
-picker label `LINK v4.2 [SM64 Trainer]`): the pinned upstream tree plus the
-capture overlay that adds the SourceV2 export the [[capture layer]] reads. A
+The trainer's build of LINK's GLideN64 v4.2 (bundled as `GLideN64_SM64Trainer.dll`,
+own label `LINK v4.2 [SM64 Trainer]`): the pinned upstream tree plus the
+capture overlay that adds the SourceV2 export the [[capture layer]] reads.
+Project64 receives it as `sm64_trainer_gfx.renderer`, no `.dll`, so its plugin
+picker lists only the wrapper (a tester saw two plugins, 2026-10-24). A
 stock GLideN64 has no such export, so a wrapper pointed at one captures
 nothing. (His 2026-09-15 "input unavailable" report had a different cause:
 Project64 selected the renderer directly, so the wrapper never loaded.)
@@ -1780,6 +1782,37 @@ delivery worker only keeps time and books, without the GPU.
 - **Not** -- the driver warm-up it replaced (2026-09-26 to 09-27), which kept
   the worker's context and paid the same freeze once in the boot intro
 
+### Bindings cause
+
+Why the [[renderer]] could not name a capture surface: the first place it
+stopped trusting its GL state observation in this context (a site, plus the
+OpenGL error it read there), and how far arming that context got (created,
+[[practice ROM]], function table installed, right thread). Added 2026-10-24
+for a tester whose every recording ended "no qualified source surface"
+(10034) with no way to tell which of those steps failed. It rides the
+[[refused picture]] record, the `gpu_failure` log line and the startup
+receipt, beside the GPU's name it read at context creation.
+
+- **Lives** -- `plugin/gfxwrap/source_refusal.h` (the numbers),
+  `plugin/gfxwrap/link_dispatch.cpp` (where each is recorded),
+  `src/sm64_events/replay/gpudiagnostics.py` (the plain-words names)
+- **Not** -- a refusal reason: the 10034 reason and its `0x53520001` detail
+  say which check refused; the bindings cause says why that check failed
+
+### Witness rebuild
+
+The [[renderer]] asking the driver for every binding its state witness
+holds, after a recoverable [[bindings cause]], so one GL error no longer costs
+GPU recording until the next context (2026-10-24, his "Why can't we fix the
+GPU stuff as best we can?"). It happens when the source is about to refuse a
+picture or a [[ghost]] list would start no poses, at most once a second, and
+never after a structural cause.
+
+- **Lives** -- `plugin/gfxwrap/link_dispatch.cpp` (Reconstruct),
+  `plugin/gfxwrap/source_refusal.h` (which sites are recoverable); contract
+  in [the link-state doc](replay-link-state.md#witness-rebuild)
+- **Not** -- a new recording: the GPU retry starts one of those
+
 ### Activation log
 
 `sm64_trainer_gfx.activation.log`, beside the wrapper: this Project64
@@ -1893,8 +1926,9 @@ The active practice card's row of the people you race: your own seat first,
 then each [[ghost slot]], slowest to fastest, centred at every width (his
 words, 2026-10-16: "our pb on far left, then times get faster as we go to the
 right"). A seat is a [[rank]] cap inside a ring in that [[ghost]]'s in-game
-colour, the time and the name; a name wraps where the handle divides and is
-never cut off. A dashed ring is a [[ghost]] that cannot race yet (yours before
+colour, the time and the name, with that seat's [[strategy]] small and italic
+under the name (his words, 2026-10-28); a name wraps where the handle divides and is
+never cut off, and a long [[strategy]] ends in an ellipsis. A dashed ring is a [[ghost]] that cannot race yet (yours before
 your first time, a [[ghost]] still downloading); a lock on a ring is a pinned
 [[ghost]], which stays even once beaten, to your left. The [[lineup track]] threads
 the rings. With no [[strategy]] the row offers every one of the [[strategies]]
@@ -2148,6 +2182,20 @@ the saved PBs on every read, never stored, and never changes the input compariso
 
 - **Lives** — `src/sm64_events/ghost/pb.py`
 
+### Best recorded run
+
+Your fastest recording of the practised [[target]] and [[strategy]] that has
+Mario poses, racing in the [[PB ghost]]'s place and colour while your saved
+[[personal best]] has none (an older build's PB, an [[imported time]]). Only a
+[[run]] the trainer admitted itself qualifies, so the [[ghost ceiling]] applies to it.
+The [[lineup]] gives it its own seat under this name, and its label in the
+game says the same; your PB stays the [[rank]] you chase (his decision,
+2026-10-25). A PB with poses takes the seat back.
+
+- **Lives** — `src/sm64_events/ghost/rivals.py` (Rivals._pb_seat)
+- **Not** — a [[ghost slot]]: it never holds a rival, and unticking the PB
+  unseats it.
+
 ### Ghost set
 
 Which [[ghost]]s play for a [[target]]: the [[PB ghost]] box plus any [[saved ghost]],
@@ -2207,13 +2255,20 @@ beaten. With no [[strategy]] there are no slots, no pins and no cloud request.
 
 ### Ghost matching scope
 
-The [[Strategy]] or Overall choice on the practice card. [[Strategy]] restricts
-[[ghost slot]]s to the current [[strategy]]; `Overall` admits other strategies
-and grades them on the [[Overall curve]]. Both use the current [[strategy]]'s saved
-[[personal best]] as their starting basis. Each choice remembers its own manual
-choices, and every [[ghost]] keeps its recorded [[strategy]] label.
+The [[ghost]]s a [[target]]'s [[ghost slot]]s may hold. Every [[lineup]] is
+Overall: it races every [[strategy]] of the [[target]] and grades them on the
+[[Overall curve]], from the current [[strategy]]'s saved [[personal best]] (his
+decision, 2026-10-28: "I think that actually is the better design in general").
+A player near the limit of a slower [[strategy]] meets the slowest [[ghost]]s of a
+faster one. The code still serves a caller that asks for the earlier
+[[strategy]]-only matching, which holds the slots to the current [[strategy]]; no
+card offers it, and the card's [[Strategy]]/Overall pair now picks only which
+[[rank]] shows. A [[ghost]] someone pinned in one [[strategy]]'s [[lineup]] before
+then took a free slot in the Overall [[lineup]]. Every [[ghost]] keeps its
+recorded [[strategy]] label.
 
-- **Lives** — `src/sm64_events/ghost/rivals.py` and `src/sm64_events/ui/components/practicelog.js`
+- **Lives** — `src/sm64_events/ghost/rivals.py` (DEFAULT_SCOPE, _widened_pins) and
+  `src/sm64_events/ui/components/ghostswitch.js` (GHOST_SCOPE)
 
 ### Region scope
 
@@ -3470,9 +3525,13 @@ log records and [[ghost]] playback state. The builder omits private paths and
 custom display labels. The Debug report
 button in the settings drawer writes one and opens Explorer with it selected,
 so a user can attach evidence to a bug report instead of a description of it.
+The first automatic error of each issue per launch carries the same report
+as an attachment, which the upload worker builds after the SDK captures the
+error.
 
 - **Lives** — the report builder (`src/sm64_events/core/diagnostics.py`) → the
-  settings drawer (`src/sm64_events/ui/components/header.js`)
+  settings drawer (`src/sm64_events/ui/components/header.js`) and the error
+  upload worker (`src/sm64_events/core/error_reporting_transport.py`)
 
 ### Memory layout
 

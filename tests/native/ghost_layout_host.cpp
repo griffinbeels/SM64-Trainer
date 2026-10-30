@@ -71,6 +71,8 @@ int main() {
     number("PATH_SPACING_MS_MIN", GP_PATH_SPACING_MS_MIN); number("PATH_SPACING_MS_MAX", GP_PATH_SPACING_MS_MAX);
     text("IPC_MAGIC", GIPC_MAGIC); number("IPC_VERSION", GIPC_VERSION); wide("IPC_PREFIX", GIPC_PREFIX);
     number("GP_WRONG_SCENE", GP_WRONG_SCENE);
+    name("GIPC_ROM_REASONS");
+    std::printf("[%d,%d,%d,%d]", GIPC_ROM, GIPC_ROM_UNQUALIFIED, GIPC_ROM_EXHAUSTED, GIPC_ROM_AMBIGUOUS);
 
     number("HEADER_BYTES", sizeof(gclip_header)); number("RECORD_BYTES", sizeof(gclip_frame));
     number("SAMPLE_BYTES", sizeof(gc_sample)); number("RECORD_PREFIX_BYTES", offsetof(gclip_frame, sample));

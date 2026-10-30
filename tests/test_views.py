@@ -1437,6 +1437,31 @@ def test_session_view_attaches_ranks(tmp_path):
     assert any(p.get("rank") for s in sec["progress"]["sessions"] for p in s["points"])
 
 
+def test_every_finish_carries_its_overall_rank_beside_its_strategy_rank(tmp_path):
+    """The practice log's caps follow the card's rank view (his ask, 2026-10-29),
+    so a finish ships its grade on the Overall curve too: the same curve, entity
+    and frames the Overall banner grades, so the PB row and the banner agree."""
+    from sm64_events.tracking.views import entity_rank
+    db, svc = make(tmp_path)
+    seed(svc)
+    svc.ranks = _ranks(tmp_path)
+    asyncio.run(svc.set_strat(2, 2, "fast"))
+    db._conn.execute("UPDATE attempts SET strat_tag='fast' WHERE course_id=2")
+    db._conn.commit()
+    best_aid = next(a.id for a in db.attempts() if a.igt_frames == 343)
+    save_pb(svc, db, best_aid, "igt")
+    [sec] = build_session_view(db, svc, clock="igt")["stars"]
+    finishes = [at for at in sec["attempts"] if at["outcome"] == "success"]
+    assert finishes and all(at["overall_rank"] for at in finishes)
+    for at in finishes:
+        graded = entity_rank(svc.ranks, "star:2:2", at["igt_frames"])
+        assert at["overall_rank"] == {"rank": graded["rank"], "division": graded["division"]}
+    pb_row = next(at for at in finishes if at["id"] == best_aid)
+    assert (pb_row["overall_rank"]["rank"], pb_row["overall_rank"]["division"]) == (
+        sec["entity_rank"]["rank"], sec["entity_rank"]["division"])
+    assert all(at["overall_rank"] is None for at in sec["attempts"] if at["outcome"] != "success")
+
+
 def test_rank_by_star_grades_active_strat_for_quick_select(tmp_path):
     """The stage quick-select grid grades each star under its active strat:
     view['rank_by_star'] maps '<course>:<star>' -> {rank, division} when the

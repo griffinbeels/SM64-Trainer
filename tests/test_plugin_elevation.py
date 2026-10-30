@@ -17,7 +17,7 @@ import pytest
 
 from sm64_events.core.capturelayer import (
     CaptureLayer, GRAPHICS_DLL_VALUE, LayerRefused, REGISTRY_DLL_SUBKEY,
-    RENDERER_DLL, WRAPPER_DLL, WRAPPER_INI,
+    RENDERER_FILE, WRAPPER_DLL, WRAPPER_INI,
 )
 from sm64_events.core import plugin_elevation, plugin_elevation_worker, plugin_installation
 from sm64_events.core.plugin_installation import (
@@ -30,7 +30,7 @@ def install(tmp_path):
     pj64 = tmp_path / "PJ64"
     (pj64 / "Plugin").mkdir(parents=True)
     (pj64 / "Project64.exe").write_bytes(b"fake exe; version checker injected")
-    source, renderer = tmp_path / WRAPPER_DLL, tmp_path / RENDERER_DLL
+    source, renderer = tmp_path / WRAPPER_DLL, tmp_path / RENDERER_FILE
     source.write_bytes(b"MZ" + b"1" * 64 + b"-gpu-runtime\0")
     renderer.write_bytes(b"MZ" + b"2" * 64 + b"-renderer\0")
     settings = tmp_path / "capture_layer.json"
@@ -143,14 +143,14 @@ def test_terminal_admin_error_retains_actual_operation_path_and_windows_code(ins
 
     @contextmanager
     def failed(*args):
-        raise PluginInstallError("copy plugin", pj64 / "Plugin" / RENDERER_DLL, error)
+        raise PluginInstallError("copy plugin", pj64 / "Plugin" / RENDERER_FILE, error)
         yield  # pragma: no cover
 
     monkeypatch.setattr(plugin_elevation, "elevated_install", failed)
     with pytest.raises(PluginInstallError) as raised:
         layer.install(True)
     assert raised.value.operation == "copy plugin"
-    assert raised.value.filename == str(pj64 / "Plugin" / RENDERER_DLL)
+    assert raised.value.filename == str(pj64 / "Plugin" / RENDERER_FILE)
     assert raised.value.winerror == 112
 
 
@@ -340,4 +340,4 @@ def test_authenticated_parent_helper_transaction_without_real_uac(privileged_req
     assert outcomes == [0]
     assert registry.selected == WRAPPER_DLL
     assert json.loads(settings.read_text())["consented_at"]
-    assert (pj64 / "Plugin" / WRAPPER_INI).read_text() == f"wrapped={RENDERER_DLL}\n"
+    assert (pj64 / "Plugin" / WRAPPER_INI).read_text() == f"wrapped={RENDERER_FILE}\n"

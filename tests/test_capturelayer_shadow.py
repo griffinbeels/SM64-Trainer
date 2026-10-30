@@ -8,7 +8,7 @@ import pytest
 
 from sm64_events.core import plugin_elevation
 from sm64_events.core.capturelayer import (
-    GRAPHICS_DLL_VALUE, REGISTRY_DLL_SUBKEY, REGRESSED, RENDERER_DLL, WRAPPER_DLL,
+    GRAPHICS_DLL_VALUE, REGISTRY_DLL_SUBKEY, REGRESSED, RENDERER_FILE, WRAPPER_DLL,
     WRAPPER_INI, LayerRefused,
 )
 from sm64_events.core.plugin_installation import PluginInstallError
@@ -40,7 +40,7 @@ def test_explicit_install_reconciles_existing_shadow_and_preserves_other_files(s
     unrelated.write_bytes(b"the player's renderer settings")
     result = layer.install(True)
     assert shadow.read_bytes() == (pj64 / "Plugin" / WRAPPER_INI).read_bytes()
-    assert shadow.read_text().strip() == f"wrapped={RENDERER_DLL}"
+    assert shadow.read_text().strip() == f"wrapped={RENDERER_FILE}"
     assert unrelated.read_bytes() == b"the player's renderer settings"
     assert result.installation_verified
 
@@ -72,7 +72,7 @@ def test_refresh_repairs_only_shadow_when_installed_dlls_are_current(shadow_inst
     monkeypatch.setattr("sm64_events.core.plugin_installation.shutil.copyfile",
                         lambda *_: pytest.fail("current DLLs must not be recopied"))
     assert layer.refresh_if_stale()
-    assert shadow.read_text().strip() == f"wrapped={RENDERER_DLL}"
+    assert shadow.read_text().strip() == f"wrapped={RENDERER_FILE}"
     assert before == {p.name: p.read_bytes() for p in (pj64 / "Plugin").glob("*.dll")}
     assert layer.status().installation_verified
 
@@ -116,7 +116,7 @@ def test_elevated_files_keep_original_users_shadow_in_transaction(shadow_install
             admin_context.setenv("LOCALAPPDATA", str(admin_data))
             with layer._install_plugin_files(pj64, source, layer._renderer_dll(), elevated=False) as receipts:
                 yield receipts
-                assert shadow.read_text().strip() == f"wrapped={RENDERER_DLL}"
+                assert shadow.read_text().strip() == f"wrapped={RENDERER_FILE}"
                 assert admin_shadow.read_bytes() == admin_before
                 if commit_failure:
                     raise PluginInstallError("commit administrator install", pj64 / "Plugin",
@@ -192,7 +192,7 @@ def test_undo_restores_previous_selection_without_touching_other_shadow_files(sh
 
 @pytest.mark.parametrize("contents", [
     b"\xff\xfe\x00",
-    f"wrapped={RENDERER_DLL}\n\twrapped=old_trainer_renderer.dll\n".encode(),
+    f"wrapped={RENDERER_FILE}\n\twrapped=old_trainer_renderer.dll\n".encode(),
 ])
 def test_unreadable_or_later_override_shadow_is_repaired(shadow_install, contents):
     layer, _, _, _, _, _, shadow = shadow_install
@@ -202,4 +202,4 @@ def test_unreadable_or_later_override_shadow_is_repaired(shadow_install, content
     assert not layer.status().installation_verified
     assert layer.refresh_if_stale()
     assert layer.status().installation_verified
-    assert shadow.read_text().strip() == f"wrapped={RENDERER_DLL}"
+    assert shadow.read_text().strip() == f"wrapped={RENDERER_FILE}"

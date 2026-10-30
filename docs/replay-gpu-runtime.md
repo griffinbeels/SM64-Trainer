@@ -119,7 +119,7 @@ comparison (+0.92% AV1/-0.31% H.264) remains preserved as historical evidence.
 
 | File | Role | Built by | Build id suffix |
 |---|---|---|---|
-| `GLideN64_SM64Trainer.dll` (label `LINK v4.2 [SM64 Trainer]`) | the renderer: LINK's GLideN64 v4.2 at the pinned commit plus the SourceV2/ContextV1 overlay from `plugin/gfxwrap/` | `tools/build_renderer.py` (pin, credits and the prebuilt-library recipe in `renderer/`) | `-renderer` |
+| `GLideN64_SM64Trainer.dll` (label `LINK v4.2 [SM64 Trainer]`) | the renderer: LINK's GLideN64 v4.2 at the pinned commit plus the SourceV2/ContextV1 overlay from `plugin/gfxwrap/`; installed in Project64 as `sm64_trainer_gfx.renderer` so its picker lists one plugin | `tools/build_renderer.py` (pin, credits and the prebuilt-library recipe in `renderer/`) | `-renderer` |
 | `sm64_trainer_gfx.dll` (label `SM64 Trainer v1.0`) | the capture wrapper Project64 selects; loads the renderer named by `sm64_trainer_gfx.ini` | `tools/build_plugin.py` | `-gpu-runtime` |
 | `SM64GpuEncoderV1.dll` | the 64-bit hardware helper: unchanged NVENC plus shared Windows D3D11/MF encoding | `tools/build_plugin.py` | `-gpu-encoder` |
 
@@ -982,7 +982,18 @@ refusal in `gpu_failure.detail`, using the existing diagnostic-only failed
 `rb_surface.witness`: `0x53520001` bindings, `02` source format, `03` drawable
 extent, `04` geometry, `05` missing VI register, `06` crop bounds, and `07` a
 ticket the renderer did not observe. Zero is unknown, including older producers.
-The bindings gate still does not identify its underlying state-invalidation cause.
+A bindings refusal also carries the [bindings cause](replay-link-state.md#bindings-cause):
+the first invalidation site since context creation, the GL error read there,
+and which arming steps happened. The deadline puts it in the `gpu_failure`
+line (`bindings_*`) and in the appended startup receipt (control page offset
+784), beside the GL vendor, renderer and version the renderer read at context
+creation. Those name the GPU even when no surface qualified, while the V1
+receipt's strings stay empty until a gateway opens. Since 2026-10-24 a
+recoverable bindings cause no longer lasts the session: the renderer rebuilds
+its witness from the driver at the refusal or at the ghost's next list ([witness rebuild](replay-link-state.md#witness-rebuild)),
+logs `bindings_reconstructed` on success, and a failure line counts the
+attempts. A 10034 after rebuilds names a structural site, a fatal driver
+error, or an error repeated faster than the once-a-second rebuild.
 Later refusals replace transient startup evidence; accepted requests reset it.
 Successful pictures retain their witness semantics and no Source layout changes.
 These observations retain the original deadline, safety gates and scoped desktop

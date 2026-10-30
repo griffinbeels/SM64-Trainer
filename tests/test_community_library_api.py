@@ -96,7 +96,8 @@ def test_invalid_cloud_cursor_requests_a_fresh_sequence(library):
 def test_save_remove_for_b_while_a_is_active_never_cycles_practice(library):
     client, session, row, native, _ = library
     before = live_state(session._rivals, native)
-    command = {"target": OTHER, "action": "add", "id": row["id"], "version": "us", "scope": "strategy"}
+    # The Library names no scope: a saved rival joins the star's one lineup.
+    command = {"target": OTHER, "action": "add", "id": row["id"], "version": "us"}
     response = client.post("/api/ghost/rivals/saved", json=command)
     assert response.status_code == 200 and response.json()["state"] == "added"
     assert session._community.calls == [("metadata", row["id"])]

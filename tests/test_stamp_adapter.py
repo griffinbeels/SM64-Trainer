@@ -27,6 +27,7 @@ def host(tmp_path_factory):
     (work / "GLFunctions.h").write_text(r"""#pragma once
 #include <windows.h>
 #include <stdint.h>
+#include "source_refusal.h"
 extern bool surface_ready;
 namespace renderer { struct Identity { uintptr_t context,read_drawable; uint32_t owner_thread,context_generation,drawable_generation; }; }
 namespace snapshot { struct RestoreBindings { unsigned read_framebuffer,texture_2d,source_read_buffer; }; }
@@ -34,6 +35,8 @@ namespace replay_gl {
 inline bool CandidateBindings(renderer::Identity *i,snapshot::RestoreBindings *b){if(!surface_ready)return false;*i={123,456,GetCurrentThreadId(),1,1};*b={0,0,0x404};return true;}
 inline bool DrawableExtent(unsigned*w,unsigned*h){*w=640;*h=480;return true;}
 inline uint32_t SourceFormat(){return 1;}
+inline void BindingsCause(rs_bindings_cause *c){*c={};}
+inline bool Reconstruct(){return false;}
 inline bool __cdecl BeginCapture(){return true;}inline bool __cdecl EndCapture(){return true;}
 }
 """)

@@ -12,9 +12,14 @@ Measured 2026-09-18 on two of his saved replays: hardware AV1 lands near a
 quarter of the saved size at VMAF ~99. H.264 WITH picture reordering
 (B-frames) passed every ffprobe check and still could not present the clip's
 last 11 pictures in Chromium, so every candidate runs with reordering off --
-which `picture_duration_filter` requires anyway. ffprobe agreeing is therefore
-necessary, not sufficient: a new codec row earns its place with the
+which `picture_duration_filter` requires anyway. The probe agreeing is
+therefore necessary, not sufficient: a new codec row earns its place with the
 every-slot browser seek check (`tools/probe_clip_seek.py`).
+
+The stream reads come from `mediaprobe.py`, in-process. Until 2026-10-25 they
+spawned the ffprobe beside ffmpeg, which the packaged app never shipped, so
+no installed copy had ever shrunk a replay. Only the audio digest and the
+picture comparison still run ffmpeg, which ships.
 
 Two steps, because a player may be reading the file when the encode ends:
 
@@ -63,7 +68,7 @@ from pathlib import Path
 from sm64_events.core.childproc import quiet_spawn_kwargs
 from sm64_events.replay import config as replay_config
 from sm64_events.replay.config import ARCHIVE_CODECS, CLIP_MAXRATE, video_quality_args
-from sm64_events.replay.extract import ffprobe_beside, frame_times_of
+from sm64_events.replay import mediaprobe
 from sm64_events.replay.media import MEDIA_HZ, picture_duration_filter
 from sm64_events.replay.publication import GHOST_COPY_SUFFIX, atomic_json
 
@@ -215,56 +220,53 @@ def file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def picture_ticks(ffmpeg: str, clip: Path) -> list[int]:
+def picture_ticks(clip: Path) -> list[int]:
     """Every presented picture's time on the 90 kHz media clock."""
-    times = frame_times_of(ffmpeg, clip)
+    times = mediaprobe.frame_times_of(clip)
     if not times:
         raise Unproven(f"picture times unreadable: {clip.name}")
     return [round(at * MEDIA_HZ) for at in times]
 
 
-def _probe(ffmpeg: str, clip: Path, stream: str, entries: str) -> list[str]:
-    ffprobe = ffprobe_beside(ffmpeg)
-    if not ffprobe:
-        raise Unproven("no ffprobe beside ffmpeg")
-    out = subprocess.run(
-        [ffprobe, "-v", "error", "-select_streams", stream, "-show_entries", entries,
-         "-of", "csv=p=0", str(clip)],
-        capture_output=True, text=True, timeout=120, check=False, **_spawn_kwargs())
-    if out.returncode:
-        raise Unproven(f"ffprobe failed on {clip.name}: {out.stderr[-200:].strip()}")
-    return [line.strip().rstrip(",") for line in out.stdout.splitlines() if line.strip()]
+def _media(clip: Path) -> mediaprobe.Media:
+    media = mediaprobe.probe(clip)
+    if media is None:
+        raise Unproven(f"unreadable: {clip.name}")
+    return media
 
 
-def end_ticks(ffmpeg: str, clip: Path) -> int:
+def _video_span(clip: Path, unreadable: str) -> tuple[mediaprobe.VideoStream, float, float]:
+    """The video stream, its start (never before zero) and its duration, in
+    the seconds the probe prints."""
+    video = _media(clip).video
+    start = video.start_s if video else None
+    duration = video.duration_s if video else None
+    if start is None or duration is None:
+        raise Unproven(f"{unreadable}: {clip.name}")
+    return video, max(start, 0.0), duration
+
+
+def end_ticks(clip: Path) -> int:
     """Where the last picture stops being shown: the video track's own end."""
-    rows = _probe(ffmpeg, clip, "v:0", "stream=start_time,duration")
-    try:
-        start, duration = (float(part) for part in rows[0].split(",")[:2])
-    except (IndexError, ValueError) as unreadable:
-        raise Unproven(f"video length unreadable: {clip.name}") from unreadable
-    return round((max(start, 0.0) + duration) * MEDIA_HZ)
+    _, start, duration = _video_span(clip, "video length unreadable")
+    return round((start + duration) * MEDIA_HZ)
 
 
-def end_in_stream_units(ffmpeg: str, clip: Path) -> int:
+def end_in_stream_units(clip: Path) -> int:
     """The same end, counted in the video track's OWN time base -- the unit
     the encoder's packets carry under `-enc_time_base demux`, and so the unit
     `picture_duration_filter` compares against. A saved replay's is 1/90000;
     nothing here may assume it (a 1/15360 clip held its last picture for 11 s
     when the end was passed in 90 kHz ticks, which the proof refused)."""
-    rows = _probe(ffmpeg, clip, "v:0", "stream=time_base,start_time,duration")
-    try:
-        base, start, duration = rows[0].split(",")[:3]
-        numerator, denominator = (int(part) for part in base.split("/"))
-        return round((max(float(start), 0.0) + float(duration)) * denominator / numerator)
-    except (IndexError, ValueError, ZeroDivisionError) as unreadable:
-        raise Unproven(f"video time base unreadable: {clip.name}") from unreadable
+    video, start, duration = _video_span(clip, "video time base unreadable")
+    base = video.time_base
+    return round((start + duration) * base.denominator / base.numerator)
 
 
 def audio_digest(ffmpeg: str, clip: Path) -> str | None:
     """Digest of the DECODED audio as presented: every frame's time, length
     and samples. None when the clip has no audio track."""
-    if not _probe(ffmpeg, clip, "a:0", "stream=index"):
+    if not _media(clip).has_audio:
         return None
     out = run_child(
         [ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error", "-i", str(clip),
@@ -284,10 +286,10 @@ def fingerprint(ffmpeg: str, clip: Path) -> Fingerprint:
     seconds of a thirty-second job on a 53 s replay, with the progress bar
     standing still for all of it (2026-09-19)."""
     with ThreadPoolExecutor(max_workers=4, thread_name_prefix="replay-fingerprint") as pool:
-        ticks_f = pool.submit(picture_ticks, ffmpeg, clip)
+        ticks_f = pool.submit(picture_ticks, clip)
         audio_f = pool.submit(audio_digest, ffmpeg, clip)
         sha_f = pool.submit(file_sha256, clip)
-        end_f = pool.submit(end_ticks, ffmpeg, clip)
+        end_f = pool.submit(end_ticks, clip)
         ticks = ticks_f.result()
         times = hashlib.sha256(",".join(map(str, ticks)).encode()).hexdigest()
         return Fingerprint(clip.stat().st_size, sha_f.result(), len(ticks), times,
@@ -420,17 +422,17 @@ def _tell(report, stage: str, fraction: float | None) -> None:
         report(stage, fraction)
 
 
-def _picture_scale(ffmpeg: str, saved: Path, meta: dict) -> int:
+def _picture_scale(saved: Path, meta: dict) -> int:
     """How many pictures the progress bar counts to. The sidecar knows for a
     picture-feed clip; the container's own count is close enough otherwise."""
     pictures = len(meta.get("frame_times") or ())
     if not pictures:
-        with suppress(Unproven, ValueError, IndexError):
-            pictures = int(_probe(ffmpeg, saved, "v:0", "stream=nb_frames")[0])
+        media = mediaprobe.probe(saved)
+        pictures = media.video.frames if media and media.video else 0
     return pictures
 
 
-def _recorded_at_archive_quality(ffmpeg: str, saved: Path, codecs, *,
+def _recorded_at_archive_quality(saved: Path, codecs, *,
                                 encoder_backend: str | None = None) -> bool:
     """Did the recorder already write what this pass would have produced?
 
@@ -456,9 +458,8 @@ def _recorded_at_archive_quality(ffmpeg: str, saved: Path, codecs, *,
     if ("av1_nvenc" not in codecs
             or replay_config.VIDEO_AV1_CQ != replay_config.ARCHIVE_AV1_CQ):
         return False
-    with suppress(Unproven, ValueError, IndexError):
-        return _probe(ffmpeg, saved, "v:0", "stream=codec_name")[0] == "av1"
-    return False
+    media = mediaprobe.probe(saved)
+    return bool(media and media.video and media.video.codec_name == "av1")
 
 
 def _encode(run, args: list[str], report, pictures: int):
@@ -525,7 +526,7 @@ def shrink(ffmpeg: str, saved: Path, *, codecs=ARCHIVE_CODECS, run=run_child,
         # Already answered for this clip. Re-encoding a compressed replay
         # would stack a second generation of loss on a PB for nothing.
         return settled
-    if _recorded_at_archive_quality(ffmpeg, saved, codecs,
+    if _recorded_at_archive_quality(saved, codecs,
                                    encoder_backend=meta.get("encoder_backend")):
         # RECORDED IN THE ARCHIVE'S OWN CODEC AND TARGET. On a GPU with an AV1
         # encoder the recorder writes what this pass would have produced, so
@@ -557,8 +558,8 @@ def _encode_proven(ffmpeg: str, saved: Path, staged: Path, proof: Path, meta: di
     measuring = ThreadPoolExecutor(max_workers=1, thread_name_prefix="replay-original")
     original_f = measuring.submit(fingerprint, ffmpeg, saved)
     try:
-        end = end_in_stream_units(ffmpeg, saved)
-        pictures = _picture_scale(ffmpeg, saved, meta)
+        end = end_in_stream_units(saved)
+        pictures = _picture_scale(saved, meta)
         for codec in codecs:
             if original_f.done() and original_f.exception() is not None:
                 raise original_f.exception()   # unreadable clip: no codec can help
@@ -713,7 +714,7 @@ def shrink_ghost_copy(ffmpeg: str, saved: Path, *, codecs=ARCHIVE_CODECS, run=ru
     encoder_backend = block.get("encoder_backend")
     if encoder_backend is None:
         encoder_backend = meta.get("encoder_backend")
-    if _recorded_at_archive_quality(ffmpeg, copy, codecs, encoder_backend=encoder_backend):
+    if _recorded_at_archive_quality(copy, codecs, encoder_backend=encoder_backend):
         kept = {"version": MEDIA_VERSION, "state": "kept_original",
                 "reasons": ["recorded in the archive codec already"]}
         _record_ghost_copy(saved, kept)

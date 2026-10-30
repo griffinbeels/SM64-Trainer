@@ -1,5 +1,6 @@
-/* Worker-only discovery of the loaded cartridge. Zilmar supplies a header,
- * never a full-ROM pointer. No emulator offsets, writes, or file selection. */
+/* Worker-only discovery of the loaded cartridge. Zilmar promises a header,
+ * not a full-ROM pointer: the header's own allocation is read first, then the
+ * process is searched. No emulator offsets, writes, or file selection. */
 #pragma once
 #include <cstddef>
 #include <cstdint>
@@ -8,7 +9,9 @@
 
 namespace ghost_rom {
 constexpr uint32_t IMAGE_BYTES = 8u << 20;
-enum class Result { ready, missing, changed, ambiguous, exhausted };
+// unqualified: a full image behind the header failed the model's asset check
+// and none passed (a cartridge build the model does not know).
+enum class Result { ready, missing, changed, ambiguous, exhausted, unqualified };
 enum class Validation { valid, invalid, unavailable };
 struct Limits {
     uint64_t bytes = 1ull << 30;

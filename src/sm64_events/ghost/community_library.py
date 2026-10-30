@@ -34,7 +34,7 @@ def decorate_page(page, tracker, rivals, collection):
         target = ({"kind": portable["kind"], "entity_key": key, "strat": row["strategy"]}
                   if key is not None else None)
         if target is not None and rivals is not None:
-            capability = rivals.saved_availability(target, version=row["game_version"], scope="strategy",
+            capability = rivals.saved_availability(target, version=row["game_version"],
                                                    expected_clock=row["clock"])
             reason = capability["reason"]
             pins = capability["pins"]

@@ -134,6 +134,40 @@ def _reporting_tls(bundle, load):
             and ssl.create_default_context(cafile=str(ca)).cert_store_stats()["x509_ca"] > 0)
 
 
+def _bundled_media_reads():
+    # Saved-replay shrinking and a clip's first pts read media in-process
+    # through the bundled PyAV (replay/mediaprobe.py): the release ships no
+    # ffprobe, which is how every installed copy once failed both quietly
+    # (2026-10-25). Write a tiny native-shaped clip, then read it the way the
+    # shrink proof does: stream facts, decoded picture times, the packet index.
+    import tempfile
+    import av
+    from sm64_events.replay import mediaprobe
+    from sm64_events.replay.media import MEDIA_HZ, MEDIA_TIME_BASE
+    ticks = (3000, 4500, 9000)   # uneven, and the first after zero
+    with tempfile.TemporaryDirectory(prefix="sm64-self-check-") as folder:
+        clip = Path(folder) / "media-reads.mp4"
+        with av.open(str(clip), "w", format="mp4", container_options={
+                "movie_timescale": str(MEDIA_HZ), "video_track_timescale": str(MEDIA_HZ)}) as out:
+            stream = out.add_stream("libx264", options={"bf": "0"})
+            stream.width = stream.height = 64
+            stream.pix_fmt = "yuv420p"
+            stream.codec_context.time_base = MEDIA_TIME_BASE
+            for pts in ticks:
+                picture = av.VideoFrame(64, 64, "yuv420p")
+                picture.pts, picture.time_base = pts, MEDIA_TIME_BASE
+                out.mux(stream.encode(picture))
+            out.mux(stream.encode())
+        media = mediaprobe.probe(clip)
+        packets = mediaprobe.native_packet_index(clip) or ()
+        times = [round(pts / MEDIA_HZ, 6) for pts in ticks]
+        return (media is not None and media.video is not None
+                and media.video.codec_name == "h264" and not media.has_audio
+                and tuple(p.pts for p in packets) == ticks
+                and mediaprobe.frame_times_of(clip) == times
+                and mediaprobe.video_start_of(clip) == times[0])
+
+
 def collect_report(*, fixture: ProbeRuntime | None = None, importer=None):
     """Collect bounded checks. Unit fixtures are never selected by CLI or env."""
     report = {"schema": 1, "kind": "frozen-beta-self-check", "ok": False,
@@ -193,6 +227,7 @@ def collect_report(*, fixture: ProbeRuntime | None = None, importer=None):
     check("bundled_ffmpeg", lambda: paths.bundled_ffmpeg() is not None
           and Path(paths.bundled_ffmpeg()).resolve() == ffmpeg.resolve()
           and _file(bundle, "ffmpeg.exe") and _pe(ffmpeg, 0x8664, dll=False))
+    check("bundled_media_reads", _bundled_media_reads)
     check("x64_runtime", lambda: struct.calcsize("P") == 8)
 
     def shipped_ranking_policy():

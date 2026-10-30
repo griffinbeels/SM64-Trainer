@@ -8,7 +8,7 @@ import pytest
 
 from sm64_events.ghost import settings
 from sm64_events.ghost.native_session import LATE_JOIN_FRAMES, NATIVE_BUDGET_REASON, NativeGhost, budget_reason
-from sm64_events.ghost.native_layout import GP_WRONG_SCENE
+from sm64_events.ghost.native_layout import GIPC_ROM_REASONS, GP_WRONG_SCENE
 from sm64_events.memory.ghost_layout import ghost_supported
 from tests.test_ghost_session import a_session, mark
 from tests.test_ui_ghost_session import controls, run_node
@@ -253,10 +253,10 @@ def test_scope_switch_revokes_native_owner_before_population_failure(tmp_path):
     source.snapshot_status = lambda **kwargs: {**served(**kwargs), **generations}
 
     def metadata_snapshot(_kind, _entity, *, clock, game_version, strategy=None, versions=None):
-        if strategy is None:
+        if strategy is not None:
             assert source.commands[-1] == {"enabled": False}
             assert native._asset is native._selected_asset is None
-            raise OSError("Overall population unavailable")
+            raise OSError("Strategy population unavailable")
         return ()
 
     population = SimpleNamespace(generation=1, metadata_snapshot=metadata_snapshot)
@@ -266,14 +266,14 @@ def test_scope_switch_revokes_native_owner_before_population_failure(tmp_path):
         await session.update(enabled=True)
         native.note()
         assert source.commands[-1]["enabled"] and source.commands[-1]["activate_generation"] == 1
-        with pytest.raises(OSError, match="Overall population unavailable"):
-            await session.update({"target": target, "rivals": {"scope": "overall"}})
-        assert session.payload()["rivals"]["scope"] == "strategy"
+        with pytest.raises(OSError, match="Strategy population unavailable"):
+            await session.update({"target": target, "rivals": {"scope": "strategy"}})
+        assert session.payload()["rivals"]["scope"] == "overall"
         assert session._pending == {}
         native.note()
         assert source.commands[-1] == {"enabled": False}
         assert native._selected_asset is None
-        await session.update({"target": target, "rivals": {"scope": "strategy"}})
+        await session.update({"target": target, "rivals": {"scope": "overall"}})
         generations["prepared_generation"] = session._rivals.generation
         native.note()
         assert not source.commands[-1]["enabled"] and source.commands[-1]["activate_generation"] == 0
@@ -802,6 +802,24 @@ def test_a_set_that_does_not_fit_says_so_on_the_ghost_card(tmp_path):
 
     asyncio.run(check())
     assert budget_reason(2) == budget_reason(16) == "These ghosts are too long to show together; untick one."
+
+
+@pytest.mark.parametrize("reason", GIPC_ROM_REASONS)
+def test_an_unreadable_cartridge_says_so_on_the_ghost_card(tmp_path, reason):
+    """Each cartridge refusal reads as the ROM sentence, never "Preparing
+    Mario..." (a JP/AMD tester's card said that for a whole session)."""
+    session, source, _ = native_session(tmp_path)
+
+    async def check():
+        await session.update({"enabled": True})
+        session._native.note()
+        source.snapshot_status = lambda **_: {
+            "available": True, "state": 5, "reason": reason,
+            "producer": SimpleNamespace(configuration=2, epoch=3)}
+        assert session.payload()["window"]["reason"].startswith("The game ROM could not be read for Mario.")
+        await session.stop()
+
+    asyncio.run(check())
 
 
 def test_pose_ready_is_not_display_evidence(tmp_path):
