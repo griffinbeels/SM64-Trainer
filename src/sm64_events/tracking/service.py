@@ -178,7 +178,8 @@ class TrackerService:
                                     time_filters=self._time_filters(),
                                     origin_overrides=self._origin_overrides(),
                                     hundred_coin_strat=self._hundred_coin_strat,
-                                    landmark_names=self._landmark_names)
+                                    landmark_names=self._landmark_names,
+                                    reds_pipe_by_course=self._reds_pipe_by_course())
         self._current_stage = {"course_id": None, "level": None,
                                "area": None, "mode": None}
         self._persisted_runs: list[int] = []
@@ -210,6 +211,15 @@ class TrackerService:
         keys = [f.name for f in dataclasses.fields(SegmentDef)]
         return [SegmentDef(**{k: row[k] for k in keys})
                 for row in self.db.segment_defs()]
+
+    def _reds_pipe_by_course(self) -> dict[int, int]:
+        """course_id -> its Bowser reds->pipe segment, for the projector's
+        reds-grab strategy (`Projector._reds_star_twin`); read once per
+        projector build, as the definitions themselves are."""
+        if self.db is None:
+            return {}
+        from sm64_events.tracking.activestrat import reds_pipe_segments
+        return reds_pipe_segments(self.db.segment_defs())[0]
 
     def _time_filters(self) -> dict:
         """Star validity-bounds overrides (ui_state KV) for the projector;
@@ -256,7 +266,8 @@ class TrackerService:
                                     time_filters=self._time_filters(),
                                     origin_overrides=self._origin_overrides(),
                                     hundred_coin_strat=self._hundred_coin_strat,
-                                    landmark_names=self._landmark_names)
+                                    landmark_names=self._landmark_names,
+                                    reds_pipe_by_course=self._reds_pipe_by_course())
         await self.start()
 
     # -- pipeline -------------------------------------------------------------
@@ -283,7 +294,8 @@ class TrackerService:
             time_filters=self._time_filters(),
             origin_overrides=self._origin_overrides(),
             hundred_coin_strat=self._hundred_coin_strat,
-            landmark_names=self._landmark_names)
+            landmark_names=self._landmark_names,
+            reds_pipe_by_course=self._reds_pipe_by_course())
         self.db.replace_attempts(attempts)
         # Boot repair, same reason as in _reproject: an orphaned pb row keeps
         # GRADING, so a db that already carries some from an older delete or
@@ -2485,7 +2497,8 @@ class TrackerService:
             time_filters=self._time_filters(),
             origin_overrides=self._origin_overrides(),
             hundred_coin_strat=self._hundred_coin_strat,
-            landmark_names=self._landmark_names)
+            landmark_names=self._landmark_names,
+            reds_pipe_by_course=self._reds_pipe_by_course())
         # keep the live session: replayed projector state is authoritative
         self._projector = projector
         db.replace_attempts(attempts)

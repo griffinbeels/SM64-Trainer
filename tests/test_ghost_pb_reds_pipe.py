@@ -10,9 +10,11 @@ borrows the same star ladder through `PracticeIdentity.ladder_key`; the clock,
 PB slot and region scope stay on the segment, as Practice keeps them.
 
 Since every lineup races on the Overall scope (2026-10-28, `rivals.DEFAULT_SCOPE`),
-the borrowed ladder grades a caller that names the Strategy scope. On Overall
-the segment has no curve, as on Practice's Overall tab: the PB races unranked
-and seats no rival by itself (`test_ghost_pb_unranked.py`).
+the borrowed ladder grades a caller that names the Strategy scope. These
+ranks carry no Sheet calibration, so the segment has no Overall curve here and
+the PB races unranked (`test_ghost_pb_unranked.py`). The app always calibrates:
+there the segment has its own Overall curve from the Sheet's reds-to-pipe rows
+and races ranked with rivals (`test_ghost_bowser_overall.py`).
 """
 from dataclasses import replace
 from types import SimpleNamespace

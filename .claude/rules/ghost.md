@@ -57,4 +57,12 @@ rank shown. The Strategy scope stays valid for callers that name it;
 `tests/test_ghost_rival_scope.py` pins both scopes, the version-5 widening of
 older per-strategy pins, search guards and native target propagation.
 
+Bowser courses: the reds star, the reds->pipe segment and the No Reds pipe each
+grade on their own Sheet Overall curve (`library/placements.py::scoring_rows`
+files pipe rows under the reds->pipe segment). Ranks built without the Sheet
+calibration have no reds->pipe curve, so test Overall through the calibrated
+fixture in `tests/test_ghost_bowser_overall.py`. A reds->pipe run's grab is its
+own star attempt, tagged with the Pipe strategy's " (Star)" twin
+(`Projector._reds_star_twin`); that attempt is the star ghost.
+
 `tests/test_ghost_settings.py` covers the row with no edit: refused, applied, remembered, carried to the native command, and read by the card. The fixture and the API docs follow the registry. A setting of another kind also needs its sample pair in that test's `SAMPLES`, plus its control in `ui/components/ghostswitch.js`.
