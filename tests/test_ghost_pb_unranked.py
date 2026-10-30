@@ -3,7 +3,8 @@
 His rule, 2026-09-22: "Any new PB should become a ghost immediately." A
 strategy he just created has no ladder of its own (the Strategy scope; the
 default Overall scope grades it on the star's curve), and a Bowser reds->pipe
-segment's Overall tab has no curve (Practice shows no Overall rank there either). The
+segment has no Overall curve until the Sheet calibration runs (with it, it
+ranks: `test_ghost_bowser_overall.py`). The
 saved PB used to need a rank to exist at all, so neither raced. It now races
 unranked (`adaptive.UNRANKED`) and anchors no rival range: nobody is seated
 automatically around it, while rivals he chose himself still play.
@@ -55,7 +56,7 @@ def test_a_new_strategy_with_no_ladder_races_its_pb_unranked(tmp_path, ranks):
         database.close()
 
 
-def test_a_reds_pipe_pb_races_on_the_overall_lineup_with_no_overall_curve(tmp_path, ranks):
+def test_a_reds_pipe_pb_races_on_the_overall_lineup_before_any_sheet_calibration(tmp_path, ranks):
     database = Database(tmp_path / "practice.db")
     try:
         segment_id = pipe_segment(database, "seg:reds->pipe:bitdw", 17)
