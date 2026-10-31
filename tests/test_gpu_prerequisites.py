@@ -23,5 +23,5 @@ def test_gl_prerequisite_receipt_without_picture_channel(tmp_path):
         "prerequisite 0 10005", "prerequisite 1 10028",
         "prerequisite 2 10029", "prerequisite 3 10030",
         "prerequisite 4 10031", "prerequisite 5 10032",
-        "prerequisite 6 10033", "prerequisite 7 10005", "other 10006",
+        "prerequisite 6 10033", "prerequisite 7 10036", "prerequisite 8 10005", "other 10006",
     ]

@@ -230,7 +230,7 @@ def test_session_never_admits_native_frames_until_sink_preparation_completes(mon
     session = session_module.CaptureSession(owner, NS(snapshot=DemandSnapshot("preparing")),
                                             controller_factory=lambda **k: controller)
     session.channel = NS(header=NS(luid_high=0, luid_low=1, even_width=320, even_height=240),
-                         texture_names=("fixture",), encoder_ready=admitted.set)
+                         texture_names=("fixture",), transport=1, encoder_ready=admitted.set)
 
     def start():
         try:

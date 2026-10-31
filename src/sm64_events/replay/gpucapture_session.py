@@ -204,6 +204,7 @@ class CaptureSession:
             dll_path=str(dll),
             adapter_luid=[header.luid_high, header.luid_low],
             names=list(self.channel.texture_names),
+            transport=self.channel.transport,
             options=self.settings.encoder(
                 header, self.owner.cfg,
                 nominal_rate=self.owner.nominal_rate, codec=codec, facts=self._adapter_facts,

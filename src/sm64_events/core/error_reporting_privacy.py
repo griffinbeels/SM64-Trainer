@@ -57,6 +57,8 @@ _CONTEXT_KEYS = frozenset({
     "context_gl_vendor", "context_gl_renderer", "context_gl_version", "context_identity",
     "bindings_site", "bindings_site_name", "bindings_cause", "bindings_gl_error", "bindings_flags",
     "bindings_invalidations", "bindings_after_ms", "bindings_contexts",
+    # Which bridge transport the driver allows (gpu_transport.h names only).
+    "transport_capabilities", "bridge_transport", "transport_floor", "failed_transport", "failed_transport_error",
 })
 # Operational loggers only: gameplay event wires, profiles, community/account
 # and process inventories stay local. Breadcrumbs, Sentry Logs and the Debug

@@ -81,9 +81,15 @@ picture, timing, audio and visual interchangeability proof before replacement.
 Windows media components are optional dependencies of the helper. Their absence
 refuses only the Windows backend; delay loading preserves NVIDIA helper loading
 on Windows editions without the Media Feature Pack. Pre-channel GL prerequisite
-failures have explicit append-only reasons10028–10033 rather than a startup
-timeout. Required OpenGL external-memory/keyed-mutex support is still checked;
-a vendor name alone neither proves nor disproves that support.
+failures have explicit append-only reasons10028–10033 and 10036 rather than a
+startup timeout. Since 2026-10-31 the picture crosses into the helper through a
+[bridge transport](replay-gpu-bridge.md#transports) the renderer selects from
+what its context offers: the keyed mutex where it exists (NVIDIA, unchanged),
+else a shared fence imported as a GL semaphore, else a pack-buffer readback
+through a shared section. A context without the keyed mutex is therefore no
+longer the 10031 verdict (only an older layer still reports it); 10036 means
+every transport it offers was refused in that Project64. A vendor name alone
+neither proves nor disproves that support.
 
 The Windows media type has its own positive bitrate negotiation hint; quality
 mode and NVIDIA rate-control fields remain separate. Output handling accepts
@@ -104,6 +110,10 @@ available device qualification here. Full AMD renderer/OpenGL transport and
 gameplay pacing remain unqualified: this hybrid's AMD displays are disconnected
 and isolated OpenGL selection probes remained on NVIDIA. A NVIDIA GL context
 cannot stand in for AMD evidence; the hardware witness rejects the wrong vendor.
+The beta.36 AMD report (RX 9070 XT, driver 26.8.1) passed GL 4.5 and both
+memory-object extensions and failed only at the keyed mutex (10031); the
+semaphore and readback transports answer it, witnessed here on NVIDIA through
+a test override and unproven on AMD ([what remains](replay-gpu-bridge.md#hardware-witnesses)).
 Desktop fallback is availability only and does not establish optimized parity.
 
 The final review's old/new NVIDIA helper comparison used the same executable,
@@ -573,7 +583,8 @@ header and did not change, so the renderer keeps its build id
 (`3833db66...-renderer`) and every non-practice ROM still runs the identical
 renderer DLL. Because the helper now creates the bridge textures, the channel
 wire became version 2 (`GC_CHANNEL_VERSION`, `gpuchannel.VERSION`, compared by
-`test_gpu_channel`); [the ghost copy](#the-ghost-copy) made it version 3. A trainer meeting a wrapper from another build fails
+`test_gpu_channel`); [the ghost copy](#the-ghost-copy) made it version 3 and the
+[bridge transport](replay-gpu-bridge.md#transports) version 4. A trainer meeting a wrapper from another build fails
 with "the capture layer in Project64 speaks GPU channel version 1 and this
 trainer speaks version 2: they come from different builds. Close Project64 so
 the trainer can update the capture layer", and the setup screen's build-id
@@ -709,6 +720,9 @@ through a second helper process with its own two textures. The twin never
 waits on or extends the clean picture's custody, and a twin fault stops only
 the twin: nothing in the lane can fail, quarantine or delay the clean capture.
 With the switch off there is no display copy, no twin pool and no twin helper.
+The twin uses the clean capture's [bridge transport](replay-gpu-bridge.md#the-ghost-copy):
+the keyed mutex or the semaphore. With the readback it stops at once with
+`GD_TWIN_TRANSPORT_UNSUPPORTED` (10037) and the clean recording continues.
 
 The channel (version 3) carries the lane in a 768-byte block at
 `twin_offset` (after the payloads; RAM only, always present): the client's
@@ -995,6 +1009,20 @@ logs `bindings_reconstructed` on success, and a failure line counts the
 attempts. A 10034 after rebuilds names a structural site, a fatal driver
 error, or an error repeated faster than the once-a-second rebuild.
 Later refusals replace transient startup evidence; accepted requests reset it.
+
+A third appended receipt, `SM64GPT1` at control page offset 1136
+(`gpu_startup_transport_v1`), names the [bridge transport](replay-gpu-bridge.md#transports):
+the capabilities the renderer's context offers (GL 4.5, both memory-object
+extensions, the keyed mutex, `GL_EXT_semaphore`, `GL_EXT_semaphore_win32` and
+`WGL_NV_DX_interop2`), probed in the request's first renderer tick before its
+surface is checked, the transport it selected, the lowest transport this
+Project64 may still select, and the latest refused one with its GL error. The
+Debug report and automatic Sentry context carry these as names
+(`transport_capabilities`, `bridge_transport`, `failed_transport`) and numbers
+(`transport_floor`, `failed_transport_error`). A request whose renderer never
+called back (a surface refused before the delivery's callback, such as beta.35's
+crop refusal) leaves them absent: only the renderer's thread may probe, and the
+renderer runs that callback only for a surface it qualified.
 Successful pictures retain their witness semantics and no Source layout changes.
 These observations retain the original deadline, safety gates and scoped desktop
 recovery after proved cleanup. Neither is a permanent unsupported-adapter verdict.

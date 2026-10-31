@@ -33,7 +33,11 @@ enum gd_reason { GD_NONE=0, GD_CANCELLED=10000, GD_BAD_SOURCE, GD_BAD_REQUEST,
     GD_GL_VERSION_UNSUPPORTED, GD_GL_MEMORY_OBJECT_UNSUPPORTED,
     GD_GL_MEMORY_WIN32_UNSUPPORTED, GD_GL_KEYED_MUTEX_UNSUPPORTED,
     GD_GL_ENTRY_POINT_UNAVAILABLE, GD_GL_SNAPSHOT_ENTRY_POINT_UNAVAILABLE,
-    GD_SETUP_NO_SURFACE, GD_SETUP_GATEWAY_REFUSED };
+    GD_SETUP_NO_SURFACE, GD_SETUP_GATEWAY_REFUSED,
+    // LoadError::no_transport: every bridge transport the context offers
+    // failed in this Project64 (gpu_transport.h). TWIN_TRANSPORT: the ghost
+    // copy declines READBACK, whose second CPU copy per picture it would add.
+    GD_GL_TRANSPORT_UNAVAILABLE, GD_TWIN_TRANSPORT_UNSUPPORTED };
 
 typedef struct {
     uint32_t bytes, version, max_slots, max_age_ms;

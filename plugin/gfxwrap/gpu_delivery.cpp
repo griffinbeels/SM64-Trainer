@@ -33,7 +33,22 @@ std::atomic<void (__cdecl *)()> test_iteration_probe{nullptr},test_retired_probe
 std::atomic<uint32_t> test_deadline_visits{0};
 std::atomic<uint32_t> test_bridge_fault{0}; // the next bridge copy faults with this error
 std::atomic<uint32_t> test_twin_bridge_fault{0}; // the next twin copy faults
+std::atomic<uint32_t> test_import_refusal{0}; // the next bridge import is a driver refusal with this GL error
 bool (*test_sample)(const snapshot::Image&,uint8_t*)=nullptr; // replaces the GPU sample: true = bytes ready
+#endif
+#if defined(GD_TEST_HOST) || defined(GD_TRANSPORT_TEST)
+// SM64_TEST_GPU_TRANSPORT=keyed|semaphore|readback makes a test host select
+// exactly that transport, so NVIDIA runs each through this shipped code. The
+// shipped wrapper defines neither macro (test_gpu_transport pins that).
+uint32_t forced_transport(){
+    char value[16]{};const DWORD n=GetEnvironmentVariableA("SM64_TEST_GPU_TRANSPORT",value,sizeof value);
+    if(!n || n>=sizeof value)return GT_TRANSPORT_NONE;
+    if(!strcmp(value,"keyed"))return GT_TRANSPORT_KEYED_MUTEX;
+    if(!strcmp(value,"semaphore"))return GT_TRANSPORT_SEMAPHORE;
+    return strcmp(value,"readback") ? GT_TRANSPORT_COUNT : GT_TRANSPORT_READBACK; // unknown: nothing qualifies
+}
+#else
+uint32_t forced_transport(){return GT_TRANSPORT_NONE;}
 #endif
 uint64_t qpc(){LARGE_INTEGER v{};QueryPerformanceCounter(&v);return uint64_t(v.QuadPart);}
 bool source_valid(const rs_api* s,const rcl_api* c){
@@ -81,10 +96,17 @@ struct Runtime {
     std::atomic<uint32_t> status_seq{0},status_words[sizeof(gd_status)/4]{};
     std::atomic<uint32_t> startup_seq{0},startup_words[sizeof(gpu_startup_v1)/4]{};
     std::atomic<uint32_t> startup_context_words[sizeof(gpu_startup_context_v1)/4]{}; // same sequence
+    std::atomic<uint32_t> startup_transport_words[sizeof(gpu_startup_transport_v1)/4]{}; // same sequence
     // Request admission initializes CPU identity while request_state=1 owns
     // the empty runtime. Subsequent writes belong to the renderer thread.
     gpu_startup_v1 startup{};
     gpu_startup_context_v1 startup_context{};
+    gpu_startup_transport_v1 startup_transport{};
+    // THE BRIDGE TRANSPORT (gpu_transport.h). The renderer's first tick of a
+    // request probes its context and selects one (render thread only).
+    // transport_floor lasts the process: a transport whose import the driver
+    // refused is below it, so the next request selects the next transport.
+    uint32_t capabilities=0,selected_transport=GT_TRANSPORT_NONE,transport_floor=GT_TRANSPORT_KEYED_MUTEX;
     uint32_t latest_source_refusal=0;
     rs_bindings_cause latest_bindings_cause{}; // what the latest refusal carried, when it was BINDINGS
     // The renderer's reconstruction counts (SM64ReplayContextEvidenceV1), the
@@ -271,6 +293,8 @@ struct Runtime {
         for(unsigned i=0;i<sizeof(startup)/4;++i)startup_words[i].store(words[i]);
         words=reinterpret_cast<const uint32_t*>(&startup_context);
         for(unsigned i=0;i<sizeof(startup_context)/4;++i)startup_context_words[i].store(words[i]);
+        words=reinterpret_cast<const uint32_t*>(&startup_transport);
+        for(unsigned i=0;i<sizeof(startup_transport)/4;++i)startup_transport_words[i].store(words[i]);
         startup_seq.store(seq+2);
     }
     // The renderer's own GL identity, copied without GL (source_refusal.h).
@@ -467,8 +491,18 @@ struct Runtime {
     // a VI with no GPU work never makes one.
     bool gpu(){
         if(gateway_open)return true;
-        if(!in_render || !source.begin_capture())return false;
+        if(!in_render || !source.begin_capture || !source.begin_capture())return false;
         gateway_open=true;return true;
+    }
+    // The first renderer tick of a request, before the surface it carries is
+    // checked: what the context offers and the transport it selects reach the
+    // startup receipt even if a later step refuses (docs/replay-gpu-bridge.md).
+    void probe_transport(){
+        if(capabilities || !gpu())return;
+        capabilities=render_capture::probe_capabilities();
+        selected_transport=render_capture::select_transport(capabilities,forced_transport(),transport_floor);
+        startup_transport.capabilities=capabilities;startup_transport.transport=selected_transport;
+        publish_startup();
     }
     bool bootstrap_ready(){
         if(surface_state.load()!=2)return false;
@@ -495,6 +529,7 @@ struct Runtime {
         // Temporary names only for layout validation; replaced by real bridge identities.
         config.texture_names[0][0]='A';config.texture_names[1][0]='B';
         config.twin_texture_names[0][0]='C';config.twin_texture_names[1][0]='D';
+        config.transport=selected_transport?selected_transport:GT_TRANSPORT_KEYED_MUTEX; // the real one follows the load
         if(!gpu_channel::layout(config)){fail(GD_BAD_REQUEST,ERROR_NOT_ENOUGH_MEMORY);return false;}
         set_state(GD_PREPARING);publish_status();
 #ifdef GD_TEST_HOST
@@ -509,7 +544,9 @@ struct Runtime {
         text(startup.renderer,sizeof startup.renderer,glGetString(GL_RENDERER));
         text(startup.gl_version,sizeof startup.gl_version,glGetString(GL_VERSION));
         publish_startup(); // Preserve identity even if a later driver capability query stalls.
-        if(!gl.load()){startup.load_error=uint32_t(gl.load_error);
+        if(!selected_transport){gl={};gl.load_error=render_capture::unavailable(capabilities);
+            startup.load_error=uint32_t(gl.load_error);publish_startup();fail(GD_GL_UNSUPPORTED,uint32_t(gl.load_error));return false;}
+        if(!gl.load(selected_transport)){startup.load_error=uint32_t(gl.load_error);
             text(startup.missing_entry_point,sizeof startup.missing_entry_point,reinterpret_cast<const GLubyte*>(gl.missing_entry_point));
             publish_startup();fail(GD_GL_UNSUPPORTED,uint32_t(gl.load_error));return false;}
         // Renderer-thread Pool::prepare already requires copy_texture; do not
@@ -537,9 +574,9 @@ struct Runtime {
         LUID adapter{};
         if(!render_capture::adapter_luid(gl,&adapter)){fail(GD_BRIDGE_FAILED,ERROR_NOT_SUPPORTED);return false;}
         prepare_steps.luid=qpc();
-        config.luid_low=adapter.LowPart;config.luid_high=adapter.HighPart;
+        config.luid_low=adapter.LowPart;config.luid_high=adapter.HighPart;config.transport=gl.transport;
         startup.luid_available=1;startup.luid_low=adapter.LowPart;startup.luid_high=adapter.HighPart;publish_startup();
-        // The helper creates these two keyed-mutex textures; PREPARING imports them.
+        // The helper creates these two textures for the transport; PREPARING imports them.
         for(unsigned i=0;i<GC_BRIDGES;++i){
             swprintf_s(texture_names[i],L"Local\\SM64GpuImage-%016llx%016llx-%u-texture-%u",request.nonce_hi,request.nonce_lo,epoch,i);
             for(unsigned c=0;c<128;++c)config.texture_names[i][c]=uint16_t(texture_names[i][c]);
@@ -563,9 +600,25 @@ struct Runtime {
         const auto ready_reader=channel?channel->reader_ready():ChannelResult::empty;
         if(!channel_ok(ready_reader) || ready_reader!=ChannelResult::ok || !gpu())return;
         bridge_attempted=true;prepare_steps.reader_qpc=qpc();prepare_steps.import_begin=qpc();
-        if(!bridge.prepare(gl,surface.width,surface.height,texture_names)){fail(GD_BRIDGE_FAILED,bridge.error(),false);return;}
+#ifdef GD_TEST_HOST
+        if(const auto refused=test_import_refusal.exchange(0)){demote_transport(refused);fail(GD_BRIDGE_FAILED,refused,false);return;}
+#endif
+        if(!bridge.prepare(gl,surface.width,surface.height,texture_names)){
+            if(bridge.driver_refused())demote_transport(bridge.error());
+            fail(GD_BRIDGE_FAILED,bridge.error(),false);return;}
         prepare_steps.imported=qpc();
         SetEvent(wake);
+    }
+    // The driver refused this transport's import: the next request in this
+    // process selects the next one, and once none is left the request fails
+    // before a channel with GD_GL_TRANSPORT_UNAVAILABLE, the desktop-grab
+    // verdict. The keyed mutex keeps its existing retry, and a missing name
+    // (a dead helper) demotes nothing.
+    void demote_transport(uint32_t error){
+        if(gl.transport==GT_TRANSPORT_KEYED_MUTEX || gl.transport==GT_TRANSPORT_NONE)return;
+        if(transport_floor<=gl.transport)transport_floor=gl.transport+1;
+        startup_transport.floor=transport_floor;startup_transport.failed_transport=gl.transport;
+        startup_transport.failed_error=error;publish_startup();
     }
     // Delivery thread: ACTIVE at the first frontier read after the import.
     void activate_when_imported(){
@@ -640,6 +693,13 @@ struct Runtime {
                 && (index==GC_BRIDGES || credits[i].token<credits[index].token))index=i;
             if(index==GC_BRIDGES)return true;
             auto&credit=credits[index];
+            if(bridge.transport()==GT_TRANSPORT_READBACK){
+                // Zero-time fence poll, then the CPU copy into the section.
+                if(!gpu())return false;
+                const auto landed=bridge.delivered(index);
+                if(landed==render_capture::Bridge::Delivery::pending)return false;
+                if(landed!=render_capture::Bridge::Delivery::ready){fail(GD_BRIDGE_FAILED,bridge.error(),true);return false;}
+            }
             const auto result=channel->publish_bridge(index,credit.token,credit.decision);
             if(result==ChannelResult::busy)return false;
             if(!channel_ok(result))return false;
@@ -706,7 +766,7 @@ struct Runtime {
             // A stopping epoch abandons its keys: the helper's textures end with
             // its session, and this side's imports are deleted by the renderer.
             if(!stopping){
-                if(!gpu())return;
+                if(bridge.gl_custody() && !gpu())return;
                 const auto key=bridge.key0_returned(n);
                 if(key==render_capture::Bridge::KeyReturn::pending)continue;
                 if(key!=render_capture::Bridge::KeyReturn::ready){fail(GD_BRIDGE_FAILED,bridge.error(),true);return;}
@@ -808,7 +868,7 @@ struct Runtime {
         if(!live())return drain_tick();
         if(!renderer)note_reconstructions();
         const auto now_state=state.load();
-        if(now_state==GD_BOOTSTRAP){take_records(false);if(renderer)bootstrap_ready();}
+        if(now_state==GD_BOOTSTRAP){take_records(false);if(renderer){probe_transport();bootstrap_ready();}}
         else if(now_state==GD_PREPARING){take_records(false);if(renderer)preparing_tick();else activate_when_imported();}
         else if(now_state==GD_ACTIVE){if(renderer)active_tick();else {frontier_tick();maybe_summary(qpc());}}
 #ifdef GD_TEST_HOST
@@ -966,6 +1026,9 @@ struct Runtime {
         auto refuse=[this](uint32_t why){twin_state=GC_TWIN_STOPPED;twin_reason=why;twin_publish();};
         if(!source4.query_display){refuse(GD_TWIN_UNAVAILABLE);return;} // "capture layer predates ghost copies"
         if(twin_poisoned){refuse(twin_poison);return;}
+        // READBACK publishes a picture a VI after its copy and would add a
+        // second CPU copy per picture; the ghost copy declines it.
+        if(gl.transport==GT_TRANSPORT_READBACK){refuse(GD_TWIN_TRANSPORT_UNSUPPORTED);return;}
         twin_state=GC_TWIN_PREPARING;twin_publish();
         // The twin pool doubles the snapshot memory; the immutable limit bounds both.
         const uint64_t bytes=snapshots.images().counters().texture_bytes;
@@ -1016,7 +1079,7 @@ struct Runtime {
             if(now>twin_credit_qpc[n] && now-twin_credit_qpc[n]>frequency*limits.max_age_ms/1000){twin_abandon(GD_TWIN_KEY_ABANDONED);return;}
             // Stopping, the key alone retires it: the receipt only acknowledged metadata.
             if(!c.receipt && !twin_stopping)continue;
-            if(!gpu())return;
+            if(twin_bridge.gl_custody() && !gpu())return;
             const auto key=twin_bridge.key0_returned(n);
             if(key==render_capture::Bridge::KeyReturn::pending)continue;
             if(key!=render_capture::Bridge::KeyReturn::ready){drain_gl();twin_abandon(GD_TWIN_BRIDGE_FAILED);return;}
@@ -1145,6 +1208,10 @@ extern "C" int __cdecl gd_request(const gc_header*h,uint64_t budget){
     r->startup_context={};memcpy(r->startup_context.magic,GPU_STARTUP_CONTEXT_MAGIC,8);
     r->startup_context.version=GPU_STARTUP_CONTEXT_VERSION;r->startup_context.bytes=sizeof r->startup_context;
     r->startup_context.epoch=e;r->adopt_context_identity(); // CPU copy of the renderer's own receipt
+    r->startup_transport={};memcpy(r->startup_transport.magic,GPU_STARTUP_TRANSPORT_MAGIC,8);
+    r->startup_transport.version=GPU_STARTUP_TRANSPORT_VERSION;r->startup_transport.bytes=sizeof r->startup_transport;
+    r->startup_transport.epoch=e;r->startup_transport.floor=r->transport_floor;
+    r->capabilities=0;r->selected_transport=GT_TRANSPORT_NONE; // probed again by this request's first renderer tick
     // Successes before this request belong to earlier epochs: note only new ones.
     r->renderer_evidence={};r->reconstruct_notes=0;
     r->noted_generation=r->read_renderer_evidence()?r->renderer_evidence.context_generation:0;
@@ -1203,6 +1270,14 @@ extern "C" int __cdecl gd_read_startup(gpu_startup_v1*out){
     for(unsigned n=0;n<3;++n){const auto before=r->startup_seq.load();if(!before||before&1)continue;
         uint32_t words[sizeof(*out)/4]{};
         for(unsigned i=0;i<sizeof(*out)/4;++i)words[i]=r->startup_words[i].load();
+        if(before==r->startup_seq.load()){memcpy(out,words,sizeof(*out));return 1;}
+    }return 0;
+}
+extern "C" int __cdecl gd_read_startup_transport(gpu_startup_transport_v1*out){
+    const auto*r=runtime.load();if(!r||!out)return 0;
+    for(unsigned n=0;n<3;++n){const auto before=r->startup_seq.load();if(!before||before&1)continue;
+        uint32_t words[sizeof(*out)/4]{};
+        for(unsigned i=0;i<sizeof(*out)/4;++i)words[i]=r->startup_transport_words[i].load();
         if(before==r->startup_seq.load()){memcpy(out,words,sizeof(*out));return 1;}
     }return 0;
 }
@@ -1494,5 +1569,6 @@ extern "C" void gd_test_set_iteration_probe(void (__cdecl *probe)()){
 extern "C" void gd_test_set_retired_probe(void (__cdecl *probe)()){test_retired_probe.store(probe);}
 extern "C" void gd_test_bridge_fault_once(uint32_t error){test_bridge_fault.store(error);}
 extern "C" void gd_test_twin_bridge_fault_once(uint32_t error){test_twin_bridge_fault.store(error);}
+extern "C" void gd_test_import_refusal_once(uint32_t error){test_import_refusal.store(error);}
 extern "C" uint32_t gd_test_deadline_visits(){return test_deadline_visits.load();}
 #endif

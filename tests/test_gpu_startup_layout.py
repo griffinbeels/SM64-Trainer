@@ -9,7 +9,8 @@ import pytest
 
 from sm64_events.core.childproc import quiet_spawn_kwargs
 from sm64_events.replay.gpufielddiagnostics import (
-    STARTUP, STARTUP_CONTEXT, STARTUP_CONTEXT_OFFSET, STARTUP_OFFSET, startup_receipt)
+    STARTUP, STARTUP_CONTEXT, STARTUP_CONTEXT_OFFSET, STARTUP_OFFSET, STARTUP_TRANSPORT,
+    STARTUP_TRANSPORT_OFFSET, startup_receipt)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -27,11 +28,15 @@ def test_optional_native_startup_receipt_preserves_existing_control_offsets(tmp_
                       f"/I{ROOT / 'plugin/gfxwrap'}", str(ROOT / "tests/native/gpu_startup_layout_host.cpp"),
                       f"/Fe:{target}", f"/Fo{tmp_path}\\"], tmp_path)
     result = subprocess.run([str(target)], capture_output=True, timeout=5, check=True, **quiet_spawn_kwargs())
-    assert struct.unpack_from("<5I", result.stdout) == (4096, 128, 256, 336, STARTUP_CONTEXT_OFFSET)
+    assert struct.unpack_from("<6I", result.stdout) == (
+        4096, 128, 256, 336, STARTUP_CONTEXT_OFFSET, STARTUP_TRANSPORT_OFFSET)
     assert STARTUP_CONTEXT_OFFSET == STARTUP_OFFSET + STARTUP.size
-    assert len(result.stdout) == 20 + STARTUP.size + STARTUP_CONTEXT.size
-    v1, appended = result.stdout[20:20 + STARTUP.size], result.stdout[20 + STARTUP.size:]
-    receipt = startup_receipt(v1, appended)
+    assert STARTUP_TRANSPORT_OFFSET == STARTUP_CONTEXT_OFFSET + STARTUP_CONTEXT.size
+    assert len(result.stdout) == 24 + STARTUP.size + STARTUP_CONTEXT.size + STARTUP_TRANSPORT.size
+    v1 = result.stdout[24:24 + STARTUP.size]
+    appended = result.stdout[24 + STARTUP.size:24 + STARTUP.size + STARTUP_CONTEXT.size]
+    transport = result.stdout[24 + STARTUP.size + STARTUP_CONTEXT.size:]
+    receipt = startup_receipt(v1, appended, transport)
     assert receipt["adapter_luid"] == [-1, 42]
     assert receipt["gl_vendor"] == "fixture AMD"
     assert receipt["missing_entry_point"] == "glFixture"
@@ -43,3 +48,9 @@ def test_optional_native_startup_receipt_preserves_existing_control_offsets(tmp_
     assert (receipt["bindings_site"], receipt["bindings_gl_error"], receipt["bindings_flags"],
             receipt["bindings_invalidations"], receipt["bindings_after_ms"], receipt["bindings_contexts"]) == (
         14, 0x502, 1, 2, 30, 4)
+    # The transport receipt, by position from the same x86 layout: no keyed
+    # mutex, the semaphore offered but already refused, so readback selected.
+    assert receipt["transport_capabilities"] == (
+        "gl45,memory_object,memory_object_win32,semaphore,semaphore_win32,wgl_nv_dx_interop2")
+    assert (receipt["bridge_transport"], receipt["transport_floor"], receipt["failed_transport"],
+            receipt["failed_transport_error"]) == ("readback", 3, "semaphore", 0x502)

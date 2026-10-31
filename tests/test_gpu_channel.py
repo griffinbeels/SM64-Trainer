@@ -448,6 +448,8 @@ def test_torn_invalid_stale_repeated_commands(native):
         "twin_clean_name",
         "twin_offset",
         "twin_bytes",
+        "transport_none",
+        "transport_unknown",
     ],
 )
 def test_header_independent_native_and_python_refusals(native, mutation):
@@ -468,6 +470,8 @@ def test_header_independent_native_and_python_refusals(native, mutation):
             "backing_length": ("total_bytes", h.total_bytes + 64),
             "twin_offset": ("twin_offset", h.twin_offset + 64),
             "twin_bytes": ("twin_bytes", G.TWIN_BYTES - 1),
+            "transport_none": ("transport", 0),
+            "transport_unknown": ("transport", 4),
         }
         if mutation in scalar:
             setattr(h, *scalar[mutation])
@@ -994,6 +998,7 @@ class TwinProducer:
         h.twin_offset = h.payload_offset + 8 * h.payload_stride
         h.twin_bytes = G.TWIN_BYTES
         h.total_bytes = h.twin_offset + G.TWIN_BYTES
+        h.transport = G.TRANSPORT_KEYED_MUTEX
         for i, text in enumerate(("Local\\SM64.GpuChannel.fixture.a",
                                   "Local\\SM64.GpuChannel.fixture.b")):
             C.memmove(h.texture_names[i], text.encode("utf-16-le"), len(text) * 2)

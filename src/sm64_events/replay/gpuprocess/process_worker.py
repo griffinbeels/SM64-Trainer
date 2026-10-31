@@ -54,7 +54,7 @@ class Worker:
     def _dispatch(self, command):
         op = command.get("op")
         if op == "Open":
-            exact(command, ["op", "dll_path", "adapter_luid", "names", "options"])
+            exact(command, ["op", "dll_path", "adapter_luid", "names", "transport", "options"])
             if self.client is not None:
                 raise ValueError("session already opened")
             if command["options"].get("max_packet_bytes", 0) > self.max_packet:
@@ -63,6 +63,7 @@ class Worker:
                 dll_path=command["dll_path"],
                 adapter_luid=command["adapter_luid"],
                 names=command["names"],
+                transport=command["transport"],
                 options=command["options"],
                 on_packet=self.receive,
             )

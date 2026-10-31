@@ -7,6 +7,9 @@ bridge textures. Shared by test_gpu_bridge, test_gpu_fidelity and
 test_gpu_selection.
 SM64_TEST_GPU_VENDOR=amd|intel|nvidia requires that actual GL implementation;
 a mixed machine's default NVIDIA context cannot qualify an AMD/Intel run.
+SM64_TEST_GPU_TRANSPORT=keyed|semaphore|readback makes the producer select
+exactly that bridge transport (`use_transport`), so NVIDIA witnesses each one
+through the shipped code; the consumer follows the producer's choice.
 """
 from __future__ import annotations
 
@@ -20,6 +23,14 @@ from sm64_events.core.childproc import quiet_spawn_kwargs
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "plugin/gfxwrap"
+# gpu_transport.h GT_TRANSPORT_*, by the name the test override takes.
+TRANSPORTS = {"keyed": 1, "semaphore": 2, "readback": 3}
+
+
+def use_transport(monkeypatch, transport):
+    """Force one transport in every witness process this test starts."""
+    monkeypatch.setenv("SM64_TEST_GPU_TRANSPORT", transport)
+    return TRANSPORTS[transport]
 
 
 def toolchain():
