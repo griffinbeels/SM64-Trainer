@@ -1311,6 +1311,41 @@ outdated or unfinished emulator installation. Beginner guides appear where neede
 - **Lives** -- `src/sm64_events/ui/components/setupmodal.js`; setup stages in
   `src/sm64_events/ui/setupflow.js`; its API is `src/sm64_events/server/setup_api.py`
 
+### Tested setup
+
+The Project64 setup we test the trainer on: Griffin's own machine, recorded
+with its source and date (2026-10-30). Wermi's build v7 of Project64 1.6
+outside Program Files, the trainer's graphics plugin with GLideN64's
+framebuffer emulation off, Azimer's Audio, the PJ64Fixups RSP, a raphnetraw
+controller plugin, and for the Usamune ROM 8 MB memory, Counter Factor 1 and the
+Interpreter CPU core. Each item carries an **importance**: *required* (known to
+stop the trainer working), *recommended* (differs from what we test with) or
+*noted* (kept only as a record; the controller plugin is never a problem).
+
+- **Lives** -- `src/sm64_events/data/setup_baseline.json`, which is also the one
+  table of importances, fix sentences and guide links
+- **Not** -- the [[setup screen]]'s readiness: that proves the trainer's
+  plugin sees the game; the tested setup describes the emulator
+  settings around it.
+
+### Setup check
+
+Your Project64 setup compared item by item with the [[tested setup]]: each item
+reads *same*, *different* or *can't tell* (no readable evidence; never a
+guess). It is read-only and cheap: registry values, file hashes and the
+`Project64.rdb` entry for the loaded ROM (the VirtualStore copy when one
+exists). Settings → Check my setup lists every item, differences first. When
+the [[ghost]] the player asked for has gone unseen for 20 s and the check finds a
+required or recommended difference, the practice card shows a notice that
+opens it with those items highlighted; with a matching setup it shows nothing
+new, because the failure is the trainer's. The wizard's completion page lists
+differences as notes. The [[debug report]] and automatic error reports carry
+it; `GET /api/setup/check` serves it alone.
+
+- **Lives** -- `src/sm64_events/core/setup_profile.py`;
+  `src/sm64_events/ui/components/setupcheck.js`; the stall is
+  `src/sm64_events/ghost/display_stall.py`
+
 ### Overlay layer
 
 One transparent video file drawing part of the pad — the stick, the

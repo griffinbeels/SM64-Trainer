@@ -26,6 +26,7 @@ questions.
 | Build, capture stage, native codes, first/latest GPU failure | Yes | Yes |
 | Ghost enabled/target-present, native playback/display state, counts | Yes | Yes |
 | Cached setup checks, ROM region, polling/input health counters | Yes | Yes |
+| The [setup check](glossary.md#setup-check): each item's fixed id, importance and status, your plugin/file names and SHA-256, the ROM's rdb section and which rdb copy was read; never a folder (location reads "Program Files" or "Outside Program Files") | Yes, under `setup.check`, beside the ghost's `draw_refusal` | Yes, its own "Setup compared with the tested setup" table |
 | Own memory/handle/thread counts | Yes | Yes |
 | Recognized native log events and numeric/enum fields | Latest 32 within a 24 KiB snapshot; absent log files only counted | Bounded recognized records from known log tails |
 | The Debug report itself | Attached to the first error of each issue, at most 5 per session | Exported on request |

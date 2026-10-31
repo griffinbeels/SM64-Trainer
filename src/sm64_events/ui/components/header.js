@@ -15,6 +15,7 @@ import { ImportSection } from "./importsection.js";
 import { celebrationsEnabled, setCelebrationsEnabled,
          CLIMB_SKIP_STYLES, climbSkipStyle, setClimbSkipStyle } from "./celebrate.js";
 import { SetupModal } from "./setupmodal.js";
+import { SetupCheckModal } from "./setupcheck.js";
 import { StreamOverlayDesigner } from "./streamoverlay.js";
 import { EMU, N64 } from "../platform.js";
 import { CommunityAccountModal } from "./communityaccount.js";
@@ -141,6 +142,7 @@ export function Header({ t, settingsOpen, closeSettings, setTab, onOpenPlayer })
   // either outcome for this browser session; completion also persists.
   const [setupOpen, setSetupOpen] = useState(false);
   const [setupManual, setSetupManual] = useState(false);
+  const [checkOpen, setCheckOpen] = useState(false);
   const [setupWarning, setSetupWarning] = useState(null);
   const [overlayOpen, setOverlayOpen] = useState(false);
   const community = useCommunityAccount();
@@ -370,6 +372,9 @@ export function Header({ t, settingsOpen, closeSettings, setTab, onOpenPlayer })
             <button type="button" onclick=${() => { closeSettings(); setSetupManual(true); setSetupOpen(true); }}>
               <${Icon} name="settings" />Setup
             </button>
+            <button type="button" onclick=${() => { closeSettings(); setCheckOpen(true); }}>
+              <${Icon} name="check" />Check my setup
+            </button>
           </div>
           ${t.updateMsg && html`<p class="settings-note">${t.updateMsg}</p>`}
           ${reportMsg && html`<p class="settings-note">${reportMsg}</p>`}
@@ -591,6 +596,7 @@ export function Header({ t, settingsOpen, closeSettings, setTab, onOpenPlayer })
     ${overlayOpen && html`<${StreamOverlayDesigner} onClose=${() => setOverlayOpen(false)} />`}
     ${onboardingStarted && html`<${OnboardingFlow} blocked=${updateFirst}>
       ${setupOpen && html`<${SetupModal} onClose=${closeSetup} onComplete=${completeSetup} manual=${setupManual} />`}
+      ${checkOpen && !setupOpen && html`<${SetupCheckModal} onClose=${() => setCheckOpen(false)} />`}
       ${community.open && !setupOpen && html`<${CommunityAccountModal} community=${community}
         onClose=${() => community.setOpen(false)} onPracticeRefresh=${t.refresh}
         onOpenPlayer=${uid => { community.setOpen(false); closeSettings?.(); onOpenPlayer?.(uid); }} />`}

@@ -718,7 +718,7 @@ def _mount_service_routes(app, service, mode_path) -> None:
 
 def _mount_optional_routes(app, replay, inputs, capture_layer, compare,
                            compilation, updater, mode_path, setup_observer,
-                           poller=None) -> None:
+                           poller=None, setup_profile=None) -> None:
     if replay is not None:
         from sm64_events.server.replay_api import create_replay_router
         app.include_router(create_replay_router(replay))
@@ -728,9 +728,12 @@ def _mount_optional_routes(app, replay, inputs, capture_layer, compare,
         app.include_router(create_inputs_router(inputs))
 
     if capture_layer is not None:
+        from sm64_events.core.setup_profile import setup_profile_for
         from sm64_events.server.setup_api import create_setup_router
-        app.include_router(create_setup_router(capture_layer,
-                                               mode_path=mode_path, observer=setup_observer))
+        # One setup check per app: the setup routes and the reports share its caches.
+        app.state.setup_profile = setup_profile or setup_profile_for(capture_layer)
+        app.include_router(create_setup_router(capture_layer, mode_path=mode_path, observer=setup_observer,
+                                               profile=app.state.setup_profile))
 
     if compare is not None:
         from sm64_events.server.compare_api import create_compare_router
@@ -841,10 +844,11 @@ def _mount_controls(app, poller, replay) -> None:
 
 def _mount_diagnostics(app, poller, broadcaster, service, monitor, replay=None, capture_layer=None,
                        ghost=None, setup_observer=None) -> None:
-    from sm64_events.server.diagnostics_runtime import make_snapshot, with_diagnostics
+    from sm64_events.server.diagnostics_runtime import make_snapshot, setup_check_now, with_diagnostics
+    setup_profile = getattr(app.state, "setup_profile", None)
     snapshot = make_snapshot(poller=poller, service=service, monitor=monitor, replay=replay,
         capture_layer=capture_layer, ghost=ghost, setup_observer=setup_observer,
-        polling_state=lambda: _polling_state(app))
+        polling_state=lambda: _polling_state(app), setup_profile=setup_profile)
     app.state.diagnostic_snapshot = snapshot
 
     def debug_report(*, attached=False):
@@ -863,6 +867,8 @@ def _mount_diagnostics(app, poller, broadcaster, service, monitor, replay=None, 
             health=health, events=_events,
             replay=getattr(getattr(replay, "recorder", None), "diagnostic_status", None),
             setup=getattr(capture_layer, "diagnostic_status", None),
+            setup_check=(lambda: setup_check_now(capture_layer, setup_observer, setup_profile, poller))
+            if setup_profile is not None else None,
             snapshot=lambda: snapshot.collect(local=True),
             build={"channel": current_build().channel, "build_id": current_build().build_id},
             attached=attached)
@@ -967,7 +973,7 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
                service=None, replay=None, updater=None, compare=None,
                compilation=None, db_retry=None, debug_hooks: bool = False,
                adoptions_path=None, mode_path=None, inputs=None, capture_layer=None,
-               setup_observer=None, on_db_attached=None,
+               setup_observer=None, on_db_attached=None, setup_profile=None,
                library_path=None, refresh_library_on_start=False,
                library_bundled_path=None, ghost=None, protect_local_api=False,
                local_port=None, community_account=None, community_sync=None,
@@ -1011,7 +1017,7 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
                           adoptions_path)
     _mount_service_routes(app, service, mode_path)
     _mount_optional_routes(app, replay, inputs, capture_layer, compare,
-                           compilation, updater, mode_path, setup_observer, poller)
+                           compilation, updater, mode_path, setup_observer, poller, setup_profile)
     from sm64_events.server.ghost_api import mount_ghost_routes
     mount_ghost_routes(app, session=ghost)
     from sm64_events.server.community_api import create_community_router

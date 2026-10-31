@@ -5464,6 +5464,32 @@
   .setup-help-content code { overflow-wrap: anywhere; white-space: normal; font-size: .88rem; }
   .setup-warning, .setup-error { border-left: 3px solid #e6b852; border-radius: 4px; background: #292b25; color: #f0d597; padding: .85rem 1rem; line-height: 1.55; font-size: .94rem; margin: .8rem 0; }
   .setup-error { color: #ffb6b6; background: #38252b; border-color: #e88383; }
+  /* The setup check (components/setupcheck.js): one card per item, the
+     server's order. A difference wears the warning gold, can't-tell a quiet
+     blue, the same a quiet green; a noted item never looks like a problem. */
+  .setup-check-summary { margin: .2rem 0 1rem; color: #c6d5e5; font-size: 1rem; line-height: 1.55; }
+  .setup-check-list { list-style: none; margin: 0; padding: 0; display: grid; gap: .6rem; }
+  .setup-check-item { min-width: 0; border: 1px solid #22384f; border-left: 3px solid #405770; border-radius: 6px; background: #0f1d2d; padding: .7rem .9rem; }
+  .setup-check-item.is-differs { border-left-color: #e6b852; background: #1f2421; }
+  .setup-check-item.is-unknown { border-left-color: #6f9fcf; }
+  .setup-check-item.is-same { border-left-color: #4fae7c; }
+  .setup-check-item.is-highlighted { border-color: #e6b852; box-shadow: 0 0 0 1px #e6b852 inset; }
+  .setup-check-head { display: flex; align-items: baseline; justify-content: space-between; gap: .8rem; }
+  .setup-check-head strong { min-width: 0; color: #eef2f6; font-size: .98rem; }
+  .setup-check-status { flex: 0 0 auto; font-size: .82rem; font-weight: 700; color: #bed0e2; }
+  .setup-check-item.is-differs .setup-check-status { color: #f0d597; }
+  .setup-check-item.is-same .setup-check-status { color: #83ecb0; }
+  .setup-check-values { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: .2rem 1rem; margin: .45rem 0 0; }
+  .setup-check-values div { min-width: 0; }
+  .setup-check-values dt { color: #8fa0b5; font-size: .78rem; }
+  .setup-check-values dd { margin: .1rem 0 0; color: #dbe5ef; font-size: .9rem; overflow-wrap: anywhere; }
+  .setup-check-fix { margin: .55rem 0 0; color: #c6d4e4; font-size: .92rem; line-height: 1.5; }
+  .setup-check-fix a { color: #8fc8ff; white-space: nowrap; }
+  .setup-check-notes { text-align: left; margin: 1.4rem 0 .4rem; }
+  .setup-check-notes > p { color: #f0d597; margin: 0 0 .6rem; line-height: 1.55; }
+  .ghost-setup-notice { display: flex; align-items: center; justify-content: space-between; gap: .4rem .8rem; flex-wrap: wrap; margin: 4px 0; padding: .45rem .7rem; border-left: 3px solid #e6b852; border-radius: 4px; background: #292b25; }
+  .ghost-setup-notice p { margin: 0; min-width: 0; flex: 1 1 16rem; color: #f0d597; font-size: .84rem; line-height: 1.45; }
+  .ghost-setup-notice button { flex: 0 0 auto; }
   .setup-rom-result { margin: .9rem 0; }
   .setup-regions { display: flex; justify-content: center; gap: 1rem; padding: .5rem 0; }
   .setup-region { display: flex; position: relative; align-items: center; justify-content: center; gap: .6rem; min-width: 135px; padding: 1rem; border: 2px solid transparent; border-radius: 10px; color: #becddd; transition: border-color .25s ease-in-out, box-shadow .25s ease-in-out; }

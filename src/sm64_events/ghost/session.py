@@ -15,6 +15,7 @@ from types import SimpleNamespace
 
 from sm64_events.core.error_reporting_privacy import GHOST_STATE_LOGGER
 from sm64_events.core.events import Event
+from sm64_events.ghost.display_stall import DisplayStall
 from sm64_events.ghost.dpad_toggle import hotkey_for
 from sm64_events.ghost.native_session import ghost_hue
 from sm64_events.ghost.pb import GhostLibrary
@@ -141,6 +142,8 @@ class GhostSession:
                 source_of=lambda:id(getattr(getattr(replay,"recorder",None),"ghost_capture",None)), community=community)
             self._population_recorder = PopulationRecorder(population,replay,tracker,self._attempt_identity,community=community)
         self._native_answer = {}
+        # Ghosts asked for and unseen too long: the card's setup notice.
+        self._display_stall = DisplayStall()
         # The last `sm64.ghost.state` line, and the renderer's last readable
         # progress (its lock is only tried, so a busy read keeps the old one).
         self._noted_state: str | None = None
@@ -201,6 +204,7 @@ class GhostSession:
                 "source": dict(self._source),
                 "window": self._window_state(),
                 "hotkey": self._hotkey,
+                "display_stalled": self._display_stall.stalled,
                 **({"rivals":self._rivals.payload()} if self._rivals else {})}
 
     def note_hotkey(self, hotkey: str) -> None:
@@ -322,6 +326,7 @@ class GhostSession:
         async with self._lock:
             target = self._read_target()
             await asyncio.to_thread(self._cycle, target, resolve)
+            self._display_stall.observe(self.silent_failure_status())
             body = self.payload()
             self._note_state(body)
             if body == self._published:

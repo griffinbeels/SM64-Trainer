@@ -151,6 +151,42 @@ def _native(value):
     return result
 
 
+SETUP_CHECK_IDS = ("graphics_plugin", "frame_buffer_emulation", "memory_size", "counter_factor", "cpu_core",
+                   "emulator_build", "rsp_plugin", "audio_plugin", "install_location", "controller_plugin")
+
+
+def _setup_check(value):
+    """The setup check (core/setup_profile.py): fixed ids, statuses and
+    importances, the user's value as bounded scrubbed text, a 64-hex hash."""
+    value = mapping(value)
+    if not value:
+        return {}
+    result = pick(value, ("version", "unknown", "required_differs", "error_type"))
+    for key, allowed in (("rom", r"[0-9A-F]{8}-[0-9A-F]{8}-C:[0-9A-F]{2}"),
+                         ("rdb", r"Project64 folder|VirtualStore|missing")):
+        if isinstance(value.get(key), str) and re.fullmatch(allowed, value[key]):
+            result[key] = value[key]
+    recorded = mapping(value.get("baseline")).get("recorded")
+    if isinstance(recorded, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", recorded):
+        result["baseline_recorded"] = recorded
+    flagged = value.get("flagged")
+    result["flagged"] = [item for item in flagged if item in SETUP_CHECK_IDS] if isinstance(flagged, list) else []
+    items = []
+    for row in value.get("items", []) if isinstance(value.get("items"), list) else []:
+        row = mapping(row)
+        if (row.get("id") not in SETUP_CHECK_IDS or row.get("status") not in ("match", "differs", "unknown")
+                or row.get("importance") not in ("required", "recommended", "noted")):
+            continue
+        clean = {key: row[key] for key in ("id", "status", "importance")}
+        clean.update(pick(row, ("yours", "tested")))
+        sha = row.get("yours_sha256")
+        if isinstance(sha, str) and re.fullmatch(r"[0-9a-f]{64}", sha):
+            clean["yours_sha256"] = sha
+        items.append(clean)
+    result["items"] = items
+    return result
+
+
 def safe_snapshot(value) -> dict:
     """Structural projection, including unknown/busy sources and observation age."""
     if not isinstance(value, Mapping):
@@ -188,6 +224,7 @@ def safe_snapshot(value) -> dict:
     for key in ("configuration_consistent", "frame_buffer_emulation_off"):
         if type(setup.get(key)) is bool:
             result["setup"][key] = setup[key]
+    result["setup"]["check"] = _setup_check(setup.get("check"))
     runtime = mapping(setup.get("runtime"))
     result["setup"]["runtime"] = {"checks": pick(runtime.get("checks"), ("plugin", "pictures", "inputs", "game")),
         "rom": pick(runtime.get("rom"), ("state", "region")), "target": pick(runtime.get("target"), ("state",)),

@@ -10,6 +10,7 @@ paths:
   - "src/sm64_events/core/paths.py"
   - "src/sm64_events/core/setup_runtime.py"
   - "src/sm64_events/core/setup_gpu.py"
+  - "src/sm64_events/core/setup_profile.py"
   - "src/sm64_events/core/onboarding.py"
   - "src/sm64_events/server/setup_api.py"
   - "src/sm64_events/ui/setupflow.js"
@@ -44,6 +45,11 @@ paths:
   is on reads like a stale DLL: refresh fixes it, and after a refused write
   status and the header offer Install, which may elevate. The overlay's
   `renderer_settings` keeps the first earlier value for undo.
+- **Setup check, beside readiness:** `core/setup_profile.py` compares the
+  emulator's configuration with the tested setup in `data/setup_baseline.json`
+  (also the one importance table). It reads the same registry and VirtualStore
+  policy, never writes, and says "unknown" without evidence. It never gates
+  readiness or completion: the wizard shows its differences as notes.
 - **One reader per process:** `setup_runtime.py` attaches one `Pj64Memory` by the
   target's pid and keeps it while that process runs (`alive()`); an observation is
   one header read. A fresh reader per poll re-walked Project64's memory every

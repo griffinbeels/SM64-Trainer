@@ -11,13 +11,32 @@ from sm64_events.core.silent_failures import SilentFailureMonitor
 log = logging.getLogger("sm64.diagnostics")
 
 
-def make_snapshot(*, poller, service, monitor, replay, capture_layer, ghost, setup_observer, polling_state):
+def setup_check_now(capture_layer, setup_observer, profile, poller=None):
+    """The setup check from the last observed setup and ROM, with cached file
+    reads only: never discover a process or attach to the game. The poller's
+    cartridge comes first: it reads the header every second while playing,
+    while the setup observer may last have looked before the ROM was open."""
+    if profile is None:
+        return None
+    read = getattr(capture_layer, "diagnostic_status", None)
+    layer = read() if read else None
+    runtime = getattr(setup_observer, "diagnostic_status", None)
+    rom = getattr(poller, "rom_identity", None) or (runtime() if runtime else {}).get("rom")
+    return profile.diagnostic_status(layer, rom) if layer is not None or rom else profile.diagnostic_status()
+
+
+def make_snapshot(*, poller, service, monitor, replay, capture_layer, ghost, setup_observer, polling_state,
+                  setup_profile=None):
     recorder = getattr(replay, "recorder", None)
     def setup():
         read = getattr(capture_layer, "diagnostic_status", None)
         layer = read() if read else None
         runtime = getattr(setup_observer, "diagnostic_status", None)
-        return {**(layer or {}), "runtime": runtime() if runtime else {}} if layer is not None or runtime else None
+        if layer is None and not runtime:
+            return None
+        # The setup check rides next to the ghost's draw step in every report.
+        return {**(layer or {}), "runtime": runtime() if runtime else {},
+                "check": setup_check_now(capture_layer, setup_observer, setup_profile, poller)}
     def ghost_status():
         read = getattr(ghost, "diagnostic_status", None)
         result = read() if read else {}

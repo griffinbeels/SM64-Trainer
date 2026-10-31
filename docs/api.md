@@ -739,8 +739,23 @@ for its versioned completion record. Routes are mounted only when
 | `POST` | `/api/setup/capture-layer` | `{"consent": true}` | Installs with Project64 closed, marks onboarding started/incomplete, returns setup. Refusal or file-write failure: 409 with an actionable `detail`. |
 | `DELETE` | `/api/setup/capture-layer` | — | Restores the previous graphics selection with Project64 closed and clears completion. Returns setup; refusal or write failure: 409. |
 | `POST` | `/api/setup/complete` | `{"platform": "emu"\|"n64"}` | Rechecks applicable readiness, saves platform and completion, returns setup. Incomplete emulator setup: 409. N64 can finish with `limited: true`, without claiming console tracking. |
+| `GET` | `/api/setup/check` | — | Only the setup check (the `setup_check` field below), for the practice card's ghost notice. 404 when the app has no setup check. |
 
 Runtime fields in `emu`:
+
+- `setup_check`: the [setup check](glossary.md#setup-check) against the
+  [tested setup](glossary.md#tested-setup), or null without one:
+  `{version, baseline: {recorded, source}, rom, rdb, items, flagged,
+  required_differs, unknown}`. `rom` is the loaded Usamune ROM's
+  `Project64.rdb` section name (`AFD13A9D-8622568E-C:45`) or null; `rdb` says
+  which copy was read (`"Project64 folder"`, `"VirtualStore"`, `"missing"`).
+  `items` come in display order (noted last, then differences, can't-tell,
+  same; required before recommended), each `{id, label, importance:
+  "required"|"recommended"|"noted", status: "differs"|"unknown"|"match", yours,
+  tested, link, fix, yours_sha256?}`; `fix` is the sentence to show, null for a
+  match. `flagged` lists the ids of required or recommended differences: the
+  ghost notice shows only when it is non-empty. `rom` in `emu` also carries
+  `rdb_key`.
 
 - `installation_verified`: installed wrapper and renderer match this build by
   embedded build id, the wrapper is

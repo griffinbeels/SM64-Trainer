@@ -5,6 +5,7 @@ import { Icon } from "./icons.js";
 import { RegionFlag, REGIONS } from "./regionflag.js";
 import { castSrc } from "./emptystate.js";
 import { SetupDisclosure, SetupSwap } from "./setupmotion.js";
+import { SetupCheckNotes } from "./setupcheck.js";
 import { STAGE_ORDER, stageOf } from "../setupflow.js";
 
 const html = htm.bind(h);
@@ -184,6 +185,7 @@ export function CompletionPage({ setup, onFinish, busy }) {
     <button class="setup-green setup-finish" type="button" disabled=${busy} onclick=${onFinish}>
       ${busy ? "Finishing…" : "Ready to practice!"}
     </button>
+    <${SetupCheckNotes} check=${setup.emu.setup_check}/>
   </div>`;
 }
 

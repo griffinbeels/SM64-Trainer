@@ -28,7 +28,7 @@ def identify_rom(raw: bytes | None) -> dict:
     """Identity from the loaded cartridge; a preference is never detection."""
     header = normalise_header(raw) if raw else None
     if header is None:
-        return {"state": "missing", "region": None, "name": None, "warning": None}
+        return {"state": "missing", "region": None, "name": None, "warning": None, "rdb_key": None}
     name = header[NAME_FIELD].decode("ascii", errors="replace").rstrip(" \0")
     region = version_from_header(header)
     state = "unsupported"
@@ -38,7 +38,13 @@ def identify_rom(raw: bytes | None) -> dict:
         # Practice either way; full support once its layout is verified.
         state = "supported" if _layout_ready("jp") else "jp"
     return {"state": state, "region": region, "name": name,
-            "warning": JP_WARNING if state == "jp" else None}
+            "warning": JP_WARNING if state == "jp" else None, "rdb_key": rdb_key(header)}
+
+
+def rdb_key(header: bytes) -> str:
+    """The cartridge's section name in Project64.rdb: both header CRCs and the
+    country byte, as Project64 1.6 writes them (``AFD13A9D-8622568E-C:45``)."""
+    return f"{header[0x10:0x14].hex().upper()}-{header[0x14:0x18].hex().upper()}-C:{header[0x3E]:02X}"
 
 
 #: The cartridges the trainer practises on. Any other ROM -- vanilla SM64,

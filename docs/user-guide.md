@@ -58,6 +58,15 @@ configuring the game/controller. Pages advance after a visible acknowledgment;
 Back lets you review earlier steps. **Not now** postpones unfinished setup
 for the current app session. Open it again from **Settings → Setup**.
 
+**Check my setup.** Settings → **Check my setup** compares your Project64 with
+the setup the trainer is tested on, item by item: the Project64 build, where it
+is installed, the graphics, audio, RSP and controller plugins, frame buffer
+emulation, and your Usamune ROM's memory size, Counter Factor and CPU core.
+Each difference says how to fix it and links the guide. A different controller
+plugin is fine; it is only noted. If ghosts stop showing and your setup differs,
+the practice card says so and opens this check for you. The setup wizard's
+last page lists any differences too, but never stops you from practicing.
+
 Already set up? The trainer compares the installed wrapper's SHA-256 hash with
 this build and checks its selected graphics configuration. A matching installation
 skips automatic onboarding, including in a fresh worktree. A stale or incomplete

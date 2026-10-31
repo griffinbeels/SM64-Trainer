@@ -196,6 +196,21 @@ def _configured(present: bool, selected: bool, wrapped: str | None, renderer_pre
     return bool(present and selected and renderer_present and _names_our_renderer(wrapped))
 
 
+def virtualstore_copy(local_appdata: str | None, folder: Path, name: str) -> Path | None:
+    """The existing per-user VirtualStore copy of `folder`/`name`, or None.
+
+    Windows gives a virtualized legacy program this copy before the real file.
+    Only an existing copy counts: never create one or scan a tree."""
+    if not local_appdata or not folder.is_absolute() or folder.drive.startswith("\\\\"):
+        return None
+    appdata = Path(local_appdata)
+    if not appdata.is_absolute():
+        return None
+    folder = Path(os.path.abspath(folder))
+    shadow = appdata / "VirtualStore" / folder.relative_to(folder.anchor) / name
+    return shadow if shadow.is_file() else None
+
+
 def _names(value: str | None, name: str) -> bool:
     return (value or "").lower() == name.lower()
 
@@ -351,6 +366,16 @@ class CaptureLayer:
         self._refresh_stop = threading.Event()
         self._refresh_thread = None
 
+    @property
+    def registry(self) -> Registry:
+        """The same per-user Project64 settings this layer reads; the setup
+        check (`core/setup_profile.py`) only reads them."""
+        return self._registry
+
+    @property
+    def local_appdata(self) -> str | None:
+        return self._local_appdata
+
     def start_refresh(self, logger=None):
         if not self.auto_refresh or self._refresh_stop.is_set() or self._refresh_thread is not None:
             return
@@ -482,14 +507,7 @@ class CaptureLayer:
         A manifested/elevated Project64 may instead read the physical file, so
         both copies must agree. Never create a VirtualStore file or scan a tree.
         """
-        if not self._local_appdata or not plugin_dir.is_absolute() or plugin_dir.drive.startswith("\\\\"):
-            return None
-        appdata = Path(self._local_appdata)
-        if not appdata.is_absolute():
-            return None
-        plugin_dir = Path(os.path.abspath(plugin_dir))
-        shadow = appdata / "VirtualStore" / plugin_dir.relative_to(plugin_dir.anchor) / name
-        return shadow if shadow.is_file() else None
+        return virtualstore_copy(self._local_appdata, plugin_dir, name)
 
     def _reconcile_shadow(self, shadow: Path | None) -> None:
         if shadow is None:

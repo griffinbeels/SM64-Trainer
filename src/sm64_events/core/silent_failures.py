@@ -21,6 +21,19 @@ MESSAGES = {
 }
 
 
+#: How long an expectation must go without progress before it is a failure.
+GRACE_S = 20.0
+
+
+def ghost_display_missing(ghost: dict) -> bool:
+    """The renderer was asked to show ghosts and has not displayed them:
+    the one predicate the report watch and the practice card's setup notice
+    share (the watch adds player activity and freshness on top)."""
+    return (ghost.get("expected_display") is True and ghost.get("available") is True
+            and (ghost.get("awaiting_preparation") is True or ghost.get("display_pending") is True)
+            and ghost.get("displayed") is False)
+
+
 @dataclass(frozen=True)
 class Pending:
     scope: object
@@ -31,7 +44,7 @@ class Pending:
 class SilentFailureMonitor:
     def __init__(self, probe, *, reporter=error_reporting.capture_problem,
                  consent=error_reporting.collection_epoch, clock=time.monotonic,
-                 wall_clock=time.time, interval_s=1.0, grace_s=20.0, cooldown_s=3600.0):
+                 wall_clock=time.time, interval_s=1.0, grace_s=GRACE_S, cooldown_s=3600.0):
         self._probe, self._reporter, self._consent = probe, reporter, consent
         self._clock, self._wall = clock, wall_clock
         self.interval_s, self.grace_s, self.cooldown_s = interval_s, grace_s, cooldown_s
@@ -102,10 +115,7 @@ class SilentFailureMonitor:
                    and not capture.get("gated") and not capture.get("storage_pressure"))
         recording = enabled and capture.get("player_active") is True
         ghost_expected = (capture.get("player_active") is True
-                          and ghost.get("expected_display") is True and ghost.get("available") is True
-                          and (ghost.get("awaiting_preparation") is True
-                               or ghost.get("display_pending") is True)
-                          and ghost.get("displayed") is False and self._fresh(ghost))
+                          and ghost_display_missing(ghost) and self._fresh(ghost))
         checks = setup.get("checks") or {}
         setup_expected = (recording and setup.get("pending") is True and self._fresh(setup)
                           and setup.get("installed") is True and setup.get("running") is True
