@@ -13,18 +13,33 @@ import { Modal } from "./modal.js";
 const html = htm.bind(h);
 const STATUS_WORDS = { differs: "Different", unknown: "Can't tell", match: "Same" };
 
-/** The check, read once when the caller mounts (`enabled` false reads nothing). */
-export function useSetupCheck(enabled = true) {
+/** How often an open Check my setup reads again, so opening or closing a ROM shows at once. */
+export const SETUP_CHECK_POLL_MS = 1000;
+
+/**
+ * The check (`enabled` false reads nothing). `live` reads it again every
+ * SETUP_CHECK_POLL_MS while mounted; a failed re-read keeps the last answer.
+ */
+export function useSetupCheck(enabled = true, { live = false } = {}) {
   const [check, setCheck] = useState(null);
   const [failed, setFailed] = useState(false);
   useEffect(() => {
     if (!enabled) return undefined;
     let alive = true;
+    let timer;
     setFailed(false);
-    getJSON("/api/setup/check").then(value => { if (alive) setCheck(value); })
-      .catch(() => { if (alive) setFailed(true); });
-    return () => { alive = false; };
-  }, [enabled]);
+    const read = async () => {
+      try {
+        const value = await getJSON("/api/setup/check");
+        if (alive) { setCheck(value); setFailed(false); }
+      } catch {
+        if (alive) setFailed(true);
+      }
+      if (alive && live) timer = setTimeout(read, SETUP_CHECK_POLL_MS);
+    };
+    read();
+    return () => { alive = false; clearTimeout(timer); };
+  }, [enabled, live]);
   return { check, failed };
 }
 
@@ -75,10 +90,10 @@ function summary(check) {
 }
 
 export function SetupCheckModal({ onClose, highlight = [] }) {
-  const { check, failed } = useSetupCheck();
+  const { check, failed } = useSetupCheck(true, { live: true });
   return html`<${Modal} title="Check my setup" icon="settings" size="large" onClose=${onClose}>
     <div class="setup-check" data-testid="setup-check">
-      ${failed ? html`<p class="setup-error" role="alert">Couldn't check your setup. Try again.</p>`
+      ${failed && !check ? html`<p class="setup-error" role="alert">Couldn't check your setup. Try again.</p>`
         : !check ? html`<p role="status">Checking your setup…</p>`
         : html`<p class="setup-check-summary" role="status">${summary(check)}</p>
           <${FolderLine} folder=${check.folder}/>

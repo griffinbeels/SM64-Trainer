@@ -168,13 +168,23 @@ struct Layout {
 namespace stack {
 constexpr float scale=0.5f,half=8; // half-size cells: 16 HUD pixels become 8
 // His m-digit number spans digit_x .. digit_x + 12(m-1) + 16; the ghost's is half as wide.
-inline float digits_width(unsigned m) {return (float(m-1)*usamune::digit_advance+16)*scale;}
-inline float digits_start(unsigned m) {
+constexpr float digits_width(unsigned m) {return (float(m-1)*usamune::digit_advance+16)*scale;}
+constexpr float digits_start(unsigned m) {
     return usamune::digit_x+(float(m-1)*usamune::digit_advance+16)*0.5f-digits_width(m)*0.5f;
 }
 constexpr float letter_gap=(usamune::digit_x-usamune::letter_x)*scale; // the letter tucks this far left
 constexpr float button_pitch=usamune::button_advance*scale;
 constexpr float buttons_x=usamune::digit_x+(usamune::digit_advance+16)*0.5f+(usamune::digit_advance+16)*0.25f+3;
+// The buttons and the name hold ONE column in every row and every frame. It
+// once followed this frame's stick value, so a 3-digit value pushed that row
+// alone right, even with the stick box drawn and no number at all, and it
+// jumped while the stick moved. His report, 2026-10-31: "All names and
+// buttons should be in line with each other." The stick box keeps the compact
+// column; numbers reserve the widest a pad can show (3 digits, -128..127).
+constexpr unsigned widest_digits=3;
+constexpr float values_buttons_x=digits_start(widest_digits)+digits_width(widest_digits)+3>buttons_x
+    ?digits_start(widest_digits)+digits_width(widest_digits)+3:buttons_x;
+constexpr float buttons_left(bool values) {return values?values_buttons_x:buttons_x;}
 constexpr float row_height=20;     // one ghost's rectangle plus the ring's travel
 constexpr float base=usamune::y_row-2; // the lowest row's bottom edge
 constexpr float column_width=usamune::button_x+4*usamune::button_advance-usamune::letter_x;
@@ -208,7 +218,7 @@ inline void stack_row(const Payload& p,uint32_t flip_y,Mesh& mesh) {
         if(n>wide)wide=n;
     }
     const float digit_left=stack::digits_start(wide);
-    const float buttons_left=std::fmax(stack::buttons_x,digit_left+stack::digits_width(wide)+3);
+    const float buttons_left=stack::buttons_left(p.values);
     auto value=[&](int v,float top,cell::Letter negative,cell::Letter positive) {
         if(v)hud_rect(layout,dx+digit_left-stack::letter_gap,top,stack::half,stack::half,
                       cell::letter_x+16*float(v<0?negative:positive),cell::letter_y,16,16);

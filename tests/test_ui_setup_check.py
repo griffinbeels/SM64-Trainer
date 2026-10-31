@@ -188,3 +188,31 @@ def test_settings_lists_every_item(served, tmp_path):
         (tmp_path / "setupbase-settings-check-end.png").write_bytes(page.locator(".modal").screenshot())
         no_faults(seen)
 
+
+
+def test_an_open_check_follows_the_rom_he_opens_and_closes(served):
+    """His report, 2026-10-31: opening Usamune left the open check on "Can't
+    tell" until he closed and reopened it. The open check reads again on its
+    own, and a ROM closed again goes back to "Can't tell"."""
+    _base, _state, served_check, _session, _browser = served
+    unread = served_check.value
+    with opened(served, 1500, stalled=False) as (page, seen):
+        page.locator(SETTINGS_CONTROL).first.click()
+        page.get_by_role("button", name="Check my setup").click()
+        cpu = page.locator(f'{CHECK} [data-item="cpu_core"]')
+        cpu.wait_for()
+        assert cpu.get_attribute("data-status") == "unknown"
+        served_check.value = matching(unread)          # he opens the ROM
+        page.wait_for_function("document.querySelector('[data-testid=setup-check] [data-item=cpu_core]')"
+                               ".dataset.status === 'match'", timeout=4000)
+        assert "Your setup matches the tested setup." in page.locator(CHECK).inner_text()
+        served_check.value = unread                    # and closes it again
+        page.wait_for_function("document.querySelector('[data-testid=setup-check] [data-item=cpu_core]')"
+                               ".dataset.status === 'unknown'", timeout=4000)
+        page.keyboard.press("Escape")
+        page.locator(CHECK).wait_for(state="detached")
+        requests = []
+        page.on("request", lambda request: requests.append(request.url) if "/api/setup/check" in request.url else None)
+        page.wait_for_timeout(1500)
+        assert requests == [], "a closed check stops reading"
+        no_faults(seen)
