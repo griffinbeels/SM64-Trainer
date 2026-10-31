@@ -72,6 +72,12 @@ bool finalized = false, token_current = true;
 bool usamune_hidden = false; // the list's Usamune HUD hides the player's display
 int usamune_values = -1;      // its Stick (0) / Values (1) setting, -1 unknown
 bool model_ready = true; // playback has built Mario's model
+// What a scenario makes refuse (the draw facts' gates): compositor creation,
+// its prepare and batch results, the playback boundary's thread, negotiation.
+struct Knobs {
+    bool refuse_create = false, other_thread = false, unnegotiated = false;
+    ghost_compositor::Result prepare = ghost_compositor::Result::ok, batch = ghost_compositor::Result::ok;
+} knobs;
 bool chooses = true; // the list's plan chose a ghost
 bool layer_broken = false, begun = false, in_hud = false, layer_active = false;
 uint64_t layer_generation = 0;
@@ -99,6 +105,8 @@ bool Render(RenderState *r) {
 }
 bool Enabled(GLenum, bool *on) { if (!gl.nominal) return false; *on = false; return true; }
 bool Texture2D(unsigned, GLuint *name) { if (!gl.nominal) return false; *name = 0; return true; }
+// link_dispatch's record of the invalidation: the gateway's close, with the error it kept.
+void BindingsCause(rs_bindings_cause *out) { *out = {}; out->site = RS_BINDINGS_GATEWAY_CLOSE_ERROR; out->gl_error = gl.saved; }
 bool __cdecl BeginCapture() {
     if (!gl.nominal || gl.open || gl.saved) return false;
     Owner who{}; const GLenum error = take(who);
@@ -126,16 +134,17 @@ namespace ghost_compositor {
 struct Instance { int unused = 0; };
 namespace { Instance instance; }
 Instance *create(const Dispatch &, uint64_t) {
-    ++seen.created; begun = in_hud = finalized = layer_active = false; return &instance;
+    ++seen.created; begun = in_hud = finalized = layer_active = false; return knobs.refuse_create ? nullptr : &instance;
 }
 Result prepare(Instance *, uint32_t w, uint32_t h, uint32_t, const uint8_t *, uint32_t, uint32_t) {
-    ++seen.prepared; seen.prepared_width = w; seen.prepared_height = h; return Result::ok;
+    ++seen.prepared; seen.prepared_width = w; seen.prepared_height = h; return knobs.prepare;
 }
 Result prepare_particles(Instance *, const uint8_t *, uint32_t, uint32_t) { return Result::unsupported; }
 Result prepare_annotations(Instance *, const uint8_t *, uint32_t, uint32_t) { return Result::unsupported; }
 Result warm(Instance *) { ++seen.warmed; return Result::ok; }
 Result begin_batch(Instance *, const Target &target, const Pose *poses, uint32_t count, const Known *,
                    const ghost_path::Frame *) {
+    if (knobs.batch != Result::ok) return knobs.batch; // refused before any GL, as an MSAA target is
     if (faults.batch) fail_gl(Owner::ghost);
     for (uint32_t i = 0; i < count; ++i) {seen.stacked += poses[i].annotation.hud; seen.values += poses[i].annotation.values;}
     shown = {target.occurrence, target.generation, 22, 23, target.width, target.height};
@@ -181,7 +190,7 @@ namespace ghost_dispatch { bool load(ghost_compositor::Dispatch &) { ++seen.disp
 namespace ghost_playback {
 bool drawing() { return true; } // a displayed request holds its clips, finished or not
 bool plan(const gc_sample &) { return chooses; }
-void safe_boundary(uint32_t, uint32_t) {}
+bool safe_boundary(uint32_t, uint32_t) { return !knobs.other_thread; }
 bool atlas(sg_atlas_view *out, uint64_t *id) {
     static const uint8_t pixel[4]{};
     *out = {}; out->rgba = pixel; out->width = out->height = 1; *id = 1;
@@ -202,7 +211,7 @@ const ghost_path::Frame *path() { return nullptr; }
 void retire_on_context_loss() {}
 }
 namespace ghost_presentation {
-bool clean_consumer() { return true; }
+bool clean_consumer() { return !knobs.unnegotiated; }
 void set_provider(ImageProvider provider, PresentationNotice, ImageValidity validity) {
     image_provider = provider; image_validity = validity;
 }
@@ -386,6 +395,110 @@ void transitions() {
     check(!seen.foreign_restores && !gl.open, "begin abandons old layer scopes without foreign restoration");
     run_list(0, 0);run_list(0, 0);
 }
+// Every list publishes its first refusal (ghost_draw_facts.h), or DREW: the
+// gate a tester's report names when no ghost shows.
+uint32_t gate() { return ghost_facts::list_gate.load(); }
+uint32_t list_flags() { return ghost_facts::list_flags.load(); }
+uint32_t code(ghost_compositor::Result result) { return uint32_t(result) + 1; }
+void show(const char *name, bool comma = true) { std::printf("%s\"%s\":%u", comma ? "," : "", name, gate()); }
+// One list in the renderer's order, with a step of the scenario's own between.
+void sealed_list(void (*between)(), bool sealed = true, bool finished = true) {
+    static uint64_t serial = 50000; ++serial;
+    gc_sample sample{}; sample.sequence = sample.dlist_serial = serial;
+    ghost::WorldPass world{}; world.list_serial = serial; world.context_generation = identity().context_generation;
+    world.target.color = screen; world.target.width = width; world.target.height = height; world.target.samples = 1;
+    ghost_draw::begin(7, 4, &sample); ghost_draw::observe(world.target);
+    gSP.geometryMode = 0;
+    if (sealed) ghost_draw::seal(sample, world, false, -1);
+    if (between) between();
+    ghost_draw::finish(finished ? &world : nullptr);
+    gSP.geometryMode = 0;
+}
+void gates() {
+    reset(); fresh_context();
+    std::printf(",\"gates\":{");
+    run_list(3, 5);
+    check(gate() == GDF_LIST_DREW && list_flags() == (GDF_COMPOSITOR | GDF_MODEL | GDF_PLANNED)
+          && ghost_facts::create_step.load() == GDF_CREATE_CREATED && ghost_facts::batch_result.load() == code(ghost_compositor::Result::ok)
+          && ghost_facts::finalize_result.load() == code(ghost_compositor::Result::ok)
+          && ghost_facts::observed_width.load() == width && ghost_facts::prepared_width.load() == width,
+          "a drawn list says it drew, with its compositor, model and plan");
+    show("drew", false);
+    chooses = false; run_list(0, 0); chooses = true;
+    check(gate() == GDF_LIST_NO_PLAN && !(list_flags() & GDF_PLANNED), "playback choosing no ghost is the list's first refusal");
+    show("no_plan");
+    model_ready = chooses = false; run_list(0, 0); model_ready = chooses = true; // no model, no pose
+    check(gate() == GDF_LIST_NO_MODEL, "no Mario model held by playback names itself");
+    show("no_model");
+    // Playback on another thread's boundary holds no model or pose for this one.
+    knobs.other_thread = true; model_ready = chooses = false; run_list(0, 0);
+    knobs.other_thread = false; model_ready = chooses = true;
+    check(gate() == GDF_LIST_OTHER_THREAD, "a boundary another thread owns names itself");
+    show("other_thread");
+    knobs.unnegotiated = true; run_list(0, 0); knobs.unnegotiated = false;
+    check(gate() == GDF_LIST_NO_CLEAN_CONSUMER, "no clean presentation negotiated names itself");
+    show("no_clean_consumer");
+    ghost_draw::begin(7, 4, nullptr); ghost_draw::finish(nullptr);
+    check(gate() == GDF_LIST_NO_SAMPLE, "a list without a pose sample names itself");
+    show("no_sample");
+    knobs.batch = ghost_compositor::Result::unsupported; run_list(0, 0); knobs.batch = ghost_compositor::Result::ok;
+    check(gate() == GDF_LIST_BATCH && ghost_facts::batch_result.load() == code(ghost_compositor::Result::unsupported),
+          "a refused batch names itself and why (an MSAA target is unsupported)");
+    show("batch");
+    sealed_list([] { ghost_draw::cancel(GDF_LIST_TARGET_CHANGED); });
+    check(gate() == GDF_LIST_TARGET_CHANGED, "a color target changed after the seal names itself");
+    show("target_changed");
+    sealed_list([] { gSP.geometryMode = G_ZBUFFER; check(!ghost_draw::begin_hud(), "a z-buffered HUD draw refuses"); });
+    check(gate() == GDF_LIST_HUD, "a HUD mirror that refused names itself");
+    show("hud");
+    sealed_list(nullptr, false);
+    check(gate() == GDF_LIST_NO_SEAL, "a planned list that never sealed names itself");
+    show("no_seal");
+    sealed_list(nullptr, true, false);
+    check(gate() == GDF_LIST_STALE, "a list that ended incomplete names itself");
+    show("stale");
+    // Candidate B: the compositor refused Mario's model on a fresh context.
+    ++active_identity.context_generation; knobs.prepare = ghost_compositor::Result::resources;
+    run_list(0, 0); run_list(0, 0); knobs.prepare = ghost_compositor::Result::ok;
+    check(gate() == GDF_LIST_PREPARE && ghost_facts::prepare_result.load() == code(ghost_compositor::Result::resources)
+          && list_flags() == GDF_COMPOSITOR, "a refused model prepare names itself and its result");
+    show("prepare");
+    run_list(0, 0);
+    check(gate() == GDF_LIST_DREW && ghost_facts::prepare_result.load() == code(ghost_compositor::Result::ok),
+          "the next prepare that succeeds draws");
+    // Candidate A: creation refused, or its scope refused, and never retried for that context.
+    ++active_identity.context_generation; knobs.refuse_create = true; run_list(0, 0); knobs.refuse_create = false;
+    check(gate() == GDF_LIST_NO_COMPOSITOR && ghost_facts::create_step.load() == GDF_CREATE_REFUSED && !list_flags(),
+          "a refused compositor creation names itself");
+    show("no_compositor");
+    run_list(0, 0);
+    check(gate() == GDF_LIST_NO_COMPOSITOR, "creation is not retried for its context, and every list says so");
+    ++active_identity.context_generation; gl.saved = GL_INVALID_ENUM; run_list(0, 0); gl.saved = GL_NO_ERROR;
+    check(gate() == GDF_LIST_CREATE_SCOPE && ghost_facts::create_step.load() == GDF_CREATE_SCOPE,
+          "a gateway refused for compositor creation names itself");
+    show("create_scope");
+    run_list(0, 0);
+    check(gate() == GDF_LIST_NO_COMPOSITOR, "after a refused creation scope every list has no compositor");
+    // No world raster target seen yet for this context's prepare.
+    ghost_draw::context_lost(); run_list(0, 0);
+    check(gate() == GDF_LIST_NO_EXTENT && ghost_facts::observed_width.load() == width && !ghost_facts::prepared_width.load(),
+          "a context with no raster extent yet names itself");
+    show("no_extent");
+    run_list(0, 0); check(gate() == GDF_LIST_DREW, "the next list, extent seen, draws");
+    // Candidate A: a dirty display scope, then the ghost steps aside for the context.
+    faults.batch = true; run_list(3, 5); faults = {};
+    check(gate() == GDF_LIST_CLOSE_DIRTY && (list_flags() & GDF_FAULTED) && ghost_facts::fault_step.load() == GDF_FAULT_DISPLAY
+          && ghost_facts::fault_site.load() == RS_BINDINGS_GATEWAY_CLOSE_ERROR
+          && ghost_facts::fault_error.load() == GL_INVALID_OPERATION, "a dirty display scope names itself, its site and error");
+    show("close_dirty");
+    gl.nominal = true; gl.saved = GL_NO_ERROR; gl.saved_owner = Owner::none; // the source rebuilt
+    run_list(3, 5);
+    check(gate() == GDF_LIST_FAULTED && (list_flags() & GDF_FAULTED), "every later list of that context says the ghost stepped aside");
+    show("faulted");
+    std::printf("}");
+    fresh_context(); run_list(0, 0);
+    check(gate() == GDF_LIST_DREW && !(list_flags() & GDF_FAULTED), "the next context draws again");
+}
 #endif
 }
 
@@ -454,7 +567,11 @@ int main() {
 #ifndef GHOST_DRAW_BASELINE
         ghost_steps_aside();
 #endif
-        std::printf("},\"checks\":%u,\"driver_queries\":%u}\n", checks, clean_queries);
+        std::printf("}");
+#ifndef GHOST_DRAW_BASELINE
+        gates();
+#endif
+        std::printf(",\"checks\":%u,\"driver_queries\":%u}\n", checks, clean_queries);
         return 0;
     } catch (const std::exception &error) {
         std::fprintf(stderr, "\nghost glue witness: %s (check %u)\n", error.what(), checks);

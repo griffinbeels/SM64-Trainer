@@ -51,7 +51,7 @@ def test_native_ghost_ipc_lifecycle(tmp_path):
     spec.loader.exec_module(compiler)
     vcvars = compiler.find_vcvars32()
     assert vcvars, "x86 MSVC toolchain is required for this native witness"
-    inputs = ["plugin/gfxwrap/ghost_ipc.cpp", "plugin/gfxwrap/ghost_ipc.h",
+    inputs = ["plugin/gfxwrap/ghost_ipc.cpp", "plugin/gfxwrap/ghost_ipc.h", "plugin/gfxwrap/ghost_draw_facts.h",
               "plugin/gfxwrap/ghost_assets.cpp", "plugin/gfxwrap/ghost_assets.h",
               "plugin/gfxwrap/ghost_rom.cpp", "plugin/gfxwrap/ghost_rom.h", "plugin/gfxwrap/practice_rom.h",
               "plugin/gfxwrap/ghost_clip.h", "plugin/gfxwrap/ghost_playback.h",
@@ -133,7 +133,8 @@ def assert_python_mirror(layout):
     """The ctypes mirror must match the compiled worker field by field."""
     assert layout["page"] == P.PAGE_BYTES
     assert layout["ring"] == P.RING_OFFSET
-    for name, mirror in (("request", P.Request), ("clip", P.Clip), ("status", P.Status)):
+    assert layout["draw_at"] == P.DRAW_AT
+    for name, mirror in (("request", P.Request), ("clip", P.Clip), ("status", P.Status), ("draw", P.Draw)):
         native = dict(layout[name])
         assert native.pop("$bytes") == C.sizeof(mirror), name
         assert native == {field: getattr(mirror, field).offset for field, *_ in mirror._fields_}, name

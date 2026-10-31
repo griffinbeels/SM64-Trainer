@@ -171,3 +171,12 @@ def test_a_ghost_list_never_rebuilds_a_structural_witness_and_shares_the_limit(g
                                           "queries": "0", "attempts": "0"}
     # The recording rebuilt a moment ago: the ghost waits for the next second.
     assert ghost_report["shared_limit"] == {"soon": "0", "later": "1", "attempts": "2", "successes": "2"}
+
+
+def test_a_ghost_list_start_names_its_first_refusal(ghost_report):
+    """The draw facts' list gate (ghost_draw_facts.h), from the real list start:
+    a clean start refuses nothing, a structural witness is BINDINGS, and RDRAM
+    sized other than 4 or 8 MiB is RDRAM_SIZE before the stream refuses it."""
+    from sm64_events.ghost.native_layout import DRAW_LIST_GATES
+    gates = {name: DRAW_LIST_GATES[int(code)] for name, code in ghost_report["facts"].items()}
+    assert gates == {"clean": "unknown", "structural": "bindings", "rdram": "rdram_size"}

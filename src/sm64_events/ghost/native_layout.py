@@ -77,6 +77,33 @@ V6_MAGIC, V6_VERSION, V6_SAMPLE_VERSION, V6_RECORD_BYTES, V6_SAMPLE_BYTES = b"SM
 IPC_SLOTS, IPC_RING_AT, IPC_PATH_CHARS = 512, 20480, 520
 IPC_CLIP_BYTES, IPC_REQUEST_BYTES, LABEL_BYTES = 1160, 20080, 64
 IPC_CAP_HIDDEN = 0x100  # GIPC_CAP_HIDDEN: the renderer can hide a race and keep it running
+
+# The draw path's own account (ghost_draw_facts.h, gipc_page.draw): which step
+# refused the latest list and picture. Codes are positions in these tuples, in
+# the headers' append-only order; 0 is always "the renderer did not say".
+IPC_CAP_DRAW_FACTS = 0x200  # GIPC_CAP_DRAW_FACTS: the worker writes gipc_page.draw
+IPC_DRAW_AT, IPC_DRAW_BYTES, DRAW_VERSION = 20336, 128, 1
+DRAW_LIST_GATES = (
+    "unknown", "drew", "no_context", "not_requested", "bindings", "rdram_size", "not_observed",
+    "other_thread", "no_clean_consumer", "no_identity", "no_dispatch", "create_scope", "no_compositor",
+    "faulted", "no_model", "no_extent", "prepare_scope", "prepare", "no_sample", "no_plan", "no_seal",
+    "seal_world", "seal_buffer", "no_pose", "seal_scope", "batch", "target_changed", "world_lost",
+    "hud", "stale", "close_dirty", "finalize")
+DRAW_PRESENT_GATES = (
+    "unknown", "shown", "no_clean_consumer", "no_presentation", "no_provider", "identity", "split",
+    "overscan", "multisampling", "fxaa", "blit_workaround", "source", "source_extent", "no_image",
+    "no_display_buffer", "extent", "not_ready", "repeat", "faulted", "image", "srgb", "copy", "draw")
+DRAW_READY_STEPS = ("unknown", "ready", "no_clean_consumer", "no_identity", "source_format", "dispatch",
+                    "scope", "create", "gamma", "dirty", "extent")
+DRAW_CREATE_STEPS = ("unknown", "created", "dispatch", "scope", "refused", "dirty")
+DRAW_FAULT_STEPS = ("none", "create", "prepare", "particles", "annotations", "display")
+#: ghost_compositor::Result, which the facts carry as Result + 1 (0: never called)
+COMPOSITOR_RESULTS = ("ok", "invalid", "unsupported", "resources", "state")
+DRAW_KNOWN_LIST, DRAW_KNOWN_SETTINGS, DRAW_KNOWN_PRESENT, DRAW_KNOWN_PLAYBACK, DRAW_KNOWN_SWAP = 1, 2, 4, 8, 16
+DRAW_OBSERVING, DRAW_FAULTED, DRAW_COMPOSITOR, DRAW_MODEL, DRAW_PLANNED = 1, 2, 4, 8, 16
+DRAW_PRESENTATION, DRAW_PRESENTATION_FAULTED = 32, 64
+DRAW_SETTING_FBE, DRAW_SETTING_FXAA, DRAW_SETTING_OVERSCAN = 1, 2, 4
+DRAW_SETTING_BLIT_WORKAROUND, DRAW_SETTING_N64_DEPTH_COMPARE, DRAW_SETTING_FRAGMENT_DEPTH_WRITE = 8, 16, 32
 GHOSTS = 16  # displayed ghosts at once: playback, compositor batch, sound sources, request slots
 PROXIMITY_MAX = 400.0  # the largest overlap-fade distance a request may carry
 BRIDGE_FRAMES = 2  # the longest refused run playback holds the previous pose over

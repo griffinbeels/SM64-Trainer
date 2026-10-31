@@ -14,6 +14,8 @@ unsigned drawable_width=640,drawable_height=480;
 bool identity_available=true,format_known=true,extent_available=true,extent_succeeds=true,negotiated=true;
 renderer::Identity live{1,1,1,1,1};
 void check(bool okay,const char* what){++checks;if(!okay)throw std::runtime_error(what);}
+// How the last context_ready ended (ghost_draw_facts.h): a tester's report says it.
+uint32_t step(){return ghost_facts::ready_step.load();}
 }
 namespace replay_gl {
 bool CandidateBindings(renderer::Identity* out,snapshot::RestoreBindings* bindings) {
@@ -94,6 +96,7 @@ struct DisplayWindow {
 int main(){try {
     using namespace ghost_presentation;
     context_ready();check(creates==1 && shader_creates==1 && allocations==1,"initial setup prewarms and prepares without a ghost");
+    check(step()==GDF_READY_READY,"a readied context says so");
     context_ready();check(creates==1 && shader_creates==1 && allocations==1,"stable setup allocates nothing");
     DisplayWindow window;
     publish();window.m_bResizeWindow=true;check(window.resizeWindow(),"pinned resize forwards");
@@ -107,6 +110,7 @@ int main(){try {
     publish();source_width=320;source_height=240;extent_available=false;++live.drawable_generation;context_ready();
     check(!published() && !current->ready && !source_width && !source_height && creates==1 && shader_creates==1,
           "missing extent refuses old picture without recompiling or keeping old source dimensions");
+    check(step()==GDF_READY_EXTENT,"a context whose extent could not be prepared says so");
     extent_available=true;context_ready();publish();extent_succeeds=false;++live.drawable_generation;context_ready();
     check(!published() && !current->ready,"failed allocation refuses old picture");
     extent_succeeds=true;context_ready();
@@ -119,8 +123,10 @@ int main(){try {
     ++live.context;context_ready();check(creates==3 && shader_creates==3 && abandons==2,"new context prewarms again");
     ++live.owner_thread;context_ready();check(creates==4 && shader_creates==4 && abandons==3,"new owner cannot retain old resources");
     publish();identity_available=false;context_ready();check(!current && !gamma_program && abandons==4,"missing identity safely abandons");
+    check(step()==GDF_READY_NO_IDENTITY,"a context without identity says so");
     identity_available=true;context_ready();publish();format_known=false;context_ready();
     check(!current && !gamma_program && destroys==old_destroys+1 && shader_deletes==old_deletes+1,"missing format refuses setup with owned cleanup");
+    check(step()==GDF_READY_SOURCE_FORMAT,"an unobserved framebuffer format says so");
     format_known=true;context_ready();publish();window.resize_ok=false;window.m_bResizeWindow=true;window.resizeWindow();
     check(creates==7 && shader_creates==7 && abandons==5,"failed resize fallback rebuilds new context generation");
     const unsigned gamma_deletes=shader_deletes;
@@ -130,6 +136,8 @@ int main(){try {
     publish();window.stop();check(!current && !gamma_program && !published(),"true stop cleans up before context disappears");
     check(!foreign_resets,"no presentation reset restores a foreign generation");
     context_ready();check(!current,"zero context cannot become ready");
+    check(step()==GDF_READY_NO_IDENTITY,"a zero context names no identity");
+    negotiated=false;context_ready();check(!current && step()==GDF_READY_NO_CLEAN_CONSUMER,"an unnegotiated presentation says so");
     std::printf("transition passed checks=%u resize=retained fullscreen=retained initial=prewarmed stale=refused failure=refused foreign=abandoned stop=destroyed\n",checks);
     return 0;
 }catch(const std::exception& error){std::fprintf(stderr,"presentation transition: %s (check %u)\n",error.what(),checks);return 1;}}

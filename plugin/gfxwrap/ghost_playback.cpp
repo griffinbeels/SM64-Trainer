@@ -1245,9 +1245,9 @@ uint32_t hidden_refusals(const gclip_header& header,const gclip_frame *frames) {
 const gp_api *api() {return &api_v2;}
 void set_sound_sink(const SoundSink *sink) {sound_sink.store(sink,std::memory_order_release);}
 void set_annotation_loader(AnnotationLoader loader) {annotation_loader.store(loader,std::memory_order_release);}
-void safe_boundary(uint32_t rom,uint32_t configuration) {
+bool safe_boundary(uint32_t rom,uint32_t configuration) {
     const auto thread=GetCurrentThreadId();
-    if(render_thread && render_thread!=thread) {refusals.fetch_add(1);return;}
+    if(render_thread && render_thread!=thread) {refusals.fetch_add(1);return false;}
     render_thread=thread;live_rom=rom;live_configuration=configuration;path_ready=false;
     next_boundary();
     PublishedRequest published{};const bool received=requests.get(published);
@@ -1257,7 +1257,7 @@ void safe_boundary(uint32_t rom,uint32_t configuration) {
         && next.rom_generation==rom && next.configuration==configuration;
     if(!wanted) {
         retire_clips();retire_model();have_request=false;clear_timeline();live_recovery.detach();
-        sound_control(false,0);forget_heard(Forget::move);decide_all(GP_DISABLED);return;
+        sound_control(false,0);forget_heard(Forget::move);decide_all(GP_DISABLED);return true;
     }
     if(enabled_revision.load()!=next.revision) {
         // Withdrawal keeps reusable Owned clips and the model, but an explicit
@@ -1268,7 +1268,7 @@ void safe_boundary(uint32_t rom,uint32_t configuration) {
         // Withdrawal retains reusable assets, but an explicit worker model
         // replacement must still be released at this safe render boundary.
         if(have_model && (model.cancellation!=current_cancel || model.id!=desired_model.load()))retire_model();
-        sound_control(false,0);forget_heard(Forget::move);decide_all(GP_DISABLED);return;
+        sound_control(false,0);forget_heard(Forget::move);decide_all(GP_DISABLED);return true;
     }
     if(acquired_cancel!=current_cancel) {clear_timeline();retire_clips();live_recovery.detach();}
     if(have_request && (next.mode!=active_request.mode || next.model_id!=active_request.model_id))clear_timeline();
@@ -1284,7 +1284,7 @@ void safe_boundary(uint32_t rom,uint32_t configuration) {
         have_timeline=true;timeline_request=next;
     }
     if(have_model && (model.id!=next.model_id || model.cancellation!=current_cancel || model.id!=desired_model.load()))
-        if(!retire_model()) {decide_all(GP_PREPARING);return;}
+        if(!retire_model()) {decide_all(GP_PREPARING);return true;}
     const bool changed=touch_revision!=next.revision;
     const bool first=!have_request;
     const gp_request previous=active_request;
@@ -1356,6 +1356,7 @@ void safe_boundary(uint32_t rom,uint32_t configuration) {
     report.clip_count=active_request.clip_count;
     report.clips_active=active_count();
     decision(have_model && report.clips_active==active_request.clip_count?GP_READY:GP_PREPARING);
+    return true;
 }
 bool atlas(sg_atlas_view *out,uint64_t *id) {
     if(out)*out={};if(id)*id=0;

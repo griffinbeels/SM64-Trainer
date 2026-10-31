@@ -809,6 +809,7 @@ struct Session {
         std::memcpy(&s.hook_gl_queries, &stats.hooks, sizeof(stats.hooks));
         s.state = state; s.reason = reason; s.ack_token = r.token; s.ack_revision = r.revision;
         gp_status playback{};
+        uint32_t evaluations = 0, playback_refusals = 0; bool playback_known = false;
         s.displayed = 0;
         s.clips_requested = r.play_enabled || r.prepare_generation ? r.clip_count : 0;
         s.clips_prepared = r.play_enabled || r.prepare_generation ? prepared_count(r) : 0;
@@ -820,11 +821,20 @@ struct Session {
                     && playback.revision >= active_native_revision && playback.clips_active == active_roster.clip_count)
                 s.active_generation = active_generation;
             s.playback_state = playback.model_state; s.playback_reason = playback.decision;
+            evaluations = playback.evaluations; playback_refusals = playback.refusals; playback_known = true;
             s.displayed = state == GIPC_READY && applied == r.revision
                 && playback.owner_token == r.token && playback.revision != 0
                 && displayed_revision.load(std::memory_order_acquire) == playback.revision;
             if (s.displayed) s.clips_visible = playback.visible;
         }
+        // The draw path's own account: what the render thread already recorded
+        // (ghost_draw_facts.h), for this generation, beside playback's counters.
+        gdf_facts draw = ghost_facts::snapshot();
+        draw.generation = s.generation;
+        if (playback_known) {
+            draw.known |= GDF_KNOWN_PLAYBACK; draw.evaluations = evaluations; draw.playback_refusals = playback_refusals;
+        }
+        page.draw = draw;
         if (s.consumed > s.produced || s.produced - s.consumed > GIPC_SLOTS) {
             revoke(GIPC_PROTOCOL); s.consumed = s.produced; return;
         }
@@ -886,7 +896,7 @@ DWORD WINAPI worker(void *argument) {
                         std::memcpy(initial.magic, GIPC_MAGIC, 8);
                         initial.version = GIPC_VERSION; initial.bytes = sizeof(gipc_page);
                         initial.producer_pid = GetCurrentProcessId(); initial.generation = generation;
-                        initial.record_bytes = sizeof(gclip_frame); initial.capabilities = GS_CAP_POSE | GS_CAP_WORLD_PASS | GIPC_CAP_HIDDEN;
+                        initial.record_bytes = sizeof(gclip_frame); initial.capabilities = GS_CAP_POSE | GS_CAP_WORLD_PASS | GIPC_CAP_HIDDEN | GIPC_CAP_DRAW_FACTS;
                         initial.state = GIPC_PASSIVE;
                         FILETIME birth{}, unused[3]{}, utc{};
                         GetProcessTimes(GetCurrentProcess(), &birth, unused, unused+1, unused+2);
@@ -900,6 +910,7 @@ DWORD WINAPI worker(void *argument) {
                         initial.utc_anchor = static_cast<double>(ticks - 116444736000000000ull) / 10000000.0;
                         source_clock = initial;
                         view.page->status = initial;
+                        view.page->draw = {}; // nothing from an earlier generation reads as this one's
                     } else WaitForSingleObject(lifecycle_signal.load(), 16);
                 }
                 Session session(source_clock);

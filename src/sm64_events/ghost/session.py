@@ -145,6 +145,7 @@ class GhostSession:
         # progress (its lock is only tried, so a busy read keeps the old one).
         self._noted_state: str | None = None
         self._noted_native: tuple = ()
+        self._noted_draw: str | None = None
         # When the last resolve ran, and what the world it read looked like
         # (`_world`): a change there is itself the event that re-resolves.
         self._resolved_at: float | None = None
@@ -342,6 +343,9 @@ class GhostSession:
         progress = self.silent_failure_status()
         if progress.get("progress") is not None:
             self._noted_native = (*progress["progress"], progress.get("displayed"))
+            # The renderer's first refusal of the latest list and picture
+            # (ghost/draw_facts.py), "unknown/unknown" from a renderer that says none.
+            self._noted_draw = progress.get("draw")
         # (state, reason, playback state, playback reason, prepared and active
         # generation, clips prepared, displayed); generations change every
         # arm, so they stay out of the line.
@@ -358,7 +362,7 @@ class GhostSession:
             ("playing", len(selection.get("playing") or ())),
             ("pb_seat", _pb_seat(rivals, selection)),
             ("native", f"{native[0]}/{native[1]}"), ("playback", f"{native[2]}/{native[3]}"),
-            ("clips", native[6]), ("displayed", native[7])))
+            ("clips", native[6]), ("displayed", native[7]), ("draw", self._noted_draw)))
         if line != self._noted_state:
             self._noted_state = line
             state_log.info("ghost: %s", line)
