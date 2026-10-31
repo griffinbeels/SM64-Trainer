@@ -33,6 +33,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import sys
 import threading
 from pathlib import Path
@@ -41,7 +42,7 @@ from sm64_events.core import renderer_settings
 from sm64_events.core.capturelayer import (
     REGISTRY_DLL_SUBKEY, REGISTRY_KEY, virtualstore_copy,
 )
-from sm64_events.core.plugin_installation import WRAPPER_DLL
+from sm64_events.core.plugin_installation import WRAPPER_DLL, WRAPPER_INI
 from sm64_events.core.renderer_settings import RENDERER_INI
 
 BASELINE_PATH = Path(__file__).resolve().parents[1] / "data" / "setup_baseline.json"
@@ -51,7 +52,20 @@ STATUSES = ("differs", "unknown", "match")
 FLAGGED = frozenset({"required", "recommended"})
 RDB = "Project64.rdb"
 NO_ROM = "No Usamune ROM is open"
-NOT_READABLE = "Project64's default (we can't read it)"
+DEFAULT = "Project64's default"
+NOT_READABLE = f"{DEFAULT} (we can't read it)"
+#: Items whose value is chosen per Windows user (HKCU), so every Project64
+#: copy on this account shares it; the rest come from the running folder.
+ACCOUNT_CHOICES = frozenset({"graphics_plugin", "audio_plugin", "controller_plugin"})
+#: A folder's own name may be shown; anything else about its path never is.
+_FOLDER_NAME = re.compile(r"[A-Za-z0-9 ._()+',&#-]{1,48}")
+
+
+def folder_name(name) -> str:
+    """A Project64 folder's own name ("01-stock-vanilla") as reports may show
+    it, or "unnamed" for a name that is long or uses other characters: the
+    user chose it, so it is bounded like any free text."""
+    return name if isinstance(name, str) and _FOLDER_NAME.fullmatch(name) and name.strip() else "unnamed"
 
 
 def load_baseline(path: Path = BASELINE_PATH) -> dict:
@@ -127,6 +141,7 @@ class SetupProfile:
         self._rdb: tuple | None = None
         self._last: dict | None = None
         self._inputs: tuple = ({}, None)
+        self._from_registry: set = set()
 
     # -- cached file reads ---------------------------------------------------
 
@@ -164,6 +179,7 @@ class SetupProfile:
         layer, rom = layer or {}, rom or {}
         with self._lock:
             self._inputs = (layer, rom)
+            self._from_registry = set()
             pj64 = Path(layer["pj64_dir"]) if layer.get("pj64_dir") else None
             plugin = Path(layer["plugin_dir"]) if layer.get("plugin_dir") else (pj64 / "Plugin" if pj64 else None)
             rdb_path, rdb_source = self._effective_rdb(pj64)
@@ -178,6 +194,10 @@ class SetupProfile:
                 "controller_plugin": self._selected(plugin, "Controller Dll", "controller_plugin"),
             }
             items = [self._item(row, *readings[row["id"]]) for row in self.baseline["items"]]
+            for item in items:
+                # A per-ROM value that fell back to the registry default is
+                # shared too: every Project64 on this account reads it.
+                item["shared"] = item["id"] in ACCOUNT_CHOICES | self._from_registry
             order = {status: at for at, status in enumerate(STATUSES)}
             weight = {name: at for at, name in enumerate(IMPORTANCE)}
             items.sort(key=lambda item: (item["importance"] == "noted", order[item["status"]],
@@ -188,6 +208,7 @@ class SetupProfile:
                       "baseline": {"recorded": self.baseline["recorded"], "source": self.baseline["source"]},
                       "rom": rom.get("rdb_key") if rom.get("state") in ("supported", "jp") else None,
                       "rdb": rdb_source,
+                      "folder": self._folder(pj64, plugin, layer),
                       "items": items, "flagged": flagged,
                       "required_differs": sum(item["status"] == "differs" and item["importance"] == "required"
                                               for item in items),
@@ -213,6 +234,8 @@ class SetupProfile:
                 "fix": row["fix"] if status == "differs" else row["unknown"] if status == "unknown" else None}
         if sha:
             item["yours_sha256"] = sha
+        if row.get("download"):
+            item["download"] = row["download"]
         return item
 
     def _hashed(self, row_id, path, name, missing):
@@ -288,7 +311,9 @@ class SetupProfile:
         source = ""
         if size is None and value in (None, "Default"):
             size = self._megabytes(self._registry_get(REGISTRY_KEY, "Default RDRAM Size"))
-            source = " (Project64's default)"
+            source = f" ({DEFAULT})"
+            if size is not None:
+                self._from_registry.add("memory_size")
         if size is None:
             return "unknown", NOT_READABLE
         return ("match" if size == 8 else "differs"), f"{size} MB{source}"
@@ -305,6 +330,8 @@ class SetupProfile:
         if value in ("Interpreter", "Recompiler", "SyncCores"):
             return ("match" if value == "Interpreter" else "differs"), value
         raw = self._registry_get(REGISTRY_KEY, "CPU Type")
+        if raw is not None:
+            self._from_registry.add("cpu_core")
         # The registry number's meaning is not established from evidence here.
         return "unknown", f"Project64's default (setting {raw})" if raw is not None else NOT_READABLE
 
@@ -333,6 +360,21 @@ class SetupProfile:
             return "unknown", "None recorded"
         name = Path(str(name)).name
         return self._plugin_file(plugin, name, row_id, f"{name} (the file is missing)")
+
+    def _folder(self, pj64, plugin, layer):
+        """Which Project64 copy this check describes: its own folder name,
+        where it sits, and whether it was running when the setup was read
+        (the capture layer follows the running Project64, else the last one)."""
+        if pj64 is None:
+            return {"name": "unnamed", "location": "unknown", "running": False}
+        location = "other"
+        if any(_inside(pj64, folder) for folder in self._program_dirs):
+            shadows = [virtualstore_copy(self._local_appdata, pj64, RDB)]
+            if plugin is not None:
+                shadows += [virtualstore_copy(self._local_appdata, plugin, name)
+                            for name in (RENDERER_INI, WRAPPER_INI)]
+            location = "VirtualStore" if any(shadows) else "Program Files"
+        return {"name": folder_name(pj64.name), "location": location, "running": layer.get("pj64_running") is True}
 
     def _location(self, pj64, rdb_source):
         if pj64 is None:

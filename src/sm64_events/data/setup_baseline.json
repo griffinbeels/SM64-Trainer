@@ -5,88 +5,102 @@
   "guide": "https://wermi.neocities.org/emuguide/",
   "items": [
     {
-      "id": "graphics_plugin", "importance": "required",
+      "id": "graphics_plugin",
+      "importance": "required",
       "label": "Graphics plugin",
       "tested": "SM64 Trainer (sm64_trainer_gfx.dll)",
       "fix": "Project64 is not using the trainer's graphics plugin. Open Settings, choose Setup, and install Practice Replay.",
       "unknown": "We could not read which graphics plugin Project64 uses. Open Settings and choose Setup to check it.",
-      "link": "https://wermi.neocities.org/emuguide/plugin_setup/"
+      "link": "https://wermi.neocities.org/emuguide/plugin_setup/#plugin-selection"
     },
     {
-      "id": "frame_buffer_emulation", "importance": "required",
+      "id": "frame_buffer_emulation",
+      "importance": "required",
       "label": "Frame buffer emulation",
       "tested": "Off",
       "fix": "Frame buffer emulation is on, so ghosts can't show. Close Project64, open Settings, choose Setup, and install Practice Replay again. It turns this setting off for you.",
       "unknown": "We could not read the GLideN64.ini file in your Plugin folder. Open Settings and choose Setup to check it.",
-      "link": "https://github.com/Luna-Project64/GLideN64/releases"
+      "link": "https://wermi.neocities.org/emuguide/gliden64_link/"
     },
     {
-      "id": "memory_size", "importance": "required",
+      "id": "memory_size",
+      "importance": "required",
       "label": "Memory size for this game",
       "tested": "8 MB",
       "fix": "Project64 gives this game the wrong amount of memory. In Project64, open Options, then Settings, then ROM Settings. Set Memory Size to 8 MB.",
       "unknown": "We could not read this game's Memory Size. Open your Usamune ROM in Project64. Then open Options, then Settings, then ROM Settings, and make sure Memory Size is 8 MB.",
-      "link": "https://wermi.neocities.org/emuguide/basic_config/"
+      "link": "https://wermi.neocities.org/emuguide/basic_config/#rom-settings"
     },
     {
-      "id": "counter_factor", "importance": "required",
+      "id": "counter_factor",
+      "importance": "required",
       "label": "Counter Factor for this game",
       "tested": "1",
       "fix": "This game's Counter Factor is not 1. In Project64, open Options, then Settings, then ROM Settings. Set Counter Factor to 1.",
       "unknown": "We could not read this game's Counter Factor. Open your Usamune ROM in Project64. Then open Options, then Settings, then ROM Settings, and make sure Counter Factor is 1.",
-      "link": "https://wermi.neocities.org/emuguide/basic_config/"
+      "link": "https://wermi.neocities.org/emuguide/basic_config/#rom-settings"
     },
     {
-      "id": "cpu_core", "importance": "recommended",
+      "id": "cpu_core",
+      "importance": "recommended",
       "label": "CPU core style for this game",
       "tested": "Interpreter",
       "fix": "Usamune needs the Interpreter CPU core. In Project64, open Options, then Settings, then ROM Settings. Set CPU core style to Interpreter.",
       "unknown": "We could not read this game's CPU core style. Open your Usamune ROM in Project64. Then open Options, then Settings, then ROM Settings, and make sure CPU core style is Interpreter.",
-      "link": "https://wermi.neocities.org/emuguide/basic_config/"
+      "link": "https://wermi.neocities.org/emuguide/basic_config/#rom-settings"
     },
     {
-      "id": "emulator_build", "importance": "recommended",
+      "id": "emulator_build",
+      "importance": "recommended",
       "label": "Project64 build",
       "tested": "Wermi's build v7 (LINK's Project64 1.6)",
       "sha256": "8d7d373d024206f7513721b320ef3359b885aa6ea73dc2c14b3a42f0c099be2b",
       "fix": "Your Project64 is not the build we test with. We test with Wermi's build v7 of Project64 1.6. The guide shows how to get it.",
       "unknown": "We could not read your Project64 program file. Open Project64 so we can find it.",
-      "link": "https://wermi.neocities.org/emuguide/getting_emu/"
+      "link": "https://wermi.neocities.org/emuguide/getting_emu/#download",
+      "download": "https://www.dropbox.com/s/cgkbhsarjthgnz8/Project64%201.6%20%28wermi%27s%20build%20v7%29.exe?dl=1"
     },
     {
-      "id": "rsp_plugin", "importance": "recommended",
+      "id": "rsp_plugin",
+      "importance": "recommended",
       "label": "RSP plugin",
       "tested": "PJ64Fixups RSP",
       "sha256": "2e7ede23d96c634c4f2266dd4fe36459432140c617424065a1622cc57c623a9f",
       "fix": "Your RSP plugin is not the PJ64Fixups one. Download RSP.dll from PJ64Fixups. Put it in the Plugin folder inside your Project64 folder.",
       "unknown": "We could not read RSP.dll in your Plugin folder. Open Project64 so we can find it.",
-      "link": "https://wermi.neocities.org/emuguide/fixups/"
+      "link": "https://wermi.neocities.org/emuguide/fixups/#pj64-fixups",
+      "download": "https://github.com/aglab2/PJ64Fixups/releases"
     },
     {
-      "id": "audio_plugin", "importance": "recommended",
+      "id": "audio_plugin",
+      "importance": "recommended",
       "label": "Audio plugin",
       "tested": "Azimer's Audio v0.70 WIP 10 (AziAudio.dll)",
       "sha256": "d01f2bb0e1f44df360c8377e9b767d2c092d6df2dae351ae1a9bb838c60f3c8a",
       "fix": "Your audio plugin is not the one we test with. In Project64, open Options, then Settings, then Plugins. Pick Azimer's Audio.",
       "unknown": "We could not read which audio plugin Project64 uses. Open Project64 so we can find it.",
-      "link": "https://wermi.neocities.org/emuguide/plugin_setup/"
+      "link": "https://wermi.neocities.org/emuguide/azi/#azimers-hle-v070-wip-10",
+      "download": "https://www.mediafire.com/file/s1fil36hivy7qbj/AziAudio.dll/file"
     },
     {
-      "id": "install_location", "importance": "recommended",
+      "id": "install_location",
+      "importance": "recommended",
       "label": "Project64 folder",
       "tested": "Outside Program Files",
       "fix": "Project64 is inside the Program Files folder. Windows can quietly keep its settings in another place. Move your Project64 folder somewhere else, such as a Games folder.",
       "unknown": "We could not find your Project64 folder. Open Project64 so we can find it.",
-      "link": "https://wermi.neocities.org/emuguide/getting_emu/"
+      "link": "https://wermi.neocities.org/emuguide/getting_emu/#manual-setup"
     },
     {
-      "id": "controller_plugin", "importance": "noted",
+      "id": "controller_plugin",
+      "importance": "noted",
       "label": "Controller plugin",
       "tested": "raphnetraw port 1 only 1.0.7 (pj64raphnetraw_1player.dll)",
       "sha256": "2473ceb6a87e9a2a813a54cef3b2227d41c5ee00baff73c5785ffad163923548",
       "fix": "You use a different controller plugin. That is fine. We only keep a note of it.",
       "unknown": "We could not read which controller plugin Project64 uses. That is fine.",
-      "link": "https://wermi.neocities.org/emuguide/plugin_setup/"
+      "link": "https://wermi.neocities.org/emuguide/raphnetraw/#raphnetraw-for-project64"
     }
-  ]
+  ],
+  "links_read": "Links and downloads are the ones the Wermi guide itself gives, read 2026-10-30; the trainer never downloads or bundles them."
 }

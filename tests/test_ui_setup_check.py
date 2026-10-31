@@ -174,6 +174,14 @@ def test_settings_lists_every_item(served, tmp_path):
         assert len(items) == 10 and not any(row["highlighted"] for row in items)
         assert {row["status"] for row in items[:7]} == {"differs"}
         assert {row["id"] for row in items if row["status"] == "unknown"} == {"counter_factor", "cpu_core"}
+        # Which test copy this is, by its folder's own name only.
+        assert page.locator(f"{CHECK} .setup-check-folder").inner_text() == (
+            "Project64 folder: Project64 1.6 (in Program Files, settings in VirtualStore, not running)")
+        audio = page.locator(f'{CHECK} [data-item="audio_plugin"]')
+        assert audio.locator("a", has_text="Download").get_attribute("href").startswith("https://www.mediafire.com/")
+        assert audio.locator("a", has_text="How to fix").get_attribute("href").endswith("/emuguide/azi/#azimers-hle-v070-wip-10")
+        assert "Every Project64 on this Windows account uses this setting." in audio.inner_text()
+        assert page.locator(f'{CHECK} [data-item="rsp_plugin"] .setup-check-shared').count() == 0
         (tmp_path / "setupbase-settings-check.png").write_bytes(page.locator(".modal").screenshot())
         page.evaluate("document.querySelector('.modal .modal-body').scrollTo({top: 1e6, behavior: 'instant'})")
         page.wait_for_timeout(100)

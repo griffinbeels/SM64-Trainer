@@ -208,7 +208,8 @@ def test_the_report_and_the_automatic_schema_carry_the_check_without_folders(tmp
     automatic = safe_snapshot({"setup": {"check": check}})["setup"]["check"]
     rows = {row["id"]: row for row in automatic["items"]}
     assert rows["graphics_plugin"] == {"id": "graphics_plugin", "status": "differs", "importance": "required",
-                                       "yours": "Jabo_Direct3D8.dll", "tested": "SM64 Trainer (sm64_trainer_gfx.dll)"}
+                                       "shared": True, "yours": "Jabo_Direct3D8.dll",
+                                       "tested": "SM64 Trainer (sm64_trainer_gfx.dll)"}
     assert automatic["flagged"][0] == "graphics_plugin" and automatic["rom"] == US["rdb_key"]
     assert "PrivateName" not in json.dumps(automatic)
     assert safe_snapshot({"setup": {"check": {"items": [{"id": "C:\\Users\\x", "status": "differs",

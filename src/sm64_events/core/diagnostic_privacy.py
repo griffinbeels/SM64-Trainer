@@ -155,6 +155,18 @@ SETUP_CHECK_IDS = ("graphics_plugin", "frame_buffer_emulation", "memory_size", "
                    "emulator_build", "rsp_plugin", "audio_plugin", "install_location", "controller_plugin")
 
 
+def _setup_folder(value):
+    """Which Project64 copy: its own name only when short and plain (a user
+    chose it), never its path."""
+    from sm64_events.core.setup_profile import folder_name
+    value = mapping(value)
+    name = value.get("name")
+    location = value.get("location")
+    return {"name": folder_name(name),
+            "location": location if location in ("Program Files", "VirtualStore", "other", "unknown") else "unknown",
+            "running": value.get("running") is True}
+
+
 def _setup_check(value):
     """The setup check (core/setup_profile.py): fixed ids, statuses and
     importances, the user's value as bounded scrubbed text, a 64-hex hash."""
@@ -169,6 +181,7 @@ def _setup_check(value):
     recorded = mapping(value.get("baseline")).get("recorded")
     if isinstance(recorded, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", recorded):
         result["baseline_recorded"] = recorded
+    result["folder"] = _setup_folder(value.get("folder"))
     flagged = value.get("flagged")
     result["flagged"] = [item for item in flagged if item in SETUP_CHECK_IDS] if isinstance(flagged, list) else []
     items = []
@@ -178,6 +191,8 @@ def _setup_check(value):
                 or row.get("importance") not in ("required", "recommended", "noted")):
             continue
         clean = {key: row[key] for key in ("id", "status", "importance")}
+        if type(row.get("shared")) is bool:
+            clean["shared"] = row["shared"]
         clean.update(pick(row, ("yours", "tested")))
         sha = row.get("yours_sha256")
         if isinstance(sha, str) and re.fullmatch(r"[0-9a-f]{64}", sha):

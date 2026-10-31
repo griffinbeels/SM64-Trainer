@@ -1334,7 +1334,10 @@ Your Project64 setup compared item by item with the [[tested setup]]: each item
 reads *same*, *different* or *can't tell* (no readable evidence; never a
 guess). It is read-only and cheap: registry values, file hashes and the
 `Project64.rdb` entry for the loaded ROM (the VirtualStore copy when one
-exists). Settings → Check my setup lists every item, differences first. When
+exists). Every file comes from one Project64 folder, the running one (else
+the last one seen), named by its own folder name; the check marks registry
+values as shared by every Project64 copy on the Windows account. Each difference
+links its Wermi guide page. Settings → Check my setup lists every item, differences first. When
 the [[ghost]] the player asked for has gone unseen for 20 s and the check finds a
 required or recommended difference, the practice card shows a notice that
 opens it with those items highlighted; with a matching setup it shows nothing

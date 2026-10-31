@@ -745,15 +745,22 @@ Runtime fields in `emu`:
 
 - `setup_check`: the [setup check](glossary.md#setup-check) against the
   [tested setup](glossary.md#tested-setup), or null without one:
-  `{version, baseline: {recorded, source}, rom, rdb, items, flagged,
-  required_differs, unknown}`. `rom` is the loaded Usamune ROM's
+  `{version, baseline: {recorded, source}, folder, rom, rdb, items, flagged,
+  required_differs, unknown}`. `folder` names the Project64 copy it read:
+  `{name, location: "Program Files"|"VirtualStore"|"other"|"unknown", running}`,
+  where `name` is the folder's own name only ("unnamed" when it is long or uses
+  other characters) and the copy is the running Project64's, else the last one
+  seen. `rom` is the loaded Usamune ROM's
   `Project64.rdb` section name (`AFD13A9D-8622568E-C:45`) or null; `rdb` says
   which copy was read (`"Project64 folder"`, `"VirtualStore"`, `"missing"`).
   `items` come in display order (noted last, then differences, can't-tell,
   same; required before recommended), each `{id, label, importance:
   "required"|"recommended"|"noted", status: "differs"|"unknown"|"match", yours,
-  tested, link, fix, yours_sha256?}`; `fix` is the sentence to show, null for a
-  match. `flagged` lists the ids of required or recommended differences: the
+  tested, link, download?, shared, fix, yours_sha256?}`; `fix` is the sentence
+  to show, null for a match; `link` is the Wermi guide page for that step and
+  `download` the download that page itself links, opened in the browser;
+  `shared` is true when the value comes from the per-user registry, so every
+  Project64 copy on this Windows account has it. `flagged` lists the ids of required or recommended differences: the
   ghost notice shows only when it is non-empty. `rom` in `emu` also carries
   `rdb_key`.
 

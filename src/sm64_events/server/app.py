@@ -857,6 +857,14 @@ def _mount_diagnostics(app, poller, broadcaster, service, monitor, replay=None, 
             if service is None or service.db is None:
                 raise RuntimeError("journal unavailable (no db attached)")
             return service.db.recent_events(diagnostics.JOURNAL_TAIL)
+        if not attached and capture_layer is not None:
+            # His click, not an automatic error: look again, so the report
+            # describes the Project64 copy running now, not the last one the
+            # setup screen saw (he switches between test folders).
+            try:
+                capture_layer.status()
+            except Exception:  # noqa: BLE001 - the report must still build
+                log.warning("Setup status unavailable for the debug report.")
         return diagnostics.build_report(
             version=__version__, frozen=is_frozen(), port=server_port(),
             data_dir=str(data_root().resolve()),

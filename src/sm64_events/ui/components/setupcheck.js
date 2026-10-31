@@ -41,8 +41,12 @@ function SetupCheckItem({ item, highlighted }) {
       <div><dt>Yours</dt><dd>${item.yours}</dd></div>
       ${item.status !== "match" && html`<div><dt>Tested</dt><dd>${item.tested}</dd></div>`}
     </dl>
-    ${item.fix && html`<p class="setup-check-fix">${item.fix}${" "}
-      ${!noted && html`<a href=${item.link} target="_blank" rel="noopener noreferrer">How to fix ↗</a>`}</p>`}
+    ${item.shared && html`<p class="setup-check-shared">Every Project64 on this Windows account uses this setting.</p>`}
+    ${item.fix && html`<p class="setup-check-fix">${item.fix}</p>`}
+    ${item.fix && !noted && html`<p class="setup-check-links">
+      <a href=${item.link} target="_blank" rel="noopener noreferrer">How to fix ↗</a>
+      ${item.download && html`<a href=${item.download} target="_blank" rel="noopener noreferrer">Download ↗</a>`}
+    </p>`}
   </li>`;
 }
 
@@ -51,6 +55,16 @@ export function SetupCheckList({ check, highlight = [], only = null }) {
   const items = (check?.items || []).filter(item => !only || only.includes(item.id));
   return html`<ul class="setup-check-list">${items.map(item => html`<${SetupCheckItem} key=${item.id}
     item=${item} highlighted=${highlight.includes(item.id)}/>`)}</ul>`;
+}
+
+const PLACES = { "Program Files": "in Program Files", VirtualStore: "in Program Files, settings in VirtualStore",
+                 other: "outside Program Files" };
+
+// Which Project64 copy this check read: its folder's own name, never its path.
+function FolderLine({ folder }) {
+  if (!folder || folder.location === "unknown") return null;
+  return html`<p class="setup-check-folder">Project64 folder: <strong>${folder.name}</strong>
+    ${" "}(${PLACES[folder.location] || folder.location}${folder.running ? "" : ", not running"})</p>`;
 }
 
 function summary(check) {
@@ -67,6 +81,7 @@ export function SetupCheckModal({ onClose, highlight = [] }) {
       ${failed ? html`<p class="setup-error" role="alert">Couldn't check your setup. Try again.</p>`
         : !check ? html`<p role="status">Checking your setup…</p>`
         : html`<p class="setup-check-summary" role="status">${summary(check)}</p>
+          <${FolderLine} folder=${check.folder}/>
           <${SetupCheckList} check=${check} highlight=${highlight}/>`}
     </div>
   </${Modal}>`;
