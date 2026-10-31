@@ -46,16 +46,21 @@ function shouldOfferSetup(setup) {
   // Existing matching installation is enough to skip onboarding, including
   // a fresh worktree. Live readiness is a separate check in manual Setup.
   if (emu.installation_verified && emu.target?.state === "ready") return false;
-  // ...and for a layer this build has outgrown that the trainer cannot update
-  // by itself (a source checkout, or a wrapper someone else installed): the
-  // steps to update it are the onboarding. A packaged build updates the
-  // installed pair on its own once Project64 is closed, and never reopens
-  // onboarding for that (his rule, 2026-09-16: "No additional onboarding
-  // past the original onboarding").
-  const stale = emu.wrapper_present && !emu.automatic_update
-    && (emu.wrapper_current === false || emu.renderer_current === false);
-  return emu.state === "not_installed" || emu.state === "regressed" || stale
+  return emu.state === "not_installed" || emu.state === "regressed" || needsManualUpdate(emu)
     || (setup.onboarding?.started && !setup.onboarding.completed_at);
+}
+
+// ...and for a layer this build has outgrown that the trainer cannot update
+// by itself (a source checkout, or a wrapper someone else installed): the
+// steps to update it are the onboarding. A packaged build updates the
+// installed pair on its own once Project64 is closed, and never reopens
+// onboarding for that (his rule, 2026-09-16: "No additional onboarding
+// past the original onboarding"). Frame buffer emulation turned on in
+// GLideN64.ini is stale the same way: it hides ghosts (his rule, 2026-10-30).
+function needsManualUpdate(emu) {
+  if (!emu.wrapper_present || emu.automatic_update) return false;
+  return emu.wrapper_current === false || emu.renderer_current === false
+    || emu.frame_buffer_emulation_off === false;
 }
 
 const CLOCK_OPTIONS = [["igt", "Usamune IGT"], ["rta", "Anchor → grab"]];

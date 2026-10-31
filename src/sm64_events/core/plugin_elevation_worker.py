@@ -2,8 +2,10 @@
 
 The helper accepts one authenticated parent connection, installs only the active
 bundle's two named DLLs and fixed INI into a verified Project64/Plugin directory,
-removes an older install's renderer DLL of its own after the commit, and rolls
-everything back on failure. It cannot copy arbitrary files or run commands.
+turns off one fixed setting (frame buffer emulation) in the renderer's
+GLideN64.ini there, removes an older install's renderer DLL of its own after the
+commit, and rolls everything back on failure. It cannot copy arbitrary files or
+run commands.
 """
 from __future__ import annotations
 
@@ -21,6 +23,9 @@ from sm64_events.core.plugin_installation import (  # noqa: E402
     WRAPPER_INI as INI, file_operation, in_use, sha256, verified_copy,
 )
 from sm64_events.core.plugin_elevation import receive_packet, send_packet  # noqa: E402
+from sm64_events.core.renderer_settings import (  # noqa: E402
+    RENDERER_INI as SETTINGS, read as read_settings, turn_off_in_place,
+)
 
 
 def _safe_path(value) -> Path:
@@ -79,19 +84,25 @@ def privileged_files(request):
             raise OSError("Close Project64 before installing Practice Replay")
         with file_operation("create plugin folder", plugin):
             plugin.mkdir(exist_ok=True)
-        destinations = [plugin / name for name in (WRAPPER, RENDERER, INI)]
+        settings = plugin / SETTINGS
+        destinations = [plugin / name for name in (WRAPPER, RENDERER, INI, SETTINGS)]
         for destination in [*destinations, plugin / LEGACY_RENDERER]:
             if in_use(destination):
                 raise OSError(f"Plugin is in use by another process: {destination}")
+        # Pinning creates a missing destination empty, so note which existed first.
+        settings_existed = settings.is_file()
         with locked_paths([plugin], [], destinations):
+            settings_before = read_settings(settings) if settings_existed else None
             with verified_copy(renderer, plugin / RENDERER, reason="elevated_install",
-                               rollback=(plugin / WRAPPER, plugin / INI)) as renderer_receipt:
+                               rollback=(plugin / WRAPPER, plugin / INI, settings)) as renderer_receipt:
                 with verified_copy(wrapper, plugin / WRAPPER, reason="elevated_install",
-                                   rollback=(plugin / INI,)) as wrapper_receipt:
+                                   rollback=(plugin / INI, settings)) as wrapper_receipt:
                     with file_operation("write plugin configuration", plugin / INI):
                         (plugin / INI).write_text(f"wrapped={RENDERER}\n")
                         if (plugin / INI).read_text() != f"wrapped={RENDERER}\n":
                             raise OSError("Plugin configuration verification failed")
+                    with file_operation("turn off frame buffer emulation", settings):
+                        turn_off_in_place(settings, settings_before)
                     try:
                         yield {"renderer_receipt": renderer_receipt,
                                "installation_receipt": wrapper_receipt}
