@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 from sm64_events.core.childproc import quiet_spawn_kwargs
+from sm64_events.ghost.native_layout import DRAW_LIST_GATES
 
 ROOT = Path(__file__).resolve().parents[1]
 NATIVE = ROOT / "plugin/gfxwrap"
@@ -109,6 +110,25 @@ def test_ghost_glue_gateway_reads_and_error_owners(tmp_path):
     assert s["ghost_steps_aside"] == {
         "clean_drawn": 1, "faulted_drawn": 0, "kept": True, "after_drawn": 0, "after_reads": 0,
         "after_layers": 0, "again_reads": 0, "nominal": True, "next_context_drawn": 1}
+    # Each way a list ends publishes its own gate (ghost_draw_facts.h): the
+    # AMD tester's reports (2026-10-30) could not say which step refused.
+    gates = {name: DRAW_LIST_GATES[code] for name, code in report["gates"].items()}
+    assert gates == {name: name for name in (
+        "drew", "no_plan", "no_model", "other_thread", "no_clean_consumer", "no_sample", "batch",
+        "target_changed", "hud", "no_seal", "stale", "prepare", "no_compositor", "create_scope",
+        "no_extent", "close_dirty", "faulted")}
+
+
+def test_a_silent_batch_refusal_negative_control(tmp_path):
+    """Restoring the silent exit a refused batch took before 2026-10-30 (an
+    MSAA target looked like a list that never sealed) turns the witness red."""
+    if sys.platform != "win32":
+        pytest.skip("Win32 renderer component")
+    source = (NATIVE / "ghost_draw.cpp").read_text(encoding="utf-8")
+    anchor = "    } else { ghost_facts::refuse(GDF_LIST_BATCH); cancel(); }\n"
+    assert source.count(anchor) == 1
+    (tmp_path / "ghost_draw.cpp").write_text(source.replace(anchor, "    } else cancel();\n"), encoding="utf-8")
+    build(tmp_path, tmp_path, failure="a refused batch names itself and why")
 
 
 def test_old_scope_teardown_before_identity_negative_control(tmp_path):

@@ -193,8 +193,9 @@ const gp_api *api();
 uint32_t hidden_refusals(const gclip_header &, const gclip_frame *);
 /* Actual serialized renderer thread, between completed uses of borrowed pose
  * arrays. Claims preloaded state or retires old ownership without allocation,
- * destruction or waiting. Zero identity revokes this ROM session. */
-void safe_boundary(uint32_t rom_generation, uint32_t configuration);
+ * destruction or waiting. Zero identity revokes this ROM session. False only
+ * when another thread already owns the boundary: this call changed nothing. */
+bool safe_boundary(uint32_t rom_generation, uint32_t configuration);
 /* Borrowed until the next safe_boundary/retire call. Obtain only on renderer. */
 bool atlas(sg_atlas_view *out, uint64_t *model_id);
 /* The prepared model's ROM particle frames and atlas; false when it has none. */

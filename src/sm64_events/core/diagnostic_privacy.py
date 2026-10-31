@@ -28,6 +28,23 @@ _ENTRY_POINTS = frozenset({
     "glAcquireKeyedMutexWin32EXT", "glReleaseKeyedMutexWin32EXT", "glGetUnsignedBytevEXT", "glCopyTextureSubImage2D",
     "glBindFramebuffer",
 })
+# The latest render list's own numbers (ghost/capture.py LATEST_HOOKS): microseconds and counts.
+GHOST_HOOK_FIELDS = ("hook_list_micros", "hook_open_micros", "hook_batch_micros", "hook_close_micros",
+                     "hook_finalize_micros", "hook_error_reads", "hook_ghosts")
+# The renderer's draw path facts (ghost/draw_facts.py FIELDS): step and result
+# names from fixed code tables, booleans, sizes, counts, "unknown" for anything
+# the renderer did not report, and one sentence built from those tables.
+GHOST_DRAW_FIELDS = (
+    "draw_refusal", "draw_list_gate", "draw_present_gate", "draw_lists", "draw_presents",
+    "draw_observing", "draw_faulted", "draw_compositor", "draw_model", "draw_planned",
+    "draw_create_step", "draw_prepare_result", "draw_batch_result", "draw_finalize_result",
+    "draw_last_fault", "draw_fault_site", "draw_fault_gl_error",
+    "draw_observed_width", "draw_observed_height", "draw_prepared_width", "draw_prepared_height",
+    "draw_presentation_ready", "draw_presentation_faulted", "draw_ready_step",
+    "draw_fbe", "draw_fxaa", "draw_overscan", "draw_blit_workaround", "draw_n64_depth_compare",
+    "draw_fragment_depth_write", "draw_multisampling", "draw_rdram_size", "draw_rdram_supported",
+    "draw_evaluations", "draw_playback_refusals",
+)
 
 
 def mapping(value):
@@ -163,7 +180,8 @@ def safe_snapshot(value) -> dict:
                            if type(ghost.get(key)) is bool})
     result["ghost"]["native"] = pick(ghost.get("native") if isinstance(ghost, Mapping) else None, (
         "available", "error_type", "reason", "state", "dropped", "playback_state", "playback_reason", "displayed",
-        "prepared_generation", "active_generation", "clips_prepared", "refused_batches", "hook_micros", "hook_gl_queries", "observed_unix_s"))
+        "prepared_generation", "active_generation", "clips_prepared", "refused_batches", "hook_micros", "hook_gl_queries",
+        *GHOST_HOOK_FIELDS, *GHOST_DRAW_FIELDS, "observed_unix_s"))
     setup = mapping(value.get("setup"))
     result["setup"] = pick(setup, ("state", "pj64_running", "wrapper_present", "wrapper_current", "wrapper_selected",
         "renderer_present", "renderer_current", "installation_verified", "layer_alive", "pictures_flowing", "observed_unix_s"))

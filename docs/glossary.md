@@ -1254,6 +1254,22 @@ used to be gone within half an hour. The previous process's copy is `.1`.
 - **Not** -- `sm64_trainer_gfx.log`, which keeps everything, rotating at 4 MiB
   through `.1` and `.2`
 
+### Draw facts
+
+What the [[renderer]] did with each [[ghost]] the trainer asked it to draw, as
+plain facts beside its status: the first step that refused the latest display
+list (`drew` when none did), the first step that kept the latest picture from
+carrying that [[ghost]] (`shown` when none did), and the GLideN64 settings
+those steps read. A value the [[renderer]] did not report reads `unknown`,
+never fine. The [[debug report]] prints them, with one sentence the trainer
+builds from the step names.
+
+- **Lives** -- `plugin/gfxwrap/ghost_draw_facts.h` (codes and the render
+  thread's record); decoded by `src/sm64_events/ghost/draw_facts.py`
+- **Not** -- the playback decision (`playback_reason`), which says whether
+  playback wants a [[ghost]] at all; the draw facts say why a wanted one never
+  showed
+
 ### Oracle reader
 
 The developer's check that reads the [[frame]] number the game prints into its own

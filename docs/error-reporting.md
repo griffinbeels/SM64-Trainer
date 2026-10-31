@@ -147,9 +147,12 @@ supply breadcrumbs, Sentry Logs and the report's server-log lines. One rule
 (`operational_log`) drops successful request lines (1xx-3xx) from all three and
 keeps failing ones (4xx/5xx), so the page's polling cannot fill the 400-line tail.
 `sm64.ghost.state` is the ghost's decision log: one line whenever the target,
-strategy, switch, source reason, lineup, PB, playing count or renderer
-state/reason changes, plus each PB's pose outcome, written with ids, counts and
-reason codes only. The report's Ghost timeline reads its last 120 lines from the
+strategy, switch, source reason, lineup, PB, playing count, renderer
+state/reason or the renderer's draw gates change, plus each PB's pose outcome,
+written with ids, counts and reason codes only. The snapshot's ghost native
+row carries the renderer's draw facts as fixed code names, booleans, sizes and
+counts, `unknown` for anything the renderer did not report, and one sentence
+built from those codes ([what the draw facts say](ghost-native-runtime.md#what-the-draw-facts-say)). The report's Ghost timeline reads its last 120 lines from the
 whole log and its rotated copy, because the 400-line tail spans minutes of play
 and a tester's report can come hours after the ghost failed to show. The rest of
 `sm64.ghost` stays excluded. Gameplay event wires, unrelated

@@ -43,6 +43,8 @@ static bool known(gp::Known* out) {
 }
 static void reset_counts(){calls=copies=opened=ended=draws=0;}
 static void swapped(gp::Instance* p,bool success=true){gp::after_osd(p);gp::record_display(p);gp::swap_completed(p,success);}
+// What replace_vi says refused it (ghost_draw_facts.h); the VI draw publishes it.
+static uint32_t refusal(){const uint32_t gate=ghost_facts::present_pending;ghost_facts::present_pending=0;return gate;}
 int main() {
     auto* p=gp::create(dispatch(),7);require(p && gp::prepare(p,3,640,480,320,240),"prepare");
     const gp::Raster raster{nullptr,draw,begin,end,known};
@@ -65,7 +67,13 @@ int main() {
     gp::begin_update(p,5);require(gp::before_swap(p,0x1000,raster),"revoked plain candidate");
     gp::cancel_overlay(p);swapped(p);require(!gp::surface(p).presentation_serial,"revoked plain has no publication");
     gp::GhostViImage image{999,320,240,1,7,55,123,1};
+    {gp::GhostViImage stale=image;stale.context_generation=8;
+     require(!gp::replace_vi(p,stale,0x2000,false,raster) && refusal()==GDF_PRESENT_IMAGE && !gp::pending_image(p).occurrence,
+             "an image of another context names the image and changes nothing");}
     gp::begin_update(p,6);reset_counts();require(gp::replace_vi(p,image,0x2000,false,raster),"ghost replace");
+    require(!refusal(),"a replaced picture records no refusal");
+    require(!gp::replace_vi(p,image,0x2000,false,raster) && refusal()==GDF_PRESENT_REPEAT,
+            "a second replacement of one picture names itself");
     require(copies==1 && draws==1,"ghost saved clean before replacement");
     require(gp::before_swap(p,0x2000,raster) && gp::begin_osd(p),"ghost OSD mirrors");gp::end_osd(p);swapped(p);
     const auto clean=gp::surface(p),display=gp::display(p);
@@ -85,6 +93,7 @@ int main() {
     require(!calls && gp::surface(p).width==800 && gp::surface(p).drawable_generation==4,"resized front needs no copy");
     gp::begin_update(p,10);reset_counts();refuse_second_open=true;
     require(!gp::replace_vi(p,image,0x3000,false,raster),"refused replacement never draws");refuse_second_open=false;
+    require(refusal()==GDF_PRESENT_DRAW,"a refused draw scope names the ghost draw");
     require(copies==1 && !draws && opened==ended,"attempt saved clean but could not modify BACK");
     require(gp::before_swap(p,0x3000,raster) && !gp::begin_osd(p),"refused replacement needs no OSD mirror");swapped(p);
     require(!gp::surface(p).framebuffer && gp::surface(p).update_occurrence==10 && copies==1,
@@ -99,9 +108,14 @@ int main() {
     // frames keep publishing their clean front without any GL.
     gp::begin_update(p,12);reset_counts();dirty_next_end=true;
     require(!gp::replace_vi(p,image,0x3000,false,raster) && !draws && opened==ended,"dirty ghost scope is refused and closed");
+    require(refusal()==GDF_PRESENT_COPY,"a dirty clean copy names the copy");
     require(gp::before_swap(p,0x3000,raster),"plain frame after a dirty ghost scope");swapped(p);
     gp::begin_update(p,13);reset_counts();
     require(!gp::replace_vi(p,image,0x3000,false,raster) && !calls && !opened,"stepped-aside ghost asks nothing");
+    require(refusal()==GDF_PRESENT_FAULTED,"a presentation that stepped aside names itself");
+    gp::GhostViImage foreign=image;foreign.context_generation=8;
+    require(!gp::replace_vi(p,foreign,0x3000,false,raster) && refusal()==GDF_PRESENT_FAULTED,
+            "stepping aside is said before any image check");
     require(gp::before_swap(p,0x3000,raster) && !gp::begin_osd(p),"plain frame still qualifies");swapped(p);
     require(gp::surface(p).presentation_serial && gp::surface(p).update_occurrence==13 && !gp::surface(p).framebuffer &&
             !calls,"clean front still publishes without GL");

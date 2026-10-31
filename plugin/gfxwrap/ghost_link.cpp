@@ -3,6 +3,7 @@
 #include "ghost_link.h"
 #include "ghost_stream.h"
 #include "ghost_draw.h"
+#include "ghost_draw_facts.h"
 #include "ghost_ipc.h"
 #include "ghost_audio.h"
 #include "ghost_font_cache.h"
@@ -61,6 +62,17 @@ uint32_t micros(int64_t ticks) {
     const int64_t value = qpc_frequency > 0 ? ticks * 1000000 / qpc_frequency : 0;
     return value < 0 ? 0u : value > UINT32_MAX ? UINT32_MAX : uint32_t(value);
 }
+// The renderer settings the ghost path reads, and RDRAM's size, as each list
+// starts (ghost_draw_facts.h): plain reads of values the renderer holds.
+void renderer_settings() {
+    const uint32_t bits = (config.frameBufferEmulation.enable ? GDF_SETTING_FBE : 0u)
+        | (config.video.fxaa ? GDF_SETTING_FXAA : 0u)
+        | (config.frameBufferEmulation.enableOverscan ? GDF_SETTING_OVERSCAN : 0u)
+        | (config.generalEmulation.enableBlitScreenWorkaround ? GDF_SETTING_BLIT_WORKAROUND : 0u)
+        | (config.frameBufferEmulation.N64DepthCompare ? GDF_SETTING_N64_DEPTH_COMPARE : 0u)
+        | (config.generalEmulation.enableFragmentDepthWrite ? GDF_SETTING_FRAGMENT_DEPTH_WRITE : 0u);
+    ghost_facts::renderer(bits, uint32_t(config.video.multisampling), uint32_t(RDRAMSize));
+}
 replay_gl::RasterState tracked() {
     replay_gl::RasterState state{};
     replay_gl::Raster(&state);
@@ -108,7 +120,9 @@ bool begin_list() {
     hook_queries = 0; hook_ticks = 0; flush_ticks = 0;
     { LARGE_INTEGER now{}; QueryPerformanceCounter(&now); list_start = now.QuadPart; }
     HookTime timed;
+    renderer_settings();
     if (!context_current || !ghost_stream::requested()) {
+        ghost_facts::refuse(context_current ? GDF_LIST_NOT_REQUESTED : GDF_LIST_NO_CONTEXT);
         ghost_draw::begin(ghost_ipc::rom_generation(), 0, nullptr);
         ghost_stream::cancel(); observing = false; return false;
     }
@@ -122,6 +136,7 @@ bool begin_list() {
         const bool rebuilt = replay_gl::Reconstruct(&asked);
         hook_queries += asked;
         if (!rebuilt || !replay_gl::CandidateBindings(&identity, &ignored)) {
+            ghost_facts::refuse(GDF_LIST_BINDINGS);
             ghost_draw::cancel(); ghost_stream::cancel(); observing = false; return false;
         }
     }
@@ -129,7 +144,9 @@ bool begin_list() {
     LARGE_INTEGER now{}; QueryPerformanceCounter(&now);
     // Upstream RDRAMSize is the inclusive maximum byte index, not a byte count.
     const uint32_t bytes = RDRAMSize == 0x7fffff || RDRAMSize == 0x3fffff ? RDRAMSize + 1 : 0;
+    if (!bytes) ghost_facts::refuse(GDF_LIST_RDRAM_SIZE);
     observing = context_current && ghost_stream::begin(RDRAM,bytes,context_generation,now.QuadPart,gSP.segment);
+    if (!observing) ghost_facts::refuse(GDF_LIST_NOT_OBSERVED);
     ghost_draw::begin(ghost_ipc::rom_generation(), ghost_stream::api()->stats().configuration,
                       observing ? ghost_stream::sample() : nullptr);
     return observing;
@@ -138,6 +155,7 @@ bool drawing() { return observing && ghost_draw::drawing(); }
 void end_list(bool completed) {
     {
         HookTime timed;
+        ghost_facts::list_observing = observing;
         if (observing) ghost_stream::end(completed && context_current);
         ghost_draw::finish(completed && context_current ? ghost_stream::candidate() : nullptr);
         observing = false;
@@ -176,13 +194,13 @@ void geometry(uint32_t before, uint32_t after) {
         const auto *world = ghost_stream::candidate();
         if (sample && world) ghost_draw::seal(*sample, *world, ghost_stream::usamune_display_hidden(),
                                               ghost_stream::usamune_display_values());
-    } else if (!ghost_stream::candidate()) ghost_draw::cancel();
+    } else if (!ghost_stream::candidate()) ghost_draw::cancel(GDF_LIST_WORLD_LOST);
 }
 void color_target_changed() {
-    if (observing) { ghost_stream::color_target_changed(); ghost_draw::cancel(); }
+    if (observing) { ghost_stream::color_target_changed(); ghost_draw::cancel(GDF_LIST_TARGET_CHANGED); }
 }
 void clear_target() {
-    if (observing) { ghost_stream::color_target_changed(); ghost_draw::cancel(); }
+    if (observing) { ghost_stream::color_target_changed(); ghost_draw::cancel(GDF_LIST_TARGET_CHANGED); }
 }
 bool begin_hud() {
     return observing && ghost_stream::candidate() && ghost_draw::begin_hud();
