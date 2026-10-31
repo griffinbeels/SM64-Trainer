@@ -42,6 +42,7 @@ from sm64_events.core import renderer_settings
 from sm64_events.core.capturelayer import (
     REGISTRY_DLL_SUBKEY, REGISTRY_KEY, virtualstore_copy,
 )
+from sm64_events.core.identity_privacy import contains_identity
 from sm64_events.core.plugin_installation import WRAPPER_DLL, WRAPPER_INI
 from sm64_events.core.renderer_settings import RENDERER_INI
 
@@ -63,9 +64,10 @@ _FOLDER_NAME = re.compile(r"[A-Za-z0-9 ._()+',&#-]{1,48}")
 
 def folder_name(name) -> str:
     """A Project64 folder's own name ("01-stock-vanilla") as reports may show
-    it, or "unnamed" for a name that is long or uses other characters: the
-    user chose it, so it is bounded like any free text."""
-    return name if isinstance(name, str) and _FOLDER_NAME.fullmatch(name) and name.strip() else "unnamed"
+    it, or "unnamed" for a name that is long, uses other characters, or holds
+    this machine's account or computer name: the user chose it."""
+    plain = isinstance(name, str) and _FOLDER_NAME.fullmatch(name) and name.strip()
+    return name if plain and not contains_identity(name) else "unnamed"
 
 
 def load_baseline(path: Path = BASELINE_PATH) -> dict:

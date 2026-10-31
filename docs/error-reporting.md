@@ -166,6 +166,42 @@ history is also bounded to the current reporting period. Normal performance reco
 aggregate machine load and Trainer/emulator resources; unrelated program names
 are not retained in logs or `/health`.
 
+### No account or computer name leaves the machine
+
+Griffin (2026-10-30): "we should also intentionally purge any identifying file
+paths (like a user's username) from the filepath / files / any debug logs /
+etc, just to make sure that the user's info stays private". The allowlists
+above remove paths and free text. `core/identity_privacy.py` is the final pass
+after them, so the guarantee does not rely on a value being shaped like a path.
+It replaces this machine's names with `[user]` and `[computer]`, ignoring case,
+wherever they appear as text:
+
+- **Which names:** the Windows account name (`USERNAME`, `getpass`), the home
+  folder's own name (`USERPROFILE`, `Path.home()`), the computer name
+  (`COMPUTERNAME`, the host name) and a non-generic `USERDOMAIN`.
+- **Which doors:** every Sentry event (`safe_event`, its exception text,
+  snapshot and breadcrumbs), every breadcrumb (`safe_breadcrumb`), every Sentry
+  Log (`safe_log`, and `safe_log_item` at transport admission), and the Debug
+  report bytes, whether exported or attached (`diagnostic_retention.bounded_report`).
+  Native plugin log records, window titles, exception and OS error strings,
+  GLideN64.ini paths and plugin file names in the setup check all pass through
+  one of those doors.
+- **The Project64 folder name:** the setup check shows it only when it is
+  short, plain and holds none of these names. Otherwise it reads `unnamed`.
+
+`tests/test_identity_privacy.py` plants `zzqUserTok` and `ZZQ-PC` in paths, a
+window title, the folder name, exception text, a plugin log line and log
+messages. It then reads an exported Debug report, a Sentry log batch and a
+real spooled silent-failure envelope with its attached report. Neither name
+appears in any of them; with the pass disabled, every one of those tests fails.
+
+Limits: a name shorter than three characters is replaced only as a whole path
+component, because replacing it everywhere would damage ordinary words. Only
+names this process can read are known: another account's folder, a display
+name or an email the user typed elsewhere is not. The allowlists, which drop
+free text and paths, keep those out. Sentry still sees the connection's IP
+address (below).
+
 Tracing, session replay, continuous profiling, SDK request integrations and
 automatic session tracking remain disabled. A Sentry Trace page can therefore
 show an error without a waterfall. The error's technical snapshot, timestamped
