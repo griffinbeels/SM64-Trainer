@@ -213,7 +213,7 @@ static void equal_state(const gc::Dispatch& g,const cgl::State& before,const Bin
     int32_t factor=0;g.GetIntegeri_v(cgl::BLEND_SRC_RGB,1,&factor);require(factor==GL_DST_COLOR,"independent MRT blending unchanged");
     float other_viewport[4]{};int32_t other_scissor[4]{};double other_depth[2]{};uint8_t scissor=0;
     g.GetFloati_v(GL_VIEWPORT,1,other_viewport);g.GetIntegeri_v(GL_SCISSOR_BOX,1,other_scissor);
-    g.GetDoublei_v(GL_DEPTH_RANGE,1,other_depth);g.GetBooleani_v(GL_SCISSOR_TEST,1,&scissor);
+    g.GetDoublei_v(GL_DEPTH_RANGE,1,other_depth);scissor=g.IsEnabledi(GL_SCISSOR_TEST,1);
     require(other_viewport[0]==11 && other_viewport[3]==14 && other_scissor[0]==15 && other_scissor[3]==18 &&
         std::abs(other_depth[0]-.2)<1e-6 && std::abs(other_depth[1]-.8)<1e-6 && scissor,"other viewport state unchanged");
     int32_t element=0;g.GetIntegerv(0x8895,&element);require(uint32_t(element)==bindings.buffers[1],"renderer VAO element buffer unchanged");

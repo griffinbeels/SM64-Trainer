@@ -25,6 +25,7 @@ bool load(ghost_compositor::Dispatch& out) {
     d.Enablei=reinterpret_cast<decltype(d.Enablei)>(g_glEnablei);
     d.Disablei=reinterpret_cast<decltype(d.Disablei)>(g_glDisablei);
     d.IsEnabled=reinterpret_cast<decltype(d.IsEnabled)>(::glIsEnabled);
+    d.IsEnabledi=reinterpret_cast<decltype(d.IsEnabledi)>(extension("glIsEnabledi"));
     d.Enable=reinterpret_cast<decltype(d.Enable)>(::glEnable);
     d.Disable=reinterpret_cast<decltype(d.Disable)>(::glDisable);
     d.GenFramebuffers=reinterpret_cast<decltype(d.GenFramebuffers)>(g_glGenFramebuffers);

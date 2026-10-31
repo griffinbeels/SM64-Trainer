@@ -8,6 +8,7 @@
 #include "link_dispatch.h"
 #include "N64.h"
 #include "practice_rom_fixture.h"
+#include "ghost_draw_facts.h"
 #include <cstdio>
 #include <cstdlib>
 
@@ -45,6 +46,7 @@ bool context_current = true, observing = false;
 uint32_t hook_queries = 0;
 int64_t hook_ticks = 0, flush_ticks = 0, list_start = 0;
 struct HookTime { explicit HookTime(int64_t & = hook_ticks) {} };
+void renderer_settings() {} // ghost_link's settings read: the renderer's Config is not shelled here
 }
 namespace ghost_link {
 #include "actual_begin_list.inc"
@@ -76,11 +78,24 @@ void break_witness() {
 int main() {
     practice_rom_fixture(cartridge, "SM64 USAMUNE v1.93u", 'E');
     arm();
+    unsigned clean_gate = 0, structural_gate = 0, rdram_gate = 0;
     {
         const unsigned begins = ghost_stream::begins;
+        ghost_facts::list_pending = 0;
         const bool observing = ghost_link::begin_list();
+        clean_gate = ghost_facts::list_pending;
         std::printf("clean observing=%d begins=+%u queries=%u attempts=%u\n", int(observing),
                     ghost_stream::begins - begins, hook_queries, evidence().reconstruct_attempts);
+    }
+    {
+        // Candidate F (2026-10-30): RDRAM sized other than 4 or 8 MiB reads
+        // nothing, and the list's first refusal says so.
+        RDRAMSize = 0x7fffef;
+        ghost_facts::list_pending = 0;
+        const bool observing = ghost_link::begin_list();
+        rdram_gate = ghost_facts::list_pending;
+        RDRAMSize = 0x7fffff;
+        CHECK(!observing && rdram_gate == GDF_LIST_RDRAM_SIZE);
     }
     arm();
     break_witness();
@@ -100,7 +115,9 @@ int main() {
     replay_gl::InstallDispatch(); // structural: the table installed twice
     {
         const unsigned begins = ghost_stream::begins, cancels = ghost_stream::cancels;
+        ghost_facts::list_pending = 0;
         const bool observing = ghost_link::begin_list();
+        structural_gate = ghost_facts::list_pending;
         fake::advance(2000);
         const bool later = ghost_link::begin_list();
         std::printf("ghost_structural observing=%d later=%d begins=+%u cancels=+%u queries=%u attempts=%u\n",
@@ -121,5 +138,6 @@ int main() {
         std::printf("shared_limit soon=%d later=%d attempts=%u successes=%u\n", int(soon), int(later),
                     e.reconstruct_attempts, e.reconstruct_successes);
     }
+    std::printf("facts clean=%u structural=%u rdram=%u\n", clean_gate, structural_gate, rdram_gate);
     return 0;
 }

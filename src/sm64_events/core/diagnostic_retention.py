@@ -9,6 +9,8 @@ from pathlib import Path
 import stat
 import time
 
+from sm64_events.core.identity_privacy import purge
+
 MAX_DEBUG_AGE = 86400
 REPORT_KEEP = 3
 REPORT_MAX_BYTES = 1024 * 1024
@@ -66,8 +68,9 @@ def prune_reports(directory: Path, *, now: float | None = None, keep: int = REPO
 
 
 def bounded_report(markdown: str, limit: int = REPORT_MAX_BYTES) -> bytes:
-    """One cut for exported files and error attachments; it names its own limit."""
-    raw = markdown.encode("utf-8")
+    """One cut for exported files and error attachments; it names its own limit.
+    Both leave the machine, so this machine's account and computer names go first."""
+    raw = purge(markdown).encode("utf-8")
     if len(raw) <= limit:
         return raw
     suffix = f"\n\n[Report truncated at the {limit // 1024} KiB size limit.]\n".encode()

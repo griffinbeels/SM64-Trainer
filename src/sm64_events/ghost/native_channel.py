@@ -40,6 +40,9 @@ class NativeChannel:
         # Whether this renderer can hide a race and keep it running
         # (GIPC_CAP_HIDDEN); read from every status before a command is encoded.
         self._hides = False
+        # The renderer's draw path facts from the last poll (ghost/draw_facts.py);
+        # None while this producer wrote none for its generation: unknown.
+        self.draw: P.Draw | None = None
         try:
             self._map = self._k.OpenFileMappingW(0xF001F, False, self.name)
             if not self._map:
@@ -131,6 +134,7 @@ class NativeChannel:
             if current.token != request.token:
                 raise RuntimeError("native ghost lease was replaced")
             self._hides = bool(status.capabilities & L.IPC_CAP_HIDDEN)
+            self.draw = P.checked_draw(C.string_at(self._view + P.DRAW_AT, C.sizeof(P.Draw)), status)
             if playback is not None:
                 try:
                     self._set_playback(playback)

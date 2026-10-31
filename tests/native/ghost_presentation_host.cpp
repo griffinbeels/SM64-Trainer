@@ -73,10 +73,10 @@ static gp::Dispatch dispatch() {
 // asked here of the raw driver, outside the presentation's count.
 static bool host_known(gp::Known* out) {
     using Active=void(GC_GL_CALL*)(uint32_t);using Bind=void(GC_GL_CALL*)(uint32_t,uint32_t);
-    using Indexed=void(GC_GL_CALL*)(uint32_t,uint32_t,uint8_t*);
+    using Indexed=uint8_t(GC_GL_CALL*)(uint32_t,uint32_t);
     static const auto active=reinterpret_cast<Active>(load("glActiveTexture"));
     static const auto bind=reinterpret_cast<Bind>(load("glBindFramebuffer"));
-    static const auto indexed=reinterpret_cast<Indexed>(load("glGetBooleani_v"));
+    static const auto indexed=reinterpret_cast<Indexed>(load("glIsEnabledi"));
     *out={};GLint value=0,unit=0;
     glGetIntegerv(gl::READ_FRAMEBUFFER_BINDING,&value);out->read=uint32_t(value);
     glGetIntegerv(gl::DRAW_FRAMEBUFFER_BINDING,&value);out->draw=uint32_t(value);
@@ -84,7 +84,7 @@ static bool host_known(gp::Known* out) {
     active(gl::TEXTURE0);glGetIntegerv(gl::TEXTURE_BINDING_2D,&value);out->unit0_texture=uint32_t(value);active(uint32_t(unit));
     bind(gl::READ_FRAMEBUFFER,0);glGetIntegerv(gl::READ_BUFFER,&value);out->default_read=uint32_t(value);
     bind(gl::READ_FRAMEBUFFER,out->read);
-    out->srgb_enabled=glIsEnabled(gl::FRAMEBUFFER_SRGB);indexed(gl::SCISSOR_TEST,0,&out->scissor_enabled);
+    out->srgb_enabled=glIsEnabled(gl::FRAMEBUFFER_SRGB);out->scissor_enabled=indexed(gl::SCISSOR_TEST,0);
     out->fields=gp::Known::read_framebuffer|gp::Known::draw_framebuffer|gp::Known::texture_unit|
         gp::Known::default_read_buffer|gp::Known::srgb|gp::Known::scissor_test;
     return true;

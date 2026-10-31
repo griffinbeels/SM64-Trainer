@@ -343,7 +343,7 @@ struct Pipeline {
                 g.GetIntegerv(cgl::DEPTH_FUNC,&depth);g.GetBooleanv(cgl::DEPTH_WRITEMASK,&mask);
                 for(unsigned i=0;i<4;++i)g.GetIntegeri_v(cgl::blend_queries[i],0,&blend[i]);
                 for(auto cap:cgl::volatile_caps)if(cap!=cgl::BLEND && cap!=cgl::SCISSOR_TEST)on=on || g.IsEnabled(cap)!=0;
-                uint8_t indexed[2]{};g.GetBooleani_v(cgl::BLEND,0,&indexed[0]);g.GetBooleani_v(cgl::SCISSOR_TEST,0,&indexed[1]);
+                const uint8_t indexed[2]{g.IsEnabledi(cgl::BLEND,0),g.IsEnabledi(cgl::SCISSOR_TEST,0)};
                 bool same=uint32_t(draw_fbo)==known.draw && uint32_t(read_fbo)==known.read && viewport[2]==float(W) &&
                     viewport[3]==float(H) && !on && !indexed[0] && !indexed[1] && uint32_t(program)==known.current_program &&
                     uint32_t(vao)==known.bound_vertex_array && uint32_t(depth)==known.depth_function && mask==known.depth_write;

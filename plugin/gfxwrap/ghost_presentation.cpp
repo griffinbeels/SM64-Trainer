@@ -83,7 +83,7 @@ struct BlitGuard {
         if(k.fields&Known::draw_framebuffer)draw_fbo=int32_t(k.draw);
         else g.GetIntegerv(gl::DRAW_FRAMEBUFFER_BINDING,&draw_fbo);
         if(k.fields&Known::scissor_test)scissor=k.scissor_enabled;
-        else g.GetBooleani_v(gl::SCISSOR_TEST,0,&scissor);
+        else scissor=g.IsEnabledi(gl::SCISSOR_TEST,0);
         if(k.fields&Known::srgb)srgb=k.srgb_enabled;else srgb=g.IsEnabled(gl::FRAMEBUFFER_SRGB);
     }
     ~BlitGuard() {
@@ -188,15 +188,20 @@ void begin_update(Instance* p,uint64_t occurrence) {
     reset(p);p->update=occurrence;
 }
 bool replace_vi(Instance* p,const GhostViImage& image,uint32_t origin,bool gamma,const Raster& raster) {
-    if(!p || !p->ready || p->saved || p->ghost_faulted || !raster_valid(raster) || !image.texture || !image.occurrence ||
-       !image.configuration || !p->update || image.context_generation!=p->context_generation ||
+    // Each refusal names itself for the picture's facts (ghost_draw_facts.h).
+    const uint32_t refused=!p || !p->ready || !p->update?GDF_PRESENT_NOT_READY:p->saved?GDF_PRESENT_REPEAT:
+       p->ghost_faulted?GDF_PRESENT_FAULTED:!raster_valid(raster)?GDF_PRESENT_DRAW:
+       !image.texture || !image.occurrence || !image.configuration || image.context_generation!=p->context_generation ||
        !image.width || !image.height || image.width!=p->source_width || image.height!=p->source_height ||
-       image.texture==p->textures[0] || image.texture==p->textures[1] || image.texture==p->textures[2])return false;
+       image.texture==p->textures[0] || image.texture==p->textures[1] || image.texture==p->textures[2]?GDF_PRESENT_IMAGE:0u;
+    if(refused){ghost_facts::present_refuse(refused);return false;}
     const auto k=known(raster);
-    if((k.fields&Known::srgb) ? k.srgb_enabled!=0 : p->dispatch.gl.IsEnabled(gl::FRAMEBUFFER_SRGB)!=0)return false;
+    if((k.fields&Known::srgb) ? k.srgb_enabled!=0 : p->dispatch.gl.IsEnabled(gl::FRAMEBUFFER_SRGB)!=0) {
+        ghost_facts::present_refuse(GDF_PRESENT_SRGB);return false;
+    }
     p->raster=raster;p->vi_origin=origin;
-    if(!save_back(p))return false;
-    if(!raster.begin_gpu()){p->saved=false;return false;}
+    if(!save_back(p)){ghost_facts::present_refuse(GDF_PRESENT_COPY);return false;}
+    if(!raster.begin_gpu()){p->saved=false;ghost_facts::present_refuse(GDF_PRESENT_DRAW);return false;}
     bool drawn=false;
     try {
         if(gamma)raster.draw(raster.user,{DrawKind::gamma,image.texture,p->fbos[1],image.width,image.height,image.framebuffer});
@@ -206,7 +211,7 @@ bool replace_vi(Instance* p,const GhostViImage& image,uint32_t origin,bool gamma
     }catch(...) {} // duplicate-only renderer diagnostics must still close our gateway
     const bool clean=raster.end_gpu();
     if(!clean)p->ghost_faulted=true;
-    if(!drawn || !clean){restore_back(p);p->saved=false;return false;}
+    if(!drawn || !clean){restore_back(p);p->saved=false;ghost_facts::present_refuse(GDF_PRESENT_DRAW);return false;}
     p->image=image;p->replaced=true;return true;
 }
 bool before_swap(Instance* p,uint32_t origin,const Raster& raster) {
@@ -416,59 +421,75 @@ void drawable_changing() {
     }
 }
 void context_ready() {
-    if(!clean_consumer()){context_stopping();return;}
+    // How each attempt ends is the presentation's fact (ghost_draw_facts.h).
+    if(!clean_consumer()){ghost_facts::ready(GDF_READY_NO_CLEAN_CONSUMER);context_stopping();return;}
     renderer::Identity now{};
     snapshot::RestoreBindings ignored{};
-    if(!replay_gl::CandidateBindings(&now,&ignored) || replay_gl::SourceFormat()==RB_SOURCE_UNKNOWN) {
-        context_stopping();return;
-    }
+    if(!replay_gl::CandidateBindings(&now,&ignored)){ghost_facts::ready(GDF_READY_NO_IDENTITY);context_stopping();return;}
+    if(replay_gl::SourceFormat()==RB_SOURCE_UNKNOWN){ghost_facts::ready(GDF_READY_SOURCE_FORMAT);context_stopping();return;}
     if(current && gamma_program && owns_context(now)) {
         drawable_changing();owner=now;source_width=source_height=0;
         // The pinned shader captures these uniforms in its constructor. A
         // settings-driven drawer restart must apply the new gamma too.
         if(gamma_force!=config.gammaCorrection.force || gamma_level!=config.gammaCorrection.level) {
-            if(!replay_gl::BeginCapture()){current->ready=false;return;}
+            if(!replay_gl::BeginCapture()){current->ready=false;ghost_facts::ready(GDF_READY_SCOPE);return;}
             gamma_program.reset(gfxContext.createGammaCorrectionShader());
             gamma_force=config.gammaCorrection.force;gamma_level=config.gammaCorrection.level;
             const bool clean=replay_gl::EndCapture();
-            if(!gamma_program || !clean){context_stopping();return;}
+            if(!gamma_program || !clean) {
+                ghost_facts::ready(!gamma_program?GDF_READY_GAMMA:GDF_READY_DIRTY);context_stopping();return;
+            }
         }
-        if(!prepare_extent(0,0))current->ready=false;
+        if(!prepare_extent(0,0)){current->ready=false;ghost_facts::ready(GDF_READY_EXTENT);}
+        else ghost_facts::ready(GDF_READY_READY);
         return;
     }
     context_stopping();owner=now;
     Dispatch dispatch{};
-    if(!ghost_dispatch::load(dispatch.gl))return;
+    if(!ghost_dispatch::load(dispatch.gl)){ghost_facts::ready(GDF_READY_DISPATCH);return;}
     dispatch.CopyTexSubImage2D=reinterpret_cast<decltype(dispatch.CopyTexSubImage2D)>(glCopyTexSubImage2D);
     dispatch.DrawBuffers=reinterpret_cast<decltype(dispatch.DrawBuffers)>(g_glDrawBuffers);
-    if(!replay_gl::BeginCapture())return;
+    if(!replay_gl::BeginCapture()){ghost_facts::ready(GDF_READY_SCOPE);return;}
     current=create(dispatch,owner.context_generation);
     if(current) {
         gamma_program.reset(gfxContext.createGammaCorrectionShader());
         gamma_force=config.gammaCorrection.force;gamma_level=config.gammaCorrection.level;
     }
     const bool clean=replay_gl::EndCapture();
-    if(!current || !gamma_program || !clean || !prepare_extent(0,0)){context_stopping();return;}
+    // In the original order: the extent is prepared only for a clean setup.
+    const uint32_t step=!current?GDF_READY_CREATE:!gamma_program?GDF_READY_GAMMA:!clean?GDF_READY_DIRTY:
+        !prepare_extent(0,0)?GDF_READY_EXTENT:GDF_READY_READY;
+    ghost_facts::ready(step);
+    if(step!=GDF_READY_READY){context_stopping();return;}
 }
 void begin_update(uint64_t occurrence) {
     if(current)begin_update(current,occurrence);
 }
 static void draw_vi_image(const FrameBuffer& source,const GraphicsDrawer::CopyRectParams& params,
                           uint32_t origin,bool split,const GraphicsDrawer::BlitOrCopyRectParams* screen) {
-    if(!clean_consumer() || !current || !provider || !validity || !identity_matches() || split ||
-       config.frameBufferEmulation.enableOverscan ||
-       config.video.multisampling || config.video.fxaa || config.generalEmulation.enableBlitScreenWorkaround ||
-       !source.m_pTexture || source.m_pTexture->frameBufferTexture!=CachedTexture::fbOneSample)return;
+    // This picture's first refusal, published however it returns (ghost_draw_facts.h).
+    ghost_facts::Present present;
+    const uint32_t refused=!clean_consumer()?GDF_PRESENT_NO_CLEAN_CONSUMER:!current?GDF_PRESENT_NO_PRESENTATION:
+       !provider || !validity?GDF_PRESENT_NO_PROVIDER:!identity_matches()?GDF_PRESENT_IDENTITY:split?GDF_PRESENT_SPLIT:
+       config.frameBufferEmulation.enableOverscan?GDF_PRESENT_OVERSCAN:
+       config.video.multisampling?GDF_PRESENT_MULTISAMPLING:config.video.fxaa?GDF_PRESENT_FXAA:
+       config.generalEmulation.enableBlitScreenWorkaround?GDF_PRESENT_BLIT_WORKAROUND:
+       !source.m_pTexture || source.m_pTexture->frameBufferTexture!=CachedTexture::fbOneSample?GDF_PRESENT_SOURCE:0u;
+    if(refused)return present.refuse(refused);
     // Upstream's postprocessor caches its result by width alone. A stale
     // height/scale must not map the ghost through a differently sized image.
     if(!params.tex[0] || params.tex[0]->realWidth!=source.m_pTexture->realWidth ||
-       params.tex[0]->realHeight!=source.m_pTexture->realHeight)return;
-    if(!screen && (params.srcWidth!=source.m_pTexture->realWidth || params.srcHeight!=source.m_pTexture->realHeight))return;
+       params.tex[0]->realHeight!=source.m_pTexture->realHeight)return present.refuse(GDF_PRESENT_SOURCE_EXTENT);
+    if(!screen && (params.srcWidth!=source.m_pTexture->realWidth || params.srcHeight!=source.m_pTexture->realHeight))
+        return present.refuse(GDF_PRESENT_SOURCE_EXTENT);
     ViSource input{uint32_t(source.m_FBO),uint32_t(source.m_pTexture->name),source.m_pTexture->realWidth,
         source.m_pTexture->realHeight,origin,owner.context_generation,owner.drawable_generation};
     GhostViImage image{};
-    if(!provider(input,&image) || !clean_consumer() || (screen && !image.framebuffer))return;
-    if((source_width!=input.width || source_height!=input.height) && !prepare_extent(input.width,input.height))return;
+    if(!provider(input,&image))return present.refuse(GDF_PRESENT_NO_IMAGE);
+    if(!clean_consumer())return present.refuse(GDF_PRESENT_NO_CLEAN_CONSUMER);
+    if(screen && !image.framebuffer)return present.refuse(GDF_PRESENT_NO_DISPLAY_BUFFER);
+    if((source_width!=input.width || source_height!=input.height) && !prepare_extent(input.width,input.height))
+        return present.refuse(GDF_PRESENT_EXTENT);
     ViRaster vi{&params,source.m_pTexture,screen};
     Raster raster{&vi,raster_draw,replay_gl::BeginCapture,replay_gl::EndCapture,known_state};
     const bool gamma=((*REG.VI_STATUS & 8) | config.gammaCorrection.force)!=0;
@@ -495,6 +516,8 @@ void after_osd() {
     else {revalidate_image();record_display(current);}
 }
 void swap_completed(bool success) {
+    // Once a swap: whether the presentation can carry a ghost at all.
+    ghost_facts::presentation(current && current->ready,current && current->ghost_faulted);
     const auto image=pending_image(current);
     swap_completed(current,current && success && clean_consumer() && identity_matches());
     const auto clean=surface(current);

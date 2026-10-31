@@ -168,3 +168,19 @@ def test_export_never_deletes_through_a_junction_ancestor(tmp_path):
         assert old.read_text() == "keep exactly" and len(list(report_dir.iterdir())) == 1
     finally:
         junction.rmdir()
+
+
+def test_the_debug_report_has_the_setup_check_section(tmp_path):
+    check = {"baseline": {"recorded": "2026-10-30"}, "rom": "AFD13A9D-8622568E-C:45", "rdb": "VirtualStore",
+             "flagged": ["memory_size"],
+             "items": [{"id": "memory_size", "importance": "required", "status": "differs",
+                        "yours": "4 MB (Project64's default)", "tested": "8 MB"},
+                       {"id": "controller_plugin", "importance": "noted", "status": "differs",
+                        "yours": "Jabo_DInput.dll", "tested": "raphnetraw"}]}
+    report = diagnostics.build_report(**_healthy_kwargs(tmp_path), setup_check=lambda: check)
+    section = report.split(f"## {diagnostics.SETUP_CHECK_TITLE}", 1)[1].split("\n## ", 1)[0]
+    assert "Differences that may matter: memory_size." in section
+    assert "| memory_size | required | differs | 4 MB (Project64's default) | 8 MB |" in section
+    assert "| controller_plugin | noted | differs | Jabo_DInput.dll |" in section
+    failing = diagnostics.build_report(**_healthy_kwargs(tmp_path), setup_check=lambda: 1 / 0)
+    assert f"## {diagnostics.SETUP_CHECK_TITLE}\n\nunavailable: ZeroDivisionError" in failing

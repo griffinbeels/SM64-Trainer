@@ -8,6 +8,7 @@ import time
 from dataclasses import replace
 from typing import Callable
 
+from sm64_events.ghost import draw_facts
 from sm64_events.ghost.clip import ClipError
 from sm64_events.ghost.native_channel import NativeChannel, RejectedControl
 from sm64_events.ghost.native_layout import GIPC_ROM_REASONS
@@ -19,6 +20,11 @@ from sm64_events.replay.ownedclose import CleanupPending, retain
 log = logging.getLogger("sm64.ghost.capture")
 
 WARN_EVERY_S = 60.0  # one warning per distinct reason per minute, with the count since
+#: The latest list's hook numbers the status carries as they are (hook_<name>),
+#: beside its query count and time: a list that drew a ghost reads its error
+#: reads and gateway stages, one that did not reads zeros and no ghosts.
+LATEST_HOOKS = ("list_micros", "open_micros", "batch_micros", "close_micros", "finalize_micros",
+                "error_reads", "ghosts")
 
 
 class RateLimitedWarning:
@@ -368,6 +374,8 @@ class NativeCapture:
                              clips_prepared=status.clips_prepared,
                              refused_batches=self._refused, refused_reason=self._refused_reason,
                              hook_gl_queries=status.hook_gl_queries, hook_micros=status.hook_micros,
+                             **{f"hook_{name}": getattr(status, f"hook_{name}") for name in LATEST_HOOKS},
+                             **draw_facts.fields(getattr(self._channel, "draw", None)),
                              hook_cost=self._hook_summary)
                 self._stop.wait(0.016)
             except BlockingIOError:

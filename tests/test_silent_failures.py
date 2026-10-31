@@ -303,6 +303,43 @@ def test_fresh_default_reports_use_real_sdk_snapshot_and_existing_optout_stays_p
         snapshot.close()
 
 
+def test_the_ghost_report_carries_the_setup_check_beside_the_draw_refusal(reporter):
+    """The tester's question: is a ghost that never showed a setup problem or
+    ours? The real SDK event must answer both halves side by side."""
+    refusal = "No ghost was drawn: the ghost drawer could not prepare Mario's model (resources)."
+    check = {"version": 1, "baseline": {"recorded": "2026-10-30", "source": "x"}, "rom": "AFD13A9D-8622568E-C:45",
+             "rdb": "VirtualStore", "flagged": ["memory_size"], "required_differs": 1, "unknown": 1,
+             "items": [{"id": "memory_size", "importance": "required", "status": "differs",
+                        "yours": "4 MB (Project64's default)", "tested": "8 MB", "fix": "Set it.", "link": "https://x"},
+                       {"id": "controller_plugin", "importance": "noted", "status": "differs",
+                        "yours": "Jabo_DInput.dll (sha256 0123456789ab)", "tested": "raphnetraw",
+                        "yours_sha256": "0123456789ab" * 5 + "cdef"}]}
+    h = Harness()
+    h.data["setup"]["pending"] = False
+    snapshot = DiagnosticSnapshot(
+        ghost=lambda: {"expected_display": True, "native": {"displayed": False, "draw_refusal": refusal}},
+        setup=lambda: {"state": "active", "pj64_dir": "C:\\Users\\PrivateName\\Project64", "check": check},
+        native=NS(snapshot=lambda _: {"available": False}, close=lambda: None))
+    unbind = reporting.set_diagnostic_source(snapshot.collect)
+    h.watch = SilentFailureMonitor(lambda: h.data, clock=lambda: h.now, wall_clock=lambda: h.now,
+        interval_s=1, grace_s=3)
+    try:
+        h.tick(count=5)
+        rows = [row for row in events(reporter, count=2) if row["message"] == MESSAGES["ghost"]]
+        assert len(rows) == 1
+        diagnostics = rows[0]["extra"]["diagnostics"]
+        assert diagnostics["ghost"]["native"]["draw_refusal"] == refusal
+        sent = diagnostics["setup"]["check"]
+        assert sent["flagged"] == ["memory_size"] and sent["rdb"] == "VirtualStore"
+        assert sent["items"][0] == {"id": "memory_size", "status": "differs", "importance": "required",
+                                    "yours": "4 MB (Project64's default)", "tested": "8 MB"}
+        assert sent["items"][1]["importance"] == "noted" and len(sent["items"][1]["yours_sha256"]) == 64
+        assert "PrivateName" not in json.dumps(rows)
+    finally:
+        unbind()
+        snapshot.close()
+
+
 @pytest.mark.parametrize("preference", [{"enabled": False}, {"enabled": True}, "corrupt"])
 def test_default_does_not_override_saved_optout_or_unreadable_choice(tmp_path, monkeypatch, preference):
     monkeypatch.setattr("sm64_events.core.error_reporting_transport.Delivery", lambda dsn: lambda payload: (False, 0))

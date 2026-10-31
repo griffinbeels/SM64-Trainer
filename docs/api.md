@@ -739,19 +739,54 @@ for its versioned completion record. Routes are mounted only when
 | `POST` | `/api/setup/capture-layer` | `{"consent": true}` | Installs with Project64 closed, marks onboarding started/incomplete, returns setup. Refusal or file-write failure: 409 with an actionable `detail`. |
 | `DELETE` | `/api/setup/capture-layer` | — | Restores the previous graphics selection with Project64 closed and clears completion. Returns setup; refusal or write failure: 409. |
 | `POST` | `/api/setup/complete` | `{"platform": "emu"\|"n64"}` | Rechecks applicable readiness, saves platform and completion, returns setup. Incomplete emulator setup: 409. N64 can finish with `limited: true`, without claiming console tracking. |
+| `GET` | `/api/setup/check` | — | Only the setup check (the `setup_check` field below), for the practice card's ghost notice. 404 when the app has no setup check. |
 
 Runtime fields in `emu`:
+
+- `setup_check`: the [setup check](glossary.md#setup-check) against the
+  [tested setup](glossary.md#tested-setup), or null without one:
+  `{version, baseline: {recorded, source}, folder, rom, rdb, items, flagged,
+  required_differs, unknown}`. `folder` names the Project64 copy it read:
+  `{name, location: "Program Files"|"VirtualStore"|"other"|"unknown", running}`,
+  where `name` is the folder's own name only ("unnamed" when it is long or uses
+  other characters) and the copy is the running Project64's, else the last one
+  seen. `rom` is the loaded Usamune ROM's
+  `Project64.rdb` section name (`AFD13A9D-8622568E-C:45`) or null; `rdb` says
+  which copy was read (`"Project64 folder"`, `"VirtualStore"`, `"missing"`).
+  `items` come in display order (noted last, then differences, can't-tell,
+  same; required before recommended), each `{id, label, importance:
+  "required"|"recommended"|"noted", status: "differs"|"unknown"|"match", yours,
+  tested, link, download?, shared, fix, yours_sha256?}`; `fix` is the sentence
+  to show, null for a match; `link` is the Wermi guide page for that step and
+  `download` the download that page itself links, opened in the browser;
+  `shared` is true when the value comes from the per-user registry, so every
+  Project64 copy on this Windows account has it. `flagged` lists the ids of required or recommended differences: the
+  ghost notice shows only when it is non-empty. `rom` in `emu` also carries
+  `rdb_key`.
 
 - `installation_verified`: installed wrapper and renderer match this build by
   embedded build id, the wrapper is
   selected in Project64, and its physical INI names the renderer. Any existing
-  per-user VirtualStore copy must agree (`configuration_consistent: true`).
+  per-user VirtualStore copy must agree (`configuration_consistent: true`), and
+  the renderer must load frame buffer emulation off (`frame_buffer_emulation_off: true`).
   This does not require a local consent timestamp and does not imply live readiness.
   A verified installation in supported Project64 suppresses automatic onboarding.
 - `configuration_consistent`: the physical wrapper INI and any existing per-user
   VirtualStore copy name the same renderer. A mismatch offers re-installation;
   install and permitted automatic refresh repair the existing copy with Project64
   closed. An absent per-user copy is never created.
+- `frame_buffer_emulation_off`: every `GLideN64.ini` Project64 may read in the
+  Plugin folder (the physical file and any existing VirtualStore copy) loads
+  `frameBufferEmulation\enable=0` in its active profile. With it on, ghosts do
+  not draw and the game lags. Install and permitted automatic refresh write it
+  with Project64 closed: a missing physical file becomes the minimal `[General]`
+  plus `[User]` file (version 26, this one key; everything else stays GLideN64's
+  defaults), and an existing file changes only that key. Reading status never
+  writes. A setting turned back on reads like an older DLL: automatic refresh
+  fixes it, otherwise `problems` says to choose Install, which can ask Windows
+  for administrator permission. Removal puts back each value it changed.
+  [`core/renderer_settings.py`](../src/sm64_events/core/renderer_settings.py)
+  owns the file format.
 - `target`: Project64 executable path, PID, file version, state and recovery message.
   `build` identifies an exact known unversioned build by SHA-256; `version` stays
   null when Windows version metadata is absent. Names alone never qualify a build.

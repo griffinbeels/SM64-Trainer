@@ -26,6 +26,7 @@ questions.
 | Build, capture stage, native codes, first/latest GPU failure | Yes | Yes |
 | Ghost enabled/target-present, native playback/display state, counts | Yes | Yes |
 | Cached setup checks, ROM region, polling/input health counters | Yes | Yes |
+| The [setup check](glossary.md#setup-check): each item's fixed id, importance and status, your plugin/file names and SHA-256, whether a value is shared by every Project64 on the account, the ROM's rdb section, which rdb copy was read, and the Project64 folder's own name (bounded; "unnamed" otherwise); never a path (location reads "Program Files" or "Outside Program Files") | Yes, under `setup.check`, beside the ghost's `draw_refusal` | Yes, its own "Setup compared with the tested setup" table |
 | Own memory/handle/thread counts | Yes | Yes |
 | Recognized native log events and numeric/enum fields | Latest 32 within a 24 KiB snapshot; absent log files only counted | Bounded recognized records from known log tails |
 | The Debug report itself | Attached to the first error of each issue, at most 5 per session | Exported on request |
@@ -147,9 +148,12 @@ supply breadcrumbs, Sentry Logs and the report's server-log lines. One rule
 (`operational_log`) drops successful request lines (1xx-3xx) from all three and
 keeps failing ones (4xx/5xx), so the page's polling cannot fill the 400-line tail.
 `sm64.ghost.state` is the ghost's decision log: one line whenever the target,
-strategy, switch, source reason, lineup, PB, playing count or renderer
-state/reason changes, plus each PB's pose outcome, written with ids, counts and
-reason codes only. The report's Ghost timeline reads its last 120 lines from the
+strategy, switch, source reason, lineup, PB, playing count, renderer
+state/reason or the renderer's draw gates change, plus each PB's pose outcome,
+written with ids, counts and reason codes only. The snapshot's ghost native
+row carries the renderer's draw facts as fixed code names, booleans, sizes and
+counts, `unknown` for anything the renderer did not report, and one sentence
+built from those codes ([what the draw facts say](ghost-native-runtime.md#what-the-draw-facts-say)). The report's Ghost timeline reads its last 120 lines from the
 whole log and its rotated copy, because the 400-line tail spans minutes of play
 and a tester's report can come hours after the ghost failed to show. The rest of
 `sm64.ghost` stays excluded. Gameplay event wires, unrelated
@@ -161,6 +165,42 @@ re-enable is never sent. Automatic native/GPU
 history is also bounded to the current reporting period. Normal performance records keep
 aggregate machine load and Trainer/emulator resources; unrelated program names
 are not retained in logs or `/health`.
+
+### No account or computer name leaves the machine
+
+Griffin (2026-10-30): "we should also intentionally purge any identifying file
+paths (like a user's username) from the filepath / files / any debug logs /
+etc, just to make sure that the user's info stays private". The allowlists
+above remove paths and free text. `core/identity_privacy.py` is the final pass
+after them, so the guarantee does not rely on a value being shaped like a path.
+It replaces this machine's names with `[user]` and `[computer]`, ignoring case,
+wherever they appear as text:
+
+- **Which names:** the Windows account name (`USERNAME`, `getpass`), the home
+  folder's own name (`USERPROFILE`, `Path.home()`), the computer name
+  (`COMPUTERNAME`, the host name) and a non-generic `USERDOMAIN`.
+- **Which doors:** every Sentry event (`safe_event`, its exception text,
+  snapshot and breadcrumbs), every breadcrumb (`safe_breadcrumb`), every Sentry
+  Log (`safe_log`, and `safe_log_item` at transport admission), and the Debug
+  report bytes, whether exported or attached (`diagnostic_retention.bounded_report`).
+  Native plugin log records, window titles, exception and OS error strings,
+  GLideN64.ini paths and plugin file names in the setup check all pass through
+  one of those doors.
+- **The Project64 folder name:** the setup check shows it only when it is
+  short, plain and holds none of these names. Otherwise it reads `unnamed`.
+
+`tests/test_identity_privacy.py` plants `zzqUserTok` and `ZZQ-PC` in paths, a
+window title, the folder name, exception text, a plugin log line and log
+messages. It then reads an exported Debug report, a Sentry log batch and a
+real spooled silent-failure envelope with its attached report. Neither name
+appears in any of them; with the pass disabled, every one of those tests fails.
+
+Limits: a name shorter than three characters is replaced only as a whole path
+component, because replacing it everywhere would damage ordinary words. Only
+names this process can read are known: another account's folder, a display
+name or an email the user typed elsewhere is not. The allowlists, which drop
+free text and paths, keep those out. Sentry still sees the connection's IP
+address (below).
 
 Tracing, session replay, continuous profiling, SDK request integrations and
 automatic session tracking remain disabled. A Sentry Trace page can therefore

@@ -16,12 +16,13 @@ BIRTH = int((datetime(2026, 10, 21, 18, tzinfo=timezone.utc).timestamp() + 11644
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_setup_configuration_consistency_is_boolean_only():
-    result = safe_snapshot({"setup": {"configuration_consistent": False}})
-    assert result["setup"]["configuration_consistent"] is False
+@pytest.mark.parametrize("key", ["configuration_consistent", "frame_buffer_emulation_off"])
+def test_setup_configuration_consistency_is_boolean_only(key):
+    result = safe_snapshot({"setup": {key: False}})
+    assert result["setup"][key] is False
     assert safe_snapshot(result) == result
-    result = safe_snapshot({"setup": {"configuration_consistent": "PrivateName"}})
-    assert "configuration_consistent" not in result["setup"]
+    result = safe_snapshot({"setup": {key: "PrivateName"}})
+    assert key not in result["setup"]
 
 
 def test_video_and_pose_lifetimes_are_visible_as_booleans_without_raw_fallback_text():

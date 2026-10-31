@@ -28,6 +28,23 @@ _ENTRY_POINTS = frozenset({
     "glAcquireKeyedMutexWin32EXT", "glReleaseKeyedMutexWin32EXT", "glGetUnsignedBytevEXT", "glCopyTextureSubImage2D",
     "glBindFramebuffer",
 })
+# The latest render list's own numbers (ghost/capture.py LATEST_HOOKS): microseconds and counts.
+GHOST_HOOK_FIELDS = ("hook_list_micros", "hook_open_micros", "hook_batch_micros", "hook_close_micros",
+                     "hook_finalize_micros", "hook_error_reads", "hook_ghosts")
+# The renderer's draw path facts (ghost/draw_facts.py FIELDS): step and result
+# names from fixed code tables, booleans, sizes, counts, "unknown" for anything
+# the renderer did not report, and one sentence built from those tables.
+GHOST_DRAW_FIELDS = (
+    "draw_refusal", "draw_list_gate", "draw_present_gate", "draw_lists", "draw_presents",
+    "draw_observing", "draw_faulted", "draw_compositor", "draw_model", "draw_planned",
+    "draw_create_step", "draw_prepare_result", "draw_batch_result", "draw_finalize_result",
+    "draw_last_fault", "draw_fault_site", "draw_fault_gl_error",
+    "draw_observed_width", "draw_observed_height", "draw_prepared_width", "draw_prepared_height",
+    "draw_presentation_ready", "draw_presentation_faulted", "draw_ready_step",
+    "draw_fbe", "draw_fxaa", "draw_overscan", "draw_blit_workaround", "draw_n64_depth_compare",
+    "draw_fragment_depth_write", "draw_multisampling", "draw_rdram_size", "draw_rdram_supported",
+    "draw_evaluations", "draw_playback_refusals",
+)
 
 
 def mapping(value):
@@ -134,6 +151,57 @@ def _native(value):
     return result
 
 
+SETUP_CHECK_IDS = ("graphics_plugin", "frame_buffer_emulation", "memory_size", "counter_factor", "cpu_core",
+                   "emulator_build", "rsp_plugin", "audio_plugin", "install_location", "controller_plugin")
+
+
+def _setup_folder(value):
+    """Which Project64 copy: its own name only when short and plain (a user
+    chose it), never its path."""
+    from sm64_events.core.setup_profile import folder_name
+    value = mapping(value)
+    name = value.get("name")
+    location = value.get("location")
+    return {"name": folder_name(name),
+            "location": location if location in ("Program Files", "VirtualStore", "other", "unknown") else "unknown",
+            "running": value.get("running") is True}
+
+
+def _setup_check(value):
+    """The setup check (core/setup_profile.py): fixed ids, statuses and
+    importances, the user's value as bounded scrubbed text, a 64-hex hash."""
+    value = mapping(value)
+    if not value:
+        return {}
+    result = pick(value, ("version", "unknown", "required_differs", "error_type"))
+    for key, allowed in (("rom", r"[0-9A-F]{8}-[0-9A-F]{8}-C:[0-9A-F]{2}"),
+                         ("rdb", r"Project64 folder|VirtualStore|missing")):
+        if isinstance(value.get(key), str) and re.fullmatch(allowed, value[key]):
+            result[key] = value[key]
+    recorded = mapping(value.get("baseline")).get("recorded")
+    if isinstance(recorded, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", recorded):
+        result["baseline_recorded"] = recorded
+    result["folder"] = _setup_folder(value.get("folder"))
+    flagged = value.get("flagged")
+    result["flagged"] = [item for item in flagged if item in SETUP_CHECK_IDS] if isinstance(flagged, list) else []
+    items = []
+    for row in value.get("items", []) if isinstance(value.get("items"), list) else []:
+        row = mapping(row)
+        if (row.get("id") not in SETUP_CHECK_IDS or row.get("status") not in ("match", "differs", "unknown")
+                or row.get("importance") not in ("required", "recommended", "noted")):
+            continue
+        clean = {key: row[key] for key in ("id", "status", "importance")}
+        if type(row.get("shared")) is bool:
+            clean["shared"] = row["shared"]
+        clean.update(pick(row, ("yours", "tested")))
+        sha = row.get("yours_sha256")
+        if isinstance(sha, str) and re.fullmatch(r"[0-9a-f]{64}", sha):
+            clean["yours_sha256"] = sha
+        items.append(clean)
+    result["items"] = items
+    return result
+
+
 def safe_snapshot(value) -> dict:
     """Structural projection, including unknown/busy sources and observation age."""
     if not isinstance(value, Mapping):
@@ -163,12 +231,15 @@ def safe_snapshot(value) -> dict:
                            if type(ghost.get(key)) is bool})
     result["ghost"]["native"] = pick(ghost.get("native") if isinstance(ghost, Mapping) else None, (
         "available", "error_type", "reason", "state", "dropped", "playback_state", "playback_reason", "displayed",
-        "prepared_generation", "active_generation", "clips_prepared", "refused_batches", "hook_micros", "hook_gl_queries", "observed_unix_s"))
+        "prepared_generation", "active_generation", "clips_prepared", "refused_batches", "hook_micros", "hook_gl_queries",
+        *GHOST_HOOK_FIELDS, *GHOST_DRAW_FIELDS, "observed_unix_s"))
     setup = mapping(value.get("setup"))
     result["setup"] = pick(setup, ("state", "pj64_running", "wrapper_present", "wrapper_current", "wrapper_selected",
         "renderer_present", "renderer_current", "installation_verified", "layer_alive", "pictures_flowing", "observed_unix_s"))
-    if type(setup.get("configuration_consistent")) is bool:
-        result["setup"]["configuration_consistent"] = setup["configuration_consistent"]
+    for key in ("configuration_consistent", "frame_buffer_emulation_off"):
+        if type(setup.get(key)) is bool:
+            result["setup"][key] = setup[key]
+    result["setup"]["check"] = _setup_check(setup.get("check"))
     runtime = mapping(setup.get("runtime"))
     result["setup"]["runtime"] = {"checks": pick(runtime.get("checks"), ("plugin", "pictures", "inputs", "game")),
         "rom": pick(runtime.get("rom"), ("state", "region")), "target": pick(runtime.get("target"), ("state",)),

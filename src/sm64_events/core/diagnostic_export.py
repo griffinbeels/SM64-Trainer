@@ -39,7 +39,8 @@ _FIELDS = _TEXT_FIELDS | frozenset({"id", "seq", "frame", "last_frame", "session
     "pj64_dir", "pj64_running", "registry_graphics_dll", "wrapper_present", "wrapper_current", "wrapper_selected",
     "wrapped_name", "layer_alive", "consented_at", "problems", "pictures_via", "steps", "plugin_pid",
     "pictures_flowing", "plugin_dir", "renderer_present", "renderer_current", "previous_graphics_dll",
-    "automatic_update", "configuration_consistent", "installation_verified", "observed_unix_s", "refresh_error",
+    "automatic_update", "configuration_consistent", "frame_buffer_emulation_off", "installation_verified",
+    "observed_unix_s", "refresh_error",
     "done", "action", "label",
     # Health and perf samples (perfmon, poller.perf_stats, recorder.perf_gauges, InputSampler.health):
     "objects", "gpu", "rss_bytes", "private_bytes", "poll_hz", "tick_ms_ema", "tick_ms_max", "ticks",

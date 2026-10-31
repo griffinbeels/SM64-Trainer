@@ -186,6 +186,9 @@ class Poller:
         self.practice_rom: bool | None = None
         self.observed_game_version: str | None = None
         self._rom_name: str | None = None
+        #: The last cartridge identified (`onboarding.identify_rom`), for the
+        #: setup check's per-ROM settings in a report; never cleared by a miss.
+        self.rom_identity: dict | None = None
         self._rom_identified_at = float("-inf")
         self.on_gap = on_gap
         self._tick_lock = asyncio.Lock()
@@ -515,6 +518,7 @@ class Poller:
                      "practice tooling on" if practice else
                      "not a practice ROM; tracking and replay stay off")
         self.practice_rom, self._rom_name = practice, identity["name"]
+        self.rom_identity = identity
         self.observed_game_version = identity["region"] if practice else None
         if practice:
             self._follow_cartridge(identity["region"])

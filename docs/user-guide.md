@@ -58,6 +58,15 @@ configuring the game/controller. Pages advance after a visible acknowledgment;
 Back lets you review earlier steps. **Not now** postpones unfinished setup
 for the current app session. Open it again from **Settings → Setup**.
 
+**Check my setup.** Settings → **Check my setup** compares your Project64 with
+the setup the trainer is tested on, item by item: the Project64 build, where it
+is installed, the graphics, audio, RSP and controller plugins, frame buffer
+emulation, and your Usamune ROM's memory size, Counter Factor and CPU core.
+Each difference says how to fix it and links the guide. A different controller
+plugin is fine; it is only noted. If ghosts stop showing and your setup differs,
+the practice card says so and opens this check for you. The setup wizard's
+last page lists any differences too, but never stops you from practicing.
+
 Already set up? The trainer compares the installed wrapper's SHA-256 hash with
 this build and checks its selected graphics configuration. A matching installation
 skips automatic onboarding, including in a fresh worktree. A stale or incomplete
@@ -72,9 +81,14 @@ v1.0`) that loads it and supplies replay pictures stamped with the game's
 frame counter and inputs. Project64's plugin list shows only `SM64 Trainer
 v1.0`; an older install's second entry goes away when the trainer updates
 it. Your existing graphics plugin stays in the folder
-untouched. Install while Project64 is closed; open Usamune once afterward to
+untouched. Install also turns off frame buffer emulation in the folder's
+`GLideN64.ini`, and makes that file if it is missing. With this setting on,
+ghosts do not show and the game lags. If the setting gets turned on again, the
+trainer turns it off by itself once Project64 is closed, or asks you to choose
+Install. Install while Project64 is closed; open Usamune once afterward to
 check it. **Manage Practice Replay → Remove Practice Replay** selects your
-previous graphics plugin again, also with Project64 closed.
+previous graphics plugin again and puts your old frame buffer emulation setting
+back, also with Project64 closed.
 Practice tooling runs only on the Usamune practice ROM. Load vanilla SM64,
 another hack or another game for a real run and the same plugin draws as
 plain GLideN64, while the trainer neither tracks nor records.

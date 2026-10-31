@@ -165,6 +165,7 @@ int32_t __cdecl playback_status(gp_status* out,uint32_t bytes) {
     out->revision=command.revision;out->owner_token=command.owner_token;
     out->clips_active=command.clip_count;
     out->decision=out->model_state==GP_MODEL_RENDER_OWNED?GP_READY:GP_DISABLED;
+    out->evaluations=41;out->refusals=5; // the page's draw facts carry both
     return GP_OK;
 }
 const gs_api capture_api={sizeof(gs_api),GS_VERSION,GS_CAP_POSE|GS_CAP_WORLD_PASS,0,
@@ -190,6 +191,7 @@ struct Page {
     ~Page(){if(value)UnmapViewOfFile(value);}
     void lock(){check(WaitForSingleObject(mutex.value,2000)==WAIT_OBJECT_0,"page mutex");}
     gipc_status status(){lock();auto copy=value->status;ReleaseMutex(mutex.value);return copy;}
+    gdf_facts draw(){lock();auto copy=value->draw;ReleaseMutex(mutex.value);return copy;}
     void send(gipc_request& request) {
         ++request.heartbeat;lock();value->request=request;ReleaseMutex(mutex.value);SetEvent(wake.value);
     }
@@ -241,6 +243,11 @@ void set_clip(gipc_clip& clip,uint8_t id,const wchar_t* file,const wchar_t* hex,
     X(hud_inputs_enabled) X(record_ghosts) X(path_enabled) X(path_buttons) X(path_source) X(path_clip) \
     X(path_ahead_ms) X(path_width) X(path_opacity) X(path_spacing_ms) \
     X(prepare_generation) X(activate_generation) X(activate_start) X(cancel_preparation)
+#define GDF_FACTS_FIELDS(X) X(version) X(generation) X(known) X(flags) X(list_gate) X(lists) \
+    X(present_gate) X(presents) X(ready_step) X(create_step) X(prepare_result) X(batch_result) \
+    X(finalize_result) X(fault_step) X(fault_site) X(fault_error) X(observed_width) X(observed_height) \
+    X(prepared_width) X(prepared_height) X(settings) X(multisampling) X(rdram_size) X(evaluations) \
+    X(playback_refusals) X(reserved)
 #define GIPC_CLIP_FIELDS(X) X(clip_id) X(clip_sha256) X(hue_degrees) X(reserved) X(clip_path) X(label)
 #define GIPC_STATUS_FIELDS(X) X(magic) X(version) X(bytes) X(producer_pid) X(producer_created_lo) \
     X(producer_created_hi) X(generation) X(rom_generation) X(rom_open) X(state) X(reason) \
@@ -254,14 +261,17 @@ void set_clip(gipc_clip& clip,uint8_t id,const wchar_t* file,const wchar_t* hex,
     X(hook_ghosts) X(prepared_generation) X(active_generation)
 void field(const char* name,size_t offset) {std::printf("\"%s\":%u,",name,unsigned(offset));}
 void print_layout() {
-    std::printf("\"layout\":{\"page\":%u,\"ring\":%u,\"request\":{",unsigned(sizeof(gipc_page)),
-        unsigned(offsetof(gipc_page,records)));
+    std::printf("\"layout\":{\"page\":%u,\"ring\":%u,\"draw_at\":%u,\"request\":{",unsigned(sizeof(gipc_page)),
+        unsigned(offsetof(gipc_page,records)),unsigned(offsetof(gipc_page,draw)));
 #define REQUEST(name) field(#name,offsetof(gipc_request,name));
 #define CLIP(name) field(#name,offsetof(gipc_clip,name));
 #define STATUS(name) field(#name,offsetof(gipc_status,name));
+#define DRAW(name) field(#name,offsetof(gdf_facts,name));
     GIPC_REQUEST_FIELDS(REQUEST) std::printf("\"$bytes\":%u},\"clip\":{",unsigned(sizeof(gipc_request)));
     GIPC_CLIP_FIELDS(CLIP) std::printf("\"$bytes\":%u},\"status\":{",unsigned(sizeof(gipc_clip)));
-    GIPC_STATUS_FIELDS(STATUS) std::printf("\"$bytes\":%u}},",unsigned(sizeof(gipc_status)));
+    GIPC_STATUS_FIELDS(STATUS) std::printf("\"$bytes\":%u},\"draw\":{",unsigned(sizeof(gipc_status)));
+    GDF_FACTS_FIELDS(DRAW) std::printf("\"$bytes\":%u}},",unsigned(sizeof(gdf_facts)));
+#undef DRAW
 #undef REQUEST
 #undef CLIP
 #undef STATUS
@@ -386,6 +396,25 @@ extern "C" int __cdecl ghost_ipc_witness(int argc,wchar_t** argv) {
         {const auto hooked=page.status();check(hooked.hook_gl_queries==2 && hooked.hook_micros==345 && hooked.hook_list==7
             && hooked.hook_validate_micros==11 && hooked.hook_error_reads==3 && hooked.hook_ghosts==1,
             "render hook cost reaches the status page, field for field");}
+        {
+            // What the render thread recorded reaches the page for this
+            // generation, beside playback's counters; no picture was offered.
+            const uint32_t lists=ghost_facts::list_count;
+            ghost_facts::renderer(GDF_SETTING_FBE|GDF_SETTING_FXAA,4,0x7fffff);
+            ghost_facts::refuse(GDF_LIST_NO_COMPOSITOR);ghost_facts::refuse(GDF_LIST_NO_PLAN);
+            ghost_facts::end_list(false,GDF_MODEL);
+            page.send(r);
+            gdf_facts facts{};const DWORD start=GetTickCount();
+            do {facts=page.draw();if(facts.lists==lists+1)break;Sleep(5);}while(GetTickCount()-start<2500);
+            const auto now=page.status();
+            check(now.capabilities&GIPC_CAP_DRAW_FACTS,"the worker advertises its draw facts");
+            check(facts.version==GDF_VERSION && facts.generation==now.generation && facts.lists==lists+1
+                && facts.list_gate==GDF_LIST_NO_COMPOSITOR && facts.flags==GDF_MODEL
+                && facts.settings==(GDF_SETTING_FBE|GDF_SETTING_FXAA) && facts.multisampling==4
+                && facts.rdram_size==0x7fffff && facts.evaluations==41 && facts.playback_refusals==5
+                && facts.known==(GDF_KNOWN_LIST|GDF_KNOWN_SETTINGS|GDF_KNOWN_PLAYBACK) && !facts.present_gate,
+                "the draw path's first refusal and settings reach the page for this generation");
+        }
         check(audio_starts.load()==1 && !audio_stops.load(),"sound engine starts once from the verified ROM");
         page.consume_record();
         check(first.rom_generation==r.rom_generation && first.owner_token==r.token && first.opacity==0.75f
