@@ -23,7 +23,7 @@ namespace ghost_path { struct Frame; }
  X(void, GetIntegeri_v, (uint32_t,uint32_t,int32_t*)) X(void, GetBooleani_v, (uint32_t,uint32_t,uint8_t*)) \
  X(void, GetFloati_v, (uint32_t,uint32_t,float*)) X(void, GetDoublei_v, (uint32_t,uint32_t,double*)) \
  X(void, Enablei, (uint32_t,uint32_t)) X(void, Disablei, (uint32_t,uint32_t)) \
- X(uint8_t, IsEnabled, (uint32_t)) \
+ X(uint8_t, IsEnabled, (uint32_t)) X(uint8_t, IsEnabledi, (uint32_t,uint32_t)) \
  X(void, Enable, (uint32_t)) X(void, Disable, (uint32_t)) \
  X(void, GenFramebuffers, (int32_t, uint32_t*)) X(void, DeleteFramebuffers, (int32_t, const uint32_t*)) \
  X(void, BindFramebuffer, (uint32_t, uint32_t)) X(uint32_t, CheckFramebufferStatus, (uint32_t)) \

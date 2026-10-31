@@ -1516,6 +1516,17 @@ Every report said playback READY, three clips prepared, nothing displayed, and
 hooks near 40 us with no driver queries: the draw path had refused, and none of
 its early exits said why (2026-10-30). Each exit now names itself.
 
+The likeliest cause, fixed on 2026-10-31 without live AMD evidence yet: the
+ghost's state guards asked `BLEND` and `SCISSOR_TEST` with `glGetBooleani_v`.
+The spec's state tables query those indexed enables with `glIsEnabledi`, so a
+strict driver raises `GL_INVALID_ENUM` (1280). That is the error the tester's
+renderer recorded on the ghost's first closing scope, after which the ghost
+steps aside for the context. NVIDIA accepts the call, so no witness here could
+see it. The guards now use `IsEnabledi`, and
+[test_ghost_gl_indexed_queries.py](../tests/test_ghost_gl_indexed_queries.py)
+keeps `GetBooleani_v` to `COLOR_WRITEMASK`. If an AMD report still shows
+`faulted`, the draw facts name the step and error that remain.
+
 The render thread keeps two plain facts as it runs
 ([ghost_draw_facts.h](../plugin/gfxwrap/ghost_draw_facts.h)). The **list gate**
 is the first step that refused the most recent display list, or `drew` when

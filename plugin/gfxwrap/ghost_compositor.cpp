@@ -603,7 +603,7 @@ Result begin_layer(Instance* p,const Target& t,LayerPass pass,const Known* known
     // mask as prepare recorded them; one that does not has them asked.
     int32_t blend[6]={0,0,0,0,p->stable.blend[4],p->stable.blend[5]};uint8_t blending=0,depth_mask=1,depth_test=0;
     uint8_t mask[4]={p->stable.color_mask[0],p->stable.color_mask[1],p->stable.color_mask[2],p->stable.color_mask[3]};
-    if(!known_cap(known,Known::blend,&blending))g.GetBooleani_v(BLEND,0,&blending);
+    if(!known_cap(known,Known::blend,&blending))blending=g.IsEnabledi(BLEND,0);
     if(known && (known->fields&Known::depth))depth_mask=known->depth_write;
     else g.GetBooleanv(DEPTH_WRITEMASK,&depth_mask);
     if(known && (known->fields&Known::blend_factors))for(size_t i=0;i<4;++i)blend[i]=int32_t(known->blend_factor[i]);
@@ -618,7 +618,7 @@ Result begin_layer(Instance* p,const Target& t,LayerPass pass,const Known* known
     if(!p->layer.open) {
         // Scissor applies to blits and clears; the game's value is restored below.
         uint8_t scissor=0;int32_t read=0;
-        if(!known_cap(known,Known::scissor_test,&scissor))g.GetBooleani_v(SCISSOR_TEST,0,&scissor);
+        if(!known_cap(known,Known::scissor_test,&scissor))scissor=g.IsEnabledi(SCISSOR_TEST,0);
         if(known && (known->fields&Known::read_framebuffer))read=int32_t(known->read);
         else g.GetIntegerv(READ_FRAMEBUFFER_BINDING,&read);
         const auto& facts=verify(p,t);

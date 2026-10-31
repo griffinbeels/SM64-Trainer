@@ -96,8 +96,11 @@ struct State {
         int32_t profile=0; g.GetIntegerv(CONTEXT_PROFILE_MASK,&profile);
         if(profile&CONTEXT_CORE_PROFILE_BIT) polygon[1]=polygon[0];
         g.GetDoublei_v(DEPTH_RANGE,0,depth_range); g.GetBooleanv(DEPTH_WRITEMASK,&depth_mask);
-        g.GetBooleani_v(COLOR_WRITEMASK,0,color_mask); g.GetBooleani_v(BLEND,0,&blend_enabled);
-        g.GetBooleani_v(SCISSOR_TEST,0,&scissor_enabled);
+        // BLEND and SCISSOR_TEST are indexed enables: the spec asks them with
+        // IsEnabledi. GetBooleani_v of them is INVALID_ENUM on AMD (NVIDIA
+        // accepts it), and that error made the ghost step aside (2026-10-31).
+        g.GetBooleani_v(COLOR_WRITEMASK,0,color_mask); blend_enabled=g.IsEnabledi(BLEND,0);
+        scissor_enabled=g.IsEnabledi(SCISSOR_TEST,0);
         for (size_t i=0;i<std::size(enables);++i) enabled[i]=g.IsEnabled(enables[i]);
         for (size_t i=0;i<6;++i) g.GetIntegeri_v(blend_queries[i],0,&blend[i]);
         for (size_t j=0;j<2;++j) for (size_t i=0;i<7;++i) g.GetIntegerv(stencil_queries[j][i],&stencil[j][i]);
@@ -160,7 +163,7 @@ struct Guard {
  * dispatch, which counts and times it: under threaded optimization each one
  * waits for the driver's own thread, so the count is what a frame pays. */
 #define GC_GL_QUERIES(X) X(GetIntegerv) X(GetBooleanv) X(GetFloatv) X(GetDoublev) X(GetIntegeri_v) \
-    X(GetBooleani_v) X(GetFloati_v) X(GetDoublei_v) X(IsEnabled) X(IsTexture) X(CheckFramebufferStatus) \
+    X(GetBooleani_v) X(GetFloati_v) X(GetDoublei_v) X(IsEnabled) X(IsEnabledi) X(IsTexture) X(CheckFramebufferStatus) \
     X(GetFramebufferAttachmentParameteriv) X(GetTexLevelParameteriv) X(GetShaderiv) X(GetProgramiv) \
     X(GetUniformLocation)
 struct QueryMeter { uint32_t count=0; uint64_t nanos=0; };
@@ -255,8 +258,8 @@ struct Frame {
         g.GetIntegerv(DEPTH_FUNC,&depth_func);
         for(size_t i=0;i<3;++i)g.GetIntegerv(unpack_queries[i+1],&unpack[i]);
         g.GetDoublei_v(DEPTH_RANGE,0,depth_range);g.GetBooleanv(DEPTH_WRITEMASK,&depth_mask);
-        g.GetBooleani_v(COLOR_WRITEMASK,0,color_mask);g.GetBooleani_v(BLEND,0,&blend_enabled);
-        g.GetBooleani_v(SCISSOR_TEST,0,&scissor_enabled);g.GetBooleanv(TRANSFORM_FEEDBACK_ACTIVE,&feedback);
+        g.GetBooleani_v(COLOR_WRITEMASK,0,color_mask);blend_enabled=g.IsEnabledi(BLEND,0); // see State::capture
+        scissor_enabled=g.IsEnabledi(SCISSOR_TEST,0);g.GetBooleanv(TRANSFORM_FEEDBACK_ACTIVE,&feedback);
         for(size_t i=0;i<std::size(enables);++i)enabled[i]=g.IsEnabled(enables[i]);
     }
     void assume(const Frame& stable,const Known* known,const Dispatch& g) {
@@ -283,7 +286,7 @@ struct Frame {
             const auto cap=volatile_caps[i];
             uint8_t value=uint8_t(k.enabled>>i&1);
             if(!(k.caps>>i&1)) {
-                if(cap==BLEND || cap==SCISSOR_TEST)g.GetBooleani_v(cap,0,&value);
+                if(cap==BLEND || cap==SCISSOR_TEST)value=g.IsEnabledi(cap,0);
                 else value=g.IsEnabled(cap);
             }
             if(cap==BLEND)blend_enabled=value;

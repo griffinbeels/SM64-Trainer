@@ -83,7 +83,7 @@ struct BlitGuard {
         if(k.fields&Known::draw_framebuffer)draw_fbo=int32_t(k.draw);
         else g.GetIntegerv(gl::DRAW_FRAMEBUFFER_BINDING,&draw_fbo);
         if(k.fields&Known::scissor_test)scissor=k.scissor_enabled;
-        else g.GetBooleani_v(gl::SCISSOR_TEST,0,&scissor);
+        else scissor=g.IsEnabledi(gl::SCISSOR_TEST,0);
         if(k.fields&Known::srgb)srgb=k.srgb_enabled;else srgb=g.IsEnabled(gl::FRAMEBUFFER_SRGB);
     }
     ~BlitGuard() {
