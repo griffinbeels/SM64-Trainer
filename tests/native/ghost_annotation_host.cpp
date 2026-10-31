@@ -156,7 +156,7 @@ int main(int argc,char** argv) {
         {
             Payload far=p;far.inputs=false;far.position[1]=-GP_ANNOTATION_HEIGHT;float persp[16]{};persp[0]=persp[5]=persp[10]=2.4f;persp[11]=1;
             auto width=[&](float z) {
-                far.position[2]=z;build(far,persp,1,1,1,ghost_occlusion::Region{},640,480,mesh);
+                far.position[2]=z;build(far,persp,1,1,1,ghost_occlusion::Region{},2560,1920,mesh);
                 float lo=1e9f,hi=-1e9f;for(unsigned i=0;i<mesh.count;++i) {
                     const float x=mesh.vertices[i].clip[0]/mesh.vertices[i].clip[3];lo=std::fmin(lo,x);hi=std::fmax(hi,x);}
                 return mesh.count?hi-lo:0.0f;
@@ -168,6 +168,27 @@ int main(int argc,char** argv) {
             width(20);const float cap=2.0f*GP_ANNOTATION_MAX_SCREEN/240*8*0.75f;
             const float close=(mesh.vertices[1].clip[0]-mesh.vertices[0].clip[0])/mesh.vertices[0].clip[3];
             check(close<=cap*1.001f,"a ghost beside the camera never exceeds the largest name size");
+            // Apeduden's 640x480 window, 2026-10-31: a name under two pixels a
+            // font texel lost strokes ("griffman1212" read "GRIFF(AN,2.2").
+            // There every glyph is whole pixels a texel, on the pixel grid.
+            for(float z:{300.0f,800.0f,1600.0f,5000.0f})for(unsigned flip:{0u,1u}) {
+                far.position[0]=z*0.013f;far.position[2]=z;build(far,persp,flip,1,1,ghost_occlusion::Region{},640,480,mesh);
+                check(mesh.count>0,"a small name still draws");
+                for(unsigned i=0;i<mesh.count;i+=6) {
+                    const auto& a=mesh.vertices[i];const auto& b=mesh.vertices[i+1];const auto& c=mesh.vertices[i+2];
+                    const float x0=(a.clip[0]/a.clip[3]+1)*320,x1=(b.clip[0]/b.clip[3]+1)*320;
+                    const float y0=(a.clip[1]/a.clip[3]+1)*240,y1=(c.clip[1]/c.clip[3]+1)*240;
+                    const float texels=(b.uv[0]-a.uv[0])*atlas_width;
+                    if(texels!=8)continue; // a glyph cell, not the name box
+                    const float per=(x1-x0)/texels;
+                    check(per==1 || per==2,"a small name's font texel is one or two whole pixels");
+                    check(std::fabs(std::fabs(y1-y0)-16*per)<1e-3f,"its texels are square on screen");
+                    if(a.rgba[0]==0)continue; // the shadow sits one texel off, also on the grid
+                    check(std::fabs(x0-std::round(x0))<1e-3f && std::fabs(y0-std::round(y0))<1e-3f,
+                          "every glyph of a small name starts on a pixel corner");
+                }
+            }
+            far.position[0]=0;
         }
         region.enabled=1;region.overlap=0.15f;vp[15]=10;region.minimum=0.15f;
         build(p,vp,0,1,1,region,640,480,mesh);

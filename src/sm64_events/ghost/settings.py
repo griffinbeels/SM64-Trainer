@@ -52,8 +52,11 @@ HUE_LIMIT_DEGREES = 359
 NUDGE_LIMIT_FRAMES = 600
 #: HOW LOUD GHOST MARIO IS. His words, 2026-09-22: *"We should have a volume
 #: slider to adjust the ghost volume."* His accepted first-use volume is
-#: below the live game; a shipped preference.
-DEFAULT_VOLUME = 0.3
+#: below the live game; a shipped preference. Then, 2026-10-31, after testers
+#: asked to mute it: *"Users have asked for Ghost sounds to be disabled by
+#: default."* Off (0): the renderer opens no sound device at 0
+#: (plugin/gfxwrap/ghost_audio.cpp `audible`); the slider turns it back on.
+DEFAULT_VOLUME = 0.0
 INPUT_MODES = {"stick": INPUT_STICK, "values": INPUT_VALUES}
 DEFAULT_INPUT_MODE = "stick"
 #: THE BOX BEHIND THE GHOST'S NAME. His words, 2026-10-02: *"The nametag should
