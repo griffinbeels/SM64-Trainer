@@ -37,13 +37,13 @@ int main(int argc,char** argv) {
                       && std::fabs(dash.vertices[i].clip[1]-under.vertices[i].clip[1]-4*scale)<1e-6f,
                       "underscore keeps the original atlas coordinates and moves only the baseline");
         }
-        // Use the actual stack column calculation: two-digit controls leave
-        // 92 HUD pixels; three-digit extremes leave 83. Full 20-character
+        // Use the actual stack column: the stick box leaves 92 HUD pixels;
+        // numbers reserve three digits and leave 83. Full 20-character
         // names fit by pixels, or visibly end in an ellipsis when wider.
         for(unsigned digits:{2u,3u}) {
-            const float left=std::fmax(stack::buttons_x,stack::digits_start(digits)+stack::digits_width(digits)+3);
+            const float left=stack::buttons_left(digits==3);
             const float limit=stack::column_width-(left-usamune::letter_x)-2;
-            check(limit==(digits==2?92.0f:83.0f),"normal and three-digit corner budgets follow the live layout");
+            check(limit==(digits==2?92.0f:83.0f),"stick-box and numbers corner budgets follow the live layout");
             uint8_t chars[64]{};unsigned width=0;
             check(Layout::fitted("SullyLikesBigChungus",stack::scale,limit,chars,width)==20 && width==99,
                   "the longest measured Sheet credit fits both real corner widths");
@@ -255,8 +255,9 @@ int main(int argc,char** argv) {
             check(std::fabs(mesh.vertices[1].clip[0]-mesh.vertices[6].clip[0]-ndc(1)+ndc(0))<1e-5f,
                   "the ghost's letter tucks against its digits in Usamune's own proportion");
             // "the buttons + the name need to be more compact & shifted to the left":
-            // they pack at half pitch in a column just past a two-digit ghost number.
-            const float column=his_middle+(usamune::digit_advance+16)*0.25f+3;
+            // they pack at half pitch in a column just past a three-digit ghost
+            // number, so no value moves them (his report, 2026-10-31).
+            const float column=usamune::digit_x+(2*usamune::digit_advance+16)*0.75f+3;
             check(std::fabs(mesh.vertices[36].clip[0]-ndc(column))<1e-5f && column<usamune::button_x
                   && std::fabs(mesh.vertices[42].clip[0]-ndc(column+usamune::button_advance*0.5f))<1e-5f,
                   "the ghost's buttons pack at half pitch just past its numbers, left of the player's");
@@ -273,6 +274,32 @@ int main(int argc,char** argv) {
             q.values=false;q.pad={0,0,0,0};build(q,vp,0,1,1,ghost_annotation_region(),640,480,mesh);
             check(std::fabs((mesh.vertices[0].clip[0]+mesh.vertices[1].clip[0])*0.5f-ndc(usamune::base_x+16))<1e-5f,
                   "the ghost's stick box is centred on the player's");
+            // His report, 2026-10-31: "wookis" and his buttons jumped right while his
+            // stick moved. "All names and buttons should be in line with each other":
+            // every stick value and every row draws its first button and its name at one x.
+            for(bool values:{false,true}) {
+                q.values=values;float button_x=NAN,name_x=NAN;
+                for(uint8_t rank=0;rank<3;++rank)for(gc_pad pad:{gc_pad{0,0,0x8000,0},gc_pad{-128,127,0x8000,0},
+                                                                gc_pad{100,-5,0x8000,0},gc_pad{7,-99,0x8000,0}}) {
+                    q.hud_rank=rank;q.pad=pad;build(q,vp,0,1,1,ghost_annotation_region(),640,480,mesh);
+                    // The A button is the one quad cut from Usamune's button row; the name is
+                    // drawn last, so its final glyph is the mesh's last quad.
+                    float a=NAN,name=INFINITY;
+                    for(unsigned i=0;i+3<mesh.count;i+=4) {
+                        float u=INFINITY,v=INFINITY;
+                        for(unsigned k=0;k<4;++k) {u=std::fmin(u,mesh.vertices[i+k].uv[0]);v=std::fmin(v,mesh.vertices[i+k].uv[1]);}
+                        if(std::fabs(v*atlas_height-cell::button_y)<0.5f && u*atlas_width<0.5f) {
+                            a=INFINITY;for(unsigned k=0;k<4;++k)a=std::fmin(a,mesh.vertices[i+k].clip[0]);
+                        }
+                    }
+                    for(unsigned k=4;k>0;--k)name=std::fmin(name,mesh.vertices[mesh.count-k].clip[0]);
+                    if(std::isnan(button_x)) {button_x=a;name_x=name;}
+                    check(!std::isnan(a) && std::fabs(a-button_x)<1e-5f && std::fabs(name-name_x)<1e-5f,
+                          values?"with numbers, every row's buttons and name hold one column"
+                                :"with the stick box, every row's buttons and name hold one column");
+                }
+            }
+            q.values=false;q.pad={0,0,0,0};
             q.hud_count=9;q.hud_rank=7;build(q,vp,0,1,1,ghost_annotation_region(),640,480,mesh);
             check(mesh.count==0,"the corner shows at most seven ghosts");
             q.hud_rank=6;build(q,vp,0,1,1,ghost_annotation_region(),640,480,mesh);
