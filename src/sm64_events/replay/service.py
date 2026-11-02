@@ -1371,7 +1371,7 @@ class ReplayService:
                 try:
                     atomic_json(path.with_suffix(".json"), manifest)
                 except OSError as error:
-                    self._remember_native_preservation(identity, str(error))
+                    self._remember_native_preservation(identity, error.strerror or type(error).__name__)
                     raise
             self._remember_native_preservation(identity, reason)
             return {"path": str(path) if path else None,
@@ -1479,13 +1479,15 @@ class ReplayService:
                 "native_ghost": m["native_ghost"], "native_ghost_reason": ghost_reason}
 
     def _preserve_ghost(self, attempt, path, *, wait_tail: bool = True):
-        from sm64_events.ghost.clip import ClipError
+        from sm64_events.ghost.clip import NO_POSE_ARCHIVE, ClipError
         archive = getattr(self.recorder, "pose_archive", None)
         if archive is None:
-            return None, None, "This recording has no native Mario poses."
+            return None, None, NO_POSE_ARCHIVE
         try:
             manifest = archive.export_attempt(attempt, path, target=self._native_target(attempt), wait_tail=wait_tail)
-        except (ClipError, OSError, sqlite3.Error) as error:
+        except OSError as error:  # str(OSError) names the file, and this text reaches logs.
+            return None, None, error.strerror or type(error).__name__
+        except (ClipError, sqlite3.Error) as error:
             return None, None, str(error)
         from sm64_events.ghost.clip import pose_gaps
         if pose_gaps(manifest):
