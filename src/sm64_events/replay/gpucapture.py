@@ -147,8 +147,8 @@ class GpuCapture:
             lambda run: publish(run, (width, height)),
             audio_rate=cfg.audio_rate, audio_bitrate=160000,
             packet_limit=limits.packet_bytes, pcm_limit=limits.pcm_bytes,
-            max_bytes=limits.pending_bytes, max_blocks=limits.pcm_blocks,
-            max_age=limits.max_age, mid_run=True, name="replay-ghost-copy-sink",
+            max_bytes=limits.sink_bytes, max_blocks=limits.sink_blocks,
+            max_age=limits.sink_age_s, mid_run=True, name="replay-ghost-copy-sink",
         )
 
     def set_idle_check(self, check):

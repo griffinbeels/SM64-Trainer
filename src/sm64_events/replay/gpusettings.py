@@ -97,6 +97,25 @@ class GpuSettings:
     pending_bytes: int = 8 << 20
     pcm_bytes: int = 1 << 20
     pcm_blocks: int = 256
+    # THE MEDIA SINK'S OWN BUDGETS, used only by gpumediaworker.MediaWorker. A
+    # short disk or antivirus stall blocks only the sink's writer thread, so it
+    # may queue for this long ("What about a 10 second limit?", 2026-11-02;
+    # the shared 2 s ended runs on a lone 2.1 s write, SM64-TRAINER-F). The
+    # limits above keep their meanings: native request page, encoder and audio.
+    sink_age_s: float = 10.0
+    # The age limit must be what fires, so the two capacities are sized past it.
+    # Commands: measured 100 PCM blocks/s (52149 in 523 s, SM64-TRAINER-G) plus
+    # one video and one row per picture. At 30 pictures/s that is 160/s, which
+    # filled the old 256 in 1.6 s. Worst case, a distinct picture on every 60 Hz
+    # VI: 100 + 60 + 60 = 220/s, so 2200 in 10 s; 4096 leaves room for choppier
+    # audio callbacks.
+    sink_blocks: int = 4096
+    # Bytes: NVENC is capped at RING_MAXRATE 30 Mbit/s with one second of VBV
+    # buffer, so 3.75 MB/s x (10 + 1) s = 41.25 MB. PCM adds 100 x (1920 + 128)
+    # x 10 = 2.05 MB; rows add well under 3 MB. The Windows MF backend has no
+    # such cap, so 128 MiB leaves it about 90 Mbit/s for the same 10 s. This is
+    # a ceiling, not an allocation: an ordinary run peaks near 350 KB.
+    sink_bytes: int = 128 << 20
     lead_ticks: int = 9000
     heartbeat_s: float = 1.0
 

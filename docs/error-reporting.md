@@ -28,6 +28,7 @@ questions.
 | Cached setup checks, ROM region, polling/input health counters | Yes | Yes |
 | The [setup check](glossary.md#setup-check): each item's fixed id, importance and status, your plugin/file names and SHA-256, whether a value is shared by every Project64 on the account, the ROM's rdb section, which rdb copy was read, and the Project64 folder's own name (bounded; "unnamed" otherwise); never a path (location reads "Program Files" or "Outside Program Files") | Yes, under `setup.check`, beside the ghost's `draw_refusal` | Yes, its own "Setup compared with the tested setup" table |
 | Own memory/handle/thread counts | Yes | Yes |
+| A failed media sink: which command stalled and for how long, queue counts, and the recording volume's free bytes as a number; never a path | Yes | Yes |
 | Recognized native log events and numeric/enum fields | Latest 32 within a 24 KiB snapshot; absent log files only counted | Bounded recognized records from known log tails |
 | The Debug report itself | Attached to the first error of each issue, at most 5 per session | Exported on request |
 | Operational log lines (the report's server-log filter) | INFO as up to 100 breadcrumbs; WARNING and above as Sentry Logs | Last 400 lines, successful requests skipped |

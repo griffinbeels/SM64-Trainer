@@ -291,8 +291,8 @@ class CaptureSession:
             lambda run: self.owner.publish(run, (h.even_width, h.even_height)),
             audio_rate=cfg.audio_rate, audio_bitrate=160000,
             packet_limit=limits.packet_bytes, pcm_limit=limits.pcm_bytes,
-            max_bytes=limits.pending_bytes, max_blocks=limits.pcm_blocks,
-            max_age=limits.max_age, timings=self.timings,
+            max_bytes=limits.sink_bytes, max_blocks=limits.sink_blocks,
+            max_age=limits.sink_age_s, timings=self.timings,
         )
         deadline = time.monotonic() + limits.startup_s
         while not self.output.ready:
@@ -418,6 +418,7 @@ class CaptureSession:
             # Taken before cleanup; logged only if this is not a normal end.
             before_cleanup = failure_snapshot(
                 exc, frontier=self.frontier, adapter=self.adapter, output=self.output,
+                recording_volume=getattr(getattr(self.owner, "cfg", None), "scratch_dir", None),
             )
             retired = self.demand.reconcile_lifecycle()
             snapshot = self.demand.snapshot
@@ -461,7 +462,7 @@ class CaptureSession:
 
     def _retain_diagnostic(self):
         """After helper stderr drain, keep scalar evidence outside source lifetime."""
-        from sm64_events.replay.gpufielddiagnostics import native_failure_receipt
+        from sm64_events.replay.gpufielddiagnostics import native_failure_receipt, sink_evidence
 
         try:
             snapshot = self.demand.snapshot
@@ -483,6 +484,7 @@ class CaptureSession:
                 record.update(gpu_name=facts.name, gpu_vendor_id=facts.vendor_id, gpu_driver=facts.driver)
             if self._failure_snapshot is not None:
                 record["failure"] = self._failure_snapshot
+                record.update(sink_evidence(self._failure_snapshot))
                 encoder = self._failure_snapshot.get("encoder_failure") or {}
                 if encoder.get("result") is not None:
                     record["encoder_result"] = encoder["result"]

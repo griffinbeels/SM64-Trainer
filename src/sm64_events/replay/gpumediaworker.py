@@ -10,6 +10,7 @@ import copy
 from dataclasses import replace
 from math import gcd
 import io
+import logging
 import threading
 import time
 
@@ -18,6 +19,12 @@ from sm64_events.replay.gpupublication import (
 )
 from sm64_events.replay.media import MediaRun
 from sm64_events.replay.packetmux import PacketFragmentMux
+
+log = logging.getLogger("sm64.replay")
+
+# A single command this slow is worth one field line even when the sink
+# survives it. Two seconds is the shared limit that used to end the recording.
+NOTABLE_STALL_MS = 2000.0
 
 
 def _row_size(row):
@@ -83,7 +90,7 @@ class MediaWorker(io.RawIOBase):
     """
 
     def __init__(self, template, ledger, publish, *, audio_rate, audio_bitrate,
-                 packet_limit, pcm_limit, max_bytes, max_blocks=256, max_age=2.0,
+                 packet_limit, pcm_limit, max_bytes, max_blocks, max_age,
                  timings=None, mux_factory=PacketFragmentMux, clock=time.monotonic,
                  mid_run=False, name="replay-media-sink"):
         super().__init__()
@@ -102,6 +109,7 @@ class MediaWorker(io.RawIOBase):
         self._ready = threading.Event()
         self._queue = deque()
         self._inflight = None
+        self._inflight_started = 0.0
         self._bytes = self._blocks = 0
         self._error = self._finish_error = None
         self._finishing = self._complete = self._bound = False
@@ -245,6 +253,7 @@ class MediaWorker(io.RawIOBase):
                 if not self._queue:
                     return
                 self._inflight = self._queue.popleft()
+                self._inflight_started = self.clock()
                 _, kind, payload, size = self._inflight
             start, utc = time.monotonic(), time.time()
             try:
@@ -255,6 +264,9 @@ class MediaWorker(io.RawIOBase):
                     if elapsed > self._peak_ms:
                         self._peak_ms, self._peak_unix = elapsed, utc
                         self._peak_kind = kind
+            if elapsed >= NOTABLE_STALL_MS:
+                log.warning("media sink survived a %d ms stall in a %s command",
+                            elapsed, kind)
             with self._condition:
                 self._check()
                 self._bytes -= size
@@ -299,10 +311,16 @@ class MediaWorker(io.RawIOBase):
     def status(self):
         with self._condition:
             oldest = self._inflight or (self._queue[0] if self._queue else None)
+            # A stalled command has not reached the peak fields: they update
+            # when it returns, which at the moment of a failure it has not.
+            stalled = self._inflight
             return dict(kind="media", pending_bytes=self._bytes, pending_blocks=self._blocks,
                         error=self._error, max_feed_ms=round(self._peak_ms, 3),
                         max_feed_started_unix_s=self._peak_unix,
                         slowest_command=self._peak_kind,
+                        inflight_command=stalled[1] if stalled else None,
+                        inflight_ms=(round((self.clock() - self._inflight_started) * 1000, 3)
+                                     if stalled else 0),
                         peak_bytes=self._peak_bytes, peak_blocks=self._peak_blocks,
                         oldest_ms=round((self.clock() - oldest[0]) * 1000, 3) if oldest else 0,
                         video_packets=self._video_count, delivered=self._delivered)

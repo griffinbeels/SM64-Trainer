@@ -6,13 +6,15 @@ from types import SimpleNamespace as NS
 
 import pytest
 
+from sm64_events.replay import config, gpumediaworker
 from sm64_events.replay.gpumediaworker import MediaWorker
 from sm64_events.replay.gpupublication import (
     PublicationBusyError, PublicationError, PublicationWriteError,
 )
 from sm64_events.replay.ledger import PictureLedger
 from sm64_events.replay.media import MediaRun
-from sm64_events.replay.packetmux import NativeFormat
+from sm64_events.replay.gpusettings import GpuSettings
+from sm64_events.replay.packetmux import EncodedPicture, NativeFormat
 from test_gpumedia import FakeMux, complete, media, sample, stamp
 from test_gpu_codec_choice import encoder_asset as encoder_asset
 from test_packetmux import Output, RATE, fixture_packets, pcm, verify_audio, verify_video
@@ -39,7 +41,8 @@ class Mux(FakeMux):
 
 def worker(ledger=None, publish=None, **kwargs):
     options = dict(audio_rate=RATE, audio_bitrate=160000, packet_limit=1 << 20,
-                   pcm_limit=384000, max_bytes=4 << 20, max_age=5, mux_factory=Mux)
+                   pcm_limit=384000, max_bytes=4 << 20, max_blocks=256, max_age=5,
+                   mux_factory=Mux)
     options.update(kwargs)
     q = MediaWorker(NativeFormat("h264", 320, 240, 30), ledger or PictureLedger(),
                     publish or (lambda run: NS(feed=lambda b: None, finish=lambda e: None)),
@@ -247,6 +250,9 @@ def test_session_never_admits_native_frames_until_sink_preparation_completes(mon
         thread.join(3)
         assert not thread.is_alive() and not errors
         assert admitted.is_set() and calls == ["audio"]
+        sink = made[0]
+        assert (sink.max_bytes, sink.max_blocks, sink.max_age) == (
+            settings.sink_bytes, settings.sink_blocks, settings.sink_age_s)
     finally:
         release.set()
         thread.join(3)
@@ -295,3 +301,144 @@ def test_recorder_keeps_ledger_open_while_retained_sink_owns_sqlite(tmp_path):
         rec._teardown_capture()
         rec.stop(cleanup=False)
     assert detached and archive._db is None
+
+
+class Stalled:
+    """A sink on the shipped budgets whose first video write blocks until
+    released, on a clock the test moves: the disk stall of SM64-TRAINER-F/G."""
+
+    def __init__(self, settings=None, **options):
+        self.settings = settings or GpuSettings()
+        self.now = 0.0
+        self.delivered = []
+        self.entered, self.release = threading.Event(), threading.Event()
+        stalled = self
+
+        class StallMux(Mux):
+            def write_video(self, picture):
+                if not stalled.entered.is_set():
+                    stalled.entered.set()
+                    assert stalled.release.wait(8)
+                stalled.delivered.append(("video", picture.pts))
+
+            def write_pcm(self, data, first_us):
+                stalled.delivered.append(("pcm", first_us))
+
+        class Ledger:
+            def accept_row(self, row):
+                stalled.delivered.append(("row", row["frame"]))
+
+            def mark_fed(self, *args, **kwargs):
+                pass
+
+        self.q = worker(Ledger(), mux_factory=StallMux, clock=lambda: self.now,
+                        max_bytes=self.settings.sink_bytes,
+                        max_blocks=self.settings.sink_blocks,
+                        max_age=self.settings.sink_age_s, **options)
+        self.run = MediaRun("stall", 1000)
+        self.q.bind(self.run)
+        self.pts = 0
+
+    def row(self, frame):
+        self.q.add_row(dict(frame=frame, exact=True, vi_origin=frame, lists_since=1,
+                            igt_overall=frame, pad=[0, 0, 0], mario=[0, 0, 0.0],
+                            mario_pos=[0.0, 0.0, 0.0], source_id=f"stall:{frame}"))
+
+    def video(self, data=b"x"):
+        self.pts += 3000
+        self.q.publish_picture(EncodedPicture(self.pts // 3000, self.pts, 3000, False, data),
+                               1000.0, 1000.0, media_run=self.run, pts=self.pts,
+                               source_id=f"stall:{self.pts}", repeat=False)
+
+    def pcm(self, first_us, data=b"\0" * 1920):
+        self.q.write_pcm(data, first_us)
+
+    def stall(self):
+        self.video()
+        assert self.entered.wait(2)
+
+
+def test_a_short_writer_stall_ends_nothing_and_delivers_everything_in_order():
+    s = Stalled()
+    s.stall()
+    expected = [("video", 3000)]
+    for step in range(1, 151):  # 5 s at 30 pictures/s: row, video, three PCM blocks.
+        s.now = step / 30
+        s.row(step)
+        expected.append(("row", step))
+        s.video()
+        expected.append(("video", s.pts))
+        for block in range(3):
+            first_us = step * 1000 + block
+            s.pcm(first_us)
+            expected.append(("pcm", first_us))
+        s.q.check()
+    s.release.set()
+    wait(lambda: s.q.status()["pending_blocks"] == 0)
+    s.q.check()
+    s.q.close()
+    s.q.finish(timeout=3)
+    assert s.delivered == expected
+    assert s.q.delivered == s.q.video_count == 151
+
+
+def test_a_stall_past_the_age_limit_still_ends_the_recording_and_says_what_stalled():
+    s = Stalled()
+    s.stall()
+    limit = s.settings.sink_age_s
+    s.now = limit - 0.01
+    s.q.check()
+    s.now = limit + 0.01
+    with pytest.raises(PublicationWriteError, match="age budget"):
+        s.q.check()
+    status = s.q.status()
+    assert status["inflight_command"] == "video"
+    assert status["inflight_ms"] == pytest.approx((limit + 0.01) * 1000)
+    s.release.set()
+    with pytest.raises(PublicationError, match="age budget"):
+        s.q.finish(timeout=3)
+
+
+def test_the_age_limit_fires_before_capacity_at_the_worst_case_rate():
+    """Every picture distinct at 60 Hz, at the encoder's capped bitrate with its
+    whole VBV buffer spent at once, with audio at its measured rate."""
+    s = Stalled()
+    s.stall()
+    limit = s.settings.sink_age_s
+    bitrate = int(config.RING_MAXRATE.removesuffix("M")) * 1_000_000
+    picture = bytes(bitrate // 8 // 60)
+    s.video(bytes(bitrate // 8))  # the VBV buffer, spent at once
+    audio_block = 0
+    ticks = int(limit * 60) - 1
+    for tick in range(ticks):
+        s.now = tick / 60
+        s.row(tick)
+        s.video(picture)
+        for _ in range(100 // 60 + (tick % 3 != 0)):
+            audio_block += 1
+            s.pcm(audio_block)
+    assert s.q.status()["error"] is None
+    s.now = limit + 0.01
+    with pytest.raises(PublicationWriteError, match="age budget"):
+        s.pcm(audio_block + 1)
+    s.release.set()
+    with pytest.raises(PublicationError, match="age budget"):
+        s.q.finish(timeout=3)
+
+
+def test_the_sink_budgets_leave_every_other_limit_alone():
+    wider = GpuSettings(sink_age_s=99.0, sink_blocks=9999, sink_bytes=1 << 30)
+    assert wider.request() == GpuSettings().request()
+    assert wider.helper() == GpuSettings().helper()
+
+
+def test_a_survived_stall_leaves_one_field_line(monkeypatch, caplog):
+    monkeypatch.setattr(gpumediaworker, "NOTABLE_STALL_MS", 0.0)
+    q = worker()
+    with caplog.at_level("WARNING", logger="sm64.replay"):
+        q.bind(MediaRun("line", 1000))
+        wait(lambda: q.status()["pending_blocks"] == 0)
+    q.abort()
+    q.finish(timeout=3)
+    lines = [r.getMessage() for r in caplog.records if "survived" in r.getMessage()]
+    assert len(lines) == 1 and "bind command" in lines[0]

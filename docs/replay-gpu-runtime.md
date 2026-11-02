@@ -801,7 +801,13 @@ admission encloses codec, database or archive operations. Once compressed packet
 ownership moves there, GPU source/bridge credits can return independently. No
 full-image copy or extra encoder is introduced. Capacity, excessive age and sink
 errors end the affected recording explicitly rather than dropping pictures or
-growing memory indefinitely. Shutdown joins the sink after native helper
+growing memory indefinitely. The sink has its own budgets (`sink_age_s`,
+`sink_blocks`, `sink_bytes`), because only its writer thread blocks during a
+short disk or antivirus stall: selection, encoding and native credits keep
+moving, as a field stall showed (tick maximum 19 ms, SM64-TRAINER-G). The age
+limit of 10 s is the one meant to fire; `gpusettings.py` holds the capacity
+arithmetic. A single command over 2 s logs one "survived a stall" warning.
+Shutdown joins the sink after native helper
 retirement. An unfinished sink retains archive and ledger ownership; a joined
 publication failure does not masquerade as surviving GPU ownership.
 

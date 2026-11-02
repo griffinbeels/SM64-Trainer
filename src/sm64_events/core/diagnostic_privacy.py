@@ -108,7 +108,11 @@ def _gpu(value):
     result = pick(value, ("stage", "reason", "codec", "requested_codec", "encoder_backend", "capture_build",
                           "native_reason", "native_result", "native_stage", "native_operation", "native_hresult",
                           "encoder_error", "encoder_result", "driver_error", "gpu_vendor_id", "gpu_name", "gpu_driver",
-                          "observed_unix_s"))
+                          "observed_unix_s",
+                          # A failed media sink (gpufielddiagnostics.SINK_KEYS): numbers and fixed command names.
+                          "sink_stalled_command", "sink_stalled_ms", "sink_slowest_command", "sink_max_feed_ms",
+                          "sink_oldest_ms", "sink_pending_bytes", "sink_pending_blocks", "sink_peak_bytes",
+                          "sink_peak_blocks", "recording_free_bytes"))
     result["startup"] = _startup(value.get("startup"))
     if isinstance(value.get("native_receipt_available"), bool):
         result["native_receipt_available"] = value["native_receipt_available"]

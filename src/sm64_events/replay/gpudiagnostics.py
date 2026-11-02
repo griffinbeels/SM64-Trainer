@@ -1,5 +1,7 @@
 """Bounded worker diagnostics; never called by renderer or audio callbacks."""
 
+import shutil
+import threading
 import time
 
 
@@ -170,7 +172,24 @@ def native_reason(reason, *, channel=False):
     return _DELIVERY.get(reason, _CONTROL.get(reason, "unknown native reason"))
 
 
-def failure_snapshot(exc, *, frontier, adapter, output):
+def _free_bytes(volume, timeout=0.5):
+    """Free bytes on the recording volume, or None. The asking thread is about
+    to clean up after a stalled disk, so it never waits on that disk for this."""
+    answer = []
+
+    def ask():
+        try:
+            answer.append(shutil.disk_usage(volume).free)
+        except OSError:
+            pass
+
+    thread = threading.Thread(target=ask, name="replay-free-disk", daemon=True)
+    thread.start()
+    thread.join(timeout)
+    return answer[0] if answer else None
+
+
+def failure_snapshot(exc, *, frontier, adapter, output, recording_volume=None):
     """Capture worker-owned counters before teardown drains or clears queues.
 
     This is the instant the server observes the fault, not necessarily the
@@ -205,6 +224,11 @@ def failure_snapshot(exc, *, frontier, adapter, output):
             result[name] = component.status()
         except Exception as status_error:  # noqa: BLE001 - diagnostic cannot replace capture failure.
             result[name] = {"unavailable": str(status_error)[:256]}
+    # Only a failed sink asks: a number, never the path it came from.
+    if recording_volume is not None and (result.get("publication") or {}).get("error"):
+        free = _free_bytes(recording_volume)
+        if free is not None:
+            result["recording_free_bytes"] = free
     return result
 
 
