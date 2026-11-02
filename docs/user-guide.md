@@ -215,6 +215,16 @@ manual. Unsaved footage shares a modest storage budget and is discarded when
 the session ends; storage pressure removes the oldest unsaved footage first.
 Explicitly saved replays remain on disk. See [replay storage](replay-storage.md).
 
+By default the trainer keeps your newest 5 attempts, up to 10 minutes of attempts
+in total. It deletes your oldest unsaved attempts when you go past either limit.
+A reset counts as an attempt, and your newest attempt always stays, even if it
+is very long. You can change both numbers in the recording panel under **Keep
+footage**.
+
+Video stops if your disk has less than 2 GB free. The recording light and the
+recording panel tell you when this happens. Ghosts keep recording, and video
+starts again by itself when you free up space.
+
 On an RTX 40-series or newer card, the trainer records in AV1 and a saved
 replay is already about a third the size the moment you save it, with nothing
 left to do afterwards. It asks your card at the start of each recording and

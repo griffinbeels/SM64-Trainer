@@ -556,8 +556,8 @@ client return current state without overwriting it. Expired tokens return 409;
 reload GET and discard drafts from the old session. The browser keeps only
 unacknowledged drafts in tab session storage and serializes writes. Saved
 preferences remain in the replay's separate preference file across restarts.
-- `GET  /api/replay/settings` — `{retention_attempts, retention_s, max_buffer_bytes, pre_pad_s, post_pad_s, save_root, saved_bytes}`. `pre_pad_s` (default 0.5 since 2026-09-23) is the clip's lead-in before the attempt's opening anchor, and it never reaches back past the anchor journaled before that one — reset fifteen times and run on the sixteenth, and the clip opens on the sixteenth.
-- `PUT  /api/replay/settings` — body `{retention_attempts?, retention_s|null, max_buffer_bytes, pre_pad_s?, post_pad_s?}`. Attempt count is an integer 1–1000 or null (no count limit); omitted count/pads keep current values. Both retention fields null keep the session. Persists and applies immediately; shrinking evicts eligible old footage. Bounds: 60 s–24 h / 1 GiB–1 TiB / pads 0–10 s. Invalid bounds return 409; non-integer count returns 422. Saved/PB exports are exempt. Increasing retention cannot restore expired footage.
+- `GET  /api/replay/settings` — `{retention_attempts, retention_footage_s, retention_s, max_buffer_bytes, pre_pad_s, post_pad_s, save_root, saved_bytes}`. `pre_pad_s` (default 0.5 since 2026-09-23) is the clip's lead-in before the attempt's opening anchor, and it never reaches back past the anchor journaled before that one — reset fifteen times and run on the sixteenth, and the clip opens on the sixteenth.
+- `PUT  /api/replay/settings` — body `{retention_attempts?, retention_footage_s?, retention_s|null, max_buffer_bytes, pre_pad_s?, post_pad_s?}`. Attempt count is an integer 1–1000 or null (no count limit); omitted count, footage limit and pads keep current values. `retention_footage_s` (60–86400, attempts mode only) bounds the total time the kept attempts span; see [the attempt window](replay-fragments.md). Both retention fields null keep the session. Persists and applies immediately; shrinking evicts eligible old footage. Bounds: 60 s–24 h / 1 GiB–1 TiB / pads 0–10 s. Invalid bounds return 409; non-integer count returns 422. Saved/PB exports are exempt. Increasing retention cannot restore expired footage.
 - `POST /api/attempts/{id}/replay` — cut or reuse the attempt's clip. Returns
   `{clip_url, duration_s, truncated, fps, game_fps, source, anchor_offset_s,
   attempt_start_slot, input_span, frame_map, frame_map_source, input_alignment,
@@ -659,7 +659,9 @@ Undoing or superseding a PB does not delete its preserved video.
 Temporary ring segments, extracted clips, live partial files and the identity
 index share accounting. HTTP range reads, extraction and saves lease their
 files against eviction. `GET /api/replay/status` includes `storage_pressure`
-(recording paused because eviction cannot restore the free-space reserve),
+(video stopped because eviction cannot restore the free-space reserve; ghost
+poses continue while `pose_source_owned` is true), `disk_free_bytes` (the last
+free-space reading, or null) and `disk_reserve_bytes` (the reserve), plus
 `save_failures` (bounded attempt-id/message map) and `recovery_failures`.
 Saved media is outside eviction. True session switches and shutdown discard
 unsaved media after active extraction/save operations finish; practice resets,
