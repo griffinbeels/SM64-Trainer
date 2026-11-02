@@ -807,7 +807,11 @@ short disk or antivirus stall: selection, encoding and native credits keep
 moving, as a field stall showed (tick maximum 19 ms, SM64-TRAINER-G). The age
 limit of 10 s is the one meant to fire; `gpusettings.py` holds the capacity
 arithmetic. A single command over 2 s logs one "survived a stall" warning.
-Shutdown joins the sink after native helper
+A stop waits `sink_finish_s` (the age limit plus `close_s`) so a stall the sink
+survives still publishes its queue, on the attach thread and never the event
+loop. App shutdown keeps its own bound: the recorder's 10 s attach-thread join
+inside the 15 s replay stop deadline. A daemon writer still stalled then dies
+with the process and loses its queue. Shutdown joins the sink after native helper
 retirement. An unfinished sink retains archive and ledger ownership; a joined
 publication failure does not masquerade as surviving GPU ownership.
 

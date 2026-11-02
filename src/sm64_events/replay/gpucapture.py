@@ -449,7 +449,8 @@ class GpuCapture:
         if self._worker is None:
             self._close_pending_control()
             return
-        self._worker.join(timeout=self.settings.close_s + 3.0)
+        # Off the event loop: the recorder's attach thread, or its bounded stop.
+        self._worker.join(timeout=self.settings.close_s + 3.0 + self.settings.sink_finish_s)
         if self._worker.is_alive():
             raise GpuCleanupError("GPU media worker did not finish; retain its scratch")
         pending = getattr(self, "_pending_cleanup", None)

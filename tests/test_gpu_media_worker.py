@@ -1,5 +1,6 @@
 """Sink delays cannot withhold capture work; real output retains picture/PCM clocks."""
 
+from dataclasses import replace
 import threading
 import time
 from types import SimpleNamespace as NS
@@ -442,3 +443,90 @@ def test_a_survived_stall_leaves_one_field_line(monkeypatch, caplog):
     q.finish(timeout=3)
     lines = [r.getMessage() for r in caplog.records if "survived" in r.getMessage()]
     assert len(lines) == 1 and "bind command" in lines[0]
+
+
+def _stopping_session(stalled, settings):
+    """A real CaptureSession at a normal stop: its media sealed and its sink
+    told the recording is complete, as GpuMedia.finish leaves them."""
+    from sm64_events.replay.gpucapture_session import CaptureSession
+    from sm64_events.replay.gpudemand import DemandSnapshot
+
+    session = CaptureSession(NS(settings=settings, end_audio=lambda handoff: None),
+                             NS(snapshot=DemandSnapshot("active"),
+                                request_stop=lambda *a, **k: None))
+    session.media = NS(closed=True, fault=None)
+    session.output = stalled.q
+    session._open_channel = lambda: True
+    session._open_encoder = lambda: ()
+    session._first_offers = lambda: (1,)
+    session._create_media = lambda *_: None
+    session._continue = lambda: False
+    stalled.q.close()
+    return session
+
+
+def _stalled_with_backlog(settings):
+    causes = []
+    archive = NS(feed=lambda b: None, finish=causes.append)
+    s = Stalled(settings, publish=lambda run: archive)
+    s.stall()
+    for frame in range(1, 301):
+        s.row(frame)
+        s.video()
+    return s, causes
+
+
+def test_a_stop_during_a_long_backlog_waits_and_publishes_all_of_it():
+    # close_s alone is far shorter than the stall; only the age budget covers it.
+    settings = replace(GpuSettings(), close_s=0.02)
+    s, causes = _stalled_with_backlog(settings)
+    session = _stopping_session(s, settings)
+    timer = threading.Timer(0.3, s.release.set)
+    timer.start()
+    try:
+        session.close()
+    finally:
+        s.release.set()
+        timer.join()
+    assert session._output_joined
+    assert s.q.mux.closed and not s.q.mux.failed
+    assert causes == [None]
+    assert s.q.delivered == s.q.video_count == 301
+
+
+def test_a_stall_outlasting_the_stop_stays_owned_and_still_closes_complete():
+    from sm64_events.replay.gpucapture import GpuCleanupError
+
+    settings = replace(GpuSettings(), close_s=0.01, sink_age_s=0.02)
+    s, causes = _stalled_with_backlog(settings)
+    session = _stopping_session(s, settings)
+    try:
+        with pytest.raises(GpuCleanupError):
+            session.run()
+        assert not session._output_joined and s.q._worker.is_alive() and not causes
+        # The retained owner's retry, with the disk still stuck. The busy text
+        # the first attempt left in session.error is not this recording's outcome.
+        with pytest.raises(PublicationBusyError):
+            session.close()
+    finally:
+        s.release.set()
+    wait(lambda: not s.q._worker.is_alive())
+    session.close()
+    assert session._output_joined
+    assert s.q.mux.closed and not s.q.mux.failed
+    assert causes == [None]
+    assert s.q.delivered == s.q.video_count == 301
+
+
+def test_the_capture_owner_waits_as_long_as_its_session_may_wait_for_the_sink():
+    from sm64_events.replay.gpucapture import GpuCapture
+
+    settings = GpuSettings()
+    waited = []
+    owner = GpuCapture.__new__(GpuCapture)
+    owner.settings = settings
+    owner.request_stop = lambda: None
+    owner._worker = NS(join=lambda timeout: waited.append(timeout), is_alive=lambda: False)
+    owner.cleanup_error = None
+    owner.finish()
+    assert waited[0] > settings.sink_age_s + settings.close_s

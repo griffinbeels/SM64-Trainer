@@ -98,6 +98,7 @@ class CaptureSession:
         self._copy_lanes = 0
         self.audio = self.archive = self.handoff = self.mux = None
         self.output = None
+        self._output_cause = None
         self._output_joined = False
         self.frontier = None
         self.settings = owner.settings
@@ -629,10 +630,14 @@ class CaptureSession:
             self.channel.close()
 
     def _finish_output(self):
-        error = self.error or (self.media.fault if self.media else "media setup failed")
+        # The run's outcome, fixed at the first attempt. A retry finds "sink still
+        # busy" in self.error, and passing that on would abort a complete recording.
+        if self._output_cause is None:
+            self._output_cause = (self.error or (self.media.fault if self.media else "media setup failed"),)
+        error = self._output_cause[0]
         if self.output is not None:
             try:
-                self.output.finish(error, timeout=self.settings.close_s)
+                self.output.finish(error, timeout=self.settings.sink_finish_s)
                 self._output_joined = True
             except PublicationError:
                 self._output_joined = True

@@ -119,6 +119,13 @@ class GpuSettings:
     lead_ticks: int = 9000
     heartbeat_s: float = 1.0
 
+    @property
+    def sink_finish_s(self):
+        """How long a stop waits for the sink. Everything queued is either
+        written or past its age limit by sink_age_s, so a stop during a stall the
+        sink survives still publishes the footage; close_s covers closing it."""
+        return self.sink_age_s + self.close_s
+
     def request(self):
         return RequestLimits(
             self.slots,
