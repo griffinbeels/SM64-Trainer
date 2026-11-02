@@ -3,6 +3,7 @@ import asyncio
 from copy import deepcopy
 import hashlib
 import json
+from pathlib import Path
 import threading
 from types import SimpleNamespace
 from uuid import uuid4
@@ -456,4 +457,132 @@ def test_queued_completed_run_cannot_be_adopted_by_later_login(tmp_path, second_
         await recorder.stop()
         assert admission.accepted == 2
         assert not sync._queue and not sync._outbox.pending(UID) and not sync._outbox.pending(account.state["uid"])
+    asyncio.run(scenario())
+
+
+# -- A burst of slow runs never costs a subdivision best (2026-11-02) -------------
+
+def test_a_burst_of_ungraded_slow_runs_cannot_evict_a_subdivision_best(tmp_path):
+    outbox = SourceOutbox(tmp_path / "burst.json")
+    value = {**source(tmp_path / "burst.ghost"), "owner": UID}
+    bests = [{**value, "frames": 100 + step, "bin": step} for step in range(8)]
+    for best in bests:
+        outbox.remember(best)
+    for index in range(MAX_OFFERS + 300):
+        outbox.remember({**value, "frames": 5000 + index})
+    kept = {row["frames"] for row in outbox.pending(UID)}
+    assert len(outbox.pending(UID)) == MAX_OFFERS
+    assert {best["frames"] for best in bests} <= kept
+    # Nothing could grade the slow ones, so their slowest went first.
+    assert max(kept) < 5000 + MAX_OFFERS + 300 - 1
+
+
+def test_the_byte_limit_spends_slow_runs_before_bests_too(tmp_path, monkeypatch):
+    monkeypatch.setattr("sm64_events.community.outbox.MAX_BYTES", 16 << 10)
+    outbox = SourceOutbox(tmp_path / "bytes.json")
+    value = {**source(tmp_path / "bytes.ghost"), "owner": UID}
+    bests = [{**value, "frames": 100 + step, "bin": step} for step in range(8)]
+    for best in bests:
+        outbox.remember(best)
+    for index in range(200):
+        outbox.remember({**value, "frames": 5000 + index})
+    assert outbox.path.stat().st_size <= 16 << 10 and len(outbox.pending(UID)) < 208
+    assert {best["frames"] for best in bests} <= {row["frames"] for row in outbox.pending(UID)}
+
+
+def test_a_slower_row_in_its_own_bin_goes_before_any_other_best(tmp_path, monkeypatch):
+    monkeypatch.setattr("sm64_events.community.outbox.MAX_OFFERS", 8)
+    outbox = SourceOutbox(tmp_path / "bins.json")
+    value = {**source(tmp_path / "bins.ghost"), "owner": UID}
+    for index in range(8):  # The oldest row is a best too, so it must not be the one to go.
+        outbox.remember({**value, "frames": index + 1, "bin": index})
+    outbox.remember({**value, "frames": 999, "bin": 0})  # Slower than bin 0's best.
+    frames = {row["frames"] for row in outbox.pending(UID)}
+    assert frames == set(range(1, 9))
+    outbox.remember({**value, "frames": 500, "bin": 500})  # A real best with no room: the oldest pays.
+    assert {row["frames"] for row in outbox.pending(UID)} == {*range(2, 9), 500}
+
+
+def test_only_a_valid_bin_is_stored(tmp_path):
+    outbox = SourceOutbox(tmp_path / "invalid.json")
+    value = {**source(tmp_path / "invalid.ghost"), "owner": UID}
+    for wrong in ("3", -1, 1001, 1.5, True):
+        with pytest.raises(CommunityError):
+            outbox.remember({**value, "bin": wrong})
+    outbox.remember({**value, "bin": 3})
+    assert SourceOutbox(outbox.path).available(UID) == ()  # Not loaded yet: load is explicit.
+    restored = SourceOutbox(outbox.path)
+    restored.load()
+    assert restored.available(UID)[0]["bin"] == 3
+
+
+def budget_day(account, spent):
+    async def exhausted(method, path, **kwargs):
+        if path == "/v1/catalog":
+            return catalog()
+        spent.append(path)
+        raise CommunityError("budget_exhausted", status=429, retry_after=1)
+    account.request_json = exhausted
+
+
+def test_a_best_survives_a_budget_day_and_uploads_after_it(tmp_path):
+    async def scenario():
+        account = Account()
+        original, spent = account.request_json, []
+        budget_day(account, spent)
+        first = sync_at(tmp_path, account)
+        await first.start()
+        first._practice_started.set()
+        item = {**source(tmp_path / "best.ghost"), "bin": 1}
+        await asyncio.to_thread(first.remember_source, item, **first.contribution_context())
+        await settled(lambda: spent)
+        await first.stop()
+        assert len(first._outbox.pending(UID)) == 1  # A refused budget is not a refused run.
+        account.request_json = original
+        restored = sync_at(tmp_path, account)
+        await restored.start()
+        restored._practice_started.set()
+        await settled(lambda: any(call[1].startswith("/v1/uploads/") for call in account.calls))
+        await settled(lambda: not restored._outbox.pending(UID))
+        await restored.stop()
+    asyncio.run(scenario())
+
+
+def test_a_locked_clip_is_retried_and_a_deleted_one_is_not(tmp_path, monkeypatch):
+    async def scenario():
+        account = Account()
+        sync = sync_at(tmp_path, account)
+        await sync.start()
+        sync._practice_started.set()
+        locked = source(tmp_path / "locked.ghost")
+        real_open, denied = Path.open, []
+
+        def deny(path, *args, **kwargs):
+            if path.name == "locked.ghost" and not denied:
+                denied.append(path)
+                raise PermissionError(13, "Access is denied", str(path))
+            return real_open(path, *args, **kwargs)
+        monkeypatch.setattr(Path, "open", deny)
+        # A first failure leaves the offer owed and scheduled, not discarded.
+        await asyncio.to_thread(sync.remember_source, locked, **sync.contribution_context())
+        await settled(lambda: denied)
+        await settled(lambda: sync._offer_retry)
+        assert len(sync._outbox.pending(UID)) == 1
+        operation = next(iter(sync._offer_retry.values()))[0]
+        await sync._failed_operation("gone", operation, FileNotFoundError(2, "gone", "x"))
+        assert sync._outbox.pending(UID) == ()
+        await sync.stop()
+    asyncio.run(scenario())
+
+
+def test_catalog_step_reads_only_what_is_held(tmp_path):
+    async def scenario():
+        account = Account()
+        sync = sync_at(tmp_path, account)
+        item = source(tmp_path / "held.ghost")
+        ask = lambda frames: sync.catalog_step(item["target"], "igt", "us", "Standard", frames)
+        assert ask(3) is None and account.calls == []  # Nothing held, and no request either.
+        await sync._catalog_ready()
+        assert ask(3) == 2 and ask(400) == 1 and ask(900) == 0
+        assert sync.catalog_step(item["target"], "igt", "us", "Other", 3) is None
     asyncio.run(scenario())
