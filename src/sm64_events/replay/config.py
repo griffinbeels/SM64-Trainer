@@ -12,11 +12,26 @@ from pathlib import Path
 from sm64_events.core.paths import (replay_scratch_dir, replay_settings_path,
                                      replays_root)
 
+# Griffin's window, 2026-11-02: "if the total amount of time spread across
+# attempts exceeds, say, 10 minutes of footage OR the number of attempts
+# exceeds, say, 5 attempts, then the footage is purged."
+DEFAULT_RETENTION_ATTEMPTS = 5
+DEFAULT_RETENTION_FOOTAGE_S = 600.0
+
+# Free disk that unsaved footage and a Save must leave behind. A near-full
+# system volume thrashes the machine (Windows squeezes the pagefile). One number
+# for both owners: a lower ring margin alone would record attempts that Save
+# then refuses. It fell from 5 GiB on 2026-11-02, when the default window made
+# the buffer small and under-5-GiB machines were losing video for no reason.
+DISK_RESERVE_BYTES = 2 * 1024**3
+
 
 @dataclass(frozen=True)
 class ReplayConfig:
     retention_s: float | None = None      # None = no additional age limit
-    retention_attempts: int | None = 10    # completed attempts; saves live separately
+    retention_attempts: int | None = DEFAULT_RETENTION_ATTEMPTS  # saves live separately
+    # Footage limit, attempts mode only (attemptretention.py owns the rule).
+    retention_footage_s: float = DEFAULT_RETENTION_FOOTAGE_S
     # before the attempt anchor, and never past the anchor before it
     # (service._span): "about 0.5 s before the opening reset" (2026-09-23)
     pre_pad_s: float = 0.5
@@ -230,6 +245,7 @@ def raw_picture_args(codec: str) -> list[str]:
 SETTINGS_LIMITS = {
     "retention_attempts": (1, 1000),
     "retention_s": (60.0, 86400.0),          # 1 min .. 24 h (None = whole session)
+    "retention_footage_s": (60.0, 86400.0),  # 1 min .. 24 h, attempts mode only
     "max_buffer_bytes": (1024**3, 1024**4),  # 1 GiB .. 1 TiB
     "pre_pad_s": (0.0, 10.0),                # clip lead-in before the anchor
     "post_pad_s": (0.0, 10.0),               # clip tail after the closing event
@@ -239,7 +255,8 @@ SETTINGS_LIMITS = {
 def validate_settings(retention_s: float | None, max_buffer_bytes: int,
                       pre_pad_s: float | None = None,
                       post_pad_s: float | None = None,
-                      retention_attempts: int | None = None) -> None:
+                      retention_attempts: int | None = None,
+                      retention_footage_s: float | None = None) -> None:
     """ValueError on out-of-range values (the API maps it to 409).
     Pads are validated only when provided (None = caller keeps current)."""
     lo, hi = SETTINGS_LIMITS["retention_s"]
@@ -249,6 +266,10 @@ def validate_settings(retention_s: float | None, max_buffer_bytes: int,
     if retention_s is not None and not (lo <= float(retention_s) <= hi):
         raise ValueError(
             f"retention_s must be null or {lo:.0f}..{hi:.0f} seconds")
+    lo, hi = SETTINGS_LIMITS["retention_footage_s"]
+    if retention_footage_s is not None and (type(retention_footage_s) not in (int, float)
+            or not lo <= retention_footage_s <= hi):
+        raise ValueError(f"retention_footage_s must be {lo:.0f}..{hi:.0f} seconds")
     lo, hi = SETTINGS_LIMITS["max_buffer_bytes"]
     if not (lo <= int(max_buffer_bytes) <= hi):
         raise ValueError("max_buffer_bytes must be 1 GiB..1 TiB")
@@ -262,8 +283,10 @@ def validate_settings(retention_s: float | None, max_buffer_bytes: int,
 
 def save_settings(path: Path, retention_s: float | None,
                   max_buffer_bytes: int, pre_pad_s: float,
-                  post_pad_s: float, retention_attempts: int | None = 10,
-                  *, recording_enabled: bool | None = None) -> None:
+                  post_pad_s: float,
+                  retention_attempts: int | None = DEFAULT_RETENTION_ATTEMPTS,
+                  *, recording_enabled: bool | None = None,
+                  retention_footage_s: float = DEFAULT_RETENTION_FOOTAGE_S) -> None:
     from sm64_events.replay.publication import atomic_json
     if recording_enabled is None:
         # Legacy storage callers must not silently re-enable recording.
@@ -276,6 +299,7 @@ def save_settings(path: Path, retention_s: float | None,
         raise ValueError("recording_enabled must be a boolean")
     atomic_json(path,
         {"retention_s": retention_s, "retention_attempts": retention_attempts,
+         "retention_footage_s": float(retention_footage_s),
          "max_buffer_bytes": int(max_buffer_bytes),
          "pre_pad_s": float(pre_pad_s), "post_pad_s": float(post_pad_s),
          "recording_enabled": recording_enabled})
@@ -307,13 +331,16 @@ def apply_settings_file(cfg: ReplayConfig) -> ReplayConfig:
     pre = raw.get("pre_pad_s", cfg.pre_pad_s)
     post = raw.get("post_pad_s", cfg.post_pad_s)
     attempts = raw.get("retention_attempts", cfg.retention_attempts)
+    # A file from before this limit keeps its attempt count and gains the default.
+    footage = raw.get("retention_footage_s", cfg.retention_footage_s)
     try:
-        validate_settings(retention, cap, pre, post, attempts)
+        validate_settings(retention, cap, pre, post, attempts, footage)
     except ValueError as e:
         logging.getLogger("sm64.replay").warning(
             "ignoring invalid %s: %s", cfg.settings_path, e)
         return cfg
-    return replace(cfg, retention_s=retention, retention_attempts=attempts, max_buffer_bytes=int(cap),
+    return replace(cfg, retention_s=retention, retention_attempts=attempts,
+                   retention_footage_s=float(footage), max_buffer_bytes=int(cap),
                    pre_pad_s=float(pre), post_pad_s=float(post))
 
 

@@ -943,6 +943,19 @@ loads unchanged.
   reads a second; the ledger records what the screen SHOWED, one row per
   picture.
 
+### Attempt window
+
+The unsaved [[attempt]]s whose replay video the trainer keeps. It keeps the
+newest ones and stops before either limit breaks: 5 [[attempt]]s by default, or
+10 minutes of footage by default. A [[reset]] counts as one [[attempt]], so a
+player who keeps resetting holds very little video. The newest finished
+[[attempt]] always stays, and the one in progress never expires. A [[star]] and
+a [[segment]] closed by the same play share one place and count their time once.
+Saved replays and PBs sit outside it. The trainer deletes older unsaved footage.
+
+- **Lives** -- `src/sm64_events/replay/attemptretention.py`; the recording panel
+  edits both limits (`src/sm64_events/ui/components/replay.js`).
+
 ### Clip start
 
 The time of a clip's first picture, in the clip's own clock. A cut

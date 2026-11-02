@@ -6288,6 +6288,9 @@
     justify-self: end; gap: .35rem; font-size: .69rem;
   }
   .replay-number-field input { width: 60px; min-width: 60px; }
+  .retention-footage-field { width: auto; grid-template-columns: 60px auto; }
+  .replay-retention-row > span:first-child { white-space: normal; }
+  .replay-retention-row .retention-mode { flex-basis: 100%; }
   .saved-replay-note {
     display: flex; align-items: center; gap: .4rem;
     margin-top: .6rem; color: var(--muted); font-size: .66rem;
@@ -6510,6 +6513,7 @@
     .sidebar-status .status-short { color: var(--coral); }
     .sidebar-status .recording-short { color: var(--muted); }
     .sidebar-status .recording-short.is-on { color: var(--coral); }
+    .sidebar-status .recording-short.is-warn { color: var(--danger, #ffb1b1); }
     .sidebar-status .recording-status:empty { display: none; }
     .recording-status {
       width: 100%; display: flex; justify-content: center;

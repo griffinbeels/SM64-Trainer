@@ -1403,6 +1403,9 @@ class ReplayRecorder:
             "buffer_end_utc": cov[1].isoformat() if cov else None,
             "disk_bytes": self.ring.total_bytes,
             "storage_pressure": self.ring.storage_pressure,
+            # Numbers only: this status reaches diagnostics, so never the path.
+            "disk_free_bytes": self.ring.free_bytes,
+            "disk_reserve_bytes": self.ring.disk_reserve_bytes,
             "retention_s": self.ring.retention_s,
             "max_buffer_bytes": self.ring.max_bytes,
             "idle": self._idle,
