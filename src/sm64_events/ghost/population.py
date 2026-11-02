@@ -27,7 +27,10 @@ from sm64_events.inputs.service import entity_key_of
 from sm64_events.tracking.caveats import pb_blocked_by, save_state_run
 
 MAX_RECORDINGS = 16384
-MAX_POPULATION_BYTES = 512 << 20
+# One best per player per subdivision is the real bound, so this only stops a
+# runaway. His rule, 2026-11-02: "keep all of them". Measured clips average
+# 727 KB, so MAX_RECORDINGS is the limit that a real player would reach first.
+MAX_POPULATION_BYTES = 16 << 30
 
 
 class PopulationFull(ValueError):
