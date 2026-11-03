@@ -289,3 +289,49 @@ def test_action_frames_keep_their_size_at_zoom_and_when_a_row_is_removed():
                 _matching_action_frames(seen)
                 assert any(row["pb"] for row in seen["rows"]), seen
                 assert any(row["unavailable"] for row in seen["rows"]), seen
+
+
+FIT = """(() => {
+  const body = document.querySelector('%s .log-card-body');
+  const edge = body.getBoundingClientRect();
+  const limit = edge.right - parseFloat(getComputedStyle(body).paddingRight);
+  const rows = [...document.querySelectorAll(%s)];
+  return {
+    narrow: getComputedStyle(rows[0]).display === 'grid',
+    limit,
+    rows: rows.length,
+    overrun: Math.max(...rows.map(tr => Math.max(tr.getBoundingClientRect().right,
+      ...[...tr.querySelectorAll('button')].map(b => b.getBoundingClientRect().right))) ) - limit,
+    wide: rows.filter(tr => tr.querySelector('.pb-save.is-shown')).length,
+    scroll: body.scrollWidth - body.clientWidth,
+  };
+})()""" % (CARD, json.dumps(ROWS))
+
+
+def test_no_row_or_button_leaves_the_card_at_any_width():
+    """His report, 2026-11-03, at the smallest window: a row holding GOLD!! and
+    its Time Save pushed the table, and every row's buttons, past the card."""
+    with serve_ui_live() as (base, service):
+        _reset_then_finish(service, 30000)
+        with sync_playwright() as play:
+            browser = play.chromium.launch(headless=True, args=["--disable-gpu"])
+            try:
+                page = browser.new_page(viewport={"width": 850, "height": 1100})
+                page.add_init_script("localStorage.setItem('scope', 'lifetime')")
+                page.route("**/api/replay/status", lambda route: route.fulfill(
+                    status=200, content_type="application/json", body=json.dumps(STATUS)))
+                page.goto(base)
+                page.locator(ROWS).nth(2).wait_for(timeout=20000)
+                page.locator(ROWS).nth(0).locator(".attempt-pb-slot button").click()
+                page.locator(f"{ROWS}.is-pb .pb-save.is-shown").wait_for(timeout=20000)
+                page.wait_for_timeout(1800)
+                seen = {}
+                for width in range(760, 1560, 10):
+                    page.set_viewport_size({"width": width, "height": 1100})
+                    page.wait_for_timeout(30)
+                    seen[width] = page.evaluate(FIT)
+                    assert seen[width]["wide"] == 1, (width, seen[width])
+            finally:
+                browser.close()
+    bad = {width: round(fit["overrun"], 1) for width, fit in seen.items() if fit["overrun"] > .5}
+    assert not bad, (bad, seen[850])
