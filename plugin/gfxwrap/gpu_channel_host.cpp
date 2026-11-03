@@ -27,6 +27,7 @@ int main(int argc, char **argv) {
     for (unsigned i = 0; i < 2; ++i) memcpy(h.texture_names[i], names[i], (wcslen(names[i])+1)*2);
     const wchar_t *twins[2] = {L"Local\\SM64.GpuChannel.fixture.copy.a", L"Local\\SM64.GpuChannel.fixture.copy.b"};
     for (unsigned i = 0; i < 2; ++i) memcpy(h.twin_texture_names[i], twins[i], (wcslen(twins[i])+1)*2);
+    h.transport = GT_TRANSPORT_KEYED_MUTEX;
     gpu_channel::Producer producer;
     if (argc == 9 && !strcmp(argv[8], "defer-header")) {
         producer.test_before_header = [](void *) {

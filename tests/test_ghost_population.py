@@ -32,7 +32,7 @@ def recorded(tmp_path, *, number=77, strategy="Standard", frames=2, game_version
         current = row
         def attempt(self, number):
             return self.current
-        def preserve_native(self, number):
+        def preserve_native(self, number, *, wait_tail=True):
             return {"path": str(path)}
         def find_native(self, number):
             check_manifest(path, manifest, attempt=self.current, target=target)

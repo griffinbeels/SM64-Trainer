@@ -13,21 +13,26 @@ STARTUP = struct.Struct("<8s10I2Q80s128s96s80s")
 # gpu_startup_context_v1, appended after the V1 receipt (plugin/gfxwrap/gpu_startup.h).
 STARTUP_CONTEXT_OFFSET = 784
 STARTUP_CONTEXT = struct.Struct("<8s10I80s128s96s")
+# gpu_startup_transport_v1, appended after the context receipt.
+STARTUP_TRANSPORT_OFFSET = 1136
+STARTUP_TRANSPORT = struct.Struct("<8s14I")
 _BINDINGS_KEYS = ("bindings_site", "bindings_gl_error", "bindings_flags", "bindings_invalidations",
                   "bindings_after_ms", "bindings_contexts")
 # Receipt fields automatic reports may carry; the privacy allowlists still
 # decide what leaves the machine.
 STARTUP_TEXT_KEYS = ("gl_vendor", "gl_renderer", "gl_version", "missing_entry_point",
                      "context_gl_vendor", "context_gl_renderer", "context_gl_version", "context_identity",
-                     "bindings_site_name", "bindings_cause")
-STARTUP_NUMBER_KEYS = _BINDINGS_KEYS
+                     "bindings_site_name", "bindings_cause",
+                     "transport_capabilities", "bridge_transport", "failed_transport")
+STARTUP_NUMBER_KEYS = (*_BINDINGS_KEYS, "transport_floor", "failed_transport_error")
 _OPEN = re.compile(
     r"event=encoder_open_failure native_result=([0-9]{1,10}) stage=([a-z_]+) "
     r"encoder_state=([0-9]{1,10}|unknown) encoder_error=([0-9]{1,10}|unknown) "
     r"nv_status=([0-9]{1,10}|unknown) hresult=([0-9]{1,10}|unknown)"
 )
 _STAGES = frozenset({"adapter", "device_interface", "input_format", "shared_texture",
-                     "texture_format", "keyed_mutex", "completion_query", "encoder_prepare"})
+                     "texture_format", "keyed_mutex", "completion_query", "encoder_prepare",
+                     "transport_custody"})
 _MF = re.compile(r"SM64_GPU_MF operation=([A-Za-z0-9_:.,()><*& \[\]-]{1,180}) hresult=([0-9a-fA-F]{8})")
 
 
@@ -61,10 +66,36 @@ def startup_context_receipt(raw: bytes) -> dict | None:
     return result
 
 
-def startup_receipt(raw: bytes, context: bytes | None = None) -> dict | None:
+def startup_transport_receipt(raw: bytes) -> dict | None:
+    """The appended bridge transport receipt; None from an older producer.
+
+    What the renderer's context offers (probed at the request's first
+    renderer tick, before any surface check) and the transport it selected.
+    A capability or transport not yet known stays absent.
+    """
+    from sm64_events.replay.gpudiagnostics import capability_names, transport_name
+
+    if len(raw) != STARTUP_TRANSPORT.size:
+        return None
+    magic, version, size, epoch, capabilities, transport, floor, failed, failed_error, *_ = STARTUP_TRANSPORT.unpack(raw)
+    if magic != b"SM64GPT1" or version != 1 or size != STARTUP_TRANSPORT.size:
+        return None
+    result = dict(epoch=epoch, transport_floor=floor)
+    names = capability_names(capabilities)
+    if names is not None:
+        result["transport_capabilities"] = ",".join(names) or "none"
+        result["bridge_transport"] = transport_name(transport) or "none"
+    if transport_name(failed):
+        result["failed_transport"] = transport_name(failed)
+        result["failed_transport_error"] = failed_error
+    return result
+
+
+def startup_receipt(raw: bytes, context: bytes | None = None, transport: bytes | None = None) -> dict | None:
     """Decode an optional producer extension. Missing/unknown stays unknown.
 
-    `context` is the appended context receipt; it joins only the same epoch.
+    `context` and `transport` are the appended receipts; each joins only the
+    same epoch.
     """
     if len(raw) != STARTUP.size:
         return None
@@ -79,6 +110,9 @@ def startup_receipt(raw: bytes, context: bytes | None = None) -> dict | None:
     extra = startup_context_receipt(context) if context is not None else None
     if extra and extra.pop("epoch") == epoch:
         result.update(extra)
+    bridge = startup_transport_receipt(transport) if transport is not None else None
+    if bridge and bridge.pop("epoch") == epoch:
+        result.update(bridge)
     return result
 
 
@@ -110,12 +144,40 @@ def native_failure_receipt(stderr: object) -> dict:
     return result or pending_mf
 
 
+_SINK_COMMANDS = frozenset({"bind", "row", "pcm", "video"})
+# Numbers and fixed command names only, so a failed sink's report can say what
+# stalled and how full the disk was without ever carrying a path.
+SINK_KEYS = ("sink_stalled_command", "sink_stalled_ms", "sink_slowest_command", "sink_max_feed_ms",
+             "sink_oldest_ms", "sink_pending_bytes", "sink_pending_blocks", "sink_peak_bytes",
+             "sink_peak_blocks", "recording_free_bytes")
+
+
+def sink_evidence(failure: dict) -> dict:
+    """The failed media sink's facts, flat, from a failure_snapshot."""
+    publication = failure.get("publication")
+    if not isinstance(publication, dict) or not publication.get("error"):
+        return {}
+    result = {}
+    for key, source in (("sink_stalled_command", "inflight_command"), ("sink_slowest_command", "slowest_command")):
+        if publication.get(source) in _SINK_COMMANDS:
+            result[key] = publication[source]
+    for key, source in (("sink_stalled_ms", "inflight_ms"), ("sink_max_feed_ms", "max_feed_ms"),
+                        ("sink_oldest_ms", "oldest_ms"), ("sink_pending_bytes", "pending_bytes"),
+                        ("sink_pending_blocks", "pending_blocks"), ("sink_peak_bytes", "peak_bytes"),
+                        ("sink_peak_blocks", "peak_blocks")):
+        if type(publication.get(source)) in (int, float):
+            result[key] = round(publication[source])
+    if type(failure.get("recording_free_bytes")) is int:
+        result["recording_free_bytes"] = failure["recording_free_bytes"]
+    return result
+
+
 def automatic_context(record: dict) -> dict:
     """Select scalar evidence; privacy scrubbing still runs at collection."""
     context = {key: value for key, value in record.items()
                if key in {"operation", "stage", "reason", "encoder_backend", "codec", "requested_codec", "capture_build",
                           "gpu_vendor_id", "gpu_name", "gpu_driver", "native_result", "encoder_result", "native_reason", "native_stage",
-                          "native_operation", "native_hresult", "encoder_error", "driver_error"}
+                          "native_operation", "native_hresult", "encoder_error", "driver_error", *SINK_KEYS}
                and isinstance(value, (str, int, bool))}
     startup = record.get("startup") or {}
     context.update((key, startup[key]) for key in STARTUP_TEXT_KEYS if isinstance(startup.get(key), str))

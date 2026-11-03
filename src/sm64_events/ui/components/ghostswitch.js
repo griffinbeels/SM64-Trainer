@@ -392,7 +392,7 @@ function GhostVolume({ volume, draft, range, queue }) {
       value=${known ? value : null} disabled=${!known}
       title=${known ? "How loud Ghost Mario's sounds play under the game" : "Waiting for the ghost's volume"}
       oninput=${(event) => queue({ volume: Number(event.target.value) })} />
-    <span class="ghost-field-value">${known ? `${Math.round(value * 100)}%` : "--"}</span>
+    <span class="ghost-field-value">${!known ? "--" : value > 0 ? `${Math.round(value * 100)}%` : "Off"}</span>
   </label>`;
 }
 

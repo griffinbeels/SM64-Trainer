@@ -1,5 +1,7 @@
 """Bounded worker diagnostics; never called by renderer or audio callbacks."""
 
+import shutil
+import threading
 import time
 
 
@@ -30,17 +32,38 @@ _DELIVERY = dict(enumerate((
 # Appended native delivery reasons remain readable before a picture channel
 # exists. Generic GL errors stay transient; only positive missing capabilities
 # establish this process cannot use the installed transport.
+# 10031 comes only from an older capture layer: since 2026-10-31 a context
+# without the keyed mutex selects the semaphore or readback bridge transport
+# instead (gpu_transport.h), and 10036 means every transport it offers failed.
 _GL_UNSUPPORTED = {
     10028: "OpenGL 4.5 is required for GPU recording",
     10029: "GPU recording needs GL_EXT_memory_object",
     10030: "GPU recording needs GL_EXT_memory_object_win32",
-    10031: "GPU recording needs GL_EXT_win32_keyed_mutex",
+    10031: "this capture layer needs GL_EXT_win32_keyed_mutex (an older build; Project64 runs the new one after it restarts)",
     10032: "a required GPU recording OpenGL entry point is unavailable",
     10033: "a required GPU snapshot OpenGL entry point is unavailable",
+    10036: "every GPU recording bridge this graphics driver offers failed in this Project64",
 }
 _DELIVERY.update(_GL_UNSUPPORTED)
 _DELIVERY.update({10034: "capture startup had no qualified source surface",
-                  10035: "renderer capture gateway remained unavailable"})
+                  10035: "renderer capture gateway remained unavailable",
+                  10037: "the ghost copy does not record through the readback bridge"})
+
+# gpu_transport.h: bridge transports and context capabilities, by wire value.
+_TRANSPORTS = {1: "keyed_mutex", 2: "semaphore", 3: "readback"}
+_CAPABILITIES = ("gl45", "memory_object", "memory_object_win32", "keyed_mutex", "semaphore",
+                 "semaphore_win32", "wgl_nv_dx_interop2")
+
+
+def transport_name(value):
+    return _TRANSPORTS.get(value)
+
+
+def capability_names(bits):
+    """The offered capabilities in native bit order; None before a probe."""
+    if not bits >> 31 & 1:
+        return None
+    return [name for bit, name in enumerate(_CAPABILITIES) if bits >> bit & 1]
 
 
 def unsupported_capture_reason(reason):
@@ -170,7 +193,24 @@ def native_reason(reason, *, channel=False):
     return _DELIVERY.get(reason, _CONTROL.get(reason, "unknown native reason"))
 
 
-def failure_snapshot(exc, *, frontier, adapter, output):
+def _free_bytes(volume, timeout=0.5):
+    """Free bytes on the recording volume, or None. The asking thread is about
+    to clean up after a stalled disk, so it never waits on that disk for this."""
+    answer = []
+
+    def ask():
+        try:
+            answer.append(shutil.disk_usage(volume).free)
+        except OSError:
+            pass
+
+    thread = threading.Thread(target=ask, name="replay-free-disk", daemon=True)
+    thread.start()
+    thread.join(timeout)
+    return answer[0] if answer else None
+
+
+def failure_snapshot(exc, *, frontier, adapter, output, recording_volume=None):
     """Capture worker-owned counters before teardown drains or clears queues.
 
     This is the instant the server observes the fault, not necessarily the
@@ -205,6 +245,11 @@ def failure_snapshot(exc, *, frontier, adapter, output):
             result[name] = component.status()
         except Exception as status_error:  # noqa: BLE001 - diagnostic cannot replace capture failure.
             result[name] = {"unavailable": str(status_error)[:256]}
+    # Only a failed sink asks: a number, never the path it came from.
+    if recording_volume is not None and (result.get("publication") or {}).get("error"):
+        free = _free_bytes(recording_volume)
+        if free is not None:
+            result["recording_free_bytes"] = free
     return result
 
 

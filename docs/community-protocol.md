@@ -275,10 +275,19 @@ catalog generation changes. An expired upload grant replaces its grant key
 before retry.
 
 Only a completed, certified own run with sharing enabled at attempt enqueue
-creates a durable upload intent. Its account UID and consent generation are
+creates a durable upload intent, and only when the run can still win its
+subdivision. The admission worker skips a run the player's kept rows already
+beat there, before any hash or daily operation: in the cloud's bin when the
+catalog is held, in the local grade otherwise. A run with neither is offered and
+the cloud answers. A faster row earned before signing in therefore also blocks
+slower offers in its bin. Its account UID and consent generation are
 captured before queue or preservation delay. The local outbox stores at most
-256 intents / 1 MiB of metadata and immutable retry keys, never tokens or another
-copy of the ghost. Normal app close preserves intents. Startup/login retries
+1024 intents / 1 MiB of metadata and immutable retry keys, never tokens or another
+copy of the ghost. Over the limit it evicts a slower row in the same subdivision
+(`bin`, optional, the step the worker graded it in), then the slowest row
+nothing could grade, and only then the oldest best. Normal app close preserves
+intents. A file error other than a missing clip retries instead of discarding,
+and budget exhaustion keeps the intent. Startup/login retries
 the same owner's fastest eligible run per canonical subdivision, admitting at
 most eight recovered winners per minute. Historical, imported and bundled
 recordings are never assigned to a new account.
@@ -302,7 +311,7 @@ out or sharing off, only local intents change. An older Worker's 404 drops it.
 
 Source offer is a dict: `{target,clock,game_version,strategy,frames,path,raw_sha256,
 full_start:true,valid:true}` prepared by existing native qualification off-thread.
-Root offers before/independently of local-ladder same-bin skip. Native source
+Native source
 bytes are read and compressed only on the community background worker; unknown
 or unsupported identity refuses sharing without damaging private PB playback.
 

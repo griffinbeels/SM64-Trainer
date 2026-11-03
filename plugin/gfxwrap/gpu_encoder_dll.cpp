@@ -3,6 +3,7 @@
 #include "gpu_platform_encoder.h"
 #include "gpu_encoder_lease.h"
 #include "gpu_encoder_open_receipt.h"
+#include "gpu_transport_helper.h"
 #include <new>
 #include <cstring>
 static_assert(sizeof(void*)==8,"x64 worker DLL only");
@@ -11,27 +12,16 @@ static_assert(sizeof(gbdll_retained_abi_v1)==16&&sizeof(gbdll_retained_v1)==56&&
 namespace {
 SRWLOCK gate=SRWLOCK_INIT;
 struct Guard {bool held=TryAcquireSRWLockExclusive(&gate)!=FALSE;~Guard(){if(held)ReleaseSRWLockExclusive(&gate);}};
-struct Slot {
- Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
- Microsoft::WRL::ComPtr<IDXGIKeyedMutex> mutex;
- Microsoft::WRL::ComPtr<ID3D11Query> completion;
- GpuEncoderLease lease;
- HANDLE share=nullptr; // the name this helper published (renderer-thread producers)
- ~Slot(){if(share)CloseHandle(share);}
-};
 // The capture layer's renderer-thread producer has no D3D device (a D3D device
 // in Project64 freezes its renderer once; docs/replay-gpu-runtime.md), so it
-// imports textures this helper creates under the channel's names. An older
-// layer created them itself: open first, create only when nothing has the name.
-HRESULT create_named(ID3D11Device*device,const gbdll_config_v1&config,DXGI_FORMAT format,const wchar_t*name,Slot&slot){
- D3D11_TEXTURE2D_DESC desc{};desc.Width=config.encoder.width;desc.Height=config.encoder.height;desc.MipLevels=1;desc.ArraySize=1;
- desc.Format=format;desc.SampleDesc.Count=1;desc.Usage=D3D11_USAGE_DEFAULT;
- desc.BindFlags=D3D11_BIND_RENDER_TARGET|D3D11_BIND_SHADER_RESOURCE;
- desc.MiscFlags=D3D11_RESOURCE_MISC_SHARED_NTHANDLE|D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
- HRESULT hr=device->CreateTexture2D(&desc,nullptr,&slot.texture);if(FAILED(hr))return hr;
- Microsoft::WRL::ComPtr<IDXGIResource1> resource;hr=slot.texture.As(&resource);if(FAILED(hr))return hr;
- return resource->CreateSharedHandle(nullptr,DXGI_SHARED_RESOURCE_READ|DXGI_SHARED_RESOURCE_WRITE,name,&slot.share);
-}
+// imports textures this helper creates under the channel's names, through the
+// transport the producer selected (gpu_transport_helper.h). A keyed-mutex name
+// an older layer created itself is opened rather than created.
+struct Slot {
+ gpu_transport::HelperSlot transport;
+ Microsoft::WRL::ComPtr<ID3D11Query> completion;
+ GpuEncoderLease lease;
+};
 struct Session {
  uint64_t token=0;DWORD owner=0;LUID adapter{};gbdll_state state=GBDLL_OPEN;
  uint32_t failure=GBDLL_OK;HRESULT hr=S_OK;uint64_t timeouts=0,last_pts=0;bool have_pts=false;
@@ -78,7 +68,7 @@ uint32_t poll(Session&s) {
   // One query per pending slot per API call; no spin/sleep or renderer work.
   const HRESULT hr=s.context->GetData(slot.completion.Get(),&done,sizeof(done),0);
   HRESULT released=S_OK;
-  const auto result=slot.lease.poll_result(hr,done!=FALSE,[&]{released=slot.mutex->ReleaseSync(0);return int32_t(released);});
+  const auto result=slot.lease.poll_result(hr,done!=FALSE,[&]{released=slot.transport.release();return int32_t(released);});
   if(result==GpuEncoderLease::fault)return quarantine(s,GBDLL_QUARANTINE,(hr!=S_OK&&hr!=S_FALSE)?hr:released);
   pending|=result==GpuEncoderLease::waiting;
  }
@@ -126,7 +116,7 @@ extern "C" uint32_t GBENC_CALL SM64GpuEncoderOpenV1(const gbdll_config_v1*config
  if(poisoned)return GBDLL_QUARANTINE;if(session)return GBDLL_BUSY;
  if(!config)return GBDLL_ARGUMENT;
  if(config->struct_size!=sizeof(*config)||config->version!=GBDLL_VERSION||config->encoder.struct_size!=sizeof(config->encoder)||config->encoder.version!=GBENC_ABI_V1||config->sink.struct_size!=sizeof(config->sink)||config->sink.version!=GBENC_ABI_V1)return GBDLL_ABI;
- if(config->slot_count!=GBDLL_SLOTS||config->reserved||!config->sink.on_packet||next_token==UINT64_MAX)return GBDLL_ARGUMENT;
+ if(config->slot_count!=GBDLL_SLOTS||config->transport>=GT_TRANSPORT_COUNT||!config->sink.on_packet||next_token==UINT64_MAX)return GBDLL_ARGUMENT;
  for(const auto&name:config->names){bool terminator=false;for(uint16_t c:name)if(!c){terminator=true;break;}if(!name[0]||!terminator)return GBDLL_ARGUMENT;}
  if(!wcscmp(reinterpret_cast<const wchar_t*>(config->names[0]),reinterpret_cast<const wchar_t*>(config->names[1])))return GBDLL_ARGUMENT;
  Session*s=new(std::nothrow)Session;if(!s)return GBDLL_MEMORY;
@@ -135,19 +125,20 @@ extern "C" uint32_t GBENC_CALL SM64GpuEncoderOpenV1(const gbdll_config_v1*config
   if(!device_for_luid(s->adapter,&s->device,&s->context))return abandon_open(s,GBDLL_ADAPTER,GpuOpenFailureStage::adapter);
   Microsoft::WRL::ComPtr<ID3D11Device1> device1;HRESULT hr=s->device.As(&device1);
   if(FAILED(hr))return abandon_open(s,GBDLL_IMPORT,GpuOpenFailureStage::device_interface,false,true,hr);
+  const uint32_t transport=config->transport?config->transport:GT_TRANSPORT_KEYED_MUTEX;
   const DXGI_FORMAT format=config->encoder.input_format==GBENC_INPUT_RGBA8?DXGI_FORMAT_R8G8B8A8_UNORM:config->encoder.input_format==GBENC_INPUT_BGRA8?DXGI_FORMAT_B8G8R8A8_UNORM:DXGI_FORMAT_UNKNOWN;
   if(format==DXGI_FORMAT_UNKNOWN)return abandon_open(s,GBDLL_FORMAT,GpuOpenFailureStage::input_format);
   for(unsigned i=0;i<GBDLL_SLOTS;++i){auto&slot=s->slots[i];
    const auto*name=reinterpret_cast<const wchar_t*>(config->names[i]);
-   hr=device1->OpenSharedResourceByName(name,DXGI_SHARED_RESOURCE_READ|DXGI_SHARED_RESOURCE_WRITE,IID_PPV_ARGS(&slot.texture));
-   if(FAILED(hr)){
-    hr=create_named(s->device.Get(),*config,format,name,slot);
-    if(FAILED(hr))return abandon_open(s,GBDLL_IMPORT,GpuOpenFailureStage::shared_texture,false,true,hr);
-   }
-   D3D11_TEXTURE2D_DESC desc{};slot.texture->GetDesc(&desc);
-   const UINT sharing=D3D11_RESOURCE_MISC_SHARED_NTHANDLE|D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
+   hr=slot.transport.create(s->device.Get(),transport,name,config->encoder.width,config->encoder.height,format,config->encoder.input_format);
+   if(FAILED(hr)&&!slot.transport.texture())return abandon_open(s,GBDLL_IMPORT,GpuOpenFailureStage::shared_texture,false,true,hr);
+   D3D11_TEXTURE2D_DESC desc{};slot.transport.texture()->GetDesc(&desc);
+   const UINT sharing=transport==GT_TRANSPORT_KEYED_MUTEX?D3D11_RESOURCE_MISC_SHARED_NTHANDLE|D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX
+    :transport==GT_TRANSPORT_SEMAPHORE?D3D11_RESOURCE_MISC_SHARED_NTHANDLE|D3D11_RESOURCE_MISC_SHARED:0;
    if(desc.Width!=config->encoder.width||desc.Height!=config->encoder.height||desc.Format!=format||desc.MipLevels!=1||desc.ArraySize!=1||desc.SampleDesc.Count!=1||desc.SampleDesc.Quality!=0||desc.Usage!=D3D11_USAGE_DEFAULT||desc.CPUAccessFlags||(desc.MiscFlags&sharing)!=sharing)return abandon_open(s,GBDLL_FORMAT,GpuOpenFailureStage::texture_format);
-   hr=slot.texture.As(&slot.mutex);if(FAILED(hr))return abandon_open(s,GBDLL_IMPORT,GpuOpenFailureStage::keyed_mutex,false,true,hr);
+   // The texture's custody object: its keyed mutex, else its fence or section.
+   if(FAILED(hr))return abandon_open(s,GBDLL_IMPORT,transport==GT_TRANSPORT_KEYED_MUTEX
+    ?GpuOpenFailureStage::keyed_mutex:GpuOpenFailureStage::transport_custody,false,true,hr);
    D3D11_QUERY_DESC query{D3D11_QUERY_EVENT,0};hr=s->device->CreateQuery(&query,&slot.completion);
    if(FAILED(hr))return abandon_open(s,GBDLL_MEMORY,GpuOpenFailureStage::completion_query,false,true,hr);
   }
@@ -166,14 +157,17 @@ extern "C" uint32_t GBENC_CALL SM64GpuEncoderSubmitV1(uint64_t token,const gbdll
  if(!p)return GBDLL_ARGUMENT;if(p->struct_size!=sizeof(*p)||p->version!=GBDLL_VERSION)return GBDLL_ABI;
  if(p->slot>=GBDLL_SLOTS||(p->flags&~GBDLL_FORCE_IDR)||!p->duration||p->pts>UINT64_MAX-p->duration||(s->have_pts&&p->pts<=s->last_pts))return GBDLL_ARGUMENT;
  auto&slot=s->slots[p->slot];if(slot.lease.held||slot.lease.pending)return GBDLL_PENDING;
- const HRESULT acquired=slot.mutex->AcquireSync(1,0);
+ const HRESULT acquired=slot.transport.acquire(s->context.Get());
  const auto ownership=slot.lease.acquire_result(acquired);
  if(ownership==GpuEncoderLease::timeout){++s->timeouts;return GBDLL_TIMEOUT;}
  if(ownership==GpuEncoderLease::abandoned){quarantine(*s,GBDLL_ABANDONED,acquired);return GBDLL_ABANDONED;}
  if(ownership!=GpuEncoderLease::ready)return quarantine(*s,GBDLL_QUARANTINE,acquired);
  try {
-  const bool accepted=s->encoder.encode(slot.texture.Get(),p->occurrence,p->pts,p->duration,(p->flags&GBDLL_FORCE_IDR)!=0);
+  const bool accepted=s->encoder.encode(slot.transport.texture(),p->occurrence,p->pts,p->duration,(p->flags&GBDLL_FORCE_IDR)!=0);
   if(s->encoder.state()==GBENC_QUARANTINED)return quarantine(*s,GBDLL_ENCODER,E_FAIL);
+  // SEMAPHORE: the read above is queued; signal the renderer's next value behind it.
+  const HRESULT signalled=slot.transport.after_read(s->context.Get());
+  if(FAILED(signalled))return quarantine(*s,GBDLL_QUARANTINE,signalled);
   // The source CopyResource precedes this event on THIS immediate context even
   // when NVENC mapping failed. No key return is inferred from encoder closure.
   s->context->End(slot.completion.Get());s->context->Flush();

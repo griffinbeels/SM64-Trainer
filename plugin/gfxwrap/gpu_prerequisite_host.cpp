@@ -15,7 +15,7 @@ int main(){
  gd_limits limits{};limits.bytes=sizeof limits;limits.version=GD_VERSION;
  if(!rc_bind_delivery(&limits)||!bound.status)return 1;
  observed.state=GD_FAULT;observed.reason=GD_GL_UNSUPPORTED;
- for(uint32_t detail=0;detail<=7;++detail){
+ for(uint32_t detail=0;detail<=8;++detail){
   observed.error=detail;uint32_t state=0,reason=0;
   if(!bound.status(&state,&reason)||state!=CONTROL_UNAVAILABLE)return 1;
   printf("prerequisite %u %u\n",detail,reason);

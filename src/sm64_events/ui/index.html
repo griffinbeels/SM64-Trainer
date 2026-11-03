@@ -6288,6 +6288,9 @@
     justify-self: end; gap: .35rem; font-size: .69rem;
   }
   .replay-number-field input { width: 60px; min-width: 60px; }
+  .retention-footage-field { width: auto; grid-template-columns: 60px auto; }
+  .replay-retention-row > span:first-child { white-space: normal; }
+  .replay-retention-row .retention-mode { flex-basis: 100%; }
   .saved-replay-note {
     display: flex; align-items: center; gap: .4rem;
     margin-top: .6rem; color: var(--muted); font-size: .66rem;
@@ -6510,6 +6513,7 @@
     .sidebar-status .status-short { color: var(--coral); }
     .sidebar-status .recording-short { color: var(--muted); }
     .sidebar-status .recording-short.is-on { color: var(--coral); }
+    .sidebar-status .recording-short.is-warn { color: var(--danger, #ffb1b1); }
     .sidebar-status .recording-status:empty { display: none; }
     .recording-status {
       width: 100%; display: flex; justify-content: center;
@@ -10038,6 +10042,13 @@
 .lineup .lineup-choice:hover { border-color: var(--gold-soft); background: var(--surface-3); }
 .lineup .lineup-choice:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
 .lineup-simulation { margin: 2px 0 4px; text-align: center; color: var(--muted); font-size: .7rem; }
+.lineup-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 4px 10px; margin: 2px 0 4px; font-size: .75rem; }
+.lineup-foot-text { color: var(--muted); }
+.lineup-foot-text.is-beaten-all { color: var(--text); font-weight: 600; }
+.lineup-new-ghosts { min-height: 0; height: 26px; padding: 0 10px; border-radius: 7px; border: 1px solid var(--border-soft);
+  background: transparent; color: var(--muted); font: inherit; cursor: pointer; }
+.lineup-new-ghosts:hover, .lineup-new-ghosts:focus-visible { color: var(--text); border-color: var(--border); }
+.lineup-new-ghosts.is-ready { color: var(--text); border-color: var(--border); background: var(--surface-2); }
 
 /* The swap popover: anchored under its seat; nothing else on screen moves. */
 .rival-swap { position: absolute; z-index: 30; width: 300px; padding: 6px; display: grid; gap: 4px; font-size: .78rem;

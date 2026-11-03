@@ -56,7 +56,7 @@ at 30 Hz. A geometry benchmark alone cannot establish that budget.
 `ghost/settings.py` owns the defaults accepted on October 6: ghosts enabled,
 visibility 100%, colour enabled at +250 degrees, shadow and names enabled,
 inputs over the ghost disabled, corner inputs and front-of-Mario fading enabled,
-black name boxes at 60%, sound fading enabled at 30% volume, and ghosts in
+black name boxes at 60%, sound fading enabled, volume off (0%, since October 31), and ghosts in
 recording disabled. Paths default off following the October 8 correction;
 when enabled, the path uses button presses and the average
 of ghosts, looking 3 seconds ahead at width 20, strength 80% and arrow spacing
@@ -146,7 +146,10 @@ to the cap line, and `^ | < > &`, which JP cannot draw, show JP's `?`. Only
 the names' font is borrowed: inputs, HUD art and sound stay the cartridge's
 own. Names and inputs are
 sized in world units (`GP_ANNOTATION_*` in `ghost_tuning.h`), so a far ghost's
-name shrinks with its body, up to a largest size beside the camera. The
+name shrinks with its body, up to a largest size beside the camera. Below two
+screen pixels a font texel (a 640x480 window, or a far ghost) the name stops
+following the world: each texel is one or two whole pixels on the pixel grid,
+because nearest sampling smaller than that drops strokes frame to frame. The
 renderer draws the world upside down (`flip_y`), so layout offsets flip with
 their anchor. The input display sits above the name, the stick base (or the
 Values column) through the last held button centred on it, and reproduces Usamune's
@@ -2331,6 +2334,26 @@ rechecks the current strategy's ceiling and subdivision winner. Incomplete or
 uncertified captures remain ineligible. Retraction retries compare the latest
 durable operation UUID, so a late keep-B failure cannot replace a newer keep-C
 operation, including B→C→B sequences.
+
+## Keeping every run owed a ghost
+
+`ghost/rival_recording.py` owns this. Its queue has no capacity, so a burst cannot
+drop a run. `PreservationFailed` (poses did not reach disk) and file or database
+errors retry with backoff while the poses exist (`ARCHIVE_RETENTION_S`), then log
+one error per reason per session. A plain ValueError means the run is not
+eligible and refuses silently. A run with no pose recorder (`NO_POSE_ARCHIVE`)
+never retries. A saved PB whose poses did not commit retries the same way,
+whatever admission thinks of the run, so a PB past the ghost ceiling keeps its clip
+and gets no row.
+
+Stop drains the queue for at most `DRAIN_S`, before community and recorder
+teardown. It commits without waiting for a star dance, so a clip finished while
+closing can lack its dance. The additive `owed` table in `population.sqlite3` holds each
+run from the moment the worker takes it until it settles. The next start admits
+an owed run only if its clip was committed and its lineage still matches. A
+crash before commit loses the poses: they live in session scratch, and that row
+is settled with a warning. An owed upload waits for its recorded account to
+return, for at most `OWED_OFFER_DAYS`, and never goes to another account.
 
 One player may occupy one rival seat across automatic choices, explicit pins and
 mixed ready/downloading rosters. Bundled schema2 author identities match the

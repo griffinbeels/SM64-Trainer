@@ -347,7 +347,9 @@ Their wall times can overlap capture and must not be summed as single-thread CPU
 `pending_bytes`/`pending_blocks` include in-flight work; `peak_bytes`, `peak_blocks`
 and `oldest_ms` expose bounded queue pressure. `slowest_command` labels bind, row,
 PCM or video for the existing `max_feed_ms`/UTC peak fields. Those fields now
-measure whole sink commands, not just disk writes. Delivery counts advance after
+measure whole sink commands, not just disk writes. They update when a command
+returns, so `inflight_command` and `inflight_ms` name one still stalled. Delivery
+counts advance after
 successful mux calls. Session failures log these statistics after retirement.
 
 `tests/test_gpu_cadence.py` supplies the autonomous actual-source/encoder negative

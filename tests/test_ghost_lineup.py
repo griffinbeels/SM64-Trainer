@@ -200,7 +200,7 @@ def test_switching_strategies_asks_each_list_once_and_never_mixes_them(tmp_path)
     run(tmp_path, cloud, scenario)
 
 
-def test_a_pb_change_asks_no_list_and_keeps_surviving_seats(tmp_path, monkeypatch):
+def test_a_pb_change_asks_no_list_and_holds_every_seat(tmp_path, monkeypatch):
     cloud = Cloud([cloud_row(number, frames) for number, frames in enumerate(FRAMES, 1)])
     current = [pb_at(930)]
     monkeypatch.setattr(module, "saved_pb_basis", lambda *_: current[0])
@@ -208,16 +208,19 @@ def test_a_pb_change_asks_no_list_and_keeps_surviving_seats(tmp_path, monkeypatc
     async def scenario(rivals, tracker, population, sync, native):
         await settle(sync, rivals, STANDARD)
         before = {row["slot"]: (row["id"], row["hue_degrees"], row["player_id"]) for row in rivals.rows}
-        lists, generation = len(cloud.lists()), rivals.generation
+        lists = len(cloud.lists())
         assert len(before) == 4 and lists == 1
-        current[0] = pb_at(860)  # passes the slowest seat only
+        current[0] = pb_at(100)  # past every seat
         rivals.pb_changed(STANDARD)
         await settle(sync, rivals, STANDARD)
         after = {row["slot"]: (row["id"], row["hue_degrees"], row["player_id"]) for row in rivals.rows}
-        assert len(cloud.lists()) == lists
-        survivors = [slot for slot, seat in before.items() if seat in after.values()]
-        assert len(survivors) == 3 and all(after[slot] == before[slot] for slot in survivors)
-        assert rivals.generation > generation and all(not row["pending"] for row in rivals.rows)
+        assert len(cloud.lists()) == lists and after == before
+        assert rivals.pb["frames"] == 100 and all(not row["pending"] for row in rivals.rows)
+        # Asking for new ghosts replaces it from the list it already holds.
+        rivals.apply(rivals.checked({"action": "new"}, STANDARD))
+        await settle(sync, rivals, STANDARD)
+        assert {row["id"] for row in rivals.rows}.isdisjoint(seat[0] for seat in before.values())
+        assert len(rivals.rows) == 4 and len(cloud.lists()) == lists
     run(tmp_path, cloud, scenario)
 
 

@@ -299,19 +299,6 @@ def _eligible_auto(row, pb, options, low, high, strategy, scope):
             and (options["mode"] == "fixed" or _ahead(row, pb)))
 
 
-def _keeps_seat(row, pb, options, low, high, strategy, scope):
-    """A seated rival stays until the PB passes it (his rule, 2026-10-16:
-    seats keep their player and colour), even below the range's floor.
-
-    A seat above the range's top is dealt again: widening re-seats it in the
-    same slot while the range stays empty, and an undone PB brings nearer
-    rivals back.
-    """
-    if options["mode"] == "fixed":
-        return _eligible_auto(row, pb, options, low, high, strategy, scope)
-    return _automatic_row(row, strategy, scope) and _ahead(row, pb) and row["step"] <= high
-
-
 def player_key(row):
     """Who a recording belongs to; a recording without a player stands alone."""
     if row.get("_owned") is True:
@@ -379,13 +366,16 @@ def _widened(candidates, taken, players, seats, high, strategy, scope, allow_fas
     return picked
 
 
-def select_rivals(rows, pb, options, pins: dict[str, str], previous=(), *, scope="strategy", allow_fastest=True) -> tuple[dict, ...]:
+def select_rivals(rows, pb, options, pins: dict[str, str], previous=(), *, scope="strategy", allow_fastest=True,
+                  avoid=frozenset()) -> tuple[dict, ...]:
     """Choose visible slots; caller retains hidden pins and owns PB playback.
 
-    Pass the previous roster to keep its seats: an automatic seat keeps its
-    player, slot and colour until the PB passes it, then takes that player's
-    faster in-range recording when one exists. Omit it to deal afresh (the
-    rival settings changed). With no saved PB the range spreads across the two
+    Pass the previous roster to hold it: every automatic seat keeps its player,
+    recording, slot and colour, beaten or not (his rule, 2026-11-03: beating
+    ALL of a set is the accomplishment, so a PB never replaces one). Only a seat
+    whose recording is gone is filled. Omit `previous` to deal afresh; `avoid`
+    names the players of the set just asked away, who return only when nobody
+    else can fill a seat. With no saved PB the range spreads across the two
     lowest tiers. Seats the range cannot fill widen upward, then downward (`_widened`),
     including recordings already beaten by the PB. Missing chosen recordings
     remain occupied rather than silently replaced.
@@ -411,11 +401,15 @@ def select_rivals(rows, pb, options, pins: dict[str, str], previous=(), *, scope
     # including protected choices and carried-over rows, belongs to one player.
     seats = {old["slot"]: old for old in previous
              if not old.get("pinned") and type(old.get("slot")) is int and 0 <= old["slot"] < options["count"]}
-    _carry_seats(seats, candidates, result, used, players, bounds)
-    available = [row for row in candidates.values() if row["id"] not in used and _eligible_auto(row, **bounds)]
-    automatic = list(_automatic(available, options["count"] - len(result), low, high, players))
-    automatic += _widened(candidates, used | {row["id"] for row in automatic}, players,
-                          options["count"] - len(result) - len(automatic), high, strategy, scope, allow_fastest)
+    _carry_seats(seats, candidates, result, used, players, strategy, scope)
+    automatic = []
+    fresh = {key: row for key, row in candidates.items() if player_key(row) not in avoid}
+    for pool in (fresh, candidates):
+        taken = used | {row["id"] for row in automatic}
+        available = [row for row in pool.values() if row["id"] not in taken and _eligible_auto(row, **bounds)]
+        automatic += _automatic(available, options["count"] - len(result) - len(automatic), low, high, players)
+        automatic += _widened(pool, used | {row["id"] for row in automatic}, players,
+                              options["count"] - len(result) - len(automatic), high, strategy, scope, allow_fastest)
     _deal(automatic, result, seats, options["count"])
     return tuple(result[slot] for slot in sorted(result))
 
@@ -440,32 +434,16 @@ def _place_pins(pins, candidates, count, used, players):
     return result
 
 
-def _carry_seats(seats, candidates, result, used, players, bounds):
-    """Keep each previous automatic seat the PB has not passed, in its slot.
-
-    Same rival, faster: a seat the new PB passed first takes its player's
-    fastest in-range recording that is still ahead (his design, 2026-10-16).
-    """
-    def seat(row, slot):
+def _carry_seats(seats, candidates, result, used, players, strategy, scope):
+    """Keep each previous automatic seat in its slot, beaten or not."""
+    for slot, old in sorted(seats.items()):
+        row = candidates.get(old["id"])
+        if (slot in result or row is None or row["id"] in used or player_key(row) in players
+                or not _automatic_row(row, strategy, scope)):
+            continue
         result[slot] = _placed(row, slot, False)
         used.add(row["id"])
         players.add(player_key(row))
-
-    passed = []
-    for slot, old in sorted(seats.items()):
-        row = candidates.get(old["id"])
-        if slot in result or row is not None and (row["id"] in used or player_key(row) in players):
-            continue
-        if row is not None and _keeps_seat(row, **bounds):
-            seat(row, slot)
-        elif not _ahead(row or old, bounds["pb"]):
-            passed.append((slot, old))
-    for slot, old in passed:
-        player = player_key(old)
-        faster = [row for row in candidates.values() if row["id"] not in used and player_key(row) == player
-                  and player not in players and _eligible_auto(row, **bounds)]
-        if faster:
-            seat(min(faster, key=lambda row: (row["frames"], row["id"])), slot)
 
 
 def _deal(automatic, result, seats, count):

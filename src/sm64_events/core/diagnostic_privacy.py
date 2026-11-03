@@ -80,7 +80,7 @@ def _startup(value):
     result = {key: item for key, item in value.items()
               if key in {"epoch", "load_error", "width", "height", "control_generation",
                          "bindings_site", "bindings_gl_error", "bindings_flags", "bindings_invalidations",
-                         "bindings_after_ms", "bindings_contexts"}
+                         "bindings_after_ms", "bindings_contexts", "transport_floor", "failed_transport_error"}
               and type(item) is int and 0 <= item <= 0xffffffff}
     for key in ("gl_version", "context_gl_version"):
         version = value.get(key)
@@ -92,6 +92,13 @@ def _startup(value):
     site = value.get("bindings_site_name")
     if isinstance(site, str) and re.fullmatch(r"[a-z_]{1,40}", site):
         result["bindings_site_name"] = site
+    # Native capability and transport names only (gpudiagnostics.py).
+    for key in ("bridge_transport", "failed_transport"):
+        if isinstance(value.get(key), str) and re.fullmatch(r"[a-z_]{1,20}", value[key]):
+            result[key] = value[key]
+    capabilities = value.get("transport_capabilities")
+    if isinstance(capabilities, str) and re.fullmatch(r"[a-z0-9_]{1,24}(,[a-z0-9_]{1,24}){0,15}", capabilities):
+        result["transport_capabilities"] = capabilities
     entry = value.get("missing_entry_point")
     if isinstance(entry, str) and entry in _ENTRY_POINTS:
         result["missing_entry_point"] = entry
@@ -108,7 +115,11 @@ def _gpu(value):
     result = pick(value, ("stage", "reason", "codec", "requested_codec", "encoder_backend", "capture_build",
                           "native_reason", "native_result", "native_stage", "native_operation", "native_hresult",
                           "encoder_error", "encoder_result", "driver_error", "gpu_vendor_id", "gpu_name", "gpu_driver",
-                          "observed_unix_s"))
+                          "observed_unix_s",
+                          # A failed media sink (gpufielddiagnostics.SINK_KEYS): numbers and fixed command names.
+                          "sink_stalled_command", "sink_stalled_ms", "sink_slowest_command", "sink_max_feed_ms",
+                          "sink_oldest_ms", "sink_pending_bytes", "sink_pending_blocks", "sink_peak_bytes",
+                          "sink_peak_blocks", "recording_free_bytes"))
     result["startup"] = _startup(value.get("startup"))
     if isinstance(value.get("native_receipt_available"), bool):
         result["native_receipt_available"] = value["native_receipt_available"]

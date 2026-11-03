@@ -52,11 +52,17 @@ _CONTEXT_KEYS = frozenset({
     "encoder_result", "native_reason",
     "gl_vendor", "gl_renderer", "gl_version", "missing_entry_point",
     "stalled_for_s",
+    # What stalled a failed media sink, and the recording volume's free bytes
+    # (replay/gpufielddiagnostics.py SINK_KEYS): never a path.
+    "sink_stalled_command", "sink_stalled_ms", "sink_slowest_command", "sink_max_feed_ms", "sink_oldest_ms",
+    "sink_pending_bytes", "sink_pending_blocks", "sink_peak_bytes", "sink_peak_blocks", "recording_free_bytes",
     # Why a no-surface startup (10034) refused: the GPU named at context
     # creation, and the first bindings invalidation (replay/gpudiagnostics.py).
     "context_gl_vendor", "context_gl_renderer", "context_gl_version", "context_identity",
     "bindings_site", "bindings_site_name", "bindings_cause", "bindings_gl_error", "bindings_flags",
     "bindings_invalidations", "bindings_after_ms", "bindings_contexts",
+    # Which bridge transport the driver allows (gpu_transport.h names only).
+    "transport_capabilities", "bridge_transport", "transport_floor", "failed_transport", "failed_transport_error",
 })
 # Operational loggers only: gameplay event wires, profiles, community/account
 # and process inventories stay local. Breadcrumbs, Sentry Logs and the Debug

@@ -36,7 +36,13 @@ U8, U16, U32, U64, I32, I64 = (
 # the bridge textures (renderer-thread capture), so a version-1 wrapper and
 # this trainer cannot share a channel. 3 (2026-10-03): the ghost copy's twin
 # block follows the payloads and the header names its two twin textures.
-VERSION, HEADER_BYTES, MAX_OFFERS, STAMP_BYTES = 3, 2048, 8, 2048
+# 4 (2026-10-31): `transport`, the bridge transport the producer selected.
+VERSION, HEADER_BYTES, MAX_OFFERS, STAMP_BYTES = 4, 2048, 8, 2048
+# gpu_transport.h GT_TRANSPORT_*: how a picture reaches the helper's texture.
+# Both helpers (clean and ghost copy) create their textures for it.
+TRANSPORT_KEYED_MUTEX, TRANSPORT_SEMAPHORE, TRANSPORT_READBACK = 1, 2, 3
+TRANSPORT_NAMES = {TRANSPORT_KEYED_MUTEX: "keyed_mutex", TRANSPORT_SEMAPHORE: "semaphore",
+                   TRANSPORT_READBACK: "readback"}
 # The twin block: client, status, two bridges, two receipts, 128 bytes each.
 TWIN_BYTES = 768
 TWIN_CLIENT, TWIN_STATUS, TWIN_BRIDGES, TWIN_RECEIPTS = 0, 128, 256, 512
@@ -129,7 +135,8 @@ class Header(Wire):
             ("twin_offset", U32),
             ("twin_bytes", U32),
             ("twin_texture_names", (U16 * 128) * 2),
-            ("reserved", U8 * 688),
+            ("transport", U32),
+            ("reserved", U8 * 684),
         ]
     )
 
@@ -298,7 +305,7 @@ assert [
 ] == [2048, 256, 256, 128, 128, 128]
 assert Header.table.offset == 192 and Header.texture_names.offset == 320
 assert Header.twin_offset.offset == 840 and Header.twin_texture_names.offset == 848
-assert Header.reserved.offset == 1360
+assert Header.transport.offset == 1360 and Header.reserved.offset == 1364
 
 
 class ProtocolError(ValueError):
@@ -372,6 +379,7 @@ def validate_header(h: Header, mapped_bytes: int):
         and h.packet_bytes <= h.pending_bytes <= h.packet_count * h.packet_bytes,
         "packet budget",
     )
+    _require(h.transport in TRANSPORT_NAMES, "bridge transport")
     _require(not any(h.reserved), "reserved header bytes")
     total_stamp = 0
     for i, field in enumerate(h.table):
@@ -572,6 +580,7 @@ class Client:
             raise BlockingIOError("GPU channel header not published yet")
         self.texture_names = validate_header(h, MAX_MAP)
         self.twin_texture_names = twin_texture_names(h)
+        self.transport = h.transport
         _require(
             (h.nonce_lo, h.nonce_hi, h.generation) == (lo, hi, generation)
             and (epoch is None or h.epoch == epoch)

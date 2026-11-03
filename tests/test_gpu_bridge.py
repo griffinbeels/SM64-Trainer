@@ -1,8 +1,9 @@
 """The shipped renderer-thread bridge, x86 renderer -> x64 encoder helper.
 
 One GL context plays the renderer and copies each picture (snapshot pool,
-then render_capture::Bridge) into the two keyed-mutex textures the consumer
-created, as the helper now does. The consumer checks every pixel against the
+then render_capture::Bridge) into the two textures the consumer created, as
+the helper now does, through each bridge transport in turn (keyed mutex,
+semaphore, readback; gpu_transport.h). The consumer checks every pixel against the
 independent fixture and, in the NVENC modes, encodes with the shipped encoder;
 the packets go through the recorder's own fragment mux before any decode.
 """
@@ -41,8 +42,10 @@ def test_gpu_witness_refuses_wrong_actual_vendor(tmp_path, monkeypatch):
     assert "renderer adapter_luid=" not in refused.stdout
 
 
+@pytest.mark.parametrize("transport", sorted(witness.TRANSPORTS))
 @pytest.mark.parametrize("mode", ["pixels", "omit-copy", "nvenc", "nvenc-av1"])
-def test_gpu_bridge(tmp_path, mode):
+def test_gpu_bridge(tmp_path, monkeypatch, mode, transport):
+    selected = witness.use_transport(monkeypatch, transport)
     build, vc32 = witness.toolchain()
     nvenc = mode.startswith("nvenc")
     producer = witness.build_producer(build, vc32, tmp_path,
@@ -59,8 +62,9 @@ def test_gpu_bridge(tmp_path, mode):
     assert producer_code == 0, output
     width, height = geometry[4] & ~1, geometry[5] & ~1
     assert "producer passed: pictures=6 state_restored=yes" in output, output
+    assert output.rstrip().endswith(f"transport={selected}"), output
     assert (f"consumer passed: bits=64 pictures=6 bytes_checked={width * height * 4 * 6} "
-            f"output={width}x{height} created_textures=yes") in result.stdout
+            f"output={width}x{height} created_textures=yes transport={selected}") in result.stdout
     if nvenc:
         assert_nvenc_output(tmp_path, result.stdout, "av1" if mode == "nvenc-av1" else "h264")
 

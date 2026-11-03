@@ -6,6 +6,7 @@
 #include "gpu_delivery.h"
 #include "stamp_adapter.h"
 #include "gl_fixture.h"
+#include "gpu_transport_helper.h"
 #include <d3d11_1.h>
 #include <dxgi1_2.h>
 #include <wrl/client.h>
@@ -145,23 +146,18 @@ struct TwinHelper {
             if(desc.AdapterLuid.LowPart!=h.luid_low||desc.AdapterLuid.HighPart!=h.luid_high)continue;
             CHECK(SUCCEEDED(D3D11CreateDevice(adapter.Get(),D3D_DRIVER_TYPE_UNKNOWN,nullptr,0,nullptr,0,D3D11_SDK_VERSION,&device,nullptr,&context)));}
         CHECK(device);
-        D3D11_TEXTURE2D_DESC desc{};desc.Width=h.width&~1u;desc.Height=h.height&~1u;desc.MipLevels=1;desc.ArraySize=1;
-        desc.Format=DXGI_FORMAT_R8G8B8A8_UNORM;desc.SampleDesc.Count=1;desc.Usage=D3D11_USAGE_DEFAULT;
-        desc.BindFlags=D3D11_BIND_RENDER_TARGET|D3D11_BIND_SHADER_RESOURCE;
-        desc.MiscFlags=D3D11_RESOURCE_MISC_SHARED_NTHANDLE|D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
-        ComPtr<ID3D11Texture2D> textures[2];ComPtr<IDXGIKeyedMutex> keys[2];HANDLE shares[2]{};
-        for(unsigned i=0;i<2;++i){
-            CHECK(SUCCEEDED(device->CreateTexture2D(&desc,nullptr,&textures[i]))&&SUCCEEDED(textures[i].As(&keys[i])));
-            ComPtr<IDXGIResource1> resource;CHECK(SUCCEEDED(textures[i].As(&resource)));
-            CHECK(SUCCEEDED(resource->CreateSharedHandle(nullptr,DXGI_SHARED_RESOURCE_READ|DXGI_SHARED_RESOURCE_WRITE,
-                reinterpret_cast<const wchar_t*>(h.twin_texture_names[i]),&shares[i])));
-        }
+        // The shipped helper's transport code, for the channel's transport.
+        gpu_transport::HelperSlot slots[2];
+        for(unsigned i=0;i<2;++i)CHECK(SUCCEEDED(slots[i].create(device.Get(),h.transport,
+            reinterpret_cast<const wchar_t*>(h.twin_texture_names[i]),h.width&~1u,h.height&~1u,DXGI_FORMAT_R8G8B8A8_UNORM,1)));
         request(1);
         uint64_t done[2]{};const auto deadline_ms=2000ull;uint64_t stop_started=0;
         for(;;){
             for(unsigned i=0;i<2;++i){gc_bridge b{};
                 if(!gpu_channel::stable_read(&twin()->bridges[i],&b,sizeof b)||!b.token||b.token==done[i])continue;
-                const HRESULT got=keys[i]->AcquireSync(1,100);CHECK(got==S_OK);CHECK(SUCCEEDED(keys[i]->ReleaseSync(0)));
+                HRESULT got=WAIT_TIMEOUT;
+                for(unsigned n=0;n<100 && got==WAIT_TIMEOUT;++n){got=slots[i].acquire(context.Get());if(got==WAIT_TIMEOUT)Sleep(1);}
+                CHECK(got==S_OK);CHECK(SUCCEEDED(slots[i].after_read(context.Get())));context->Flush();CHECK(SUCCEEDED(slots[i].release()));
                 gc_receipt r{};r.accepted=1;r.token=b.token;r.occurrence=b.occurrence;r.encode_serial=b.encode_serial;
                 r.nonce_lo=h.nonce_lo;r.nonce_hi=h.nonce_hi;r.epoch=h.epoch;r.generation=h.generation;r.texture_index=i;
                 put(reinterpret_cast<uint8_t*>(&twin()->receipts[i]),&r,sizeof r);done[i]=b.token;returned.fetch_add(1);
@@ -173,7 +169,7 @@ struct TwinHelper {
             }
             Sleep(1);
         }
-        for(auto share:shares)if(share)CloseHandle(share);
+        for(auto&slot:slots)slot.reset();
         stopped.store(true);
     }
     void stop(){stopping.store(true);thread.join();UnmapViewOfFile(view);CloseHandle(mapping);}

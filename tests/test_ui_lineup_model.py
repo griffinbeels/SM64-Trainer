@@ -226,3 +226,19 @@ def test_the_overlay_switch_rides_on_the_model():
 def test_scope_is_part_of_the_lineup_identity():
     """Strategy and Overall are different lineups: switching exchanges the row."""
     assert model(lineup_session(scope="strategy"))["lineup"] != model(lineup_session())["lineup"]
+
+
+def test_the_set_says_when_every_ghost_is_beaten():
+    """His rule (2026-11-03): beating ALL of a set is the moment, and the set
+    stays until he asks, so the row says so and offers the next one."""
+    racing = model(lineup_session())
+    assert racing["foot"] == {"allBeaten": False, "noNew": False}
+    beaten = model(lineup_session(pb_frames=99999))
+    assert beaten["foot"] == {"allBeaten": False, "noNew": False}  # the slowest PB beats nobody
+    fast = model(lineup_session(pb_frames=1))
+    assert fast["foot"]["allBeaten"] is True
+    no_time = model(lineup_session(pb_frames=None))
+    assert no_time["foot"]["allBeaten"] is False
+    told = lineup_session()
+    told["rivals"]["no_new_ghosts"] = True
+    assert model(told)["foot"]["noNew"] is True

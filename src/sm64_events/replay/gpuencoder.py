@@ -62,8 +62,13 @@ class EncoderFailure(RuntimeError):
 _LIVE = set()
 
 
-def _native_config(adapter_luid, names, options):
+def _native_config(adapter_luid, names, options, transport=0):
     config = abi.initialize(abi.Config)
+    # The channel's bridge transport (gpuchannel.TRANSPORT_*); the helper
+    # creates its textures, fences or sections for it.
+    if type(transport) is not int or transport not in (0, 1, 2, 3):
+        raise ValueError("unknown bridge transport")
+    config.transport = transport
     config.encoder = pod_options(options)
     if len(adapter_luid) != 2 or len(names) != 2 or names[0] == names[1]:
         raise ValueError("exact LUID and two distinct names required")
@@ -88,7 +93,7 @@ def _native_config(adapter_luid, names, options):
 
 
 class EncoderClient:
-    def __init__(self, *, dll_path, adapter_luid, names, options, on_packet):
+    def __init__(self, *, dll_path, adapter_luid, names, options, on_packet, transport=0):
         self._initialize(
             dll_path=dll_path,
             adapter_luid=adapter_luid,
@@ -96,9 +101,10 @@ class EncoderClient:
             options=options,
             on_packet=on_packet,
             loader=C.CDLL,
+            transport=transport,
         )
 
-    def _initialize(self, *, dll_path, adapter_luid, names, options, on_packet, loader):
+    def _initialize(self, *, dll_path, adapter_luid, names, options, on_packet, loader, transport=0):
         self._owner = threading.current_thread()
         self._busy = False
         self._expected = None
@@ -120,7 +126,7 @@ class EncoderClient:
             raise ValueError("absolute SM64GpuEncoderV1.dll path required")
         if not path.is_file():
             raise FileNotFoundError(path)
-        config = _native_config(adapter_luid, names, options)
+        config = _native_config(adapter_luid, names, options, transport)
         self.packet_limit = config.encoder.max_packet_bytes
         self._callback = abi.Callback(self._receive)
         config.sink = abi.Sink(C.sizeof(abi.Sink), 1, self._callback, None)
