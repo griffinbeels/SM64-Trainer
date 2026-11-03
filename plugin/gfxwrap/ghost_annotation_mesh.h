@@ -82,7 +82,8 @@ struct Layout {
               float left=NAN,float limit=180) {
         uint8_t chars[64]{};unsigned width=0;const unsigned n=fitted(value,scale,limit,chars,width,font);
         if(value[0] && n==0)return;
-        float x=std::isnan(left)?-float(width)*scale*0.5f:left;
+        // Centred on whole texels, so a name snapped to the pixel grid stays on it.
+        float x=std::isnan(left)?-float(width/2)*scale:left;
         const bool boxed=box>0,white=background==GP_NAME_WHITE;
         if(boxed) {
             // The glyph cell is 16 tall with its letters in rows 2-15 (caps 2-12).
@@ -250,6 +251,15 @@ inline void stack_row(const Payload& p,uint32_t flip_y,Mesh& mesh) {
     layout.text(p.label[0]?p.label:"GHOST",-(top_row+stack::half),stack::scale,p.background_opacity,p.background,
                 dx+buttons_left,stack::column_width-(buttons_left-letter_x)-2);
 }
+// Screen pixels one 3D-name font texel covers (its glyphs draw at 0.75 layout
+// pixels per texel), from the clip units per layout pixel over w.
+inline float name_texel_pixels(float ndc_per_layout,unsigned viewport_height) {
+    return 0.75f*ndc_per_layout*0.5f*float(viewport_height);
+}
+// An NDC coordinate moved onto the nearest pixel corner of a `size`-pixel axis.
+inline float on_pixel(float ndc,unsigned size) {
+    return std::round((ndc+1.0f)*0.5f*float(size))*2.0f/float(size)-1.0f;
+}
 inline void build(const Payload& p,const float vp[16],uint32_t flip_y,float opacity,float body_alpha,
                   const ghost_occlusion::Region& occlusion,unsigned viewport_width,unsigned viewport_height,
                   Mesh& mesh) {
@@ -272,7 +282,17 @@ inline void build(const Payload& p,const float vp[16],uint32_t flip_y,float opac
     const float px=std::sqrt(vp[0]*vp[0]+vp[4]*vp[4]+vp[8]*vp[8]),py=std::sqrt(vp[1]*vp[1]+vp[5]*vp[5]+vp[9]*vp[9]);
     if(!(px>0) || !(py>0) || !std::isfinite(px) || !std::isfinite(py))return;
     const float largest=2.0f*GP_ANNOTATION_MAX_SCREEN/240*anchor[3];
-    const float sy=std::fmin(GP_ANNOTATION_WORLD_PER_PIXEL*py,largest),sx=sy*px/py;
+    float sy=std::fmin(GP_ANNOTATION_WORLD_PER_PIXEL*py,largest),sx=sy*px/py;
+    // A small name keeps every stroke: below two screen pixels per font texel
+    // the nearest-texel sampling drops whole rows and columns, differently each
+    // frame, so there a texel is one or two whole pixels on the pixel grid.
+    const float texel=name_texel_pixels(sy/anchor[3],viewport_height);
+    if(texel<2) {
+        const float whole=texel<1.5f?1.0f:2.0f;
+        sy=whole/0.75f*2.0f/float(viewport_height)*anchor[3];sx=whole/0.75f*2.0f/float(viewport_width)*anchor[3];
+        anchor[0]=on_pixel(anchor[0]/anchor[3],viewport_width)*anchor[3];
+        anchor[1]=on_pixel(anchor[1]/anchor[3],viewport_height)*anchor[3];
+    }
     // The renderer draws the world upside down (flip_y) and turns the finished
     // picture over: offsets flip with the anchor, or every glyph reads mirrored.
     const float up=flip_y?-1.0f:1.0f;
