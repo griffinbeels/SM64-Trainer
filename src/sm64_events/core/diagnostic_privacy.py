@@ -80,7 +80,7 @@ def _startup(value):
     result = {key: item for key, item in value.items()
               if key in {"epoch", "load_error", "width", "height", "control_generation",
                          "bindings_site", "bindings_gl_error", "bindings_flags", "bindings_invalidations",
-                         "bindings_after_ms", "bindings_contexts"}
+                         "bindings_after_ms", "bindings_contexts", "transport_floor", "failed_transport_error"}
               and type(item) is int and 0 <= item <= 0xffffffff}
     for key in ("gl_version", "context_gl_version"):
         version = value.get(key)
@@ -92,6 +92,13 @@ def _startup(value):
     site = value.get("bindings_site_name")
     if isinstance(site, str) and re.fullmatch(r"[a-z_]{1,40}", site):
         result["bindings_site_name"] = site
+    # Native capability and transport names only (gpudiagnostics.py).
+    for key in ("bridge_transport", "failed_transport"):
+        if isinstance(value.get(key), str) and re.fullmatch(r"[a-z_]{1,20}", value[key]):
+            result[key] = value[key]
+    capabilities = value.get("transport_capabilities")
+    if isinstance(capabilities, str) and re.fullmatch(r"[a-z0-9_]{1,24}(,[a-z0-9_]{1,24}){0,15}", capabilities):
+        result["transport_capabilities"] = capabilities
     entry = value.get("missing_entry_point")
     if isinstance(entry, str) and entry in _ENTRY_POINTS:
         result["missing_entry_point"] = entry

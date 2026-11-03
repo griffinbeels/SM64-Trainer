@@ -1224,6 +1224,25 @@ delivery worker only keeps time and books, without the GPU.
 - **Not** -- the driver warm-up it replaced (2026-09-26 to 09-27), which kept
   the worker's context and paid the same freeze once in the boot intro
 
+### Bridge transport
+
+How a selected picture crosses from the [[renderer]]'s OpenGL context into the
+[[encoder helper]]'s texture, and how that texture comes back (2026-10-31). The
+[[renderer]] picks one per request from what its graphics driver offers: the
+keyed mutex (NVIDIA, no copy), the semaphore (no copy; the driver lacks the
+keyed mutex, as the AMD tester's did) or the readback (one CPU copy; neither
+lock). A transport the driver refuses is never picked again in that Project64;
+when the driver has refused them all, recording falls back to the desktop grab.
+The startup receipt in the [[Debug report]] names what the driver offers and
+which one ran.
+
+- **Lives** -- `plugin/gfxwrap/gpu_transport.h` (the values),
+  `plugin/gfxwrap/gpu_render.cpp` (selection and the renderer's half),
+  `plugin/gfxwrap/gpu_transport_helper.h` (the helper's half); contract in
+  [the bridge doc](replay-gpu-bridge.md#transports)
+- **Not** -- the encoder backend (NVENC or Windows Media Foundation), which
+  turns the texture into video after the transport delivered it
+
 ### Bindings cause
 
 Why the [[renderer]] could not name a capture surface: the first place it

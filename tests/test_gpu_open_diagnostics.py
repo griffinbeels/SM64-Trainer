@@ -114,7 +114,7 @@ def worker_failure(tmp_path, monkeypatch, code, *, token=False, query="ok"):
     monkeypatch.setattr(process_worker, "EncoderClient", lambda **_: failed_client(tmp_path, fake))
     worker = process_worker.Worker(1024)
     command = dict(op="Open", dll_path=str(tmp_path / "SM64GpuEncoderV1.dll"),
-                   adapter_luid=[0, 42], names=["a", "b"], options=options())
+                   adapter_luid=[0, 42], names=["a", "b"], transport=1, options=options())
     metadata, payload = worker.command(command)
     metadata.update(nonce="diagnostic-fixture", request_id=1)
     # Actual serialization and existing custody/schema validator, no I/O thread.
@@ -151,7 +151,7 @@ def attempt(queue):
                want_capture=lambda: True)
     session = CaptureSession(owner, NS(snapshot=NS(lifecycle=None, state="running")))
     session.channel = NS(header=NS(luid_high=0, luid_low=42, format=1,
-                                  even_width=320, even_height=240), texture_names=("a", "b"))
+                                  even_width=320, even_height=240), texture_names=("a", "b"), transport=1)
     session.controller = queue
     return session._attempt_open("C:/inert/SM64GpuEncoderV1.dll", session.channel.header,
                                  (0, 42), abi.CODEC_AV1, None)
@@ -254,7 +254,8 @@ def test_generic_worker_open_exception_is_protocol_state_not_native_return(monke
     monkeypatch.setattr(process_worker, "EncoderClient", failed_constructor)
     worker = process_worker.Worker(1024)
     metadata, payload = worker.command(dict(op="Open", dll_path="C:/inert/dll",
-                                           adapter_luid=[0, 42], names=["a", "b"], options=options()))
+                                           adapter_luid=[0, 42], names=["a", "b"], transport=1,
+                                           options=options()))
     assert metadata["result"] == 14 and metadata["status"] is None and not payload
     assert worker.client is None
     queue = ReplyQueue(metadata)

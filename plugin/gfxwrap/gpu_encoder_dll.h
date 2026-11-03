@@ -31,7 +31,11 @@ typedef enum gbdll_result {
 typedef enum gbdll_state {GBDLL_OPEN=1,GBDLL_FAILED=2,GBDLL_FINISHING=3,GBDLL_FINISHED=4,GBDLL_QUARANTINED=5} gbdll_state;
 typedef struct gbdll_config_v1 {
  uint32_t struct_size,version;int32_t adapter_high;uint32_t adapter_low;
- uint32_t slot_count,reserved;
+ uint32_t slot_count;
+ /* gpu_transport.h GT_TRANSPORT_*: how the renderer's picture reaches the
+    textures this helper creates under `names`. Zero is the keyed mutex an
+    older caller assumed; the channel header names the producer's. */
+ uint32_t transport;
  uint16_t names[GBDLL_SLOTS][GBDLL_NAME_UNITS]; /* NUL-terminated UTF16 NT resource names. */
  gbenc_options_v1 encoder;gbenc_sink_v1 sink;
 } gbdll_config_v1;

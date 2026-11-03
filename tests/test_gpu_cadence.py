@@ -80,7 +80,8 @@ def cadence_host(tmp_path_factory):
                 for path in inputs}
     before = fingerprints()
     flags = [flag for flag in build.COMMON_FLAGS if not flag.startswith("/std:")]
-    build._cl(vc, flags + ["/std:c++17", "/EHsc", f"/I{NATIVE}",
+    # GD_TRANSPORT_TEST: SM64_TEST_GPU_TRANSPORT selects the bridge transport.
+    build._cl(vc, flags + ["/std:c++17", "/EHsc", "/DGD_TRANSPORT_TEST", f"/I{NATIVE}",
         *map(str, sources), f"/Fe:{target}", f"/Fo{out}\\", "/link",
         "/EXPORT:SM64ReplaySourceV2", *build.LIBS, "d3d11.lib", "dxgi.lib"], out)
     assert fingerprints() == before, "native inputs changed while the fixture compiled"
@@ -188,6 +189,7 @@ class Pipeline:
                                      limits=self.settings.helper())
         self.command = dict(op="Open", dll_path=str(ENCODER),
             adapter_luid=[h.luid_high, h.luid_low], names=list(self.client.texture_names),
+            transport=self.client.transport,
             options=self.settings.encoder(h, ReplayConfig(), nominal_rate=30))
         self.request_id = self.controller.enqueue(self.command)
         self.reply = eventually(self.controller.take_result, timeout=5)
@@ -361,13 +363,19 @@ def test_autonomous_source_survives_media_stall_without_losing_identity_or_audio
     assert candidate[1] == baseline[1], "audio PTS/sample intervals changed through the worker"
 
 
+@pytest.mark.parametrize("transport", ["keyed", "semaphore", "readback"])
 @pytest.mark.parametrize("dimensions,presentation", [((320, 240), False), ((1600, 1200), True)])
-def test_ten_second_60vi_30picture_source_cadence(cadence_host, tmp_path, dimensions, presentation):
-    """Real cadence/size and renderer thread; synthetic drawing, not full LINK gameplay."""
+def test_ten_second_60vi_30picture_source_cadence(cadence_host, tmp_path, monkeypatch, dimensions, presentation,
+                                                  transport):
+    """Real cadence/size and renderer thread; synthetic drawing, not full LINK
+    gameplay. Each bridge transport (gpu_transport.h) through the shipped
+    helper, selected by the host's test override."""
+    monkeypatch.setenv("SM64_TEST_GPU_TRANSPORT", transport)
     pipeline = Pipeline(cadence_host, tmp_path, isolated=True, delay_s=0,
                         dimensions=dimensions, frames=330, vi_per_picture=2, presentation=presentation)
     try:
         pipeline.open()
+        assert pipeline.client.transport == {"keyed": 1, "semaphore": 2, "readback": 3}[transport]
         pipeline.start()
         pipeline.pump()
         pipeline.result()

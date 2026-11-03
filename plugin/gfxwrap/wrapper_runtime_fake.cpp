@@ -51,6 +51,7 @@ extern "C" HANDLE __cdecl gd_signal(){return signal;}
 // Optional renderer facts remain absent in the CPU-only delivery fixture.
 extern "C" int __cdecl gd_read_startup(gpu_startup_v1*){return 0;}
 extern "C" int __cdecl gd_read_startup_context(gpu_startup_context_v1*){return 0;}
+extern "C" int __cdecl gd_read_startup_transport(gpu_startup_transport_v1*){return 0;}
 extern "C" int __cdecl gd_read_status(gd_status*s){*s={};s->state=state.load();s->epoch=gate.load();return 1;}
 extern "C" unsigned __cdecl TestGate(){return gate.load();}
 extern "C" unsigned __cdecl TestConfigured(){return configured;}

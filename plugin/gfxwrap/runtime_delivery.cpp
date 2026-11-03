@@ -11,6 +11,7 @@ uint32_t control_reason(const gd_status &observed){
  case render_capture::LoadError::keyed_mutex:return GD_GL_KEYED_MUTEX_UNSUPPORTED;
  case render_capture::LoadError::entry_point:return GD_GL_ENTRY_POINT_UNAVAILABLE;
  case render_capture::LoadError::snapshot_entry_point:return GD_GL_SNAPSHOT_ENTRY_POINT_UNAVAILABLE;
+ case render_capture::LoadError::no_transport:return GD_GL_TRANSPORT_UNAVAILABLE;
  default:return observed.reason;
  }
 }

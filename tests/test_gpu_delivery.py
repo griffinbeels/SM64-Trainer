@@ -442,11 +442,19 @@ def select(client, offer, serial):
     return bridge
 
 
-def test_real_delivery_selection_actual_key_custody_and_restart(host, modern_gl):
+# gpu_transport.h: the delivery host is a test host, so SM64_TEST_GPU_TRANSPORT
+# selects the bridge transport its renderer uses and its helper role follows.
+TRANSPORTS = ("keyed", "semaphore", "readback")
+
+
+@pytest.mark.parametrize("transport", TRANSPORTS)
+def test_real_delivery_selection_actual_key_custody_and_restart(host, modern_gl, monkeypatch, transport):
+    monkeypatch.setenv("SM64_TEST_GPU_TRANSPORT", transport)
     run = Running(host)
     client = None
     try:
         client = run.start(101)
+        assert client.transport == TRANSPORTS.index(transport) + 1  # the header names the selection
         first = offer_for(run, client, 7)
         bridge = select(client, first, 1)
         assert run.command(f"take {bridge.texture_index} 7") == "take 1"
@@ -457,6 +465,8 @@ def test_real_delivery_selection_actual_key_custody_and_restart(host, modern_gl)
         duplicate = offer_for(run, client, 11)
         client.reply(duplicate, gpuchannel.COALESCED, retained_occurrence=first.occurrence, retained_serial=1)
         assert run.command(f"give {bridge.texture_index}") == "give"
+        # The helper's return (key 0, or the section's `returned`) retires the credit.
+        eventually(lambda: run.command("status").split()[5] == "0")
         reset = offer_for(run, client, 2)
         assert reset.occurrence > duplicate.occurrence > first.occurrence
         next_bridge = select(client, reset, 2)
@@ -491,6 +501,53 @@ def test_real_delivery_selection_actual_key_custody_and_restart(host, modern_gl)
         run.close()
 
 
+def test_a_refused_transport_import_demotes_the_next_request_until_none_is_left(host, modern_gl, monkeypatch):
+    """An import the driver refuses (injected here as a GL error) lowers this
+    Project64's transport for its next request: the semaphore falls to the
+    readback, which records; a refused readback leaves nothing, so the next
+    request fails before any channel with 10036, which the trainer reads as
+    its desktop-grab verdict. The receipt names every step."""
+    monkeypatch.setenv("SM64_TEST_GPU_TRANSPORT", "semaphore")
+    run = Running(host)
+    client = None
+    try:
+        client = run.start(1101, encoder_ready=False)
+        assert client.transport == 2
+        assert run.command("refuseimport") == "refuseimport"
+        client.encoder_ready()
+        eventually(lambda: run.command("status").split()[1:3] == ["5", "10008"])
+        fields = run.command("receipt").split()
+        assert fields[3:] == ["2", "3", "2", "1282"], fields  # selected, floor, failed, GL_INVALID_OPERATION
+        client.close()
+        client = run.start(1102)
+        assert client.transport == 3  # the next request: readback, and it records
+        bridge = select(client, offer_for(run, client, 4), 1)
+        assert run.command(f"take {bridge.texture_index} 4") == "take 1"
+        client.acknowledge_metadata(bridge)
+        assert run.command(f"give {bridge.texture_index}") == "give"
+        eventually(lambda: run.command("status").split()[5] == "0")
+        assert run.command("stop") == "stopped"
+        assert run.command("settled") == "settled"
+        client.close()
+        client = run.start(1103, encoder_ready=False)
+        assert client.transport == 3
+        assert run.command("refuseimport") == "refuseimport"
+        client.encoder_ready()
+        eventually(lambda: run.command("status").split()[1:3] == ["5", "10008"])
+        assert run.command("receipt").split()[3:] == ["3", "4", "3", "1282"]
+        client.close()
+        client = None
+        # GD_GL_UNSUPPORTED with LoadError::no_transport, projected to 10036.
+        assert run.command("startfail 1104") == "startfail 10005 7 10036"
+        assert run.command("receipt").split()[2:5] == ["0x8000007f", "0", "4"]
+        # The failed request leaves the host in FAULT, so `exit` (which waits
+        # for OFF) does not apply; close() ends the owned fixture process.
+    finally:
+        if client:
+            client.close()
+        run.close()
+
+
 def test_renderer_thread_preparation_stamps_run_in_order(host, modern_gl):
     """Every preparation step runs on the renderer's thread (renderer-thread
     capture); the gpu_prepare note carries each step's QPC, in order, from the
@@ -515,15 +572,19 @@ def test_renderer_thread_preparation_stamps_run_in_order(host, modern_gl):
         run.close()
 
 
-def test_capture_hands_back_the_renderers_gl_state(host, modern_gl):
+@pytest.mark.parametrize("transport", TRANSPORTS)
+def test_capture_hands_back_the_renderers_gl_state(host, modern_gl, monkeypatch, transport):
     """Renderer-thread capture samples, copies into the helper's texture and
     polls its keys in the renderer's own context. The host sets unusual scissor
     and pack state before every capture call and checks it after (a mismatch
-    ends the host), across a sample, a bridge copy and a key return."""
+    ends the host), across a sample, a bridge copy and a key return; for the
+    readback, its pack-buffer readback and the later CPU copy."""
+    monkeypatch.setenv("SM64_TEST_GPU_TRANSPORT", transport)
     run = Running(host)
     client = None
     try:
         client = run.start(801)
+        assert client.transport == TRANSPORTS.index(transport) + 1
         assert run.command("guard 1") == "guard"
         bridge = select(client, offer_for(run, client, 5), 1)
         assert run.command(f"take {bridge.texture_index} 5") == "take 1"

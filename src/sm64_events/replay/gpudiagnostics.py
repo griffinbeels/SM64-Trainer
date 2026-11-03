@@ -32,17 +32,38 @@ _DELIVERY = dict(enumerate((
 # Appended native delivery reasons remain readable before a picture channel
 # exists. Generic GL errors stay transient; only positive missing capabilities
 # establish this process cannot use the installed transport.
+# 10031 comes only from an older capture layer: since 2026-10-31 a context
+# without the keyed mutex selects the semaphore or readback bridge transport
+# instead (gpu_transport.h), and 10036 means every transport it offers failed.
 _GL_UNSUPPORTED = {
     10028: "OpenGL 4.5 is required for GPU recording",
     10029: "GPU recording needs GL_EXT_memory_object",
     10030: "GPU recording needs GL_EXT_memory_object_win32",
-    10031: "GPU recording needs GL_EXT_win32_keyed_mutex",
+    10031: "this capture layer needs GL_EXT_win32_keyed_mutex (an older build; Project64 runs the new one after it restarts)",
     10032: "a required GPU recording OpenGL entry point is unavailable",
     10033: "a required GPU snapshot OpenGL entry point is unavailable",
+    10036: "every GPU recording bridge this graphics driver offers failed in this Project64",
 }
 _DELIVERY.update(_GL_UNSUPPORTED)
 _DELIVERY.update({10034: "capture startup had no qualified source surface",
-                  10035: "renderer capture gateway remained unavailable"})
+                  10035: "renderer capture gateway remained unavailable",
+                  10037: "the ghost copy does not record through the readback bridge"})
+
+# gpu_transport.h: bridge transports and context capabilities, by wire value.
+_TRANSPORTS = {1: "keyed_mutex", 2: "semaphore", 3: "readback"}
+_CAPABILITIES = ("gl45", "memory_object", "memory_object_win32", "keyed_mutex", "semaphore",
+                 "semaphore_win32", "wgl_nv_dx_interop2")
+
+
+def transport_name(value):
+    return _TRANSPORTS.get(value)
+
+
+def capability_names(bits):
+    """The offered capabilities in native bit order; None before a probe."""
+    if not bits >> 31 & 1:
+        return None
+    return [name for bit, name in enumerate(_CAPABILITIES) if bits >> bit & 1]
 
 
 def unsupported_capture_reason(reason):

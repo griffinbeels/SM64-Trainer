@@ -129,6 +129,7 @@ class Recording(Pipeline):
                                      limits=self.settings.helper())
         self.command = dict(op="Open", dll_path=str(ENCODER),
             adapter_luid=[h.luid_high, h.luid_low], names=list(self.client.texture_names),
+            transport=self.client.transport,
             options=self.settings.encoder(h, ReplayConfig(), nominal_rate=30))
         self.request_id = self.controller.enqueue(self.command)
         self.reply = eventually(self.controller.take_result, timeout=5)

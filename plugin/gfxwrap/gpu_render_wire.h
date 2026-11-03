@@ -10,7 +10,7 @@ struct alignas(8) RenderWitnessControl {
     LUID adapter;                       // the producer's GL adapter, which the helper's device must match
     uint32_t width, height;             // the bridge textures: the floor-even crop
     uint32_t source_width, source_height, crop_x, crop_y, snapshot_width, snapshot_height;
-    uint32_t pictures, reserved;
+    uint32_t pictures, transport;       // GT_TRANSPORT_*: the producer's selection
     wchar_t names[2][128];              // the helper creates the textures under these names
     RenderWitnessPacket packets[2];
     volatile LONG initialized, textures_ready, consumed, failed;

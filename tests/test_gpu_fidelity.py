@@ -7,6 +7,8 @@ scissor test, sRGB writes, blending, depth/stencil/cull and a closed colour
 mask left on (the host checks they come back). The consumer dumps the texture;
 the oracle below recomputes the picture from the fixture formula alone.
 Alpha passes through the bridge untouched; the encoder does not read it.
+Every bridge transport is held to the same oracle and the same negative
+controls (the readback flips and crops in its CPU copy, the others in the blit).
 """
 import os
 
@@ -27,11 +29,13 @@ def fixture_rgb(width, height, occurrence=1):
                      (occurrence * 19 + x * 31 + y * 5 + 71) & 255], axis=-1).astype(np.uint8)
 
 
+@pytest.mark.parametrize("transport", sorted(witness.TRANSPORTS))
 @pytest.mark.parametrize("width,height,mutation", [
     (640, 480, None), (641, 481, None),
     (641, 481, "RENDER_FIDELITY_OMIT_FLIP"), (641, 481, "RENDER_FIDELITY_WRONG_ODD_ROW"),
 ])
-def test_gpu_top_down_exact_pixels(tmp_path, width, height, mutation):
+def test_gpu_top_down_exact_pixels(tmp_path, monkeypatch, width, height, mutation, transport):
+    selected = witness.use_transport(monkeypatch, transport)
     build, vc32 = witness.toolchain()
     producer = witness.build_producer(build, vc32, tmp_path, [mutation] if mutation else [])
     consumer = witness.build_consumer(build, vc32, tmp_path)
@@ -40,6 +44,7 @@ def test_gpu_top_down_exact_pixels(tmp_path, width, height, mutation):
     assert result.returncode == 0, result.stdout + result.stderr
     assert producer_code == 0, output
     assert "producer passed: pictures=1 state_restored=yes" in output, output
+    assert output.rstrip().endswith(f"transport={selected}"), output
     even_w, even_h = width & ~1, height & ~1
     rgba = np.fromfile(tmp_path / "delivered.rgba", dtype=np.uint8).reshape(even_h, even_w, 4)
     actual = rgba[:, :, :3]
