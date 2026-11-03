@@ -283,7 +283,8 @@ Each attempt row carries `timer_hint` (bool, 2026-10-17): the practice log draws
 
 **`fitted` — every graded rank names whether its ladder is Ultimate-Sheet-
 derived.** Each star/segment section's `rank` (`_section_banner`) and
-`entity_rank`, `rank_by_star[...]`, `segment_targets[].rank`, an attempt row's
+`entity_rank`, `rank_by_star[...]`, `overall_rank_by_star[...]`,
+`segment_targets[].rank`, `segment_targets[].overall_rank`, an attempt row's
 own `rank` (`_attempt_json`, and the matching progress-graph dot), a route
 step's `rank`, and `GET /api/target/ranks`' per-entity map all carry a plain
 `fitted` bool beside `rank`/`division` — `ranks/standards.py::is_fitted`'s

@@ -858,6 +858,14 @@ def _best_strategy_graded(ranks, ek, history, pbs_by_strat, rank_mode,
     return best
 
 
+def _overall_cell(ranks, ek, basis) -> dict | None:
+    """The same answer as the card's Overall banner (`entity_rank`), in the
+    {rank, division} shape a selector or picker cell draws."""
+    graded = entity_rank(ranks, ek, basis and basis["frames"],
+                         version=basis and basis.get("version"))
+    return {"rank": graded["rank"], "division": graded["division"]} if graded else None
+
+
 def build_entity_ranks(db, service) -> dict[str, dict]:
     """The picker's "how good am I at this star" answer, keyed by canonical
     entity key: `{"rank": str, "division": str, "strat": str, "fitted": bool}`
@@ -923,9 +931,13 @@ def build_entity_ranks(db, service) -> dict[str, dict]:
                                      pb_key_prefix)
         if best:
             strat, graded = best
+            basis = _ranked_basis(service.ranks, ek, rank_mode,
+                                  pbs_by_strat.get((*pb_key_prefix, service.ranks.clock_for(ek), strat)),
+                                  history, strat, service.ranks.clock_for(ek))
             out[ek] = {"rank": graded["rank"], "division": graded["division"],
                       "strat": strat,
-                      "fitted": service.ranks.is_fitted(ek, strat)}
+                      "fitted": service.ranks.is_fitted(ek, strat),
+                      "overall": _overall_cell(service.ranks, ek, basis)}
     return out
 
 
@@ -2117,6 +2129,17 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
                 _ranked_basis(
                     service.ranks, entity_key(c, s), rank_mode, pbs_by_strat.get((c, s, "igt", live_strat)),
                     attempts_by_star.get((c, s), []), live_strat, "igt", overall=True)))},
+        # The same stars on the Overall curve: the cell draws whichever of the
+        # two its card is showing (ui/rankdisplaymode.js::cellRank).
+        "overall_rank_by_star": {
+            f"{c}:{s}": rank
+            for (c, s) in service.strat_by_star
+            if (live_strat := active.for_star(c, s))
+            and (rank := _overall_cell(
+                service.ranks, entity_key(c, s),
+                _ranked_basis(
+                    service.ranks, entity_key(c, s), rank_mode, pbs_by_strat.get((c, s, "igt", live_strat)),
+                    attempts_by_star.get((c, s), []), live_strat, "igt", overall=True)))},
         # Parallel to rank_by_star, and keyed over a DIFFERENT set on purpose:
         # rank_by_star lists stars with an active strategy, while the most
         # important caveat is precisely "this PB has no strategy at all". So
@@ -2188,6 +2211,12 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
                  service.ranks,
                  reds_pipe_grading_ek.get(d.id, entity_key(None, None, d.id)),
                  seg_strat,
+                 _ranked_basis(
+                     service.ranks, entity_key(None, None, d.id), rank_mode,
+                     pbs_by_strat.get(("segment", d.id, "rta", seg_strat)),
+                     attempts_by_seg.get(d.id, []), seg_strat, "rta", overall=True)),
+             "overall_rank": _overall_cell(
+                 service.ranks, entity_key(None, None, d.id),
                  _ranked_basis(
                      service.ranks, entity_key(None, None, d.id), rank_mode,
                      pbs_by_strat.get(("segment", d.id, "rta", seg_strat)),

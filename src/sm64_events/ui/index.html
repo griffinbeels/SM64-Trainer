@@ -1924,7 +1924,10 @@
   /* THE size container all selector cqw units + @container rules resolve
      against — the pane the star row must fit inside. inline-size only, so
      normal height flow is untouched. */
-  .practice-page { display: grid; gap: 12px; container-type: inline-size; }
+  /* minmax(0,1fr), not the implicit auto track: an auto track grows to its
+     widest card, so one long row widened every card on the page past the
+     window (his report, 2026-11-03: "the page never gets overflowed"). */
+  .practice-page { display: grid; grid-template-columns: minmax(0,1fr); gap: 12px; container-type: inline-size; }
   .practice-card {
     min-width: 0; max-width: 100%; margin: 0; padding: 14px 16px;
     border: 1px solid var(--border); border-radius: var(--radius);
@@ -2013,9 +2016,18 @@
      a 7-cell star row would give it (100cqw card - 32px card padding - 6
      gaps ~ 48px), so the two row kinds have identical cell geometry at
      every pane width instead of a lone cell stretching across the card */
-  .selector-card .starrow.segcells { justify-content: flex-start; }
+  /* More segments than fit scroll inside the card, on a slim bar in the
+     row's own height, and the page keeps its width. */
+  .selector-card .starrow.segcells {
+    justify-content: flex-start; overflow-x: auto; overflow-y: hidden;
+    /* `auto`, against html's own scrollbar-color: Chromium ignores the slim
+       bar below while either standard property has a value. */
+    scrollbar-color: auto; scrollbar-width: auto;
+  }
+  .selector-card .starrow.segcells::-webkit-scrollbar { height: 6px; }
+  .selector-card .starrow.segcells::-webkit-scrollbar-thumb { background: #33506e; border-radius: 3px; }
   .selector-card .starrow.segcells .starcell {
-    flex: 0 1 auto; width: calc((100cqw - 80px) / 7);
+    flex: 0 0 calc((100cqw - 80px) / 7); width: calc((100cqw - 80px) / 7);
   }
   .selector-empty {
     display: flex; flex-direction: column; align-items: center; justify-content: center;
@@ -3868,8 +3880,15 @@
      shows its box on the row's hover or on focus. Still a real select with
      its own opaque background -- the popup themes off it (the dropdown rule
      in ui-core). */
+  /* Room for the name when a Time Save has narrowed the column. */
   .attempt-strategy select {
-    max-width: 120px; min-width: 0; height: 30px; min-height: 30px;
+    padding-inline: .3rem 1.2rem;
+    /* The percentage width lets the table count this select as zero wide when it
+       sizes its columns, so the picker is the column that gives way. As a
+       fixed 120px it was part of the row's minimum, and a row with GOLD!! and
+       its Time Save pushed every row's buttons out of the card (his report,
+       2026-11-03, at the smallest window). */
+    width: 100%; max-width: 120px; min-width: 0; height: 30px; min-height: 30px;
     border-color: transparent; color: var(--muted);
     transition: border-color .15s ease, color .15s ease, opacity .15s ease;
   }
@@ -7014,7 +7033,7 @@
     .attempt-result { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
     .attempt-delta { text-align: left; }
     .attempt-strategy { min-width: 0; text-align: right; }
-    .attempt-strategy select { max-width: 104px; }
+    .attempt-strategy select { width: 100%; max-width: 104px; }
     .save-pb-wide { display: none; }
     .save-pb-narrow { display: inline; }
     .attempt-pb-slot { min-width: 5.5rem; }

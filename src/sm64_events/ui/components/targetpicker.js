@@ -18,6 +18,7 @@ import { h } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON } from "../api.js";
+import { pickerRanks } from "../rankdisplaymode.js";
 import { PickerDialog } from "./entitymodal.js";
 import { StrategyStep } from "./strategystep.js";
 import { courseUnionGroups, parseSegmentId, starId } from "../entities.js";
@@ -41,7 +42,7 @@ export function useTargetPicker(t) {
     // real fetch corrects it (M9, final review 2026-07-26).
     setTargetRanks({});
     getJSON("/api/target/ranks")
-      .then((ranks) => { if (alive) setTargetRanks(ranks); })
+      .then((ranks) => { if (alive) setTargetRanks(pickerRanks(ranks)); })
       .catch((fetchError) => console.error(fetchError));
     return () => { alive = false; };
   }, [editing]);
