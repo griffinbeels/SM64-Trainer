@@ -1392,7 +1392,7 @@ under the name (his words, 2026-10-28); a name wraps where the handle divides an
 never cut off, and a long [[strategy]] ends in an ellipsis. A dashed ring is a [[ghost]] that cannot race yet (yours before
 your first time, a [[ghost]] still downloading); a lock on a ring is a pinned
 [[ghost]], which stays even once beaten, to your left. Every rival stays once
-beaten until you change stars or press **New ghosts** (his rule, 2026-11-03), so
+beaten until you move to another [[star]] or press the button named after new [[ghost]]s (his rule, 2026-11-03), so
 beating all of a set means something. The [[lineup track]] threads
 the rings. With no [[strategy]] the row offers every one of the [[strategies]]
 as a button, all one width, in rows of equal length.
