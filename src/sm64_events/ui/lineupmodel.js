@@ -33,7 +33,22 @@ export const LINEUP_WORDS = {
   unknownRom: "Load a compatible practice ROM to race ghosts.",
   unreachable: "Ghost controls couldn't load.",
   bestRun: "Best recorded run",
+  newGhosts: "New ghosts",
+  newGhostsTitle: "Replace these ghosts with a new set to race.",
+  allBeaten: "You beat all of these ghosts!",
+  noNewGhosts: "No other ghosts are available right now.",
 };
+
+/**
+ * The line under a racing set. The set stays until you change stars or press
+ * the button (his rule, 2026-11-03), so a beaten set says so and offers the next.
+ */
+function setFoot(you, seats, rivals) {
+  const raced = seats.filter(seat => Number.isInteger(seat.frames));
+  return { allBeaten: Number.isInteger(you.frames) && raced.length > 0
+      && raced.length === seats.length && raced.every(seat => seat.frames > you.frames),
+    noNew: rivals.no_new_ghosts === true };
+}
 
 function strategyChoices(strategies) {
   return (strategies || []).filter(name => typeof name === "string" && name)
@@ -102,7 +117,7 @@ function loadingModel(on, lineup, mine, rivals) {
  */
 function readyModel(on, lineup, mine, rivals) {
   const seats = (rivals.rows || []).filter(row => Number.isInteger(row.slot)).map(rivalSeat);
-  if (seats.length) return { on, lineup, people: [...mine, ...seats] };
+  if (seats.length) return { on, lineup, people: [...mine, ...seats], foot: setFoot(mine[0], seats, rivals) };
   if (!rivals.reason) return loadingModel(on, lineup, mine, rivals);
   return { on, lineup, people: mine, note: { text: EMPTY_WORDS[rivals.reason] || LINEUP_WORDS.nobody } };
 }

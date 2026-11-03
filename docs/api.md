@@ -1213,7 +1213,10 @@ not prove a roster is playing. [Adaptive contracts and local testing](adaptive-r
 to change the matching scope without changing the practice strategy.
 It also accepts `{target, rivals: {options, scope?}}`, or
 `{target, rivals: {action: "add", id, slot?}}`, or
-`{target, rivals: {action: "reset", slot}}`. Target identity must still match.
+`{target, rivals: {action: "reset", slot}}`, or
+`{target, rivals: {action: "new"}}` (deal a new set; chosen slots stay, and
+`rivals.no_new_ghosts` is true when nobody else could be seated). Target
+identity must still match.
 Actions/settings can carry `scope` as a guard; a different scope rejects the
 stale choice. Scope changes use their own request.
 Settings validates the entire draft before applying. Options contain `mode`

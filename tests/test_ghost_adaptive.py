@@ -762,36 +762,39 @@ def _seats(rows):
     return {row["slot"]: (row["id"], row["hue_degrees"]) for row in rows}
 
 
-def test_a_new_pb_keeps_surviving_seats_in_their_slots_and_colours():
-    """His design (2026-10-16): seats keep their player and colour; only the
-    rivals the new PB passed are replaced, and nothing is dealt afresh."""
-    rows = [ranked(step, f"p{step}") for step in range(10, 20)]
+def test_a_new_pb_holds_every_seat_even_ones_it_beat():
+    """His rule (2026-11-03): no new ghosts until he changes stars or asks.
+    A PB past the whole set, and an undo back, leave all four exactly in place."""
+    rows = [ranked(step, f"p{step}") for step in range(10, 30)]
     before = select_rivals(rows, basis(9, 1900), {}, {})
     assert [row["step"] for row in before] == [10, 11, 13, 14]
-    after = select_rivals(rows, basis(11, 1770), {}, {}, previous=before)
-    assert _seats(after)[2] == _seats(before)[2] and _seats(after)[3] == _seats(before)[3]
-    assert {after[0]["id"], after[1]["id"]}.isdisjoint({before[0]["id"], before[1]["id"]})
-    assert all(row["step"] > 11 for row in after) and len({row["player_id"] for row in after}) == 4
-    # Without the previous roster the same PB deals afresh, moving the survivors.
-    assert _seats(select_rivals(rows, basis(11, 1770), {}, {})) != _seats(after)
+    beat_all = select_rivals(rows, basis(20, 1000), {}, {}, previous=before)
+    assert _seats(beat_all) == _seats(before)
+    assert _seats(select_rivals(rows, basis(9, 1900), {}, {}, previous=beat_all)) == _seats(before)
+    # Without the previous roster the same PB deals afresh, above the new PB.
+    assert all(row["step"] > 20 for row in select_rivals(rows, basis(20, 1000), {}, {}))
 
 
-def test_a_passed_seat_takes_the_same_rivals_faster_recording():
-    """"Same rival, faster": the passed seat keeps its player when that player
-    has a faster in-range recording; otherwise the nearest rival fills it."""
+def test_a_held_seat_is_filled_only_when_its_recording_is_gone():
     rows = [ranked(step, f"p{step}") for step in range(10, 20)]
-    faster = [ranked(13, "p10-at-13", player_id="player:p10"), ranked(15, "p10-at-15", player_id="player:p10")]
-    before = select_rivals([*rows, *faster], basis(9, 1900), {}, {})
-    assert before[0]["id"] == "p10"
-    after = select_rivals([*rows, *faster], basis(11, 1770), {}, {}, previous=before)
-    # The fastest of that player's recordings in the new range, in the same seat and colour,
-    # although the normal fill would have dealt steps 12 and 16.
-    assert after[0]["id"] == "p10-at-15" and after[0]["hue_degrees"] == before[0]["hue_degrees"]
-    assert len({row["player_id"] for row in after}) == 4
-    # A player whose only faster run is out of range gives the seat to the normal fill.
-    distant = [ranked(30, "p10-at-30", player_id="player:p10")]
-    refilled = select_rivals([*rows, *distant], basis(11, 1770), {}, {}, previous=before)
-    assert refilled[0]["player_id"] != "player:p10" and refilled[0]["step"] >= 12
+    before = select_rivals(rows, basis(9, 1900), {}, {})
+    gone = before[1]["id"]
+    after = select_rivals([row for row in rows if row["id"] != gone], basis(9, 1900), {}, {}, previous=before)
+    assert [_seats(after)[slot] for slot in (0, 2, 3)] == [_seats(before)[slot] for slot in (0, 2, 3)]
+    assert after[1]["id"] != gone and len({row["player_id"] for row in after}) == 4
+
+
+def test_asking_for_a_new_set_seats_other_players_first():
+    rows = [ranked(step, f"p{step}") for step in range(10, 16)]
+    before = select_rivals(rows, basis(9, 1900), {}, {})
+    avoid = {row["player_id"] for row in before}
+    after = select_rivals(rows, basis(9, 1900), {}, {}, avoid=avoid)
+    others = {row["id"] for row in rows} - {row["id"] for row in before}
+    # Only two others exist: both race, and two old players fill the rest.
+    assert others <= {row["id"] for row in after} and len(after) == 4
+    # Nobody else at all: the same four still race rather than an empty row.
+    only = [row for row in rows if row["player_id"] in avoid]
+    assert {row["id"] for row in select_rivals(only, basis(9, 1900), {}, {}, avoid=avoid)} == {row["id"] for row in only}
 
 
 def test_a_pin_never_moves_and_stays_when_the_pb_passes_it():

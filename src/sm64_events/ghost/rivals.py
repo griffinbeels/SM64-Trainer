@@ -12,6 +12,7 @@ from sm64_events.ghost.pb import AttemptGhost, saved_pb_basis
 from sm64_events.ghost.sharing_targets import describe
 from sm64_events.ranks import region_scope
 from sm64_events.ranks.standards import entity_key
+from sm64_events.tracking.segments import entity_parents
 
 STATE_KEY = "ghost_rivals_v1"
 #: Every star races ghosts of every strategy (his decision, 2026-10-28: "I think
@@ -144,6 +145,9 @@ class Rivals:
         self.manual = False
         self.enabled = False
         self.redeal = False
+        self.avoid = frozenset()
+        self.no_new_ghosts = False
+        self.held, self.family = {}, frozenset()
         self.prepared_key = None
         self._signatures, self._signature_basis = {}, None
         self._simulation_state = None
@@ -353,6 +357,7 @@ class Rivals:
         self.fingerprint = self.prepared_key = self._saved_pb = None
         self.rows, self.pb, self.best_run = (),None,None
         self.manual = False
+        self.held, self.family = {}, frozenset()
 
     def pb_changed(self, target=None):
         target = target or self.target
@@ -360,9 +365,9 @@ class Rivals:
             return
         if self.target is None or self._entity_key(self.target)!=self._entity_key(target):
             return
-        # The saved PB is authoritative, including Undo. Recompute now, but
-        # retain an unchanged active/pending roster rather than canceling it.
-        # Seats keep their players; the rival list itself is not asked again.
+        # The saved PB is authoritative, including Undo. Recompute your seat
+        # now; the rivals are held (`select_rivals`) and the rival list itself
+        # is not asked again.
         self.fingerprint = self._saved_pb = None
 
     def pb_preserved(self, attempt_id):
@@ -432,6 +437,7 @@ class Rivals:
             self._signature_basis = self._simulation_state = self._saved_pb = None
         changed_target = target != self.target
         if changed_target:
+            self._hold_seats(target)
             self.target = target
             self.fingerprint = None
             self.rows, self.pb, self.best_run = (),None,None
@@ -456,8 +462,7 @@ class Rivals:
                  json.dumps(self.options,sort_keys=True),json.dumps(self.pins.get(self._key(target),{}),sort_keys=True))
         if force or stamp != self.fingerprint:
             pb, best, desired = self._desired(identity, target)
-            self.rows = self.community.stage(desired, fetch=enabled)
-            self.redeal = False
+            self._seat(desired, enabled)
             self.pb, self.best_run = pb, None
             ghosts = [ColoredGhost(row["ghost"],row["hue_degrees"],row["slot"]) for row in self.rows
                       if row.get("ghost") is not None and not row.get("pending")]
@@ -527,10 +532,48 @@ class Rivals:
         ranked, best = self._ranked_population(identity,pins)
         private = [row for value in pins.values() if (row:=self._private_record(value,identity)) is not None]
         owners = self._owned_players()
-        # Only new rival settings deal afresh.
-        previous = () if self.redeal else tuple(self._seat_row(row, owners) for row in self.rows)
+        # Only new rival settings or asking for new ghosts deal afresh; anything
+        # else holds this lineup's seats, including ones parked while the target
+        # moved inside this star's family (`_hold_seats`).
+        seats = self.rows or self.held.get(identity,())
+        previous = () if self.redeal else tuple(self._seat_row(row, owners) for row in seats)
+        self.held.pop(identity,None)
         return pb, best, select_rivals((*ranked,*private),pb,self.options,pins,previous,scope=identity.scope,
-                                       allow_fastest=self.community.complete(identity))
+                                       allow_fastest=self.community.complete(identity),avoid=self.avoid)
+
+    def _seat(self, desired, enabled):
+        """Take the deal, and note when asking for new ghosts found nobody else."""
+        def automatic():
+            return {row["id"] for row in self.rows if not row.get("pinned")}
+        before = automatic()
+        self.rows = self.community.stage(desired, fetch=enabled)
+        self.no_new_ghosts = bool(self.avoid) and bool(before) and before == automatic()
+        self.redeal, self.avoid = False, frozenset()
+
+    def _hold_seats(self, target):
+        """Park the seats while the target is away; forget them on a new star.
+
+        His rule (2026-11-03): the set changes when "the user changes stars".
+        The target also drops to nothing and hops between a star and its
+        subsections during ordinary play, and neither is changing stars.
+        """
+        if self.identity is not None and self.rows:
+            self.held[self.identity] = self.rows
+        if target is None:
+            return
+        family = self._family_of(target)
+        if not family & self.family:
+            self.held = {}
+        self.family = family
+
+    def _family_of(self, target):
+        """A target's own entity key plus the entities it is a piece of."""
+        if target["kind"] == "star":
+            course, star = target["entity_key"].split("-")
+            return frozenset({f"star:{course}:{star}"})
+        number = int(target["entity_key"])
+        definition = next((row for row in self.tracker.db.segment_defs() if row["id"] == number),{})
+        return frozenset({f"segment:{number}",*entity_parents(definition.get("parents"),number)})
 
     def _pb_seat(self, pb, best, target, hue):
         """The ghost that races in your colour, or None.
@@ -682,7 +725,8 @@ class Rivals:
                 "coverage": self.community.coverage(self.identity),
                 "status": self.community.status(self.identity) or (
                     self.status if native.get("prepared_generation")==self.generation else None),
-                "generation":self.generation,"manual":self.manual}
+                "generation":self.generation,"manual":self.manual,
+                "no_new_ghosts":self.no_new_ghosts}
 
     def search(self, target, player, cursor=None, *, scope=None):
         identity = self.identity_for(target)
@@ -851,14 +895,16 @@ class Rivals:
             result["options"] = checked_options(body["options"])
         action = body.get("action")
         if action is not None:
-            if action not in ("add","reset"):
+            if action not in ("add","reset","new"):
                 raise ValueError("Choose or reset a ghost.")
             if not has_strategy(target):
                 raise ValueError(NO_STRATEGY)
             slot = body.get("slot")
             if slot is not None and (type(slot) is not int or not 0<=slot<self.options["count"]):
                 raise ValueError("Choose a visible ghost slot.")
-            if action == "reset":
+            if action == "new":
+                result.update(action=action)
+            elif action == "reset":
                 if slot is None:
                     raise ValueError("Choose the ghost to reset.")
                 result.update(action=action,slot=slot)
@@ -922,6 +968,12 @@ class Rivals:
             self.options = body["options"]
         # Pins belong to a strategy; a target with none never creates one.
         action = body.get("action") if has_strategy(self.target) else None
+        if action == "new":
+            # Chosen slots stay; everyone else gives way to whoever else can race.
+            self.redeal = True
+            self.avoid = frozenset(player_key(self._seat_row(row)) for row in self.rows
+                                   if not row.get("pinned") and row.get("ghost") is not None)
+            action = None
         choices = self.pins.setdefault(self._key(self.target),{}) if action else {}
         if action=="reset":
             choices.pop(str(body["slot"]),None)
