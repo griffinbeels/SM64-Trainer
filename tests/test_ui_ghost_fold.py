@@ -30,8 +30,10 @@ def folded_session():
 def test_older_runs_fold_into_one_quiet_line_at_every_width():
     shots = os.environ.get("SM64_SHOT_DIR")
     with serve_ui_with_ghost(folded_session(), arm_segment=FIXTURE_SEGMENT) as (base, _state):
-        with get_driver().launch() as page:
-            for width in WIDTHS:
+        # One page per width: reloading one page cancels the fetches still
+        # running on it, and the page's problem list reads each as an error.
+        for width in WIDTHS:
+            with get_driver().launch() as page:
                 page.set_viewport(width, 1200)
                 page.goto(base)
                 page.wait_for(PICKS)
