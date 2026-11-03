@@ -664,3 +664,21 @@ def test_a_kept_row_of_this_very_run_does_not_cancel_its_offer(tmp_path):
     assert recorder._admit(run[0], community.contribution_context()) is False
     assert len(community.offers) == 1
     population.close()
+
+
+def test_a_real_kept_row_becomes_an_offer_that_passes_the_outbox_check(tmp_path):
+    """Earlier ghosts read rows the real store wrote, not a hand-made shape."""
+    from sm64_events.community.outbox import checked_source
+    root = tmp_path / "runs"
+    run = recorded(root, number=77)
+    _replays, recorder, population = crash_between(tmp_path, [run], root=root / "replays")
+
+    async def scenario():
+        await boot(recorder)
+        await settled(lambda: rows(population))
+        await recorder.stop()
+    asyncio.run(scenario())
+    offers = recorder.earlier_sources()
+    assert [offer["frames"] for offer in offers] == [2]
+    assert checked_source({**offers[0], "owner": "11111111-1111-4111-8111-111111111111"})
+    population.close()

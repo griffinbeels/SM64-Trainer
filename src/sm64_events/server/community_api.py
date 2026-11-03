@@ -66,6 +66,10 @@ class Sharing(_Body):
     enabled: bool
 
 
+class EarlierAnswer(_Body):
+    share: bool
+
+
 class Confirmation(_Body):
     confirmation: Literal["WITHDRAW", "DELETE"]
 
@@ -90,7 +94,7 @@ def _private_response(response: Response):
     response.headers['X-Content-Type-Options'] = 'nosniff'
 
 
-def create_community_router(account, progress=None):
+def create_community_router(account, progress=None, sync=None):
     router = APIRouter(prefix="/api/community", tags=["community"], dependencies=[Depends(_private_response)])
     pending = {"attempt_id": None}
 
@@ -106,7 +110,22 @@ def create_community_router(account, progress=None):
 
     _mount_auth(router, require_account, pending)
     _mount_account(router, require_account, pending, progress)
+    _mount_earlier_ghosts(router, sync)
     return router
+
+
+def _mount_earlier_ghosts(router, sync):
+    @router.get("/earlier-ghosts")
+    async def earlier():
+        if sync is None:
+            return {"ask": False, "offer": False}
+        return await _call(lambda: asyncio.to_thread(sync.earlier_ghosts))
+
+    @router.put("/earlier-ghosts")
+    async def answer(body: EarlierAnswer):
+        if sync is None:
+            raise HTTPException(503, "Community testing is not configured for this build.")
+        return await _call(lambda: asyncio.to_thread(sync.answer_earlier_ghosts, body.share))
 
 
 def _mount_auth(router, require_account, pending):

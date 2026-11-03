@@ -16,6 +16,7 @@ from sm64_events.ranks.region_scope import REGIONAL, servable_versions
 from . import claims, codec, library
 from .cache import LEASE_RENEW_S, account_owner, checked_metadata, target_key, value_of
 from .config import CommunityError
+from .earlier_ghosts import NOT_NOW, SHARED, EarlierAnswer, checked_offers
 from .outbox import RetractionOutbox, SourceOutbox, checked_source, checked_strategy, retraction_key, source_key
 
 logger = logging.getLogger(__name__)
@@ -230,6 +231,8 @@ class CommunitySync:
         self._outbox = SourceOutbox(population.root / "pending-contributions.json")
         self._retractions = RetractionOutbox(population.root / "pending-retractions.json")
         self._retired = OrderedDict()  # raw_sha256 -> the one strategy it may still be offered under
+        self.earlier_sources = None  # PopulationRecorder: this install's own ghosts (`earlier_ghosts.py`)
+        self._earlier = EarlierAnswer(population.root)
         self._consent_epoch = 0
         self._recovery_owner, self._recovery_until = None, 0
         if hasattr(account, "on_contribution_cancel"):
@@ -522,7 +525,47 @@ class CommunitySync:
                 and snapshot.get("uid") == source["owner"] and kept == source["strategy"]
                 and source.get("consent_epoch", self._consent_epoch) == self._consent_epoch)
 
+    def _earlier_candidates(self, uid):
+        if self.earlier_sources is None or self._earlier.closed_to(uid):
+            return ()
+        return self.earlier_sources()
+
+    def earlier_ghosts(self):
+        """What the player can do about earlier ghosts. Reads the disk: call off the loop.
+
+        `ask` opens the one question; `offer` keeps the Settings button.
+        """
+        context = self.contribution_context()
+        if context is None or not self._earlier_candidates(context["owner"]):
+            return {"ask": False, "offer": False}
+        return {"ask": self._earlier.asks(context["owner"]), "offer": True}
+
+    def answer_earlier_ghosts(self, share):
+        """Keep the player's answer; a yes puts each ghost in the outbox. Off the loop."""
+        context = self.contribution_context()
+        if context is None:
+            return self.earlier_ghosts()
+        owner = context["owner"]
+        if not share:
+            if not self._earlier.closed_to(owner):
+                self._earlier.write(owner, NOT_NOW)
+            return self.earlier_ghosts()
+        self._outbox.load()
+        foreign = self._outbox.held_by_others(owner)
+        offers = checked_offers(self._earlier_candidates(owner), self._freeze_source, foreign=foreign)
+        with self._lock:
+            if context != self.contribution_context():
+                return self.earlier_ghosts()  # Sign-out or sharing off won the race.
+            self._outbox.remember_many(offers)
+            self._earlier.write(owner, SHARED)
+            self._recovery_until = 0
+            loop, wake = self._loop, self._contribution_wake
+        if loop and wake and not loop.is_closed():
+            loop.call_soon_threadsafe(wake.set)
+        return self.earlier_ghosts()
+
     async def cancel_contributions(self, owner):
+        await self._cpu(self._earlier.stop_everyone if owner is None else lambda: self._earlier.stop(owner))
         with self._lock:
             self._consent_epoch += 1
             for mapping in (self._queue, self._offer_retry):

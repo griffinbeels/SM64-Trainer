@@ -109,6 +109,8 @@ class PopulationRecorder:
         self._retries = []  # (due, tie, job)
         self._retry_tie = 0
         self._reported = set()  # One Sentry error per reason, per session.
+        if community is not None:
+            community.earlier_sources = self.earlier_sources
 
     @property
     def store(self):
@@ -596,6 +598,16 @@ class PopulationRecorder:
     def _backfill(self, attempt_id, contribution):
         """The normal admission on the current attempt: ceiling, bins and offer all apply."""
         return self._admit(self.replay.attempt(attempt_id), contribution)
+
+    def earlier_sources(self):
+        """Offers for every ghost this install recorded; the player's yes sends them."""
+        from sm64_events.community.earlier_ghosts import own_sources
+        database, store = self.tracker.db, self.store
+        player = database.get_state("ghost_player_id", None) if database is not None else None
+        snapshot = getattr(store, "snapshot_all", None)
+        if not player or snapshot is None:
+            return ()
+        return own_sources(snapshot(), player, store.root)
 
     def _prune(self):
         """Once per start: keep each player's fastest recording per strategy subdivision.

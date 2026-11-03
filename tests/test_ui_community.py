@@ -132,14 +132,14 @@ class FixtureAccount:
 
 
 @contextlib.contextmanager
-def community_app(monkeypatch, tmp_path, account=None, **fixture):
+def community_app(monkeypatch, tmp_path, account=None, sync=None, **fixture):
     """Inject only the account seam into the established offline app fixture."""
     listener = ui_fixture._bound_socket()
     port = listener.getsockname()[1]
     create_app = ui_fixture.create_app
 
     def configured_app(*args, **kwargs):
-        return create_app(*args, **kwargs, community_account=account,
+        return create_app(*args, **kwargs, community_account=account, community_sync=sync,
                           protect_local_api=True, local_port=port)
 
     try:
@@ -258,6 +258,57 @@ def capture_widths(page, name):
         if bounds["left"] is not None:
             assert bounds["left"] >= -1 and bounds["right"] <= width + 1, bounds
         (folder / f"{name}-{width}.png").write_bytes(page.screenshot())
+
+
+class EarlierSync:
+    """The answer the real sync gives; tests/test_community_earlier_ghosts.py proves that."""
+    def __init__(self):
+        self.state, self.answers = {"ask": True, "offer": True}, []
+
+    async def start(self):
+        pass
+
+    async def stop(self):
+        pass
+
+    def earlier_ghosts(self):
+        return dict(self.state)
+
+    def answer_earlier_ghosts(self, share):
+        self.answers.append(share)
+        self.state = {"ask": False, "offer": not share}
+        return dict(self.state)
+
+
+@pytest.mark.parametrize("button,share", [("Share them", True), ("Not now", False)])
+def test_older_ghosts_are_asked_about_once_and_the_answer_is_kept(monkeypatch, tmp_path, button, share):
+    account, sync = FixtureAccount("active"), EarlierSync()
+    account.update(sharing=True)
+    with community_app(monkeypatch, tmp_path, account, sync=sync) as (base, _):
+        with get_driver().launch(headless=True, viewport=(850, 1000)) as page:
+            page.goto(base)
+            page.wait_for(".practice-page")
+            page.wait_for(MODAL)
+            text = modal_text(page)
+            assert "older ghosts" in text and "other players can race them" in text
+            assert account.calls.count(("sharing", True)) == 0 and sync.answers == []
+            capture_widths(page, f"earlier-ghosts-{share}")
+            click_text(page, button, ".modal")
+            wait_until(page, "!document.querySelector('.modal-body')", "the question closes")
+            assert sync.answers == [share]
+            page.goto(base)
+            page.wait_for(".practice-page")
+            page.wait_for(".context-shell")
+            time.sleep(.5)
+            assert not page.count(MODAL), "the question came back"
+            # Not now keeps the Settings button; a yes has nothing left to offer.
+            open_account(page)
+            page.wait_for(".community-form")
+            time.sleep(.3)
+            shown = page.evaluate("""Array.from(document.querySelectorAll('.community-form button'))
+                .some(b => b.textContent.includes('Share my older ghosts'))""")
+            assert shown is (not share)
+            assert page.problems() == []
 
 
 def test_stable_initial_load_and_settings_have_no_browser_faults(monkeypatch, tmp_path):

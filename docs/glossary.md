@@ -1854,6 +1854,17 @@ PBs or the independent [[ghost]]-sharing setting.
   `src/sm64_events/community/progress_state.py` and
   `cloud/community/src/progress-store.js`
 
+### Earlier ghosts
+
+The [[ghost]]s this install recorded that its account may never have shared.
+The player's yes to one question, or the Settings button, puts them in the upload
+queue under the signed-in account. A login alone never does, because the published
+terms promise that signup shares future [[ghost]]s. After one account says yes, no
+other account can share them.
+
+- **Lives** — `src/sm64_events/community/earlier_ghosts.py`,
+  `src/sm64_events/ui/components/earlierghosts.js`
+
 ### Community ghost
 
 A [[ghost]] shared by an authenticated, invited player. The service keeps that

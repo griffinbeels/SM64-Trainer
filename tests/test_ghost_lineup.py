@@ -224,6 +224,28 @@ def test_a_pb_change_asks_no_list_and_holds_every_seat(tmp_path, monkeypatch):
     run(tmp_path, cloud, scenario)
 
 
+def test_leaving_for_the_castle_and_coming_back_keeps_the_set(tmp_path, monkeypatch):
+    """His answer, 2026-11-03, to whether re-entering the same star deals anew: "No."
+    Going to another star does."""
+    cloud = Cloud([cloud_row(number, frames) for number, frames in enumerate(FRAMES, 1)])
+    monkeypatch.setattr(module, "saved_pb_basis", lambda *_: pb_at(930))
+    elsewhere = {**STANDARD, "entity_key": "2-0"}
+
+    async def scenario(rivals, tracker, population, sync, native):
+        await settle(sync, rivals, STANDARD)
+        before = [row["id"] for row in rivals.rows]
+        assert len(before) == 4
+        # In the castle the star has no target at all.
+        rivals.refresh(None, CONTROLS, enabled=True)
+        await settle(sync, rivals, None)
+        await settle(sync, rivals, STANDARD)
+        assert [row["id"] for row in rivals.rows] == before
+        # A different star forgets the set.
+        await settle(sync, rivals, elsewhere)
+        assert rivals.held == {}
+    run(tmp_path, cloud, scenario)
+
+
 def test_pending_seats_show_at_once_but_only_downloaded_ones_race(tmp_path, monkeypatch):
     cloud = Cloud([cloud_row(number, frames) for number, frames in enumerate(FRAMES, 1)])
     monkeypatch.setattr(module, "saved_pb_basis", lambda *_: pb_at(930))
