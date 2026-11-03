@@ -25,9 +25,13 @@ Temporary extent eviction also queues removal of its source input provenance,
 outside the ring lock. Active response leases retain both until the read ends.
 The registry has a session-wide 131,072-sample budget across encoder restarts.
 
-`AttemptHistory` tracks a configurable count of completed attempts (default 10),
-independent of course, plus the earliest open star/segment/run. Imported times
-do not consume this window. Tracking updates bounded metadata only; recorder
+`AttemptHistory` keeps the newest completed attempts while both limits hold: an
+attempt count (default 5) and the total footage they span (default 10 minutes),
+independent of course, plus the earliest open star/segment/run. A reset counts
+as an attempt, so rapid resets keep the buffer small. The newest attempt always
+stays, even when it alone is over the footage limit. A star attempt and segment
+over the same play count once. Minutes and session modes ignore both limits.
+Imported times do not consume this window. Tracking updates bounded metadata only; recorder
 maintenance expires old shared extents off the polling thread. It retains padding
 and a predecessor extent for GOP/AAC dependencies. Closed runs entirely before the
 window can be removed in full. Reads/saves lease source spans before selection,

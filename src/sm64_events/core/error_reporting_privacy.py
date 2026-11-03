@@ -52,6 +52,10 @@ _CONTEXT_KEYS = frozenset({
     "encoder_result", "native_reason",
     "gl_vendor", "gl_renderer", "gl_version", "missing_entry_point",
     "stalled_for_s",
+    # What stalled a failed media sink, and the recording volume's free bytes
+    # (replay/gpufielddiagnostics.py SINK_KEYS): never a path.
+    "sink_stalled_command", "sink_stalled_ms", "sink_slowest_command", "sink_max_feed_ms", "sink_oldest_ms",
+    "sink_pending_bytes", "sink_pending_blocks", "sink_peak_bytes", "sink_peak_blocks", "recording_free_bytes",
     # Why a no-surface startup (10034) refused: the GPU named at context
     # creation, and the first bindings invalidation (replay/gpudiagnostics.py).
     "context_gl_vendor", "context_gl_renderer", "context_gl_version", "context_identity",

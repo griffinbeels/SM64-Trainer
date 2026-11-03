@@ -98,6 +98,7 @@ class CaptureSession:
         self._copy_lanes = 0
         self.audio = self.archive = self.handoff = self.mux = None
         self.output = None
+        self._output_cause = None
         self._output_joined = False
         self.frontier = None
         self.settings = owner.settings
@@ -291,8 +292,8 @@ class CaptureSession:
             lambda run: self.owner.publish(run, (h.even_width, h.even_height)),
             audio_rate=cfg.audio_rate, audio_bitrate=160000,
             packet_limit=limits.packet_bytes, pcm_limit=limits.pcm_bytes,
-            max_bytes=limits.pending_bytes, max_blocks=limits.pcm_blocks,
-            max_age=limits.max_age, timings=self.timings,
+            max_bytes=limits.sink_bytes, max_blocks=limits.sink_blocks,
+            max_age=limits.sink_age_s, timings=self.timings,
         )
         deadline = time.monotonic() + limits.startup_s
         while not self.output.ready:
@@ -418,6 +419,7 @@ class CaptureSession:
             # Taken before cleanup; logged only if this is not a normal end.
             before_cleanup = failure_snapshot(
                 exc, frontier=self.frontier, adapter=self.adapter, output=self.output,
+                recording_volume=getattr(getattr(self.owner, "cfg", None), "scratch_dir", None),
             )
             retired = self.demand.reconcile_lifecycle()
             snapshot = self.demand.snapshot
@@ -461,7 +463,7 @@ class CaptureSession:
 
     def _retain_diagnostic(self):
         """After helper stderr drain, keep scalar evidence outside source lifetime."""
-        from sm64_events.replay.gpufielddiagnostics import native_failure_receipt
+        from sm64_events.replay.gpufielddiagnostics import native_failure_receipt, sink_evidence
 
         try:
             snapshot = self.demand.snapshot
@@ -483,6 +485,7 @@ class CaptureSession:
                 record.update(gpu_name=facts.name, gpu_vendor_id=facts.vendor_id, gpu_driver=facts.driver)
             if self._failure_snapshot is not None:
                 record["failure"] = self._failure_snapshot
+                record.update(sink_evidence(self._failure_snapshot))
                 encoder = self._failure_snapshot.get("encoder_failure") or {}
                 if encoder.get("result") is not None:
                     record["encoder_result"] = encoder["result"]
@@ -627,10 +630,14 @@ class CaptureSession:
             self.channel.close()
 
     def _finish_output(self):
-        error = self.error or (self.media.fault if self.media else "media setup failed")
+        # The run's outcome, fixed at the first attempt. A retry finds "sink still
+        # busy" in self.error, and passing that on would abort a complete recording.
+        if self._output_cause is None:
+            self._output_cause = (self.error or (self.media.fault if self.media else "media setup failed"),)
+        error = self._output_cause[0]
         if self.output is not None:
             try:
-                self.output.finish(error, timeout=self.settings.close_s)
+                self.output.finish(error, timeout=self.settings.sink_finish_s)
                 self._output_joined = True
             except PublicationError:
                 self._output_joined = True

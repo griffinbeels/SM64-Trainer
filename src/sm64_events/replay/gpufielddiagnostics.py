@@ -110,12 +110,40 @@ def native_failure_receipt(stderr: object) -> dict:
     return result or pending_mf
 
 
+_SINK_COMMANDS = frozenset({"bind", "row", "pcm", "video"})
+# Numbers and fixed command names only, so a failed sink's report can say what
+# stalled and how full the disk was without ever carrying a path.
+SINK_KEYS = ("sink_stalled_command", "sink_stalled_ms", "sink_slowest_command", "sink_max_feed_ms",
+             "sink_oldest_ms", "sink_pending_bytes", "sink_pending_blocks", "sink_peak_bytes",
+             "sink_peak_blocks", "recording_free_bytes")
+
+
+def sink_evidence(failure: dict) -> dict:
+    """The failed media sink's facts, flat, from a failure_snapshot."""
+    publication = failure.get("publication")
+    if not isinstance(publication, dict) or not publication.get("error"):
+        return {}
+    result = {}
+    for key, source in (("sink_stalled_command", "inflight_command"), ("sink_slowest_command", "slowest_command")):
+        if publication.get(source) in _SINK_COMMANDS:
+            result[key] = publication[source]
+    for key, source in (("sink_stalled_ms", "inflight_ms"), ("sink_max_feed_ms", "max_feed_ms"),
+                        ("sink_oldest_ms", "oldest_ms"), ("sink_pending_bytes", "pending_bytes"),
+                        ("sink_pending_blocks", "pending_blocks"), ("sink_peak_bytes", "peak_bytes"),
+                        ("sink_peak_blocks", "peak_blocks")):
+        if type(publication.get(source)) in (int, float):
+            result[key] = round(publication[source])
+    if type(failure.get("recording_free_bytes")) is int:
+        result["recording_free_bytes"] = failure["recording_free_bytes"]
+    return result
+
+
 def automatic_context(record: dict) -> dict:
     """Select scalar evidence; privacy scrubbing still runs at collection."""
     context = {key: value for key, value in record.items()
                if key in {"operation", "stage", "reason", "encoder_backend", "codec", "requested_codec", "capture_build",
                           "gpu_vendor_id", "gpu_name", "gpu_driver", "native_result", "encoder_result", "native_reason", "native_stage",
-                          "native_operation", "native_hresult", "encoder_error", "driver_error"}
+                          "native_operation", "native_hresult", "encoder_error", "driver_error", *SINK_KEYS}
                and isinstance(value, (str, int, bool))}
     startup = record.get("startup") or {}
     context.update((key, startup[key]) for key in STARTUP_TEXT_KEYS if isinstance(startup.get(key), str))

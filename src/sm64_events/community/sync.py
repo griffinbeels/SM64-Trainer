@@ -75,6 +75,9 @@ def _upload_identifier(grant):
 
 
 def _retryable(error):
+    # A locked or unreadable clip may read fine later; a missing one never will.
+    if isinstance(error, OSError):
+        return not isinstance(error, FileNotFoundError)
     return isinstance(error, CommunityError) and (
         error.code in ("network_unavailable", "budget_exhausted", "grant_expired", "upload_expired", "generation_changed")
         or error.status in (429, 502, 503, 504))
@@ -407,7 +410,7 @@ class CommunitySync:
     def _freeze_source(self, source):
         fields = {"target", "clock", "game_version", "strategy", "frames", "path", "raw_sha256", "full_start", "valid"}
         try:
-            if (not isinstance(source, dict) or set(source) != fields or source["full_start"] is not True
+            if (not isinstance(source, dict) or set(source) - {"bin"} != fields or source["full_start"] is not True
                     or source["valid"] is not True or source["clock"] not in ("igt", "rta")
                     or source["game_version"] not in ("us", "jp") or type(source["frames"]) is not int
                     or not 1 <= source["frames"] <= 2592000 or not isinstance(source["strategy"], str)):
@@ -426,6 +429,12 @@ class CommunitySync:
     def offer_source(self, source):
         frozen = self._freeze_source(source)
         return self._enqueue(source_key(frozen), ("offer", frozen)) if frozen else False
+
+    def catalog_step(self, target, clock, game_version, strategy, frames):
+        """This time's canonical subdivision from the catalog already held, or
+        None when none is held or it omits this identity. Never a request."""
+        cutoffs = self._catalog.get((*target_key(target), clock, game_version, "strategy", strategy))
+        return frame_band(cutoffs, [(frames, frames)])[0] if cutoffs else None
 
     def contribution_context(self):
         """Capture attribution and consent before native qualification starts."""
@@ -918,7 +927,8 @@ class CommunitySync:
         step = frame_band(cutoffs, [(source["frames"], source["frames"])])[0]
         with self._lock:
             # Discard slower pending offers in this canonical bin, preserving
-            # all other bins. A source is independent of local ladder admission.
+            # all other bins. The admission worker already skips a run its own
+            # kept rows beat in this bin; the server still answers for the rest.
             candidates = [(queue_key, item[1]) for queue_key, item in (
                 *self._queue.items(), *((retry_key, retry[0]) for retry_key, retry in self._offer_retry.items())) if item[0] == "offer"
                 and item[1]["owner"] == source["owner"]
@@ -991,9 +1001,9 @@ class CommunitySync:
             return
         tries = min(6, source.get("retry_count", 0) + 1)
         source["retry_count"] = tries
-        if operation[0] == "offer" and error.code in ("grant_expired", "upload_expired"):
+        if operation[0] == "offer" and getattr(error, "code", None) in ("grant_expired", "upload_expired"):
             source.pop("mutation_keys", None)
-        delay = max(error.retry_after or 0, self._network_until - time.monotonic(),
+        delay = max(getattr(error, "retry_after", None) or 0, self._network_until - time.monotonic(),
                     random.uniform(1, 1.25) * min(900, 30 * 2 ** (tries - 1)))
         with self._lock:
             if operation[0] == "retract" and not self._retractions.is_current(source):
@@ -1034,7 +1044,7 @@ class CommunitySync:
         if operation[0] == "pool":
             self._pool_failed(operation, error)
         self._retry_offer(key, operation, error)
-        if operation[0] == "offer" and (isinstance(error, OSError)
+        if operation[0] == "offer" and (isinstance(error, FileNotFoundError)
                 or isinstance(error, CommunityError) and error.code in ("source_changed", "invalid_source", "unsupported_identity")):
             await self._cpu(self._outbox.discard, (operation[1],))
         if operation[0] == "retract" and not _retryable(error):

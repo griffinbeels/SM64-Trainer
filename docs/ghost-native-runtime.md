@@ -2332,6 +2332,26 @@ uncertified captures remain ineligible. Retraction retries compare the latest
 durable operation UUID, so a late keep-B failure cannot replace a newer keep-C
 operation, including B→C→B sequences.
 
+## Keeping every run owed a ghost
+
+`ghost/rival_recording.py` owns this. Its queue has no capacity, so a burst cannot
+drop a run. `PreservationFailed` (poses did not reach disk) and file or database
+errors retry with backoff while the poses exist (`ARCHIVE_RETENTION_S`), then log
+one error per reason per session. A plain ValueError means the run is not
+eligible and refuses silently. A run with no pose recorder (`NO_POSE_ARCHIVE`)
+never retries. A saved PB whose poses did not commit retries the same way,
+whatever admission thinks of the run, so a PB past the ghost ceiling keeps its clip
+and gets no row.
+
+Stop drains the queue for at most `DRAIN_S`, before community and recorder
+teardown. It commits without waiting for a star dance, so a clip finished while
+closing can lack its dance. The additive `owed` table in `population.sqlite3` holds each
+run from the moment the worker takes it until it settles. The next start admits
+an owed run only if its clip was committed and its lineage still matches. A
+crash before commit loses the poses: they live in session scratch, and that row
+is settled with a warning. An owed upload waits for its recorded account to
+return, for at most `OWED_OFFER_DAYS`, and never goes to another account.
+
 One player may occupy one rival seat across automatic choices, explicit pins and
 mixed ready/downloading rosters. Bundled schema2 author identities match the
 packaged Auth issuer and account subject; equal display names do not merge

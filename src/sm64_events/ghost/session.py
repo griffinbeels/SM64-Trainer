@@ -7,6 +7,7 @@ frame. Shutdown joins in-flight selection before revoking the final command.
 """
 import asyncio
 import logging
+import sqlite3
 import threading
 from contextlib import suppress
 from datetime import datetime, timezone
@@ -15,6 +16,7 @@ from types import SimpleNamespace
 
 from sm64_events.core.error_reporting_privacy import GHOST_STATE_LOGGER
 from sm64_events.core.events import Event
+from sm64_events.ghost.clip import NO_POSE_ARCHIVE
 from sm64_events.ghost.display_stall import DisplayStall
 from sm64_events.ghost.dpad_toggle import hotkey_for
 from sm64_events.ghost.native_session import ghost_hue
@@ -635,6 +637,7 @@ class GhostSession:
                         # 2026-10-25 this was silent: an AMD tester's PBs became no
                         # ghost and nothing said why ("i still dont see any ghost").
                         state_log.error("A saved PB kept no Mario poses: %s", reason)
+                        self._keep_pb_later(attempt, reason, reported=True)
                     elif isinstance(kept, dict) and kept.get("native_ghost"):
                         state_log.info("PB attempt %s kept %s Mario poses", attempt.id,
                                        kept["native_ghost"].get("records"))
@@ -649,8 +652,31 @@ class GhostSession:
                             self._tail_task.cancel()
                         self._tail_task = asyncio.create_task(self._complete_tail(attempt.id, preserve),
                                                               name="ghost-pb-tail")
+                except (ValueError, LookupError, OSError, sqlite3.Error) as error:
+                    # The PB itself is saved, and the worker keeps trying for its ghost.
+                    from sm64_events.ghost.rival_recording import failure_reason
+                    reason = failure_reason(error)
+                    log.warning("PB %s Mario poses were not kept yet: %s", attempt.id, reason)
+                    self._keep_pb_later(attempt, reason)
                 except Exception:  # noqa: BLE001 - the PB itself is saved; say why in the picker
                     log.exception("PB %s Mario poses could not be kept", attempt.id)
+        await self.refresh(resolve=True)
+
+    def _keep_pb_later(self, attempt, reason, *, reported=False):
+        """A PB ghost is kept forever, whatever population admission thinks of the run."""
+        if self._population_recorder is not None and reason != NO_POSE_ARCHIVE:
+            self._population_recorder.keep_pb(attempt, self._pb_kept, reason if reported else None)
+
+    async def _pb_kept(self, attempt_id):
+        """The worker kept a PB's poses after all: the ghost follows them now."""
+        if self._closing:
+            return
+        if self._rivals is not None:
+            async with self._lock:
+                def committed():
+                    with self._lifecycle_lock:
+                        self._rivals.pb_preserved(attempt_id)
+                await asyncio.to_thread(committed)
         await self.refresh(resolve=True)
 
     async def _complete_tail(self, attempt_id, preserve) -> None:

@@ -74,6 +74,9 @@ PRODUCER_FIELDS = ("pid", "created", "generation", "rom_generation", "configurat
 ROM_LAYOUTS = (ROM_US, ROM_JP)
 
 
+NO_POSE_ARCHIVE = "This recording has no native Mario poses."
+
+
 class ClipError(ValueError):
     """The recording cannot establish the requested native state."""
 

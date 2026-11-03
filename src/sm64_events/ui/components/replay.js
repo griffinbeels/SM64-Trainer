@@ -326,9 +326,19 @@ function fmtSpan(st) {
   return `${Math.round(s)} s`;
 }
 
+// Why video stopped by itself, or null. Ghosts only get the promise while the
+// recorder really holds their source; the desktop fallback records none.
+function lowDiskSentence(st) {
+  if (!st.storage_pressure || st.recording_enabled === false || st.capture_gated) return null;
+  return st.pose_source_owned
+    ? "Video has stopped because your disk is almost full, but ghosts are still being recorded."
+    : "Video has stopped because your disk is almost full.";
+}
+
 function captureLabel(st) {
   if (st.capture_state === "stopping") return "Stopping recording…";
   if (st.capture_state === "off") return "Recording off";
+  if (lowDiskSentence(st)) return "Low disk: video stopped";
   if (st.capture_state === "starting") return "Starting recording…";
   if (st.capture_state === "paused") return "Recording paused";
   if (st.capture_state === "error") return "Recording needs attention";
@@ -358,10 +368,11 @@ export function RecordingDot() {
   const label = captureLabel(st);
   return html`<span class="recording-control">
     <button class=${`dot recording-button ${cls}`}
-          title=${`${label} — recording controls and replay storage`}
+          title=${`${lowDiskSentence(st) || label} — recording controls and replay storage`}
           aria-expanded=${open} onclick=${() => setOpen(!open)}>
       <span class="recording-light"></span>${label}
-      <span class=${`recording-short${recordingNow(st) ? " is-on" : ""}`} aria-hidden="true">REC</span>
+      <span class=${`recording-short${recordingNow(st) ? " is-on" : ""}${lowDiskSentence(st) ? " is-warn" : ""}`}
+        aria-hidden="true">${lowDiskSentence(st) ? "DISK" : "REC"}</span>
     </button>
     ${open && html`<${BufferSettings} st=${st} onStatus=${setSt}
         refresh=${() => setTick((t) => t + 1)}
@@ -402,10 +413,33 @@ function RecordingSwitch({st, onStatus, refresh}) {
       : "Restart the trainer to enable these recording controls."}</p>
     ${error && html`<p role="alert">${error}</p>`}
     ${problem && html`<p role="alert">${problem}</p>`}
+    ${lowDiskSentence(st) && html`<p role="alert" class="recording-low-disk">
+      ${lowDiskSentence(st)}${" "}
+      ${st.disk_free_bytes != null && `You have ${fmtGB(st.disk_free_bytes)} GB free, and video needs ${fmtGB(st.disk_reserve_bytes)} GB free. `}
+      Video starts again by itself when you free up space.
+    </p>`}
   </div>`;
 }
 
-function RetentionControls({mode, setMode, attempts, setAttempts, mins, setMins, ready}) {
+const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+// What the chosen mode does, in words, with the numbers on screen right now.
+function retentionSentence({mode, attempts, footageMins, mins}) {
+  if (mode === "session") return "The app keeps all footage from this session until it reaches the disk cap.";
+  if (mode === "minutes") {
+    const m = Number(mins);
+    return m > 0 ? `The app keeps the last ${plural(m, "minute")} of footage and deletes older footage.`
+      : "The app keeps the last few minutes of footage and deletes older footage.";
+  }
+  const count = Number(attempts), total = Number(footageMins);
+  const limits = count > 0 && total > 0
+    ? `more than ${plural(count, "attempt")} or more than ${plural(total, "minute")} of attempts`
+    : "more attempts or more minutes than you chose";
+  return `The app deletes your oldest attempts when you have ${limits}. A reset counts as an attempt. Your newest attempt always stays, even if it is very long.`;
+}
+
+function RetentionControls({mode, setMode, attempts, setAttempts, footageMins, setFootageMins,
+    mins, setMins, ready}) {
   if (!ready) return html`<span class="meta">Loading settings…</span>`;
   return html`<div class="replay-setting-controls retention-options">
           <div class="retention-mode">
@@ -425,6 +459,12 @@ function RetentionControls({mode, setMode, attempts, setAttempts, mins, setMins,
               oninput=${(e) => mode === "attempts" ? setAttempts(e.target.value) : setMins(e.target.value)} />
             <span>${mode === "attempts" ? "attempts" : "min"}</span>
           </label>
+          ${mode === "attempts" && html`<label class="replay-number-field retention-footage-field">
+            <input id="replay-retention-footage" name="replay_retention_footage" type="number"
+              min="1" max="1440" value=${footageMins} aria-label="Footage limit in minutes"
+              oninput=${(e) => setFootageMins(e.target.value)} />
+            <span>minutes in total</span>
+          </label>`}
         </div>`;
 }
 
@@ -468,13 +508,25 @@ function CompressionSection() {
   </div>`;
 }
 
+function BufferUsage({ st }) {
+  const pct = Math.min(100, (st.disk_bytes / st.max_buffer_bytes) * 100);
+  return html`<div class="buffer-usage">
+    <div><b>${fmtGB(st.disk_bytes)} GB</b>
+      <span>of ${fmtGB(st.max_buffer_bytes)} GB · ${fmtSpan(st)} covered</span></div>
+    <div class="buffer-meter">
+      <div style=${`width:${pct}%;--meter-color:${pct > 85 ? "#e0a3a3" : "#7aa2f7"}`}></div>
+    </div>
+  </div>`;
+}
+
 // Unsaved replay history: attempt/time windows plus the shared disk cap.
 function BufferSettings({ st, onStatus, refresh, close }) {
   const [info, setInfo] = useState(null);
   // Retention placeholders: its controls and Apply wait for the settings GET,
   // which replaces all three before either can show or send them.
   const [mode, setMode] = useState("attempts");
-  const [attempts, setAttempts] = useState(10);
+  const [attempts, setAttempts] = useState(5);
+  const [footageMins, setFootageMins] = useState(10);
   const [mins, setMins] = useState(10);
   const [capGb, setCapGb] = useState(Math.round(st.max_buffer_bytes / 1024 ** 3));
   const [preS, setPreS] = useState(null);   // loaded with the settings GET
@@ -486,7 +538,8 @@ function BufferSettings({ st, onStatus, refresh, close }) {
       if (controller.signal.aborted) return;
       setInfo(s);
       setMode(s.retention_attempts != null ? "attempts" : s.retention_s == null ? "session" : "minutes");
-      setAttempts(s.retention_attempts ?? 10);
+      setAttempts(s.retention_attempts ?? 5);
+      setFootageMins((s.retention_footage_s ?? 600) / 60);
       setMins(s.retention_s != null ? Math.round(s.retention_s / 60) : 10);
       setCapGb(s.max_buffer_bytes / 1024 ** 3);
       setPreS(String(s.pre_pad_s));
@@ -498,14 +551,17 @@ function BufferSettings({ st, onStatus, refresh, close }) {
   }, []);
 
   async function apply() {
-    const cap = Number(capGb), m = Number(mins), count = Number(attempts);
+    const cap = Number(capGb), m = Number(mins), count = Number(attempts), footage = Number(footageMins);
     if (!Number.isFinite(cap) || (mode === "minutes" && !Number.isFinite(m))
-        || (mode === "attempts" && (!Number.isInteger(count) || count < 1 || count > 1000))) {
+        || (mode === "attempts" && (!Number.isInteger(count) || count < 1 || count > 1000
+          || !(footage >= 1 && footage <= 1440)))) {
       setMsg("enter a number"); return;
     }
     const body = {
       retention_s: mode === "minutes" ? m * 60 : null,
       retention_attempts: mode === "attempts" ? count : null,
+      // Other modes do not use it, so they leave the stored limit alone.
+      ...(mode === "attempts" ? {retention_footage_s: footage * 60} : {}),
       max_buffer_bytes: Math.round(cap * 1024 ** 3),
       // Apply is enabled only after the settings GET has filled both pads.
       pre_pad_s: Number(preS),
@@ -521,7 +577,6 @@ function BufferSettings({ st, onStatus, refresh, close }) {
   }
 
 
-  const pct = Math.min(100, (st.disk_bytes / st.max_buffer_bytes) * 100);
   return html`<div class="popover replay-settings-popover">
     <div class="popover-heading">
       <div><span class="eyebrow">Replay</span><b>Recording and storage</b></div>
@@ -530,18 +585,14 @@ function BufferSettings({ st, onStatus, refresh, close }) {
     </div>
     <${RecordingSwitch} st=${st} onStatus=${onStatus} refresh=${refresh} />
     <p class="popover-note">Keep recent attempts for review. Saved replays and marked PBs stay saved.</p>
-    <div class="buffer-usage">
-      <div><b>${fmtGB(st.disk_bytes)} GB</b>
-        <span>of ${fmtGB(st.max_buffer_bytes)} GB · ${fmtSpan(st)} covered</span></div>
-      <div class="buffer-meter">
-        <div style=${`width:${pct}%;--meter-color:${pct > 85 ? "#e0a3a3" : "#7aa2f7"}`}></div>
-      </div>
-    </div>
+    <${BufferUsage} st=${st} />
     <div class="replay-setting-grid">
       <div class="replay-setting-row replay-retention-row">
-        <span><b>Keep footage</b><small>Oldest unsaved footage expires first. Expired footage cannot be restored.</small></span>
+        <span><b>Keep footage</b><small>${retentionSentence({mode, attempts, footageMins, mins})} You cannot get deleted footage back.</small></span>
         <${RetentionControls} mode=${mode} setMode=${setMode}
-          attempts=${attempts} setAttempts=${setAttempts} mins=${mins} setMins=${setMins}
+          attempts=${attempts} setAttempts=${setAttempts}
+          footageMins=${footageMins} setFootageMins=${setFootageMins}
+          mins=${mins} setMins=${setMins}
           ready=${info !== null} />
       </div>
       <label class="replay-setting-row">
