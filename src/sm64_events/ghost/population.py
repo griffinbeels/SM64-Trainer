@@ -96,6 +96,20 @@ def _admissible(attempt, clock, game_version, full_start):
     return frames
 
 
+def still_admissible(attempt, row) -> bool:
+    """Whether today's rules still admit the run behind a stored ghost.
+
+    A row's `valid` is what was true when it was saved. Validity is derived
+    from the journal, so a run can lose it later and the row would not know.
+    """
+    if local_attempt_source(attempt) != row.get("source") or attempt.strat_tag != row.get("strategy"):
+        return False
+    try:
+        return _admissible(attempt, row["clock"], row["game_version"], True) == row["frames"]
+    except (ValueError, TypeError, KeyError, AttributeError):
+        return False
+
+
 def searched_versions(identity):
     """The recorded ROMs a search for this practice identity may return."""
     from sm64_events.ranks.region_scope import REGIONAL, servable_versions

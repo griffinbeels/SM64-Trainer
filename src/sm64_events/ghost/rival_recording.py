@@ -607,7 +607,21 @@ class PopulationRecorder:
         snapshot = getattr(store, "snapshot_all", None)
         if not player or snapshot is None:
             return None
-        return own_sources(snapshot(), player, store.root)
+        return own_sources(snapshot(), player, store.root, still_good=self._still_good)
+
+    def _still_good(self, row):
+        """Today's rules on the run behind a stored row: its validity and the ghost ceiling."""
+        from sm64_events.ghost.community_catalog import within_strategy_ceiling
+        from sm64_events.ghost.population import still_admissible
+        try:
+            attempt = self.replay.attempt(row["source"]["attempt_id"])
+        except (LookupError, RuntimeError):
+            return False  # A fresh profile no longer holds this run, so nothing vouches for it.
+        if not still_admissible(attempt, row):
+            return False
+        identity = self.identity_of(attempt)
+        ranks = getattr(self.tracker, "ranks", None)
+        return identity is not None and (ranks is None or within_strategy_ceiling(ranks, identity, row["frames"]))
 
     def _prune(self):
         """Once per start: keep each player's fastest recording per strategy subdivision.

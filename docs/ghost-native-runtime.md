@@ -2247,7 +2247,9 @@ and never-captured frames (`clip.py::pose_gaps`); a nonzero count is logged when
 the clip is saved. The picker row names only the frames where the ghost really
 blinks (`clip.py::blink_frames`): a refused run playback bridges is not one.
 `hidden_refusals` states the bridge rule in Python and natively, compared by
-`tests/test_ghost_clip_native.py`. `tools/ghost_extraction_audit.py` audits every committed clip and the live
+`tests/test_ghost_clip_native.py`. A shared ghost must have no `scene_holes`
+(`clip.py`): frames lost in the middle of one scene. Upload, the Worker and the
+community cache all refuse those; hiding across a level change stays allowed. `tools/ghost_extraction_audit.py` audits every committed clip and the live
 pose archives (exit 1 on any hole), naming each hole's pose refusal and
 counting frames whose Mario was culled but posed. 2026-09-22: every post-fix
 clip was complete; the only pose-less archive records were a star-exit level
@@ -2357,7 +2359,9 @@ return, for at most `OWED_OFFER_DAYS`, and never goes to another account.
 
 [[Earlier ghosts]] take a separate door: the first sharing account's claim.
 `community/earlier_ghosts.py` offers only rows with this install's recorder identity
-and a local lineage, so an imported or bundled ghost never goes up. They wait in the
+and a local lineage, so an imported or bundled ghost never goes up. Each row's run
+must still pass today's admission and ghost ceiling (`population.still_admissible`),
+so a run that lost its validity after saving stays home. They wait in the
 same outbox, at the same pace, and the cloud answers `not_faster` or `already_present`
 as for any offer. Signing out or turning sharing off cancels them, and the same account
 resumes when it shares again. Removing shared ghosts closes the claim for good.

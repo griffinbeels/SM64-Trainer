@@ -11,6 +11,8 @@ const REGION_BY_LAYOUT={1:"us",2:"jp"};
 // (IgtClock.DISPLAY_TICK, ghost/archive.py DANCE_ENTRY_FRAMES and TAIL_ACTIONS,
 // ghost/clip.py CLOSING_TRANSITION_MAX). tests/test_community_wire.py runs both.
 const DISPLAY_TICK=1,DANCE_ENTRY_FRAMES=2,CLOSING_TRANSITION_MAX=30;
+// BRIDGE_FRAMES, ghost/native_layout.py: the longest refused run playback holds a pose over.
+const BRIDGE_FRAMES=2n;
 // ACT_STAR_DANCE_EXIT/WATER/NO_EXIT, ACT_JUMBO_STAR_CUTSCENE; a tail may also fall (ACT_FALL_AFTER_STAR_GRAB).
 const DANCE_ACTIONS=new Set([0x1302,0x1303,0x1307,0x1909]),TAIL_ACTIONS=new Set([...DANCE_ACTIONS,0x1904]);
 const check = ok => requireThat(ok,"invalid_clip","The recording fails native structural validation.",422);
@@ -118,7 +120,7 @@ function record(bytes, version, header, previous) {
   if(version===7) checkPad(r,valid);
   if(previous) check(frame.sequence>previous.sequence && frame.dlist>previous.dlist && frame.qpc>=previous.qpc &&
     frame.timer>=previous.timer && clock.elapsed>=previous.elapsed && clock.continuity===previous.continuity);
-  return {...frame,...clock,playable:(valid&3)===3,pad:version===7&&Boolean(valid&512)};
+  return {...frame,...clock,playable:(valid&3)===3,posed:Boolean(valid&2),pad:version===7&&Boolean(valid&512)};
 }
 // The GHC1 envelope: the grant's size and hash, the magic, and the native sizes it declares.
 function checkEnvelope(encoded, grant) {
@@ -182,7 +184,8 @@ function checkRecords(encoded, e, hd, grant, {version,header,count,recordBytes})
       check(coordinate>=0n&&coordinate<(1n<<64n));
       if(hd.u32(112)===1 && frame.origin!==first.origin) indexing=false;
       playable ||= indexing&&frame.playable;last=frame;
-      rows.push({timer:frame.timer,igt:frame.igt,elapsed:frame.elapsed,origin:frame.origin,action:frame.action,pad:frame.pad});
+      rows.push({timer:frame.timer,igt:frame.igt,elapsed:frame.elapsed,origin:frame.origin,action:frame.action,pad:frame.pad,
+        posed:frame.posed,sequence:frame.sequence,level:frame.level,area:frame.area});
     }
     offset+=length;seen+=n;
   }
@@ -216,11 +219,30 @@ function claimedTimeAgrees(grant, hd, rows) {
   return grant.clock==="rta" && frames>=counted(rows[from]) &&
     frames<=BigInt(rows[to].timer-first.timer+first.igt+CLOSING_TRANSITION_MAX+DISPLAY_TICK);
 }
+// Frames lost in the middle of one scene: refused rows playback does not bridge,
+// and occurrences that never arrived. Hiding across a level change is normal play.
+// Mirrors sm64_events.ghost.clip.scene_holes; tests/test_community_wire.py runs both.
+function sceneHoles(rows, starClock) {
+  let indexed=rows.length;
+  if(starClock){const other=rows.findIndex(row=>row.origin!==rows[0].origin);if(other>=0)indexed=other;}
+  let holes=0n,before=-1;
+  for(let i=0;i<indexed;i++) {
+    if(!rows[i].posed) continue;
+    if(before>=0&&rows.slice(before,i).every(row=>row.level===rows[i].level&&row.area===rows[i].area)) {
+      const span=BigInt(i-before),refused=span-1n,missing=rows[i].sequence-rows[before].sequence-span;
+      const bridged=refused>0n&&refused<=BRIDGE_FRAMES&&missing===0n&&rows[i].elapsed-rows[before].elapsed===span;
+      if(!bridged)holes+=refused+missing;
+    }
+    before=i;
+  }
+  return holes;
+}
 // What the upload claims about the clip, answered by the clip: its ROM, a pad
-// on every record, and its time.
+// on every record, no frames lost mid-scene, and its time.
 function checkClaims(grant, hd, version, rows) {
   claim(REGION_BY_LAYOUT[hd.u32(24)]===grant.rom,"rom_mismatch","The recording was captured on a different ROM than the upload names.");
   claim(version===7&&rows.every(row=>row.pad),"incomplete_inputs","The recording's controller inputs are not known on every frame.");
+  claim(sceneHoles(rows,hd.u32(112)===1)===0n,"playback_gaps","The recording is missing frames in the middle of a scene.");
   claim(claimedTimeAgrees(grant,hd,rows),"frames_mismatch","The upload's time disagrees with the recording's own clock.");
 }
 export function validateGHC1(encoded, grant) {

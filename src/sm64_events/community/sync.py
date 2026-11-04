@@ -100,7 +100,7 @@ def _cutoffs(rows):
 
 
 INTEGRITY_FAILURES = ("asset_mismatch", "incomplete_inputs", "invalid_metadata", "invalid_name", "identity_mismatch",
-                      "invalid_response")
+                      "invalid_response", "playback_gaps")
 
 
 def _unusable_until(error):
