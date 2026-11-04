@@ -42,10 +42,12 @@ class _Arrival:
         self.watch = dict(WATCH)
         # PracticeCell's title is its catalog name, or that name plus Daily
         # Star's suffix. A bare prefix would confuse PSS's two similar names.
+        # ensure_ascii=False: CSS does not read JSON's escaped middle dot as a
+        # middle dot, which missed the star only on days it was the Daily Star.
         # Slot position would misidentify a segment
         # extra when pending stars are omitted from the row entirely.
         for index, name in enumerate(selected_course["stars"]):
-            cell = CELLS + ":is([title=" + json.dumps(name) + "], [title^=" + json.dumps(name + " · ") + "])"
+            cell = CELLS + ":is([title=" + json.dumps(name) + "], [title^=" + json.dumps(name + " · ", ensure_ascii=False) + "])"
             self.watch.update({f"cell{index}": cell,
                                f"active{index}": cell + ".active-star",
                                f"strat{index}": cell + " .strat"})
