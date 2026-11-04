@@ -85,7 +85,7 @@ function SheetSection({ groups, runner, importTimes, busy, onPick, onImport }) {
 
 function ConsentSection({ account, sharing, consent, busy, policies, onConsent }) {
   return html`<p class="muted">${sharing
-      ? "Your best ghost in each subdivision and strategy is shared automatically so other players can learn from your runs. You can turn sharing off in Settings."
+      ? "Your best ghost in each subdivision and strategy is shared automatically so other players can learn from your runs. Older ghosts you recorded on this computer are shared too, and they go on your account. You can turn sharing off in Settings."
       : "Automatic sharing stays off. You can change it in Settings."}</p>
     <label class="community-check"><input type="checkbox" checked=${consent} disabled=${busy}
       onchange=${event => onConsent(event.target.checked)} />

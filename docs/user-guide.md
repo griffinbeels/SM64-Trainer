@@ -136,6 +136,12 @@ recorded run races in its place, shown as **Best recorded run**; your PB stays
 the rank you chase. The ghosts picked for you come from every strategy on that
 star, starting just above your PB, and each one's strategy shows under its name.
 
+**Your older ghosts are shared too.** When you share ghosts, the older ghosts you
+recorded on this computer go on your account, and other players can race them. Only
+the first account that shares from this computer gets them. You can turn sharing off
+in your account settings. If you press **Remove shared ghosts**, your older ghosts
+will not upload again by themselves.
+
 **Share ghosts.** Open **Ghost Library · Import / Export** from a star or segment.
 Export that target's overall best, each strategy's best, all your personal bests,
 or a custom selection. The app remembers your player name and can save a search

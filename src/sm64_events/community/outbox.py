@@ -1,7 +1,9 @@
 """Bounded metadata for previously consented native contributions, never clips.
 
-Only the admission worker remembers a qualified source and its current account
-UID. Recovery never assigns historical, imported or packaged runs to a login.
+The admission worker remembers a qualified source and its current account UID.
+So does the first sharing account's claim on this install's earlier ghosts
+(`earlier_ghosts.py`), under terms that say so. Recovery itself never assigns
+imported or packaged runs to a login.
 Deleted/changed source bytes, capacity eviction and explicit cancellation can
 retire an intent; this file is not a second recording archive. Eviction spends
 what the community would miss least (`SourceOutbox._evict_one`).
@@ -198,6 +200,24 @@ class SourceOutbox:
             while len(self._rows) > MAX_OFFERS:
                 self._evict_one()
             self._write()
+
+    def remember_many(self, sources):
+        """One write for a whole batch of already checked offers."""
+        with self._lock:
+            self.load()
+            for source in sources:
+                key = source_id(source)
+                self._rows[key] = {**self._rows.get(key, {}), **source}
+                self._rows.move_to_end(key)
+            while len(self._rows) > MAX_OFFERS:
+                self._evict_one()
+            self._write()
+
+    def held_by_others(self, owner):
+        """The clips an unsent offer of another account still names."""
+        with self._lock:
+            self.load()
+            return {row["raw_sha256"] for row in self._rows.values() if row["owner"] != owner}
 
     def contains(self, source):
         with self._lock:

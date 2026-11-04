@@ -16,6 +16,7 @@ from sm64_events.ranks.region_scope import REGIONAL, servable_versions
 from . import claims, codec, library
 from .cache import LEASE_RENEW_S, account_owner, checked_metadata, target_key, value_of
 from .config import CommunityError
+from .earlier_ghosts import OLDER_TERMS, QUEUED, EarlierClaim, checked_offers
 from .outbox import RetractionOutbox, SourceOutbox, checked_source, checked_strategy, retraction_key, source_key
 
 logger = logging.getLogger(__name__)
@@ -230,6 +231,8 @@ class CommunitySync:
         self._outbox = SourceOutbox(population.root / "pending-contributions.json")
         self._retractions = RetractionOutbox(population.root / "pending-retractions.json")
         self._retired = OrderedDict()  # raw_sha256 -> the one strategy it may still be offered under
+        self.earlier_sources = None  # PopulationRecorder: this install's own ghosts (`earlier_ghosts.py`)
+        self._earlier = EarlierClaim(population.root)
         self._consent_epoch = 0
         self._recovery_owner, self._recovery_until = None, 0
         if hasattr(account, "on_contribution_cancel"):
@@ -522,7 +525,36 @@ class CommunitySync:
                 and snapshot.get("uid") == source["owner"] and kept == source["strategy"]
                 and source.get("consent_epoch", self._consent_epoch) == self._consent_epoch)
 
+    def _share_earlier_ghosts(self):
+        """The first account that shares claims this install's own ghosts. Off the loop.
+
+        A store that is not ready yet claims nothing. The offers wait in the
+        outbox and go up at the recovery pace, like any other offer.
+        """
+        context = self.contribution_context()
+        terms = self.account.snapshot().get("terms_version")
+        if (context is None or self.earlier_sources is None or not terms or terms in OLDER_TERMS
+                or not self._earlier.open_to(context["owner"])):
+            return
+        sources = self.earlier_sources()
+        if sources is None:
+            return
+        self._outbox.load()
+        offers = checked_offers(sources, self._freeze_source, foreign=self._outbox.held_by_others(context["owner"]))
+        with self._lock:
+            if context != self.contribution_context():
+                return  # Sign-out or sharing off won the race.
+            self._outbox.remember_many(offers)
+            self._earlier.write(context["owner"], QUEUED)
+
+    def close_earlier_ghosts(self):
+        """The player is removing their shared ghosts: never queue the older ones again."""
+        owner = self.account.snapshot().get("uid")
+        if owner:
+            self._earlier.remove(owner)
+
     async def cancel_contributions(self, owner):
+        await self._cpu(self._earlier.stop_everyone if owner is None else lambda: self._earlier.stop(owner))
         with self._lock:
             self._consent_epoch += 1
             for mapping in (self._queue, self._offer_retry):
@@ -546,6 +578,7 @@ class CommunitySync:
         if owner == self._recovery_owner and time.monotonic() < self._recovery_until:
             return
         self._recovery_owner, self._recovery_until = owner, time.monotonic() + 60
+        await self._cpu(self._share_earlier_ghosts)
         for retraction in await self._cpu(self._retractions.pending, owner):
             key = retraction_key(retraction)
             with self._lock:

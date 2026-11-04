@@ -1854,6 +1854,16 @@ PBs or the independent [[ghost]]-sharing setting.
   `src/sm64_events/community/progress_state.py` and
   `cloud/community/src/progress-store.js`
 
+### Earlier ghosts
+
+The [[ghost]]s this install recorded that its account may never have shared.
+The first account that shares from this install claims them, and they upload under
+that account with no question. Terms `beta-2` disclose this, so an account that last
+accepted older terms adopts nothing. No other account can share them, and removing
+shared [[ghost]]s closes the claim for good.
+
+- **Lives** — `src/sm64_events/community/earlier_ghosts.py`
+
 ### Community ghost
 
 A [[ghost]] shared by an authenticated, invited player. The service keeps that

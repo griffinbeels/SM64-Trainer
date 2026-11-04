@@ -2355,6 +2355,15 @@ crash before commit loses the poses: they live in session scratch, and that row
 is settled with a warning. An owed upload waits for its recorded account to
 return, for at most `OWED_OFFER_DAYS`, and never goes to another account.
 
+[[Earlier ghosts]] take a separate door: the first sharing account's claim.
+`community/earlier_ghosts.py` offers only rows with this install's recorder identity
+and a local lineage, so an imported or bundled ghost never goes up. They wait in the
+same outbox, at the same pace, and the cloud answers `not_faster` or `already_present`
+as for any offer. Signing out or turning sharing off cancels them, and the same account
+resumes when it shares again. Removing shared ghosts closes the claim for good.
+Terms `beta-2` disclose this. Accepting `beta-1` adopts nothing, so a build can ship
+before the Worker's policy versions change.
+
 One player may occupy one rival seat across automatic choices, explicit pins and
 mixed ready/downloading rosters. Bundled schema2 author identities match the
 packaged Auth issuer and account subject; equal display names do not merge
