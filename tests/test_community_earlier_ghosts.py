@@ -12,7 +12,7 @@ from types import SimpleNamespace
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from sm64_events.community.earlier_ghosts import OLDER_TERMS, REMOVED, EarlierClaim, own_sources
+from sm64_events.community.earlier_ghosts import OLDER_TERMS, REMOVED, EarlierClaim, own_sources as _own_sources
 from sm64_events.ghost.rival_recording import PopulationRecorder
 from sm64_events.server.community_api import create_community_router
 from test_community_outbox import Account, UID, native, settled, source, sync_at
@@ -21,6 +21,10 @@ from test_community_sync import catalog
 OTHER = "22222222-2222-4222-8222-222222222222"
 ME = "me-on-this-install"
 CLOUD = Path(__file__).resolve().parents[1] / "cloud" / "community"
+
+
+def own_sources(rows, player_id, root, still_good=lambda _row: True):
+    return _own_sources(rows, player_id, root, still_good=still_good)
 
 
 def row(tmp_path, **changes):
@@ -57,13 +61,46 @@ def test_only_this_installs_own_recorded_runs_qualify(tmp_path):
 
 
 def test_the_recorder_offers_rows_from_its_local_store(tmp_path):
-    store = SimpleNamespace(root=tmp_path, snapshot_all=lambda: (row(tmp_path), row(tmp_path, player_id="other")),
-                            rows_for_source=lambda _source: ())
-    tracker = SimpleNamespace(db=SimpleNamespace(get_state=lambda key, default=None: ME))
-    community = SimpleNamespace()
-    recorder = PopulationRecorder(store, None, tracker, None, community=community)
+    recorder, community = recorder_over(tmp_path, attempt())
     assert community.earlier_sources == recorder.earlier_sources
     assert len(recorder.earlier_sources()) == 1
+
+
+def attempt(**changes):
+    """The run behind `row`, as today's rules read it: a clean star run."""
+    return SimpleNamespace(**{"id": 1, "session_id": 1, "started_utc": "2026-10-28T21:00:00Z", "strat_tag": "Standard",
+        "valid": True, "outcome": "success", "cleared": False, "timed_by": "igt", "timed_at": "xcam",
+        "game_version": "us", "native_clock_kind": "star", "segment_id": None, "course_id": 2, "star_id": 1,
+        "igt_frames": 3, "rta_frames": 3, "anchor_type": "reset", "state_loads": 0, "invalid_reason": None,
+        "ended_utc": "2026-10-28T21:01:00Z", "native_clock_frame": 10, "closed_frame": 20,
+        "native_clock_utc": "2026-10-28T21:00:00+00:00", **changes})
+
+
+def recorder_over(tmp_path, run, identity="identity", ranks=None):
+    store = SimpleNamespace(root=tmp_path, snapshot_all=lambda: (row(tmp_path), row(tmp_path, player_id="other")),
+                            rows_for_source=lambda _source: ())
+    tracker = SimpleNamespace(db=SimpleNamespace(get_state=lambda key, default=None: ME), ranks=ranks)
+
+    def lookup(_attempt_id):
+        if run is None:
+            raise LookupError("no attempt")
+        return run
+    community = SimpleNamespace()
+    recorder = PopulationRecorder(store, SimpleNamespace(attempt=lookup), tracker, lambda _attempt: identity,
+                                  community=community)
+    return recorder, community
+
+
+def test_a_run_that_stopped_passing_todays_rules_stays_home(tmp_path):
+    """Griffin, 2026-11-04: "Just making sure we're not pushing any *broken* old ghosts."
+    The row says valid; only the run's current state can say it still is."""
+    for broken in ({"valid": False}, {"outcome": "reset"}, {"cleared": True}, {"state_loads": 1},
+                   {"anchor_type": "state_loaded"}, {"timed_by": "imported"}, {"timed_at": "grab"},
+                   {"igt_frames": 4}, {"strat_tag": "Other"}, {"session_id": 2}, {"game_version": "jp"}):
+        recorder, _ = recorder_over(tmp_path, attempt(**broken))
+        assert recorder.earlier_sources() == (), broken
+    for gone in (recorder_over(tmp_path, None), recorder_over(tmp_path, attempt(), identity=None)):
+        assert gone[0].earlier_sources() == ()
 
 
 def test_a_store_that_is_not_ready_claims_nothing(tmp_path):

@@ -23,18 +23,20 @@ OLDER_TERMS = frozenset({"beta-1"})
 """Terms that promised only future uploads. Accepting these never shares older ghosts."""
 
 
-def own_sources(rows, player_id, clips_root):
+def own_sources(rows, player_id, clips_root, *, still_good):
     """Offers for the rows this install recorded itself, skipping anything else.
 
     Only the recorder's own identity with a local lineage qualifies, so an
-    imported or bundled ghost can never go up under this account. The upload
-    re-reads the bytes and refuses a clip its bytes do not bear out.
+    imported or bundled ghost can never go up under this account. `still_good`
+    asks whether today's rules still admit the run behind a row: the row's own
+    marks only say what was true when it was saved. The upload re-reads the
+    bytes and refuses a clip its bytes do not bear out.
     """
     sources = []
     for row in rows:
         if (row.get("player_id") != player_id or row.get("simulated") is True or row.get("certified") is not True
                 or row.get("valid") is not True or row.get("full_start") is not True
-                or not isinstance(row.get("source"), dict) or not row.get("strategy")):
+                or not isinstance(row.get("source"), dict) or not row.get("strategy") or not still_good(row)):
             continue
         path = Path(clips_root) / "clips" / f"{row['sha256']}.ghost"
         if not path.is_file() or path.is_symlink():

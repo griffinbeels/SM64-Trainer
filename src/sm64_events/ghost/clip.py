@@ -686,6 +686,34 @@ def hidden_refusals(clip: Clip) -> int:
     return hidden
 
 
+def scene_holes(clip: Clip) -> int:
+    """Frames a recording lost in the middle of one scene: the ghost vanishes
+    with Mario still on screen, on rows playback does not bridge, or on
+    occurrences that never arrived. Hiding across a loading screen or a level
+    change is normal play (`hidden_refusals` counts it, this does not), as are
+    the clip's first and last rows. His rule, 2026-10-12: "If it's not a
+    perfectly recorded ghost, it doesn't belong in the system."
+    cloud/community/src/codec.js asks the same question."""
+    frames = clip.frames
+    indexed = len(frames)
+    if clip.clock_kind == STAR_CLOCK:
+        origin = frames[0].clock.origin_id
+        indexed = next((i for i, frame in enumerate(frames) if frame.clock.origin_id != origin), indexed)
+    holes, before = 0, None
+    for i in range(indexed):
+        if not frames[i].valid_fields & POSE:
+            continue
+        if before is not None and all((frame.level, frame.area) == (frames[i].level, frames[i].area)
+                                      for frame in frames[before:i]):
+            refused = i - before - 1
+            missing = frames[i].sequence - frames[before].sequence - (i - before)
+            bridged = (0 < refused <= BRIDGE_FRAMES and not missing
+                       and frames[i].clock.elapsed_frames - frames[before].clock.elapsed_frames == i - before)
+            holes += 0 if bridged else refused + missing
+        before = i
+    return holes
+
+
 def write_clip(path: Path, frames, producer, *, clock_kind: int, clip_id: str | None = None,
                tail_records: int = 0) -> dict:
     """Atomically write one clip; the replay publisher owns its durable commit.
