@@ -7,11 +7,13 @@ MP4 files retain the existing picture and input metadata.
 `SegmentRing` owns temporary-byte accounting and eviction: closed segments,
 extracted clip groups, busy-file deletion retries, and sampled live partial/index
 files count toward one budget. The new default is 2 GiB; existing saved settings
-win. A 5 GiB free-space reserve can reduce the effective cap further. Oldest
-eligible unsaved media goes first. Active encoding and pinned work may briefly
-exceed the configured cap. When eligible eviction cannot restore the free-space
-reserve, recording pauses and retries automatically; the resulting coverage gap
-stays explicit rather than compressing time or inventing missing pictures.
+win. A 2 GiB free-space reserve (`config.DISK_RESERVE_BYTES`, shared with Save)
+can reduce the effective cap further. Oldest eligible unsaved media goes first.
+Active encoding and pinned work may briefly exceed the configured cap. When
+eligible eviction cannot restore the free-space reserve, video stops and retries
+automatically; the resulting coverage gap stays explicit rather than compressing
+time or inventing missing pictures. Ghost poses keep recording through this, and
+the recording dot and panel say so (`storage_pressure`, `disk_free_bytes`).
 
 Source-span leases include newly published tail segments through extraction and
 identity mapping. Temporary-group leases also protect an output before it is

@@ -16,6 +16,7 @@ from sm64_events.ranks.region_scope import REGIONAL, servable_versions
 from . import claims, codec, library
 from .cache import LEASE_RENEW_S, account_owner, checked_metadata, target_key, value_of
 from .config import CommunityError
+from .earlier_ghosts import OLDER_TERMS, QUEUED, EarlierClaim, checked_offers
 from .outbox import RetractionOutbox, SourceOutbox, checked_source, checked_strategy, retraction_key, source_key
 
 logger = logging.getLogger(__name__)
@@ -75,6 +76,9 @@ def _upload_identifier(grant):
 
 
 def _retryable(error):
+    # A locked or unreadable clip may read fine later; a missing one never will.
+    if isinstance(error, OSError):
+        return not isinstance(error, FileNotFoundError)
     return isinstance(error, CommunityError) and (
         error.code in ("network_unavailable", "budget_exhausted", "grant_expired", "upload_expired", "generation_changed")
         or error.status in (429, 502, 503, 504))
@@ -96,7 +100,7 @@ def _cutoffs(rows):
 
 
 INTEGRITY_FAILURES = ("asset_mismatch", "incomplete_inputs", "invalid_metadata", "invalid_name", "identity_mismatch",
-                      "invalid_response")
+                      "invalid_response", "playback_gaps")
 
 
 def _unusable_until(error):
@@ -227,6 +231,8 @@ class CommunitySync:
         self._outbox = SourceOutbox(population.root / "pending-contributions.json")
         self._retractions = RetractionOutbox(population.root / "pending-retractions.json")
         self._retired = OrderedDict()  # raw_sha256 -> the one strategy it may still be offered under
+        self.earlier_sources = None  # PopulationRecorder: this install's own ghosts (`earlier_ghosts.py`)
+        self._earlier = EarlierClaim(population.root)
         self._consent_epoch = 0
         self._recovery_owner, self._recovery_until = None, 0
         if hasattr(account, "on_contribution_cancel"):
@@ -407,7 +413,7 @@ class CommunitySync:
     def _freeze_source(self, source):
         fields = {"target", "clock", "game_version", "strategy", "frames", "path", "raw_sha256", "full_start", "valid"}
         try:
-            if (not isinstance(source, dict) or set(source) != fields or source["full_start"] is not True
+            if (not isinstance(source, dict) or set(source) - {"bin"} != fields or source["full_start"] is not True
                     or source["valid"] is not True or source["clock"] not in ("igt", "rta")
                     or source["game_version"] not in ("us", "jp") or type(source["frames"]) is not int
                     or not 1 <= source["frames"] <= 2592000 or not isinstance(source["strategy"], str)):
@@ -426,6 +432,12 @@ class CommunitySync:
     def offer_source(self, source):
         frozen = self._freeze_source(source)
         return self._enqueue(source_key(frozen), ("offer", frozen)) if frozen else False
+
+    def catalog_step(self, target, clock, game_version, strategy, frames):
+        """This time's canonical subdivision from the catalog already held, or
+        None when none is held or it omits this identity. Never a request."""
+        cutoffs = self._catalog.get((*target_key(target), clock, game_version, "strategy", strategy))
+        return frame_band(cutoffs, [(frames, frames)])[0] if cutoffs else None
 
     def contribution_context(self):
         """Capture attribution and consent before native qualification starts."""
@@ -513,7 +525,36 @@ class CommunitySync:
                 and snapshot.get("uid") == source["owner"] and kept == source["strategy"]
                 and source.get("consent_epoch", self._consent_epoch) == self._consent_epoch)
 
+    def _share_earlier_ghosts(self):
+        """The first account that shares claims this install's own ghosts. Off the loop.
+
+        A store that is not ready yet claims nothing. The offers wait in the
+        outbox and go up at the recovery pace, like any other offer.
+        """
+        context = self.contribution_context()
+        terms = self.account.snapshot().get("terms_version")
+        if (context is None or self.earlier_sources is None or not terms or terms in OLDER_TERMS
+                or not self._earlier.open_to(context["owner"])):
+            return
+        sources = self.earlier_sources()
+        if sources is None:
+            return
+        self._outbox.load()
+        offers = checked_offers(sources, self._freeze_source, foreign=self._outbox.held_by_others(context["owner"]))
+        with self._lock:
+            if context != self.contribution_context():
+                return  # Sign-out or sharing off won the race.
+            self._outbox.remember_many(offers)
+            self._earlier.write(context["owner"], QUEUED)
+
+    def close_earlier_ghosts(self):
+        """The player is removing their shared ghosts: never queue the older ones again."""
+        owner = self.account.snapshot().get("uid")
+        if owner:
+            self._earlier.remove(owner)
+
     async def cancel_contributions(self, owner):
+        await self._cpu(self._earlier.stop_everyone if owner is None else lambda: self._earlier.stop(owner))
         with self._lock:
             self._consent_epoch += 1
             for mapping in (self._queue, self._offer_retry):
@@ -537,6 +578,7 @@ class CommunitySync:
         if owner == self._recovery_owner and time.monotonic() < self._recovery_until:
             return
         self._recovery_owner, self._recovery_until = owner, time.monotonic() + 60
+        await self._cpu(self._share_earlier_ghosts)
         for retraction in await self._cpu(self._retractions.pending, owner):
             key = retraction_key(retraction)
             with self._lock:
@@ -918,7 +960,8 @@ class CommunitySync:
         step = frame_band(cutoffs, [(source["frames"], source["frames"])])[0]
         with self._lock:
             # Discard slower pending offers in this canonical bin, preserving
-            # all other bins. A source is independent of local ladder admission.
+            # all other bins. The admission worker already skips a run its own
+            # kept rows beat in this bin; the server still answers for the rest.
             candidates = [(queue_key, item[1]) for queue_key, item in (
                 *self._queue.items(), *((retry_key, retry[0]) for retry_key, retry in self._offer_retry.items())) if item[0] == "offer"
                 and item[1]["owner"] == source["owner"]
@@ -991,9 +1034,9 @@ class CommunitySync:
             return
         tries = min(6, source.get("retry_count", 0) + 1)
         source["retry_count"] = tries
-        if operation[0] == "offer" and error.code in ("grant_expired", "upload_expired"):
+        if operation[0] == "offer" and getattr(error, "code", None) in ("grant_expired", "upload_expired"):
             source.pop("mutation_keys", None)
-        delay = max(error.retry_after or 0, self._network_until - time.monotonic(),
+        delay = max(getattr(error, "retry_after", None) or 0, self._network_until - time.monotonic(),
                     random.uniform(1, 1.25) * min(900, 30 * 2 ** (tries - 1)))
         with self._lock:
             if operation[0] == "retract" and not self._retractions.is_current(source):
@@ -1034,7 +1077,7 @@ class CommunitySync:
         if operation[0] == "pool":
             self._pool_failed(operation, error)
         self._retry_offer(key, operation, error)
-        if operation[0] == "offer" and (isinstance(error, OSError)
+        if operation[0] == "offer" and (isinstance(error, FileNotFoundError)
                 or isinstance(error, CommunityError) and error.code in ("source_changed", "invalid_source", "unsupported_identity")):
             await self._cpu(self._outbox.discard, (operation[1],))
         if operation[0] == "retract" and not _retryable(error):

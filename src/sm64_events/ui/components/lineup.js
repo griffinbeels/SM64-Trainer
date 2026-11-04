@@ -13,7 +13,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/ho
 import htm from "htm";
 import { fmtIgtShort } from "../format.js";
 import { createLineup } from "../lineup.js";
-import { lineupModel } from "../lineupmodel.js";
+import { LINEUP_WORDS, lineupModel } from "../lineupmodel.js";
 import { RankIcon } from "./rankicon.js";
 import { RivalSwap } from "./rivalpicker.js";
 
@@ -76,6 +76,18 @@ function useDriver(core, model, sweep) {
   }, [model]);
 }
 
+/** The line under a racing set: how it stands, and the button for the next one. */
+function SetFoot({ model, onNew }) {
+  const foot = model?.on ? model.foot : null;
+  if (!foot) return null;
+  const text = foot.noNew ? LINEUP_WORDS.noNewGhosts : foot.allBeaten ? LINEUP_WORDS.allBeaten : null;
+  return html`<div class="lineup-foot">
+    ${text && html`<span class="lineup-foot-text ${foot.allBeaten ? "is-beaten-all" : ""}" role="status">${text}</span>`}
+    <button type="button" class="lineup-new-ghosts ${foot.allBeaten ? "is-ready" : ""}" title=${LINEUP_WORDS.newGhostsTitle}
+      onClick=${onNew}>${LINEUP_WORDS.newGhosts}</button>
+  </div>`;
+}
+
 export function Lineup({ session, known, reachable, on, entityKey, strategies, write, retry,
                          onPickStrategy }) {
   const host = useRef(null);
@@ -83,6 +95,7 @@ export function Lineup({ session, known, reachable, on, entityKey, strategies, w
   const [swap, setSwap] = useState(null);
   const { capNode, sweep } = useCaps();
   const scope = session?.rivals?.scope || "strategy";
+  const askNew = () => write({ rivals: { scope, action: "new" }, target: session.target });
   const handlers = useRef({});
   handlers.current = {
     onSwap: (person, seat) => {
@@ -116,6 +129,7 @@ export function Lineup({ session, known, reachable, on, entityKey, strategies, w
   return html`<div class="lineup-host ${model ? "" : "is-waiting"}">
     <div ref=${host}></div>
     ${session?.rivals?.simulation && html`<p class="lineup-simulation" role="status">${session.rivals.simulation}</p>`}
+    <${SetFoot} model=${model} onNew=${askNew} />
     ${swap && html`<${RivalSwap} target=${session.target} scope=${scope} rows=${rows} slot=${swap.slot}
       name=${swap.name} pinned=${swap.pinned} style=${`left:${swap.left}px;top:${swap.top}px`}
       onClose=${() => setSwap(null)}

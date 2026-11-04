@@ -7,6 +7,8 @@
 #include "ghost_playback.h"
 #include "ghost_stream.h"
 #include "ghost_audio.h"
+#include "ghost_compositor.h"
+#include <cctype>
 #include <cstdio>
 
 static bool first = true;
@@ -18,6 +20,19 @@ static void wide(const char *key, const wchar_t *value) {
     for (; *value; ++value) std::printf(*value == L'\\' ? "\\\\" : "%c", char(*value));
     std::printf("\"");
 }
+// An append-only code list as Python names it: lower case, in code order.
+static void names(const char *key, const char *const *values, size_t count) {
+    name(key); std::printf("[");
+    for (size_t i = 0; i < count; ++i) {
+        std::printf("%s\"", i ? "," : "");
+        for (const char *c = values[i]; *c; ++c) std::printf("%c", char(std::tolower(static_cast<unsigned char>(*c))));
+        std::printf("\"");
+    }
+    std::printf("]");
+}
+#define GDF_NAME(value) #value,
+#define GDF_NAMES(key, list, count) do { static const char *const table[] = {list(GDF_NAME)}; \
+    static_assert(sizeof(table) / sizeof(table[0]) == count, key); names(key, table, count); } while (0)
 #define SAMPLE_AT(field) (offsetof(gclip_frame, sample) + offsetof(gc_sample, field))
 #define POSE_FIELD_AT(field) (SAMPLE_AT(pose) + offsetof(gc_pose, field))
 
@@ -130,6 +145,33 @@ int main() {
     number("IPC_PATH_CHARS", GIPC_PATH_CHARS);
     number("IPC_CLIP_BYTES", sizeof(gipc_clip)); number("IPC_REQUEST_BYTES", sizeof(gipc_request));
     number("IPC_CAP_HIDDEN", GIPC_CAP_HIDDEN);
+    number("IPC_CAP_DRAW_FACTS", GIPC_CAP_DRAW_FACTS);
+    number("IPC_DRAW_AT", offsetof(gipc_page, draw)); number("IPC_DRAW_BYTES", sizeof(gdf_facts));
+    number("DRAW_VERSION", GDF_VERSION);
+    GDF_NAMES("DRAW_LIST_GATES", GDF_LIST_GATES, GDF_LIST_GATE_COUNT);
+    GDF_NAMES("DRAW_PRESENT_GATES", GDF_PRESENT_GATES, GDF_PRESENT_GATE_COUNT);
+    GDF_NAMES("DRAW_READY_STEPS", GDF_READY_STEPS, GDF_READY_STEP_COUNT);
+    GDF_NAMES("DRAW_CREATE_STEPS", GDF_CREATE_STEPS, GDF_CREATE_STEP_COUNT);
+    GDF_NAMES("DRAW_FAULT_STEPS", GDF_FAULT_STEPS, GDF_FAULT_STEP_COUNT);
+    {
+        using ghost_compositor::Result;
+        const char *results[5] = {};
+        results[uint32_t(Result::ok)] = "ok"; results[uint32_t(Result::invalid)] = "invalid";
+        results[uint32_t(Result::unsupported)] = "unsupported"; results[uint32_t(Result::resources)] = "resources";
+        results[uint32_t(Result::state)] = "state";
+        names("COMPOSITOR_RESULTS", results, 5);
+    }
+    number("DRAW_KNOWN_LIST", GDF_KNOWN_LIST); number("DRAW_KNOWN_SETTINGS", GDF_KNOWN_SETTINGS);
+    number("DRAW_KNOWN_PRESENT", GDF_KNOWN_PRESENT); number("DRAW_KNOWN_PLAYBACK", GDF_KNOWN_PLAYBACK);
+    number("DRAW_KNOWN_SWAP", GDF_KNOWN_SWAP);
+    number("DRAW_OBSERVING", GDF_OBSERVING); number("DRAW_FAULTED", GDF_FAULTED);
+    number("DRAW_COMPOSITOR", GDF_COMPOSITOR); number("DRAW_MODEL", GDF_MODEL); number("DRAW_PLANNED", GDF_PLANNED);
+    number("DRAW_PRESENTATION", GDF_PRESENTATION); number("DRAW_PRESENTATION_FAULTED", GDF_PRESENTATION_FAULTED);
+    number("DRAW_SETTING_FBE", GDF_SETTING_FBE); number("DRAW_SETTING_FXAA", GDF_SETTING_FXAA);
+    number("DRAW_SETTING_OVERSCAN", GDF_SETTING_OVERSCAN);
+    number("DRAW_SETTING_BLIT_WORKAROUND", GDF_SETTING_BLIT_WORKAROUND);
+    number("DRAW_SETTING_N64_DEPTH_COMPARE", GDF_SETTING_N64_DEPTH_COMPARE);
+    number("DRAW_SETTING_FRAGMENT_DEPTH_WRITE", GDF_SETTING_FRAGMENT_DEPTH_WRITE);
     number("LABEL_BYTES", GP_LABEL_BYTES);
     number("GHOSTS", GP_GHOSTS); number("PROXIMITY_MAX", GP_PROXIMITY_MAX); number("BRIDGE_FRAMES", GP_BRIDGE_FRAMES);
     text("SOUND_RING_MAGIC", GS_RING_MAGIC); number("SOUND_RING_VERSION", GS_RING_VERSION);

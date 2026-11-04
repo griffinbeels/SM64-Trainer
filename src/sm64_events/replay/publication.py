@@ -17,6 +17,8 @@ from pathlib import Path
 import shutil
 import tempfile
 
+from sm64_events.replay.config import DISK_RESERVE_BYTES
+
 #: A saved ghost copy's name beside its MP4. Never `.mp4`: every
 #: `attempt_*.mp4` under the save root is a saved replay to the save tree's
 #: scanners (the saved index, the prune's protected ids, Compare).
@@ -185,7 +187,7 @@ def resume(root: Path, attempt_id: int) -> Path | None:
 
 
 def publish(root: Path, attempt_id: int, source, destination: Path,
-            metadata: dict, review: dict, *, reserve_bytes: int = 5 * 1024**3,
+            metadata: dict, review: dict, *, reserve_bytes: int = DISK_RESERVE_BYTES,
             ghost: Path | None = None, ghost_copy=None) -> Path:
     """Publish one serialized Save/PB. Retry/recovery resumes a staged copy.
 

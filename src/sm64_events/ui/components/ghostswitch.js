@@ -39,6 +39,7 @@ import { GhostProximity } from "./ghostproximity.js";
 import { GhostLibraryButton } from "./ghostlibrary.js";
 import { Icon } from "./icons.js";
 import { Lineup } from "./lineup.js";
+import { GhostSetupNotice } from "./setupcheck.js";
 import { Modal } from "./modal.js";
 import { RivalOptions, rivalDraft } from "./rivalsettings.js";
 import { clampNudge, clampOpacity, ghostAppearanceControls, ghostControls, ghostPathTuning, ghostRecordingOptions,
@@ -391,7 +392,7 @@ function GhostVolume({ volume, draft, range, queue }) {
       value=${known ? value : null} disabled=${!known}
       title=${known ? "How loud Ghost Mario's sounds play under the game" : "Waiting for the ghost's volume"}
       oninput=${(event) => queue({ volume: Number(event.target.value) })} />
-    <span class="ghost-field-value">${known ? `${Math.round(value * 100)}%` : "--"}</span>
+    <span class="ghost-field-value">${!known ? "--" : value > 0 ? `${Math.round(value * 100)}%` : "Off"}</span>
   </label>`;
 }
 
@@ -741,11 +742,13 @@ export function GhostSwitch({ t, ghost, entityKey, active = true, scope = GHOST_
   const on = overlayOn(session, draft);
   if (reachable && !session?.rivals && controls.known) {
     return html`<${LegacyRow} session=${session} controls=${controls} held=${draft || {}} on=${on} write=${write}
-      queue=${queue} retry=${retry} entityKey=${entityKey} scope=${scope} />`;
+      queue=${queue} retry=${retry} entityKey=${entityKey} scope=${scope} />
+      <${GhostSetupNotice} session=${session} />`;
   }
   return html`<div class="ghost-row ghost-row-lineup ${on ? "is-on" : ""}">
     <${Lineup} session=${session} known=${controls.known && racingScopeReady(session, scope, controls.known)}
       reachable=${reachable} on=${on} entityKey=${entityKey} strategies=${strategies || []} write=${write} retry=${retry}
       onPickStrategy=${onPickStrategy} />
+    <${GhostSetupNotice} session=${session} />
   </div>`;
 }

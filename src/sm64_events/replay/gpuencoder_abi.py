@@ -96,7 +96,8 @@ class Config(C.Structure):
         ("adapter_high", I),
         ("adapter_low", U),
         ("slot_count", U),
-        ("reserved", U),
+        # gpu_transport.h GT_TRANSPORT_* (0: the keyed mutex an older caller assumed).
+        ("transport", U),
         ("names", Names),
         ("encoder", Options),
         ("sink", Sink),

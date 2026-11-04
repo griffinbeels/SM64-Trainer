@@ -58,6 +58,15 @@ configuring the game/controller. Pages advance after a visible acknowledgment;
 Back lets you review earlier steps. **Not now** postpones unfinished setup
 for the current app session. Open it again from **Settings → Setup**.
 
+**Check my setup.** Settings → **Check my setup** compares your Project64 with
+the setup the trainer is tested on, item by item: the Project64 build, where it
+is installed, the graphics, audio, RSP and controller plugins, frame buffer
+emulation, and your Usamune ROM's memory size, Counter Factor and CPU core.
+Each difference says how to fix it and links the guide. A different controller
+plugin is fine; it is only noted. If ghosts stop showing and your setup differs,
+the practice card says so and opens this check for you. The setup wizard's
+last page lists any differences too, but never stops you from practicing.
+
 Already set up? The trainer compares the installed wrapper's SHA-256 hash with
 this build and checks its selected graphics configuration. A matching installation
 skips automatic onboarding, including in a fresh worktree. A stale or incomplete
@@ -72,9 +81,14 @@ v1.0`) that loads it and supplies replay pictures stamped with the game's
 frame counter and inputs. Project64's plugin list shows only `SM64 Trainer
 v1.0`; an older install's second entry goes away when the trainer updates
 it. Your existing graphics plugin stays in the folder
-untouched. Install while Project64 is closed; open Usamune once afterward to
+untouched. Install also turns off frame buffer emulation in the folder's
+`GLideN64.ini`, and makes that file if it is missing. With this setting on,
+ghosts do not show and the game lags. If the setting gets turned on again, the
+trainer turns it off by itself once Project64 is closed, or asks you to choose
+Install. Install while Project64 is closed; open Usamune once afterward to
 check it. **Manage Practice Replay → Remove Practice Replay** selects your
-previous graphics plugin again, also with Project64 closed.
+previous graphics plugin again and puts your old frame buffer emulation setting
+back, also with Project64 closed.
 Practice tooling runs only on the Usamune practice ROM. Load vanilla SM64,
 another hack or another game for a real run and the same plugin draws as
 plain GLideN64, while the trainer neither tracks nor records.
@@ -121,6 +135,12 @@ that PB has no recorded Mario poses (an older or imported PB), your fastest
 recorded run races in its place, shown as **Best recorded run**; your PB stays
 the rank you chase. The ghosts picked for you come from every strategy on that
 star, starting just above your PB, and each one's strategy shows under its name.
+
+**Your older ghosts are shared too.** When you share ghosts, the older ghosts you
+recorded on this computer go on your account, and other players can race them. Only
+the first account that shares from this computer gets them. You can turn sharing off
+in your account settings. If you press **Remove shared ghosts**, your older ghosts
+will not upload again by themselves.
 
 **Share ghosts.** Open **Ghost Library · Import / Export** from a star or segment.
 Export that target's overall best, each strategy's best, all your personal bests,
@@ -200,6 +220,16 @@ Mark an attempt as a PB to save its replay automatically. PB selection stays
 manual. Unsaved footage shares a modest storage budget and is discarded when
 the session ends; storage pressure removes the oldest unsaved footage first.
 Explicitly saved replays remain on disk. See [replay storage](replay-storage.md).
+
+By default the trainer keeps your newest 5 attempts, up to 10 minutes of attempts
+in total. It deletes your oldest unsaved attempts when you go past either limit.
+A reset counts as an attempt, and your newest attempt always stays, even if it
+is very long. You can change both numbers in the recording panel under **Keep
+footage**.
+
+Video stops if your disk has less than 2 GB free. The recording light and the
+recording panel tell you when this happens. Ghosts keep recording, and video
+starts again by itself when you free up space.
 
 On an RTX 40-series or newer card, the trainer records in AV1 and a saved
 replay is already about a third the size the moment you save it, with nothing

@@ -148,7 +148,7 @@ Burst limits shed traffic before expensive operations.
 | `GET /v1/recordings/{id}` | Current metadata/publication gate, including explicit pins; recording IDs are immutable64-hex identities independent of public names. |
 | `GET /v1/recordings/{id}/asset` | Auth/status/visibility/owner publication gate before immutable compressed bytes; Content-Type application/octet-stream. |
 | `POST /v1/uploads` | Admission `{target,clock,rom,strategy,frames,raw_sha256,raw_bytes,encoded_sha256,encoded_bytes,codec:"ghc1",generation}`. Server rejects unsupported catalog entries and derives UID/bin. Returns `upload_id,expires_at` or `already_present/not_faster`. Ghost ceiling: a run with `frames*100 > edge*110`, where `edge` is the strategy ladder's step-1 cutoff, answers `not_faster` before any upload budget, so deployed trainers skip it silently. |
-| `PUT /v1/uploads/{upload_id}` | Bounded streamed GHC1 bytes; grant binds exact hashes/lengths/identity/generation and is single-use/idempotent. Decode/native validation precede conditional winner publication. The clip must bear out the admission's claims (422): `rom_mismatch` (the header's ROM layout, 1 = us, 2 = jp, differs from `rom`), `incomplete_inputs` (a record without its pad), `frames_mismatch` (the clip's own clock disagrees with `frames`; exact for a star, bounded for a segment). The trainer runs the same checks before uploading (`community/claims.py`). |
+| `PUT /v1/uploads/{upload_id}` | Bounded streamed GHC1 bytes; grant binds exact hashes/lengths/identity/generation and is single-use/idempotent. Decode/native validation precede conditional winner publication. The clip must bear out the admission's claims (422): `rom_mismatch` (the header's ROM layout, 1 = us, 2 = jp, differs from `rom`), `incomplete_inputs` (a record without its pad), `playback_gaps` (the ghost would vanish in the middle of a scene: refused rows playback does not bridge, or occurrences that never arrived; hiding across a level change is allowed), `frames_mismatch` (the clip's own clock disagrees with `frames`; exact for a star, bounded for a segment). The trainer runs the same checks before uploading (`community/claims.py`). |
 | `PUT /v1/pins` | At most4 recording IDs; finite expiring leases preserve replaced winners subject to account/global physical-byte limits and publication visibility. |
 | `POST /v1/recordings/retract` | Owner-only `{raw_sha256,keep_strategy:string|null}`. Unpublishes the caller's recordings of those bytes under every other strategy (all when null), removes their winners and pins, expires their unfinished grants and bumps the affected scope epochs. Bytes are collected by reconciliation, as after withdrawal. Returns `{retracted:n}`. Persisted owners keep it after suspension, like withdrawal. |
 | `POST /v1/account/withdraw` | Explicitly confirmed withdrawal of own published ghosts; visibility changes before physical collection. |
@@ -275,10 +275,19 @@ catalog generation changes. An expired upload grant replaces its grant key
 before retry.
 
 Only a completed, certified own run with sharing enabled at attempt enqueue
-creates a durable upload intent. Its account UID and consent generation are
+creates a durable upload intent, and only when the run can still win its
+subdivision. The admission worker skips a run the player's kept rows already
+beat there, before any hash or daily operation: in the cloud's bin when the
+catalog is held, in the local grade otherwise. A run with neither is offered and
+the cloud answers. A faster row earned before signing in therefore also blocks
+slower offers in its bin. Its account UID and consent generation are
 captured before queue or preservation delay. The local outbox stores at most
-256 intents / 1 MiB of metadata and immutable retry keys, never tokens or another
-copy of the ghost. Normal app close preserves intents. Startup/login retries
+1024 intents / 1 MiB of metadata and immutable retry keys, never tokens or another
+copy of the ghost. Over the limit it evicts a slower row in the same subdivision
+(`bin`, optional, the step the worker graded it in), then the slowest row
+nothing could grade, and only then the oldest best. Normal app close preserves
+intents. A file error other than a missing clip retries instead of discarding,
+and budget exhaustion keeps the intent. Startup/login retries
 the same owner's fastest eligible run per canonical subdivision, admitting at
 most eight recovered winners per minute. Historical, imported and bundled
 recordings are never assigned to a new account.
@@ -302,7 +311,7 @@ out or sharing off, only local intents change. An older Worker's 404 drops it.
 
 Source offer is a dict: `{target,clock,game_version,strategy,frames,path,raw_sha256,
 full_start:true,valid:true}` prepared by existing native qualification off-thread.
-Root offers before/independently of local-ladder same-bin skip. Native source
+Native source
 bytes are read and compressed only on the community background worker; unknown
 or unsupported identity refuses sharing without damaging private PB playback.
 

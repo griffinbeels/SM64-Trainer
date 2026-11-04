@@ -2,20 +2,22 @@
 
 An upload names a ROM and a time; both are claims about the clip, and the
 clip's own bytes answer them. The header records the ROM layout the clip was
-captured on, every record carries a controller pad or not, and the records'
-clock counts the same game counter the trainer timed the run with. The Worker
-asks the same three questions of every upload (cloud/community/src/codec.js);
+captured on, every record carries a controller pad or not, the records show
+whether Mario was lost mid-scene, and the records' clock counts the same game
+counter the trainer timed the run with. The Worker asks the same four questions
+of every upload (cloud/community/src/codec.js);
 tests/test_community_wire.py runs both on one set of clips.
 
 His rule, 2026-10-12: "If it's not a perfectly recorded ghost, it doesn't
 belong in the system." A clip from an unknown ROM layout, with any unknown
-pad, or whose time it does not bear out, is refused at every door.
+pad, with a stretch where the ghost vanishes mid-scene, or whose time it does
+not bear out, is refused at every door.
 """
 import struct
 
 from sm64_events.detectors.igt_clock import IgtClock
 from sm64_events.ghost.archive import DANCE_ENTRY_FRAMES, TAIL_ACTIONS
-from sm64_events.ghost.clip import CLOSING_TRANSITION_MAX, INCOMPLETE_INPUTS, decode_clip, inputs_complete
+from sm64_events.ghost.clip import CLOSING_TRANSITION_MAX, INCOMPLETE_INPUTS, decode_clip, inputs_complete, scene_holes
 from sm64_events.ghost.native_layout import STAR_CLOCK
 from sm64_events.memory.addresses import ACT_FALL_AFTER_STAR_GRAB
 
@@ -89,6 +91,8 @@ def check_claims(raw: bytes, *, game_version: str, clock: str, frames: int):
         raise CommunityError("rom_mismatch", "This recording was captured on a different ROM than its run.")
     if not inputs_complete(clip):
         raise CommunityError("incomplete_inputs", INCOMPLETE_INPUTS)
+    if scene_holes(clip):
+        raise CommunityError("playback_gaps", "This recording is missing frames in the middle of a scene.")
     if not time_agrees(clip, clock, frames):
         raise CommunityError("frames_mismatch", "This recording's own clock disagrees with its time.")
     return clip

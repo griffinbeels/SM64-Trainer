@@ -1,6 +1,10 @@
 """Failure diagnostics preserve layer identity and include interrupted work."""
 
+import json
+import os
 import re
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -8,6 +12,7 @@ from types import SimpleNamespace as NS
 
 from sm64_events.replay.gpuchannel import ChannelStopped, CLOSED
 from sm64_events.replay import gpudiagnostics
+from sm64_events.replay.gpupublication import PublicationError
 from sm64_events.replay.gpudiagnostics import CaptureTimings, bindings_cause, bindings_flag_names, native_reason
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -203,3 +208,81 @@ def test_failure_counters_are_captured_before_reconcile_and_teardown(caplog, bro
     assert captured["publication"] == (
         {"unavailable": "status unavailable"} if broken_status else {"pending_blocks": 61}
     )
+
+
+def _failed_sink_session(tmp_path):
+    from sm64_events.replay.gpucapture_session import CaptureSession
+    from sm64_events.replay.gpudemand import DemandSnapshot
+    from sm64_events.replay.gpupublication import PublicationWriteError
+    from sm64_events.replay.gpusettings import GpuSettings
+    from test_gpu_media_worker import Stalled
+
+    stalled = Stalled()
+    stalled.row(1)
+    wait_until = time.monotonic() + 2
+    while stalled.q.status()["pending_blocks"] and time.monotonic() < wait_until:
+        time.sleep(0.001)
+    stalled.stall()
+    stalled.now = stalled.settings.sink_age_s + 1
+    owner = NS(settings=GpuSettings(), cfg=NS(scratch_dir=tmp_path))
+    session = CaptureSession(owner, NS(snapshot=DemandSnapshot("active"), reconcile_lifecycle=lambda: False))
+    session._open_channel = lambda: True
+    session._open_encoder = lambda: ()
+    session._first_offers = lambda: (1,)
+    session._create_media = lambda *_: None
+    session._continue = lambda: True
+    session.tick = stalled.q.check
+    session.close = lambda: None
+    session.output = stalled.q
+    session.adapter = NS(status=lambda: {"pending": 0})
+    with pytest.raises(PublicationWriteError, match="age budget"):
+        session.run()
+    stalled.release.set()
+    with pytest.raises(PublicationError):
+        stalled.q.finish(timeout=3)
+    return owner._last_diagnostic
+
+
+def test_a_failed_sink_reaches_both_reports_as_numbers_and_never_a_path(tmp_path):
+    from sm64_events.core.diagnostic_privacy import safe_snapshot
+    from sm64_events.core.error_reporting_privacy import safe_context
+    from sm64_events.replay.gpufielddiagnostics import SINK_KEYS, automatic_context
+
+    record = _failed_sink_session(tmp_path)
+    assert record["sink_stalled_command"] == "video"
+    assert record["sink_stalled_ms"] == pytest.approx(11000, abs=1)
+    assert record["sink_slowest_command"] in ("bind", "row")
+    assert record["sink_pending_blocks"] >= 1
+    assert record["recording_free_bytes"] > 0
+    sentry = safe_context(automatic_context(record))
+    report = safe_snapshot({"capture": {"gpu": {"latest": record}}})["capture"]["gpu"]["latest"]
+    for key in SINK_KEYS:
+        assert sentry[key] == record[key] and report[key] == record[key], key
+    outgoing = json.dumps([sentry, report])
+    assert str(tmp_path) not in outgoing and tmp_path.name not in outgoing
+    assert "Users" not in outgoing and os.environ.get("USERNAME", "\0") not in outgoing
+
+
+def test_only_a_failed_sink_asks_the_disk_and_a_stuck_disk_cannot_hold_cleanup(tmp_path, monkeypatch):
+    asked = []
+    monkeypatch.setattr(gpudiagnostics.shutil, "disk_usage", lambda path: asked.append(path))
+    healthy = NS(status=lambda: {"error": None})
+    snapshot = gpudiagnostics.failure_snapshot(
+        RuntimeError("channel"), frontier=None, adapter=None, output=healthy, recording_volume=tmp_path)
+    assert not asked and "recording_free_bytes" not in snapshot
+
+    stuck, release = threading.Event(), threading.Event()
+
+    def hang(path):
+        stuck.set()
+        release.wait(5)
+        return NS(free=1)
+
+    monkeypatch.setattr(gpudiagnostics.shutil, "disk_usage", hang)
+    failed = NS(status=lambda: {"error": "media sink exceeded age budget"})
+    started = time.monotonic()
+    snapshot = gpudiagnostics.failure_snapshot(
+        RuntimeError("sink"), frontier=None, adapter=None, output=failed, recording_volume=tmp_path)
+    release.set()
+    assert stuck.is_set() and "recording_free_bytes" not in snapshot
+    assert time.monotonic() - started < 2

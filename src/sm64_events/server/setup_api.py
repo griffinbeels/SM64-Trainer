@@ -44,30 +44,50 @@ def _failed_operation(error: OSError, operation: str) -> JSONResponse:
         "detail": f"Practice Replay {operation} failed: {detail}"})
 
 
-def setup_json(mode_cfg: ModeConfig, capture_layer: CaptureLayer,
-               observer=None, record=None) -> dict:
+def _observed(capture_layer, observer):
     layer = capture_layer.status()
     observed = observer(layer) if observer else {
         "target": {"state": "unknown", "message": "Waiting for the setup connection."},
         "rom": identify_rom(None), "checks": {}}
+    return layer, observed
+
+
+def setup_check(layer, observed, profile) -> dict | None:
+    """The setup check (`core/setup_profile.py`) for this observation."""
+    return profile.compare(layer.as_dict(), observed.get("rom")) if profile is not None else None
+
+
+def setup_json(mode_cfg: ModeConfig, capture_layer: CaptureLayer,
+               observer=None, record=None, profile=None) -> dict:
+    layer, observed = _observed(capture_layer, observer)
     onboarding = record.read() if record else {}
     note = getattr(observer, "note_setup_state", None)
     if note is not None:
         note(onboarding)
     return {"platform": mode_cfg.mode.value,
             TrackerMode.EMU.value: {**layer.as_dict(), **observed,
-                    "verification": readiness(layer, observed)},
+                    "verification": readiness(layer, observed),
+                    "setup_check": setup_check(layer, observed, profile)},
             "onboarding": onboarding,
             TrackerMode.N64.value: {"available": False}}
 
 
+def _mount_setup_check(router, capture_layer, observer, profile) -> None:
+    @router.get("/setup/check")
+    def get_setup_check():
+        """Only the setup check: the practice card's ghost notice asks for it."""
+        if profile is None:
+            return JSONResponse(status_code=404, content={"detail": "The setup check is unavailable."})
+        return setup_check(*_observed(capture_layer, observer), profile)
+
+
 def create_setup_router(capture_layer: CaptureLayer, mode_path: Path | None = None,
-                        observer=None) -> APIRouter:
+                        observer=None, profile=None) -> APIRouter:
     router = APIRouter(prefix="/api")
     record = SetupRecord((mode_path or mode_settings_path()).with_name("onboarding.json"))
 
     def payload():
-        return setup_json(load_mode_config(mode_path), capture_layer, observer, record)
+        return setup_json(load_mode_config(mode_path), capture_layer, observer, record, profile)
 
     def save_platform(platform):
         current = load_mode_config(mode_path)
@@ -76,6 +96,8 @@ def create_setup_router(capture_layer: CaptureLayer, mode_path: Path | None = No
     @router.get("/setup")
     def get_setup():
         return payload()
+
+    _mount_setup_check(router, capture_layer, observer, profile)
 
     @router.put("/setup/platform")
     def put_platform(body: PlatformBody):

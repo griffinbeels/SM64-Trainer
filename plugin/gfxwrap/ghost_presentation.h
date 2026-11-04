@@ -2,6 +2,9 @@
  * This is not the SourceV3 ABI; that adapter must bind CleanSurface to a ticket. */
 #pragma once
 #include "ghost_compositor.h"
+// Each refusal of a ghost picture, and how readying the context ended, are
+// recorded as the draw path's facts for the trainer's reports.
+#include "ghost_draw_facts.h"
 
 namespace ghost_presentation {
 struct ViSource {

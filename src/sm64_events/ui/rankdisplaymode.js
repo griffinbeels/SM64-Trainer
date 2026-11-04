@@ -9,6 +9,13 @@
 
 export const RANK_DISPLAY_MODE_KEY = "sm64.practiceRankModes";
 
+const listeners = new Set();
+/** Hear every change of any card's choice; returns the way to stop listening. */
+export function onRankDisplayModeChange(listener) {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+}
+
 const VALID_MODES = new Set(["strategy", "overall"]);
 
 function storedModes(storage) {
@@ -38,10 +45,26 @@ export function writeRankDisplayMode(entity, mode,
       ...storedModes(storage),
       [entity]: mode,
     }));
+    for (const listener of listeners) listener(entity, mode);
     return true;
   } catch {
     return false;
   }
+}
+
+// THE rank a star or segment cell draws, off the same choice its practice-log
+// card shows (his ask, 2026-11-03: "Need to stay in sync wherever this is
+// displayed"). No Overall answer means the two share nothing to choose between.
+export function cellRank(entity, strategyRank, overallRank,
+                         storage = globalThis.localStorage) {
+  return readRankDisplayMode(entity, storage) === "overall" && overallRank
+    ? overallRank : strategyRank;
+}
+
+// The target picker's rank map, each entry graded the way its card shows it.
+export function pickerRanks(ranks, storage = globalThis.localStorage) {
+  return Object.fromEntries(Object.entries(ranks || {}).map(([entity, entry]) =>
+    [entity, { ...entry, ...cellRank(entity, entry, entry.overall, storage) }]));
 }
 
 // A shared ladder has no strategy-vs-overall distinction. It always presents

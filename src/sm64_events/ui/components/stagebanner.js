@@ -43,6 +43,7 @@
 // enable/disable) -- the same endpoints the rest of the UI uses, so the normal
 // target_changed flow updates the header, the pinned section, and this.
 import { h } from "preact";
+import { cellRank, onRankDisplayModeChange } from "../rankdisplaymode.js";
 import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
 import { CellRow, SurfaceExchange } from "./cellrow.js";
@@ -189,6 +190,11 @@ function writeBowserFamily(level, family) {
 }
 
 const segKey = (s) => `segment:${s.segment_id}`;
+// A cell redraws the moment its card's Strategy / Overall choice changes.
+function useRankModes() {
+  const [, redraw] = useState(0);
+  useEffect(() => onRankDisplayModeChange(() => redraw((n) => n + 1)), []);
+}
 const starKey = (courseId, slot) => `star:${courseId}:${slot}`;
 
 // `segKey`/`starKey` above emit the same `segment:<id>` / `star:<c>:<s>`
@@ -285,6 +291,7 @@ function useLoneRouteOption(t, lone, key, sole = true) {
 // and was deleted with it in round 22: a cell's click is its target write
 // again, with no second meaning to dispatch on.
 function StandardSegmentCell({ t, s, setPicking, nameOverride, onPicked }) {
+  useRankModes();
   const tgt = ((t.view || {}).target) || {};
   async function pick() {
     await pickSegmentTarget(t, s);
@@ -293,7 +300,7 @@ function StandardSegmentCell({ t, s, setPicking, nameOverride, onPicked }) {
   return html`<${PracticeCell} dimIdle=${STAR_DIM_IDLE}
     active=${tgt.kind === "segment" && tgt.segment_id === s.segment_id}
     iconSrc=${entityIconSrc(t, segKey(s))}
-    rank=${s.rank} hasStandards=${hasStandardsFor(t.view, segKey(s))}
+    rank=${cellRank(segKey(s), s.rank, s.overall_rank)} hasStandards=${hasStandardsFor(t.view, segKey(s))}
     caveat=${s.caveat}
     daily=${dailyFor(t, segKey(s))}
     name=${nameOverride || s.name}
@@ -372,8 +379,10 @@ function StarRow({ t, v, stage }) {
     v.last_strat_by_star[`${stage.course_id}:${i}`] || "";
   // Rank under that star's ACTIVE strat (server-graded). Changing the strat
   // refreshes the view and swaps the medal automatically — see views.py.
-  const rankFor = (i) =>
-    (v.rank_by_star || {})[`${stage.course_id}:${i}`];
+  useRankModes();
+  const rankFor = (i) => cellRank(starKey(stage.course_id, i),
+    (v.rank_by_star || {})[`${stage.course_id}:${i}`],
+    (v.overall_rank_by_star || {})[`${stage.course_id}:${i}`]);
   // "this star's saved time does not mean what the medal implies", or
   // undefined. Server-derived (tracking/caveats.py) and keyed over a WIDER
   // set than rankFor: the most important caveat is that the PB carries no

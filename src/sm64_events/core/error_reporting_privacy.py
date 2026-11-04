@@ -13,6 +13,8 @@ from collections.abc import Mapping
 from pathlib import PurePosixPath
 from urllib.parse import urlsplit
 
+from sm64_events.core.identity_privacy import purge_value
+
 _SECRET = re.compile(
     r'''(?i)(?<!\w)["']?(?:authorization|cookie|password|passwd|secret|token|api[_-]?key|dsn|username|user_id|account_id|display_name)["']?'''
     r'''\s*[=:]\s*(?:bearer\s+)?(?:"[^"]*"|'[^']*'|[^\s,;}]+)'''
@@ -50,11 +52,17 @@ _CONTEXT_KEYS = frozenset({
     "encoder_result", "native_reason",
     "gl_vendor", "gl_renderer", "gl_version", "missing_entry_point",
     "stalled_for_s",
+    # What stalled a failed media sink, and the recording volume's free bytes
+    # (replay/gpufielddiagnostics.py SINK_KEYS): never a path.
+    "sink_stalled_command", "sink_stalled_ms", "sink_slowest_command", "sink_max_feed_ms", "sink_oldest_ms",
+    "sink_pending_bytes", "sink_pending_blocks", "sink_peak_bytes", "sink_peak_blocks", "recording_free_bytes",
     # Why a no-surface startup (10034) refused: the GPU named at context
     # creation, and the first bindings invalidation (replay/gpudiagnostics.py).
     "context_gl_vendor", "context_gl_renderer", "context_gl_version", "context_identity",
     "bindings_site", "bindings_site_name", "bindings_cause", "bindings_gl_error", "bindings_flags",
     "bindings_invalidations", "bindings_after_ms", "bindings_contexts",
+    # Which bridge transport the driver allows (gpu_transport.h names only).
+    "transport_capabilities", "bridge_transport", "transport_floor", "failed_transport", "failed_transport_error",
 })
 # Operational loggers only: gameplay event wires, profiles, community/account
 # and process inventories stay local. Breadcrumbs, Sentry Logs and the Debug
@@ -188,7 +196,7 @@ def safe_breadcrumb(crumb: dict, _hint: object = None) -> dict | None:
         result["timestamp"] = stamp
     elif hasattr(stamp, "isoformat"):
         result["timestamp"] = stamp.isoformat()
-    return result
+    return purge_value(result)
 
 
 def _build_identity(event: dict) -> dict:
@@ -250,7 +258,7 @@ def safe_event(event: dict) -> dict:
     crumbs = event.get("breadcrumbs", {})
     if isinstance(crumbs, dict) and isinstance(crumbs.get("values"), list):
         result["breadcrumbs"] = {"values": _bounded_breadcrumbs(crumbs["values"])}
-    return result
+    return purge_value(result)
 
 
 def _bounded_breadcrumbs(values: list) -> list:
@@ -297,9 +305,10 @@ def safe_log(log: Mapping) -> dict | None:
         return None
     body, attributes = projected
     ids = trace_ids(log.get("trace_id"), log.get("span_id"))
-    return {"severity_text": scrub_text(log.get("severity_text", ""), 20), "severity_number": log["severity_number"],
-            "body": body, "attributes": attributes, "time_unix_nano": log["time_unix_nano"],
-            "trace_id": ids.get("trace_id"), "span_id": ids.get("span_id")}
+    return purge_value({"severity_text": scrub_text(log.get("severity_text", ""), 20),
+                        "severity_number": log["severity_number"],
+                        "body": body, "attributes": attributes, "time_unix_nano": log["time_unix_nano"],
+                        "trace_id": ids.get("trace_id"), "span_id": ids.get("span_id")})
 
 
 def safe_log_item(item: object, run_trace: str = "") -> dict | None:
@@ -316,5 +325,5 @@ def safe_log_item(item: object, run_trace: str = "") -> dict | None:
         return None
     body, attributes = projected
     ids = trace_ids(item.get("trace_id"), item.get("span_id")) or trace_ids(run_trace)
-    return {"timestamp": stamp, "level": scrub_text(item.get("level", ""), 20), "body": body, **ids,
-            "attributes": {key: serialize_attribute(value) for key, value in attributes.items()}}
+    return purge_value({"timestamp": stamp, "level": scrub_text(item.get("level", ""), 20), "body": body, **ids,
+                        "attributes": {key: serialize_attribute(value) for key, value in attributes.items()}})

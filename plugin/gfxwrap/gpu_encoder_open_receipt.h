@@ -6,7 +6,8 @@
 
 enum class GpuOpenFailureStage {
     adapter, device_interface, input_format, shared_texture,
-    texture_format, keyed_mutex, completion_query, encoder_prepare
+    texture_format, keyed_mutex, completion_query, encoder_prepare,
+    transport_custody // appended: a SEMAPHORE fence or a transport section
 };
 struct GpuOpenFailureReceipt {
     uint32_t result=0;
@@ -27,6 +28,7 @@ inline const char*gpu_open_failure_stage(GpuOpenFailureStage stage) {
     case GpuOpenFailureStage::keyed_mutex:return "keyed_mutex";
     case GpuOpenFailureStage::completion_query:return "completion_query";
     case GpuOpenFailureStage::encoder_prepare:return "encoder_prepare";
+    case GpuOpenFailureStage::transport_custody:return "transport_custody";
     }return "unknown";
 }
 struct GpuOpenFailureLine {

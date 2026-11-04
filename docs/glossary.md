@@ -943,6 +943,19 @@ loads unchanged.
   reads a second; the ledger records what the screen SHOWED, one row per
   picture.
 
+### Attempt window
+
+The unsaved [[attempt]]s whose replay video the trainer keeps. It keeps the
+newest ones and stops before either limit breaks: 5 [[attempt]]s by default, or
+10 minutes of footage by default. A [[reset]] counts as one [[attempt]], so a
+player who keeps resetting holds very little video. The newest finished
+[[attempt]] always stays, and the one in progress never expires. A [[star]] and
+a [[segment]] closed by the same play share one place and count their time once.
+Saved replays and PBs sit outside it. The trainer deletes older unsaved footage.
+
+- **Lives** -- `src/sm64_events/replay/attemptretention.py`; the recording panel
+  edits both limits (`src/sm64_events/ui/components/replay.js`).
+
 ### Clip start
 
 The time of a clip's first picture, in the clip's own clock. A cut
@@ -1782,6 +1795,25 @@ delivery worker only keeps time and books, without the GPU.
 - **Not** -- the driver warm-up it replaced (2026-09-26 to 09-27), which kept
   the worker's context and paid the same freeze once in the boot intro
 
+### Bridge transport
+
+How a selected picture crosses from the [[renderer]]'s OpenGL context into the
+[[encoder helper]]'s texture, and how that texture comes back (2026-10-31). The
+[[renderer]] picks one per request from what its graphics driver offers: the
+keyed mutex (NVIDIA, no copy), the semaphore (no copy; the driver lacks the
+keyed mutex, as the AMD tester's did) or the readback (one CPU copy; neither
+lock). A transport the driver refuses is never picked again in that Project64;
+when the driver has refused them all, recording falls back to the desktop grab.
+The startup receipt in the [[Debug report]] names what the driver offers and
+which one ran.
+
+- **Lives** -- `plugin/gfxwrap/gpu_transport.h` (the values),
+  `plugin/gfxwrap/gpu_render.cpp` (selection and the renderer's half),
+  `plugin/gfxwrap/gpu_transport_helper.h` (the helper's half); contract in
+  [the bridge doc](replay-gpu-bridge.md#transports)
+- **Not** -- the encoder backend (NVENC or Windows Media Foundation), which
+  turns the texture into video after the transport delivered it
+
 ### Bindings cause
 
 Why the [[renderer]] could not name a capture surface: the first place it
@@ -1825,6 +1857,22 @@ used to be gone within half an hour. The previous process's copy is `.1`.
 - **Not** -- `sm64_trainer_gfx.log`, which keeps everything, rotating at 4 MiB
   through `.1` and `.2`
 
+### Draw facts
+
+What the [[renderer]] did with each [[ghost]] the trainer asked it to draw, as
+plain facts beside its status: the first step that refused the latest display
+list (`drew` when none did), the first step that kept the latest picture from
+carrying that [[ghost]] (`shown` when none did), and the GLideN64 settings
+those steps read. A value the [[renderer]] did not report reads `unknown`,
+never fine. The [[debug report]] prints them, with one sentence the trainer
+builds from the step names.
+
+- **Lives** -- `plugin/gfxwrap/ghost_draw_facts.h` (codes and the render
+  thread's record); decoded by `src/sm64_events/ghost/draw_facts.py`
+- **Not** -- the playback decision (`playback_reason`), which says whether
+  playback wants a [[ghost]] at all; the draw facts say why a wanted one never
+  showed
+
 ### Oracle reader
 
 The developer's check that reads the [[frame]] number the game prints into its own
@@ -1865,6 +1913,44 @@ outdated or unfinished emulator installation. Beginner guides appear where neede
 
 - **Lives** -- `src/sm64_events/ui/components/setupmodal.js`; setup stages in
   `src/sm64_events/ui/setupflow.js`; its API is `src/sm64_events/server/setup_api.py`
+
+### Tested setup
+
+The Project64 setup we test the trainer on: Griffin's own machine, recorded
+with its source and date (2026-10-30). Wermi's build v7 of Project64 1.6
+outside Program Files, the trainer's graphics plugin with GLideN64's
+framebuffer emulation off, Azimer's Audio, the PJ64Fixups RSP, a raphnetraw
+controller plugin, and for the Usamune ROM 8 MB memory, Counter Factor 1 and the
+Interpreter CPU core. Each item carries an **importance**: *required* (known to
+stop the trainer working), *recommended* (differs from what we test with) or
+*noted* (kept only as a record; the controller plugin is never a problem).
+
+- **Lives** -- `src/sm64_events/data/setup_baseline.json`, which is also the one
+  table of importances, fix sentences and guide links
+- **Not** -- the [[setup screen]]'s readiness: that proves the trainer's
+  plugin sees the game; the tested setup describes the emulator
+  settings around it.
+
+### Setup check
+
+Your Project64 setup compared item by item with the [[tested setup]]: each item
+reads *same*, *different* or *can't tell* (no readable evidence; never a
+guess). It is read-only and cheap: registry values, file hashes and the
+`Project64.rdb` entry for the loaded ROM (the VirtualStore copy when one
+exists). Every file comes from one Project64 folder, the running one (else
+the last one seen), named by its own folder name; the check marks registry
+values as shared by every Project64 copy on the Windows account. Each difference
+links its Wermi guide page. Settings → Check my setup lists every item, differences first. When
+the [[ghost]] the player asked for has gone unseen for 20 s and the check finds a
+required or recommended difference, the practice card shows a notice that
+opens it with those items highlighted; with a matching setup it shows nothing
+new, because the failure is the trainer's. The wizard's completion page lists
+differences as notes. The [[debug report]] and automatic error reports carry
+it; `GET /api/setup/check` serves it alone.
+
+- **Lives** -- `src/sm64_events/core/setup_profile.py`;
+  `src/sm64_events/ui/components/setupcheck.js`; the stall is
+  `src/sm64_events/ghost/display_stall.py`
 
 ### Overlay layer
 
@@ -1930,7 +2016,9 @@ colour, the time and the name, with that seat's [[strategy]] small and italic
 under the name (his words, 2026-10-28); a name wraps where the handle divides and is
 never cut off, and a long [[strategy]] ends in an ellipsis. A dashed ring is a [[ghost]] that cannot race yet (yours before
 your first time, a [[ghost]] still downloading); a lock on a ring is a pinned
-[[ghost]], which stays even once beaten, to your left. The [[lineup track]] threads
+[[ghost]], which stays even once beaten, to your left. Every rival stays once
+beaten until you move to another [[star]] or press the button named after new [[ghost]]s (his rule, 2026-11-03), so
+beating all of a set means something. The [[lineup track]] threads
 the rings. With no [[strategy]] the row offers every one of the [[strategies]]
 as a button, all one width, in rows of equal length.
 Inside one lineup every change slides; a different [[star]], [[strategy]] or
@@ -2358,6 +2446,16 @@ PBs or the independent [[ghost]]-sharing setting.
 - **Lives** — `src/sm64_events/community/progress_sync.py`,
   `src/sm64_events/community/progress_state.py` and
   `cloud/community/src/progress-store.js`
+
+### Earlier ghosts
+
+The [[ghost]]s this install recorded that its account may never have shared.
+The first account that shares from this install claims them, and they upload under
+that account with no question. Terms `beta-2` disclose this, so an account that last
+accepted older terms adopts nothing. No other account can share them, and removing
+shared [[ghost]]s closes the claim for good.
+
+- **Lives** — `src/sm64_events/community/earlier_ghosts.py`
 
 ### Community ghost
 

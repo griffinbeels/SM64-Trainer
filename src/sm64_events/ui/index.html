@@ -1935,7 +1935,10 @@
   /* THE size container all selector cqw units + @container rules resolve
      against — the pane the star row must fit inside. inline-size only, so
      normal height flow is untouched. */
-  .practice-page { display: grid; gap: 12px; container-type: inline-size; }
+  /* minmax(0,1fr), not the implicit auto track: an auto track grows to its
+     widest card, so one long row widened every card on the page past the
+     window (his report, 2026-11-03: "the page never gets overflowed"). */
+  .practice-page { display: grid; grid-template-columns: minmax(0,1fr); gap: 12px; container-type: inline-size; }
   .practice-card {
     min-width: 0; max-width: 100%; margin: 0; padding: 14px 16px;
     border: 1px solid var(--border); border-radius: var(--radius);
@@ -2024,9 +2027,18 @@
      a 7-cell star row would give it (100cqw card - 32px card padding - 6
      gaps ~ 48px), so the two row kinds have identical cell geometry at
      every pane width instead of a lone cell stretching across the card */
-  .selector-card .starrow.segcells { justify-content: flex-start; }
+  /* More segments than fit scroll inside the card, on a slim bar in the
+     row's own height, and the page keeps its width. */
+  .selector-card .starrow.segcells {
+    justify-content: flex-start; overflow-x: auto; overflow-y: hidden;
+    /* `auto`, against html's own scrollbar-color: Chromium ignores the slim
+       bar below while either standard property has a value. */
+    scrollbar-color: auto; scrollbar-width: auto;
+  }
+  .selector-card .starrow.segcells::-webkit-scrollbar { height: 6px; }
+  .selector-card .starrow.segcells::-webkit-scrollbar-thumb { background: #33506e; border-radius: 3px; }
   .selector-card .starrow.segcells .starcell {
-    flex: 0 1 auto; width: calc((100cqw - 80px) / 7);
+    flex: 0 0 calc((100cqw - 80px) / 7); width: calc((100cqw - 80px) / 7);
   }
   .selector-empty {
     display: flex; flex-direction: column; align-items: center; justify-content: center;
@@ -3879,8 +3891,15 @@
      shows its box on the row's hover or on focus. Still a real select with
      its own opaque background -- the popup themes off it (the dropdown rule
      in ui-core). */
+  /* Room for the name when a Time Save has narrowed the column. */
   .attempt-strategy select {
-    max-width: 120px; min-width: 0; height: 30px; min-height: 30px;
+    padding-inline: .3rem 1.2rem;
+    /* The percentage width lets the table count this select as zero wide when it
+       sizes its columns, so the picker is the column that gives way. As a
+       fixed 120px it was part of the row's minimum, and a row with GOLD!! and
+       its Time Save pushed every row's buttons out of the card (his report,
+       2026-11-03, at the smallest window). */
+    width: 100%; max-width: 120px; min-width: 0; height: 30px; min-height: 30px;
     border-color: transparent; color: var(--muted);
     transition: border-color .15s ease, color .15s ease, opacity .15s ease;
   }
@@ -5479,6 +5498,36 @@
   .setup-help-content code { overflow-wrap: anywhere; white-space: normal; font-size: .88rem; }
   .setup-warning, .setup-error { border-left: 3px solid #e6b852; border-radius: 4px; background: #292b25; color: #f0d597; padding: .85rem 1rem; line-height: 1.55; font-size: .94rem; margin: .8rem 0; }
   .setup-error { color: #ffb6b6; background: #38252b; border-color: #e88383; }
+  /* The setup check (components/setupcheck.js): one card per item, the
+     server's order. A difference wears the warning gold, can't-tell a quiet
+     blue, the same a quiet green; a noted item never looks like a problem. */
+  .setup-check-summary { margin: .2rem 0 1rem; color: #c6d5e5; font-size: 1rem; line-height: 1.55; }
+  .setup-check-list { list-style: none; margin: 0; padding: 0; display: grid; gap: .6rem; }
+  .setup-check-item { min-width: 0; border: 1px solid #22384f; border-left: 3px solid #405770; border-radius: 6px; background: #0f1d2d; padding: .7rem .9rem; }
+  .setup-check-item.is-differs { border-left-color: #e6b852; background: #1f2421; }
+  .setup-check-item.is-unknown { border-left-color: #6f9fcf; }
+  .setup-check-item.is-same { border-left-color: #4fae7c; }
+  .setup-check-item.is-highlighted { border-color: #e6b852; box-shadow: 0 0 0 1px #e6b852 inset; }
+  .setup-check-head { display: flex; align-items: baseline; justify-content: space-between; gap: .8rem; }
+  .setup-check-head strong { min-width: 0; color: #eef2f6; font-size: .98rem; }
+  .setup-check-status { flex: 0 0 auto; font-size: .82rem; font-weight: 700; color: #bed0e2; }
+  .setup-check-item.is-differs .setup-check-status { color: #f0d597; }
+  .setup-check-item.is-same .setup-check-status { color: #83ecb0; }
+  .setup-check-values { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: .2rem 1rem; margin: .45rem 0 0; }
+  .setup-check-values div { min-width: 0; }
+  .setup-check-values dt { color: #8fa0b5; font-size: .78rem; }
+  .setup-check-values dd { margin: .1rem 0 0; color: #dbe5ef; font-size: .9rem; overflow-wrap: anywhere; }
+  .setup-check-fix { margin: .55rem 0 0; color: #c6d4e4; font-size: .92rem; line-height: 1.5; }
+  .setup-check-links { display: flex; flex-wrap: wrap; gap: .3rem 1.2rem; margin: .35rem 0 0; font-size: .92rem; }
+  .setup-check-links a { color: #8fc8ff; white-space: nowrap; }
+  .setup-check-shared { margin: .4rem 0 0; color: #8fa0b5; font-size: .82rem; }
+  .setup-check-folder { margin: -.5rem 0 1rem; color: #8fa0b5; font-size: .9rem; overflow-wrap: anywhere; }
+  .setup-check-folder strong { color: #dbe5ef; }
+  .setup-check-notes { text-align: left; margin: 1.4rem 0 .4rem; }
+  .setup-check-notes > p { color: #f0d597; margin: 0 0 .6rem; line-height: 1.55; }
+  .ghost-setup-notice { display: flex; align-items: center; justify-content: space-between; gap: .4rem .8rem; flex-wrap: wrap; margin: 4px 0; padding: .45rem .7rem; border-left: 3px solid #e6b852; border-radius: 4px; background: #292b25; }
+  .ghost-setup-notice p { margin: 0; min-width: 0; flex: 1 1 16rem; color: #f0d597; font-size: .84rem; line-height: 1.45; }
+  .ghost-setup-notice button { flex: 0 0 auto; }
   .setup-rom-result { margin: .9rem 0; }
   .setup-regions { display: flex; justify-content: center; gap: 1rem; padding: .5rem 0; }
   .setup-region { display: flex; position: relative; align-items: center; justify-content: center; gap: .6rem; min-width: 135px; padding: 1rem; border: 2px solid transparent; border-radius: 10px; color: #becddd; transition: border-color .25s ease-in-out, box-shadow .25s ease-in-out; }
@@ -6273,6 +6322,9 @@
     justify-self: end; gap: .35rem; font-size: .69rem;
   }
   .replay-number-field input { width: 60px; min-width: 60px; }
+  .retention-footage-field { width: auto; grid-template-columns: 60px auto; }
+  .replay-retention-row > span:first-child { white-space: normal; }
+  .replay-retention-row .retention-mode { flex-basis: 100%; }
   .saved-replay-note {
     display: flex; align-items: center; gap: .4rem;
     margin-top: .6rem; color: var(--muted); font-size: .66rem;
@@ -6495,6 +6547,7 @@
     .sidebar-status .status-short { color: var(--coral); }
     .sidebar-status .recording-short { color: var(--muted); }
     .sidebar-status .recording-short.is-on { color: var(--coral); }
+    .sidebar-status .recording-short.is-warn { color: var(--danger, #ffb1b1); }
     .sidebar-status .recording-status:empty { display: none; }
     .recording-status {
       width: 100%; display: flex; justify-content: center;
@@ -7010,7 +7063,7 @@
     .attempt-result { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
     .attempt-delta { text-align: left; }
     .attempt-strategy { min-width: 0; text-align: right; }
-    .attempt-strategy select { max-width: 104px; }
+    .attempt-strategy select { width: 100%; max-width: 104px; }
     .save-pb-wide { display: none; }
     .save-pb-narrow { display: inline; }
     .attempt-pb-slot { min-width: 5.5rem; }
@@ -10046,6 +10099,13 @@
 .lineup .lineup-choice:hover { border-color: var(--gold-soft); background: var(--surface-3); }
 .lineup .lineup-choice:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
 .lineup-simulation { margin: 2px 0 4px; text-align: center; color: var(--muted); font-size: .7rem; }
+.lineup-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 4px 10px; margin: 2px 0 4px; font-size: .75rem; }
+.lineup-foot-text { color: var(--muted); }
+.lineup-foot-text.is-beaten-all { color: var(--text); font-weight: 600; }
+.lineup-new-ghosts { min-height: 0; height: 26px; padding: 0 10px; border-radius: 7px; border: 1px solid var(--border-soft);
+  background: transparent; color: var(--muted); font: inherit; cursor: pointer; }
+.lineup-new-ghosts:hover, .lineup-new-ghosts:focus-visible { color: var(--text); border-color: var(--border); }
+.lineup-new-ghosts.is-ready { color: var(--text); border-color: var(--border); background: var(--surface-2); }
 
 /* The swap popover: anchored under its seat; nothing else on screen moves. */
 .rival-swap { position: absolute; z-index: 30; width: 300px; padding: 6px; display: grid; gap: 4px; font-size: .78rem;

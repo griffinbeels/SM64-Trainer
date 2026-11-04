@@ -12,6 +12,7 @@ from pathlib import Path
 from sm64_events.ghost.native_layout import (  # sizes and limits: native_layout.py
     GHOSTS, IPC_MAGIC as MAGIC, IPC_PATH_CHARS as PATH_CHARS, IPC_PREFIX, IPC_RING_AT as RING_OFFSET,
     IPC_SLOTS as SLOTS, IPC_VERSION as VERSION, IPC_CLIP_BYTES, IPC_REQUEST_BYTES,
+    IPC_CAP_DRAW_FACTS, IPC_DRAW_AT, IPC_DRAW_BYTES, DRAW_VERSION,
     LABEL_BYTES, LAYOUT_BYTES, RECORD_BYTES, ROM_US,
 )
 
@@ -91,8 +92,24 @@ class Status(C.LittleEndianStructure):
     ]
 
 
+class Draw(C.LittleEndianStructure):
+    """The draw path's own account (gdf_facts, ghost_draw_facts.h) at DRAW_AT;
+    ghost/draw_facts.py reads it. Zero anywhere is "not reported"."""
+    _pack_ = 4
+    _fields_ = [(name, U32) for name in (
+        "version", "generation", "known", "flags", "list_gate", "lists", "present_gate", "presents",
+        "ready_step", "create_step", "prepare_result", "batch_result", "finalize_result",
+        "fault_step", "fault_site", "fault_error", "observed_width", "observed_height",
+        "prepared_width", "prepared_height", "settings", "multisampling", "rdram_size",
+        "evaluations", "playback_refusals")] + [("reserved", U32 * 7)]
+
+
+DRAW_AT = IPC_DRAW_AT
+
 assert C.sizeof(Origin) == 40 and C.sizeof(Clip) == IPC_CLIP_BYTES and C.sizeof(Request) == IPC_REQUEST_BYTES
 assert C.sizeof(Status) == 256 and 256 + C.sizeof(Request) <= RING_OFFSET
+assert C.sizeof(Draw) == IPC_DRAW_BYTES and 256 + C.sizeof(Request) <= DRAW_AT
+assert DRAW_AT + C.sizeof(Draw) <= RING_OFFSET
 assert Request.layout.offset == 80 and Status.consumed.offset == 96
 
 
@@ -157,3 +174,15 @@ def checked_status(raw: bytes, pid: int) -> Status:
             or status.produced - status.consumed > SLOTS):
         raise ValueError("unsupported or inconsistent ghost channel")
     return status
+
+
+def checked_draw(raw: bytes, status: Status) -> Draw | None:
+    """The draw facts this producer wrote for this generation, else None
+    (unknown): a renderer without GIPC_CAP_DRAW_FACTS leaves the tail zero, and
+    a copy from another generation or version is not this one's."""
+    if len(raw) != C.sizeof(Draw) or not status.capabilities & IPC_CAP_DRAW_FACTS:
+        return None
+    draw = Draw.from_buffer_copy(raw)
+    if draw.version != DRAW_VERSION or draw.generation != status.generation:
+        return None
+    return draw

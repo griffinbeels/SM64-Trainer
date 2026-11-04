@@ -54,6 +54,7 @@ export function CommunitySettings({ account, busy, run, refresh, onClose, onOpen
       onchange=${event => setSharing(event.target.checked)} /><span>Automatically share my best ghosts</span></label>
     ${!sharing && html`<p class="muted" role="status">Other players won't receive your new ghosts or be able to learn from those runs.
       Existing shared ghosts stay available until you remove them below.</p>`}
+    ${sharing && account.sharing !== true && html`<p class="muted" role="status">Older ghosts on this computer may be shared too.</p>`}
     <div class="community-actions"><button class="primary-button" disabled=${busy || !!playerNameError(name)}
       onclick=${() => run(save)}>Done</button></div>
     <${ProgressSettings} onOpenPlayer=${onOpenPlayer} />

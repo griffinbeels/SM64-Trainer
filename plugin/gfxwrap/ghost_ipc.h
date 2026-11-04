@@ -2,6 +2,7 @@
  * for every mapped-page access. The render thread never accesses this page. */
 #pragma once
 #include "ghost_clip.h"
+#include "ghost_draw_facts.h"
 #include "ghost_origin.h"
 #include "ghost_tuning.h"
 #include <stddef.h>
@@ -16,6 +17,10 @@
  * gipc_request.hidden. An older one refuses hidden as a nonzero reserved word,
  * so a client sends it only where this bit is set. */
 #define GIPC_CAP_HIDDEN 0x100u
+/* status.capabilities: this worker writes gipc_page.draw (ghost_draw_facts.h)
+ * for its own generation. An older one leaves that tail zero; either way a
+ * missing bit, version or generation reads as unknown, never as fine. */
+#define GIPC_CAP_DRAW_FACTS 0x200u
 enum gipc_state { GIPC_CLOSED, GIPC_PASSIVE, GIPC_CAPTURING, GIPC_PREPARING,
     GIPC_READY, GIPC_REFUSED };
 enum gipc_reason { GIPC_OK, GIPC_OWNER_GONE, GIPC_EXPIRED, GIPC_PROTOCOL,
@@ -118,7 +123,9 @@ typedef struct gipc_status {
 typedef struct gipc_page {
     gipc_status status;
     gipc_request request;
-    uint8_t reserved[20480 - sizeof(gipc_status) - sizeof(gipc_request)];
+    /* The draw path's own account, written in publish() (formerly reserved). */
+    gdf_facts draw;
+    uint8_t reserved[20480 - sizeof(gipc_status) - sizeof(gipc_request) - sizeof(gdf_facts)];
     gclip_frame records[GIPC_SLOTS];
 } gipc_page;
 #pragma pack(pop)
@@ -127,6 +134,7 @@ static_assert(sizeof(gipc_status) == 256, "ghost status bytes");
 static_assert(sizeof(gipc_clip) == 1160, "ghost clip entry bytes");
 static_assert(sizeof(gipc_request) == 20080, "ghost request bytes");
 static_assert(offsetof(gipc_page, request) == 256, "ghost command offset");
+static_assert(offsetof(gipc_page, draw) == 20336, "ghost draw facts offset");
 static_assert(offsetof(gipc_page, records) == 20480, "ghost ring offset");
 namespace ghost_ipc {
 // Serialized emulation lifecycle caller, outside any DList. Never joins.

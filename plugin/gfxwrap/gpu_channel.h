@@ -5,14 +5,17 @@
 #pragma once
 #include <stdint.h>
 #include <stddef.h>
+#include "gpu_transport.h"
 
 /* The GPU channel wire; GC_VERSION is the ghost capture sample (ghost_capture.h).
  * 2 (2026-09-27): the encoder helper creates the two bridge textures under the
  * header's names (renderer-thread capture); a version-1 wrapper made them itself.
  * 3 (2026-10-03): the ghost copy's twin block (twin_offset, 768 bytes, always
  * present) and the two twin texture names a second helper creates.
+ * 4 (2026-10-31): `transport`, the bridge transport the producer selected
+ * (gpu_transport.h); both helpers create their textures for it.
  * replay/gpuchannel.py VERSION must match; test_gpu_channel compares them. */
-#define GC_CHANNEL_VERSION 3u
+#define GC_CHANNEL_VERSION 4u
 #define GC_HEADER_BYTES 2048u
 #define GC_MAX_OFFERS 8u
 #define GC_BRIDGES 2u
@@ -53,7 +56,8 @@ typedef struct {
     uint32_t publication_offset, publication_bytes;
     uint32_t twin_offset, twin_bytes;              /* v3: the ghost copy's block */
     uint16_t twin_texture_names[GC_BRIDGES][128];  /* "-copy-%u", never a clean name */
-    uint8_t reserved[688];
+    uint32_t transport;                            /* v4: GT_TRANSPORT_*, never NONE */
+    uint8_t reserved[684];
 } gc_header;
 
 enum gc_state { GC_PREPARING = 1, GC_ACTIVE = 2, GC_CLOSED = 3, GC_FAULT = 4 };
@@ -134,7 +138,8 @@ typedef struct {
 static_assert(sizeof(gc_header) == 2048 && offsetof(gc_header, table) == 192, "header wire");
 static_assert(offsetof(gc_header, texture_names) == 320, "texture names wire");
 static_assert(offsetof(gc_header, twin_offset) == 840 && offsetof(gc_header, twin_bytes) == 844
-    && offsetof(gc_header, twin_texture_names) == 848 && offsetof(gc_header, reserved) == 1360, "twin header wire");
+    && offsetof(gc_header, twin_texture_names) == 848 && offsetof(gc_header, transport) == 1360
+    && offsetof(gc_header, reserved) == 1364, "twin header wire");
 static_assert(sizeof(gc_twin_client) == 128 && sizeof(gc_twin_status) == 128 && sizeof(gc_twin) == GC_TWIN_BYTES
     && offsetof(gc_twin, status) == 128 && offsetof(gc_twin, bridges) == 256 && offsetof(gc_twin, receipts) == 512
     && offsetof(gc_twin_client, lane) == 8 && offsetof(gc_twin_client, nonce_lo) == 16 && offsetof(gc_twin_client, epoch) == 32

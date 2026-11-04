@@ -36,7 +36,8 @@ def stale_shadow(shadow):
 def test_explicit_install_reconciles_existing_shadow_and_preserves_other_files(shadow_install):
     layer, _, _, pj64, _, _, shadow = shadow_install
     stale_shadow(shadow)
-    unrelated = shadow.with_name("GLideN64.ini")
+    # GLideN64.ini is not unrelated: test_renderer_settings.py owns that file.
+    unrelated = shadow.with_name("Jabo_Direct3D8.ini")
     unrelated.write_bytes(b"the player's renderer settings")
     result = layer.install(True)
     assert shadow.read_bytes() == (pj64 / "Plugin" / WRAPPER_INI).read_bytes()

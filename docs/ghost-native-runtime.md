@@ -56,7 +56,7 @@ at 30 Hz. A geometry benchmark alone cannot establish that budget.
 `ghost/settings.py` owns the defaults accepted on October 6: ghosts enabled,
 visibility 100%, colour enabled at +250 degrees, shadow and names enabled,
 inputs over the ghost disabled, corner inputs and front-of-Mario fading enabled,
-black name boxes at 60%, sound fading enabled at 30% volume, and ghosts in
+black name boxes at 60%, sound fading enabled, volume off (0%, since October 31), and ghosts in
 recording disabled. Paths default off following the October 8 correction;
 when enabled, the path uses button presses and the average
 of ghosts, looking 3 seconds ahead at width 20, strength 80% and arrow spacing
@@ -146,7 +146,10 @@ to the cap line, and `^ | < > &`, which JP cannot draw, show JP's `?`. Only
 the names' font is borrowed: inputs, HUD art and sound stay the cartridge's
 own. Names and inputs are
 sized in world units (`GP_ANNOTATION_*` in `ghost_tuning.h`), so a far ghost's
-name shrinks with its body, up to a largest size beside the camera. The
+name shrinks with its body, up to a largest size beside the camera. Below two
+screen pixels a font texel (a 640x480 window, or a far ghost) the name stops
+following the world: each texel is one or two whole pixels on the pixel grid,
+because nearest sampling smaller than that drops strokes frame to frame. The
 renderer draws the world upside down (`flip_y`), so layout offsets flip with
 their anchor. The input display sits above the name, the stick base (or the
 Values column) through the last held button centred on it, and reproduces Usamune's
@@ -226,6 +229,7 @@ readable explanation. A bulk read binds one current definition snapshot.
 | Renderer capture | GS7, still exported as `SM64GhostSourceV3` (the version argument must be 7); bounded 128-slot queue | [ghost_stream.h](../plugin/gfxwrap/ghost_stream.h) |
 | Playback | GP11: up to 16 immutable preloaded clips per command, 32 slots, revisioned owner origins, per-ghost hue and 64-byte terminated UTF-8 label, overlap fade, shadow/occlusion/sound switches, volume, owner suspension, the overlay switch's `hidden` and global names/inputs/mode, name box and HUD input stack controls, whether the recording keeps the displayed picture, and [the ghost's path](#the-ghosts-path) | [ghost_playback.h](../plugin/gfxwrap/ghost_playback.h) |
 | Ghost IPC | GIPC14: status 256, request 20080 (layout 200; 16 clip entries of 1160), ring offset 20480, 512 records of 1284; appended preparation/activation generations, certified-start nonce and cancellation; `hidden` (formerly `reserved1`), advertised by `GIPC_CAP_HIDDEN`; status reserves hold separate prepared/active generations | [ghost_ipc.h](../plugin/gfxwrap/ghost_ipc.h) |
+| Draw facts | GDF1: 128 bytes at page offset 20336 (formerly the page's reserved tail, so no GIPC offset moves), advertised by `GIPC_CAP_DRAW_FACTS` and stamped with the status generation; append-only code lists. See [what the draw facts say](#what-the-draw-facts-say) | [ghost_draw_facts.h](../plugin/gfxwrap/ghost_draw_facts.h) |
 | Portable clip | GCLIP7: header 160, record 1284, maximum 100000 records; header flag `GCLIP_DANCE_TAIL`. GCLIP6 (1276), GCLIP5 (1268) and GCLIP4 (652) still load with unavailable pad; GCLIP5 also has nothing released, GCLIP4 also has no particles | [ghost_clip.h](../plugin/gfxwrap/ghost_clip.h) |
 | Portable collection | `.sm64ghosts` manifest version 2 adds known-or-null `game_version` to new entries' identity. Version 1 remains readable; re-export retains legacy entries' omitted version field and original identity/credit | [portable.py](../src/sm64_events/ghost/portable.py) |
 | Clean recording | SourceV3 explicitly identifies the clean VI surface | [link_source_api.h](../plugin/gfxwrap/link_source_api.h) |
@@ -1508,6 +1512,70 @@ Neither these measurements nor the sampled hook report is a physical monitor clo
 Normal 30 Hz lists and 60 Hz VI callbacks are distinct valid cadences. Holds,
 loading and resets require game-state correlation rather than a fixed stutter label.
 
+### What the draw facts say
+
+An AMD tester (RX 9070 XT, stock Project64 1.6, JP ROM) never saw ghost Mario.
+Every report said playback READY, three clips prepared, nothing displayed, and
+hooks near 40 us with no driver queries: the draw path had refused, and none of
+its early exits said why (2026-10-30). Each exit now names itself.
+
+The likeliest cause, fixed on 2026-10-31 without live AMD evidence yet: the
+ghost's state guards asked `BLEND` and `SCISSOR_TEST` with `glGetBooleani_v`.
+The spec's state tables query those indexed enables with `glIsEnabledi`, so a
+strict driver raises `GL_INVALID_ENUM` (1280). That is the error the tester's
+renderer recorded on the ghost's first closing scope, after which the ghost
+steps aside for the context. NVIDIA accepts the call, so no witness here could
+see it. The guards now use `IsEnabledi`, and
+[test_ghost_gl_indexed_queries.py](../tests/test_ghost_gl_indexed_queries.py)
+keeps `GetBooleani_v` to `COLOR_WRITEMASK`. If an AMD report still shows
+`faulted`, the draw facts name the step and error that remain.
+
+The render thread keeps two plain facts as it runs
+([ghost_draw_facts.h](../plugin/gfxwrap/ghost_draw_facts.h)). The **list gate**
+is the first step that refused the most recent display list, or `drew` when
+its ghost image was finished. The **picture gate** is the first step that kept
+the most recent VI picture from carrying that image, or `shown`. Beside them it
+keeps the compositor's creation step and its last prepare, batch and finalize
+results; the dirty scope that made the ghost step aside and the renderer's
+record of its GL site and error; the observed and prepared extents; how the
+presentation's `context_ready` last ended; and the GLideN64 settings the steps
+read (frame buffer emulation, FXAA, overscan, the blit workaround,
+N64DepthCompare, fragment depth writes, multisampling and `RDRAMSize`). Each is
+a value the code already held: no GL call, no driver query, a few relaxed
+stores per list. The IPC worker copies them into the page's `draw` block in
+`publish()` with playback's evaluation and refusal counters.
+
+Zero is never fine. An older renderer leaves the block zero and lacks
+`GIPC_CAP_DRAW_FACTS`; a copy from another generation, a zero version and a
+group whose `known` bit is clear all read as `unknown`
+([draw_facts.py](../src/sm64_events/ghost/draw_facts.py)). The native status
+carries every fact as a `draw_*` field and `draw_refusal`, one sentence such as
+"No ghost was drawn: the ghost drawer could not prepare Mario's model
+(resources)." The Debug report and automatic reports keep them
+(`diagnostic_privacy.GHOST_DRAW_FIELDS`), with the latest list's gateway
+stages, error reads and ghost count. The `sm64.ghost.state` line ends
+`draw=<list gate>/<picture gate>`.
+
+| Report shows | Meaning |
+|---|---|
+| `faulted`, `draw_last_fault`, `draw_fault_gl_error` | A ghost scope closed dirty; the ghost stepped aside for that context and the next context draws again |
+| `no_compositor` with `draw_create_step` | Creation was refused (`refused`: below OpenGL 4.3 or too few texture units; `scope`: an error was pending) and is not retried for that context |
+| `prepare` with `draw_prepare_result` | The compositor refused Mario's model (`resources`: a shader, uniform or framebuffer) |
+| `batch` with `draw_batch_result` `unsupported` | The target is multisampled (or another unsupported depth route) |
+| `drew` then a picture gate | The image existed but the picture refused it: `fxaa`, `overscan`, `multisampling`, `blit_workaround`, or `no_presentation` with `draw_ready_step` |
+| `rdram_size` with `draw_rdram_size` | GLideN64's RDRAMSize is neither 0x7fffff nor 0x3fffff, so the stream reads nothing |
+| `other_thread` | Playback's safe boundary belongs to another renderer thread |
+
+Native witnesses drive each gate through the shipped code:
+`tests/native/ghost_draw_host.cpp` (every list gate of ghost_draw, with a
+negative control in `tests/test_ghost_draw.py`), the real list start in
+`ghost_begin_list_cpu_host.cpp` (bindings and RDRAM), replace_vi's refusals in
+`ghost_presentation_cpu_host.cpp`, `context_ready`'s steps in the transition
+host, and the worker's copy in `ghost_ipc_host.cpp`. The VI draw's own gates
+(`draw_vi_image`) run only in the WGL screen-route witness. No live session
+has produced these facts yet (2026-10-30): the tester's next report is the
+first.
+
 ### Recorded shadow
 
 Capture records the shadow the game executed, never an inferred disc. SM64
@@ -2269,7 +2337,9 @@ and never-captured frames (`clip.py::pose_gaps`); a nonzero count is logged when
 the clip is saved. The picker row names only the frames where the ghost really
 blinks (`clip.py::blink_frames`): a refused run playback bridges is not one.
 `hidden_refusals` states the bridge rule in Python and natively, compared by
-`tests/test_ghost_clip_native.py`. `tools/ghost_extraction_audit.py` audits every committed clip and the live
+`tests/test_ghost_clip_native.py`. A shared ghost must have no `scene_holes`
+(`clip.py`): frames lost in the middle of one scene. Upload, the Worker and the
+community cache all refuse those; hiding across a level change stays allowed. `tools/ghost_extraction_audit.py` audits every committed clip and the live
 pose archives (exit 1 on any hole), naming each hole's pose refusal and
 counting frames whose Mario was culled but posed. 2026-09-22: every post-fix
 clip was complete; the only pose-less archive records were a star-exit level
@@ -2356,6 +2426,37 @@ rechecks the current strategy's ceiling and subdivision winner. Incomplete or
 uncertified captures remain ineligible. Retraction retries compare the latest
 durable operation UUID, so a late keep-B failure cannot replace a newer keep-C
 operation, including B→C→B sequences.
+
+## Keeping every run owed a ghost
+
+`ghost/rival_recording.py` owns this. Its queue has no capacity, so a burst cannot
+drop a run. `PreservationFailed` (poses did not reach disk) and file or database
+errors retry with backoff while the poses exist (`ARCHIVE_RETENTION_S`), then log
+one error per reason per session. A plain ValueError means the run is not
+eligible and refuses silently. A run with no pose recorder (`NO_POSE_ARCHIVE`)
+never retries. A saved PB whose poses did not commit retries the same way,
+whatever admission thinks of the run, so a PB past the ghost ceiling keeps its clip
+and gets no row.
+
+Stop drains the queue for at most `DRAIN_S`, before community and recorder
+teardown. It commits without waiting for a star dance, so a clip finished while
+closing can lack its dance. The additive `owed` table in `population.sqlite3` holds each
+run from the moment the worker takes it until it settles. The next start admits
+an owed run only if its clip was committed and its lineage still matches. A
+crash before commit loses the poses: they live in session scratch, and that row
+is settled with a warning. An owed upload waits for its recorded account to
+return, for at most `OWED_OFFER_DAYS`, and never goes to another account.
+
+[[Earlier ghosts]] take a separate door: the first sharing account's claim.
+`community/earlier_ghosts.py` offers only rows with this install's recorder identity
+and a local lineage, so an imported or bundled ghost never goes up. Each row's run
+must still pass today's admission and ghost ceiling (`population.still_admissible`),
+so a run that lost its validity after saving stays home. They wait in the
+same outbox, at the same pace, and the cloud answers `not_faster` or `already_present`
+as for any offer. Signing out or turning sharing off cancels them, and the same account
+resumes when it shares again. Removing shared ghosts closes the claim for good.
+Terms `beta-2` disclose this. Accepting `beta-1` adopts nothing, so a build can ship
+before the Worker's policy versions change.
 
 One player may occupy one rival seat across automatic choices, explicit pins and
 mixed ready/downloading rosters. Bundled schema2 author identities match the

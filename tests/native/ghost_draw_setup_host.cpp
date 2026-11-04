@@ -2,6 +2,8 @@
 #define NOMINMAX
 #include <windows.h>
 #include "ghost_draw.h"
+#include "ghost_draw_facts.h"
+#include "source_refusal.h"
 #include "ghost_compositor.h"
 #include "ghost_playback.h"
 #include "ghost_live_session.h"
@@ -25,6 +27,7 @@ namespace replay_gl {
 bool CandidateBindings(renderer::Identity *out,snapshot::RestoreBindings *bindings){if(!identified)return false;*out=live;*bindings={};return true;}
 bool BeginCapture(){++gateway_calls;if(gateway_fails){gateway_fails=false;return false;}return true;}
 bool EndCapture(){if(end_fails){end_fails=false;return false;}return true;}
+void BindingsCause(rs_bindings_cause*){}
 }
 namespace ghost_dispatch {bool load(ghost_compositor::Dispatch &out){out={};out.GetIntegerv=integer;return true;}}
 namespace ghost_compositor {
@@ -38,7 +41,7 @@ Result prepare_particles(Instance*,const uint8_t*,uint32_t,uint32_t){return Resu
 Result prepare_annotations(Instance*,const uint8_t*,uint32_t,uint32_t){return Result::ok;}
 }
 namespace ghost_playback {
-void safe_boundary(uint32_t,uint32_t){++boundaries;}
+bool safe_boundary(uint32_t,uint32_t){++boundaries;return true;}
 bool atlas(sg_atlas_view*,uint64_t*){return false;}
 bool particles(sg_particle_view*,uint64_t*){return false;}
 bool annotations(ghost_annotation::View*,uint64_t*){return false;}
@@ -88,7 +91,7 @@ bool image_for_vi(const ghost_presentation::ViSource&,ghost_presentation::GhostV
 bool valid_image(const ghost_presentation::GhostViImage&){return false;}
 void presented(const ghost_presentation::GhostViImage&,uint64_t,bool){}
 }
-void close_layer(){}void cancel(){}
+void close_layer(){}void cancel(uint32_t){}
 #include "actual_ghost_draw_begin.inc"
 }
 int main(){try {
@@ -121,9 +124,10 @@ int main(){try {
     for(unsigned i=0;i<32;++i)begin(7,4,nullptr);
     check(presentation_calls==before+2 && presentation_owner.drawable_generation==live.drawable_generation,
         "presentation retry recovers through the actual renderer caller");
-    settings_eligible=false;const auto attempts=gateway_calls;const auto pending=boundaries;
+    ghost_facts::list_pending=0;settings_eligible=false;const auto attempts=gateway_calls;const auto pending=boundaries;
     for(unsigned i=0;i<12;++i)begin(7,4,nullptr);
     check(gateway_calls==attempts && !evaluations && boundaries==pending+12,
         "ineligible settings skip ghost GPU and pose work while ownership boundary continues");
+    check(ghost_facts::list_pending==GDF_LIST_INELIGIBLE,"ineligible settings name themselves in the list's facts");
     std::printf("setup passed checks=%u gateway=recovered create=recovered observation=retained ineligible=skipped\n",checks);return 0;
 }catch(const std::exception &error){std::fprintf(stderr,"draw setup: %s (check %u)\n",error.what(),checks);return 1;}}

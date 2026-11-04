@@ -3,7 +3,10 @@
  * render_tick and gd_capture run them in Project64. Hidden window, no emulator.
  *   selection <input_dir> <out_dir>      the sample against the selector's input
  *   bridge <name> <source_w> <source_h> <crop_x> <crop_y> <snapshot_w> <snapshot_h> <pictures>
- *                                         snapshot + bridge into the helper-role consumer */
+ *                                         snapshot + bridge into the helper-role consumer
+ *   capabilities                          print what the context offers and the transport it selects
+ * SM64_TEST_GPU_TRANSPORT=keyed|semaphore|readback selects exactly that
+ * transport (the delivery's test override), so NVIDIA runs each one. */
 #include "gl_fixture.h"
 #include "gpu_render.h"
 #include "gpu_render_wire.h"
@@ -11,6 +14,13 @@
 #include <string>
 
 namespace {
+uint32_t forced_transport() {
+    const char *value = getenv("SM64_TEST_GPU_TRANSPORT");
+    if (!value || !*value) return GT_TRANSPORT_NONE;
+    if (!strcmp(value, "keyed")) return GT_TRANSPORT_KEYED_MUTEX;
+    if (!strcmp(value, "semaphore")) return GT_TRANSPORT_SEMAPHORE;
+    return strcmp(value, "readback") ? GT_TRANSPORT_COUNT : GT_TRANSPORT_READBACK;
+}
 using Bind = void (APIENTRY *)(GLenum, GLuint);
 using SubImage = void (APIENTRY *)(GLuint, GLint, GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, const void *);
 Bind bind_buffer = nullptr;
@@ -115,7 +125,7 @@ int bridge(wchar_t **argv, const render_capture::Gl &gl) {
     control->width = width & ~1u; control->height = height & ~1u;
     control->source_width = source_width; control->source_height = source_height;
     control->crop_x = crop_x; control->crop_y = crop_y; control->snapshot_width = width; control->snapshot_height = height;
-    control->pictures = pictures;
+    control->pictures = pictures; control->transport = gl.transport;
     for (unsigned i = 0; i < 2; ++i) swprintf_s(control->names[i], L"%s-texture-%u", argv[2], i);
     InterlockedExchange(&control->initialized, 1);
     // The renderer's picture, in its own framebuffer, drawn at a crop offset.
@@ -160,6 +170,21 @@ int bridge(wchar_t **argv, const render_capture::Gl &gl) {
         hostile_check(); hostile_off();
         CHECK(copied == render_capture::Bridge::Result::copied);
         glFlush(); // the key release reaches the GPU queue, as the renderer's own flush would take it
+        // READBACK: the delivery publishes only once the pixels are in the section.
+        auto landed = render_capture::Bridge::Delivery::pending;
+        for (unsigned n = 0; n < 10000 && landed == render_capture::Bridge::Delivery::pending; ++n) {
+            landed = bridge.delivered(index);
+            if (landed == render_capture::Bridge::Delivery::pending) Sleep(1);
+        }
+        CHECK(landed == render_capture::Bridge::Delivery::ready);
+        // A texture the helper has not handed back is never rewritten: the
+        // copy refuses it as full (the keyed mutex reports that as a release
+        // fault instead, which the delivery's ledger never reaches).
+        if (gl.transport != GT_TRANSPORT_KEYED_MUTEX) {
+            render_capture::Bridge::Result again;
+            { render_capture::StateGuard guard(gl); again = bridge.copy(index, image.texture); }
+            CHECK(again == render_capture::Bridge::Result::full);
+        }
         packet.occurrence = image.occurrence; packet.qpc = image.qpc; InterlockedExchange(&packet.ready, 1);
         CHECK(pool.release(ticket));
     }
@@ -167,9 +192,10 @@ int bridge(wchar_t **argv, const render_capture::Gl &gl) {
          && !control->failed; ++n) Sleep(1);
     CHECK(unsigned(control->consumed) == pictures && !control->failed);
     CHECK(bridge.destroy()); pool.stop(); CHECK(pool.destroy()); CHECK(glGetError() == GL_NO_ERROR);
+    const unsigned transport = control->transport;
     UnmapViewOfFile(control); CloseHandle(mapping);
-    printf("producer passed: pictures=%u state_restored=yes source=%ux%u snapshot=%ux%u output=%ux%u\n",
-           pictures, source_width, source_height, width, height, width & ~1u, height & ~1u);
+    printf("producer passed: pictures=%u state_restored=yes source=%ux%u snapshot=%ux%u output=%ux%u transport=%u\n",
+           pictures, source_width, source_height, width, height, width & ~1u, height & ~1u, transport);
     return 0;
 }
 }
@@ -198,7 +224,10 @@ int wmain(int argc, wchar_t **argv) {
     }
     glDisable(GL_DITHER); glDisable(0x8DB9);
     render_capture::Gl gl;
-    if (!gl.load()) {
+    const uint32_t capabilities = render_capture::probe_capabilities();
+    const uint32_t transport = render_capture::select_transport(capabilities, forced_transport(), GT_TRANSPORT_KEYED_MUTEX);
+    printf("renderer capabilities=0x%08x transport=%u\n", capabilities, transport); fflush(stdout);
+    if (!gl.load(transport)) {
         fprintf(stderr, "renderer GL prerequisite failed: detail=%u entry_point=%s\n",
                 unsigned(gl.load_error), gl.missing_entry_point ? gl.missing_entry_point : "");
         CHECK(wglMakeCurrent(nullptr, nullptr)); return 3;

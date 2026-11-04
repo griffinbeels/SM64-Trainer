@@ -662,3 +662,31 @@ def test_reported_wild_blue_pb_reaches_the_real_lineup_and_its_overall_range(bro
             clean(seen)
         finally:
             context.close()
+
+
+@pytest.mark.parametrize("width", [850, 1500])
+def test_new_ghosts_is_offered_under_the_set_and_asks_the_server(browser, tmp_path, width):
+    session = {**ghost_session(enabled=True), "rivals": lineup_rivals(pb_frames=1)}
+    with practice(browser, session, width=width) as (page, state, seen):
+        settle(page, "card => card.querySelector('.lineup-new-ghosts.is-ready')")
+        foot = page.locator(f"{CARD} .lineup-foot")
+        assert foot.locator(".lineup-foot-text").inner_text() == "You beat all of these ghosts!"
+        box = page.locator(f"{CARD} .lineup-new-ghosts").evaluate(BOX)
+        assert box["right"] <= width and box["bottom"] - box["top"] >= 20
+        artifact(page, tmp_path, f"lineup-new-ghosts-{width}.png")
+        page.locator(f"{CARD} .lineup-new-ghosts").click()
+        page.wait_for_function("true")
+        for _ in range(50):
+            if state["writes"]:
+                break
+            page.wait_for_timeout(50)
+        assert state["writes"][-1] == {"rivals": {"scope": "overall", "action": "new"}, "target": FIXTURE_TARGET}
+        clean(seen)
+
+
+def test_new_ghosts_stays_quiet_while_some_ghosts_are_ahead(browser):
+    with practice(browser, {**ghost_session(enabled=True), "rivals": lineup_rivals()}) as (page, state, seen):
+        settle(page, "card => card.querySelector('.lineup-new-ghosts')")
+        assert page.locator(f"{CARD} .lineup-foot-text").count() == 0
+        assert page.locator(f"{CARD} .lineup-new-ghosts.is-ready").count() == 0
+        clean(seen)

@@ -28,16 +28,36 @@ typedef struct {
     uint32_t bindings_site,bindings_gl_error,bindings_flags,bindings_invalidations,bindings_after_ms,bindings_contexts;
     char vendor[80],renderer[128],gl_version[96];
 } gpu_startup_context_v1;
+/* Appended after the context receipt (control page offset 1136); zero from
+ * older producers. Which bridge transports the renderer's context offers
+ * (GT_CAP_*, gpu_transport.h; zero until the request's first renderer tick
+ * probed it, which runs before any surface or gateway check) and the one it
+ * selected (GT_TRANSPORT_*; zero until selected, or when none qualified).
+ * `floor` is the lowest transport this process may still select: a transport
+ * whose preparation the driver refused is never selected again in this
+ * Project64, and `failed_transport`/`failed_error` name the latest such
+ * refusal (its GL error). Same epoch as the V1 receipt. Diagnostic only. */
+#define GPU_STARTUP_TRANSPORT_MAGIC "SM64GPT1"
+#define GPU_STARTUP_TRANSPORT_VERSION 1u
+typedef struct {
+    char magic[8];
+    uint32_t version,bytes,epoch;
+    uint32_t capabilities,transport,floor,failed_transport,failed_error;
+    uint32_t reserved[6];
+} gpu_startup_transport_v1;
 #ifdef __cplusplus
 static_assert(sizeof(gpu_startup_v1)==448,"GPU startup receipt size");
 static_assert(sizeof(gpu_startup_context_v1)==352,"GPU startup context receipt size");
+static_assert(sizeof(gpu_startup_transport_v1)==64,"GPU startup transport receipt size");
 extern "C" {
 #else
 _Static_assert(sizeof(gpu_startup_v1)==448,"GPU startup receipt size");
 _Static_assert(sizeof(gpu_startup_context_v1)==352,"GPU startup context receipt size");
+_Static_assert(sizeof(gpu_startup_transport_v1)==64,"GPU startup transport receipt size");
 #endif
 int __cdecl gd_read_startup(gpu_startup_v1*);
 int __cdecl gd_read_startup_context(gpu_startup_context_v1*);
+int __cdecl gd_read_startup_transport(gpu_startup_transport_v1*);
 #ifdef __cplusplus
 }
 #endif

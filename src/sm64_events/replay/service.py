@@ -297,7 +297,7 @@ class ReplayService:
         # Shrinks what Save/PB publishes, after the fact (replay/compress.py).
         self.compressor: SavedReplayCompressor | None = None
         self.recorder.scratch_protection = self._protected_scratch
-        self.history = AttemptHistory(cfg.retention_attempts)
+        self.history = AttemptHistory(cfg.retention_attempts, cfg.retention_footage_s)
         if self.tracker is not None:
             self.tracker.on_replay_history = self.history.observe
         self.recorder.maintain_history = self._maintain_history
@@ -514,6 +514,7 @@ class ReplayService:
         current = self.recorder.status(nonblocking=True) if nonblocking else self.recorder.status()
         return {"enabled": True, **current,
                 "retention_attempts": self.history.count,
+                "retention_footage_s": self.history.footage_s,
                 "save_failures": failures, "recovery_failures": self._recovery_failures}
 
     def settings(self) -> dict:
@@ -525,6 +526,7 @@ class ReplayService:
                  if root.exists() else 0)
         return {"retention_s": self.recorder.ring.retention_s,
                 "retention_attempts": self.history.count,
+                "retention_footage_s": self.history.footage_s,
                 "max_buffer_bytes": self.recorder.ring.max_bytes,
                 "pre_pad_s": self.pre_pad_s,
                 "post_pad_s": self.post_pad_s,
@@ -535,30 +537,33 @@ class ReplayService:
                         max_buffer_bytes: int,
                         pre_pad_s: float | None = None,
                         post_pad_s: float | None = None,
-                        retention_attempts="unchanged") -> dict:
+                        retention_attempts="unchanged",
+                        retention_footage_s: float | None = None) -> dict:
         """Validate -> persist -> apply live (ring evicts immediately; pads
         affect the next view(); the recorder's idle threshold follows the
-        padding window). None pads = keep current. Persist before apply so
+        padding window). None pads or footage limit = keep current. Persist before apply so
         a write failure can't leave limits applied but not durable."""
         with self._settings_apply_guard:
             return self._update_settings(retention_s, max_buffer_bytes, pre_pad_s,
-                                         post_pad_s, retention_attempts)
+                                         post_pad_s, retention_attempts, retention_footage_s)
 
     def _update_settings(self, retention_s, max_buffer_bytes, pre_pad_s,
-                         post_pad_s, retention_attempts):
+                         post_pad_s, retention_attempts, retention_footage_s):
         with self._settings_guard:
             pre = self.pre_pad_s if pre_pad_s is None else float(pre_pad_s)
             post = self.post_pad_s if post_pad_s is None else float(post_pad_s)
             count = self.history.count if retention_attempts == "unchanged" else retention_attempts
-            validate_settings(retention_s, max_buffer_bytes, pre, post, count)
+            footage = self.history.footage_s if retention_footage_s is None else retention_footage_s
+            validate_settings(retention_s, max_buffer_bytes, pre, post, count, footage)
             save_settings(self.cfg.settings_path, retention_s, max_buffer_bytes,
                           pre, post, count,
                           recording_enabled=getattr(self.recorder, "recording_enabled",
-                                                    self.cfg.recording_enabled))
+                                                    self.cfg.recording_enabled),
+                          retention_footage_s=footage)
             # Stop must preserve the durable request, even if the ring is
             # blocked before applying it. None remains a valid retention limit.
             self._settings_limits = (retention_s, max_buffer_bytes)
-            self.history.configure(count)
+            self.history.configure(count, footage)
             self.pre_pad_s, self.post_pad_s = pre, post
             self.recorder.set_idle_after(pre + post)
         self.recorder.ring.set_limits(retention_s, max_buffer_bytes)
@@ -578,7 +583,8 @@ class ReplayService:
                               (self.recorder.ring.retention_s, self.recorder.ring.max_bytes))
             save_settings(self.cfg.settings_path, retention,
                           cap, self.pre_pad_s, self.post_pad_s,
-                          self.history.count, recording_enabled=enabled)
+                          self.history.count, recording_enabled=enabled,
+                          retention_footage_s=self.history.footage_s)
             self.recorder.set_recording_enabled(enabled)
         return self.status(nonblocking=True)
 
@@ -1365,7 +1371,7 @@ class ReplayService:
                 try:
                     atomic_json(path.with_suffix(".json"), manifest)
                 except OSError as error:
-                    self._remember_native_preservation(identity, str(error))
+                    self._remember_native_preservation(identity, error.strerror or type(error).__name__)
                     raise
             self._remember_native_preservation(identity, reason)
             return {"path": str(path) if path else None,
@@ -1473,13 +1479,15 @@ class ReplayService:
                 "native_ghost": m["native_ghost"], "native_ghost_reason": ghost_reason}
 
     def _preserve_ghost(self, attempt, path, *, wait_tail: bool = True):
-        from sm64_events.ghost.clip import ClipError
+        from sm64_events.ghost.clip import NO_POSE_ARCHIVE, ClipError
         archive = getattr(self.recorder, "pose_archive", None)
         if archive is None:
-            return None, None, "This recording has no native Mario poses."
+            return None, None, NO_POSE_ARCHIVE
         try:
             manifest = archive.export_attempt(attempt, path, target=self._native_target(attempt), wait_tail=wait_tail)
-        except (ClipError, OSError, sqlite3.Error) as error:
+        except OSError as error:  # str(OSError) names the file, and this text reaches logs.
+            return None, None, error.strerror or type(error).__name__
+        except (ClipError, sqlite3.Error) as error:
             return None, None, str(error)
         from sm64_events.ghost.clip import pose_gaps
         if pose_gaps(manifest):

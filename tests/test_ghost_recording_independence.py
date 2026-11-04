@@ -152,3 +152,57 @@ def test_rom_retarget_during_media_close_is_not_lost(tmp_path):
         assert rec.ghost_capture is not first
     finally:
         rec.stop(cleanup=False)
+
+
+def test_low_disk_stops_video_keeps_ghosts_and_reports_free_space_as_numbers(tmp_path):
+    rec, video, *_ = make(tmp_path)
+    rec._ghost_capture_factory = Source
+    free = [10**12]
+    rec.ring._free_bytes_fn = lambda: free[0]
+    try:
+        cycle(rec)
+        source, archive, lease = rec.ghost_capture, rec.pose_archive, rec._rec_lock
+        source.emit(producer(), (frame(1),))
+        assert rec.status()["recording"] and not rec.status()["storage_pressure"]
+        free[0] = 1000
+        rec.ring.maintain()
+        cycle(rec)
+        status = rec.status()
+        assert status["storage_pressure"] and not status["recording"]
+        assert status["pose_source_owned"]
+        assert status["disk_free_bytes"] == 1000
+        assert status["disk_reserve_bytes"] == rec.ring.disk_reserve_bytes
+        source.emit(producer(), (frame(2),))
+        assert rec.ghost_capture is source and rec.pose_archive is archive
+        assert rec._rec_lock is lease and not lease.closed
+        assert archive.status()["records"] == 2 and not archive.status()["closed"]
+        # Freeing space brings video back by itself, on the same ghost owner.
+        free[0] = 10**12
+        rec.ring.maintain()
+        rec._video_factory = lambda _: PairedVideo([])
+        rec._audio_factory = lambda _: Audio([])
+        cycle(rec)
+        assert rec.status()["recording"] and not rec.status()["storage_pressure"]
+        assert rec.ghost_capture is source
+    finally:
+        rec.stop(cleanup=False)
+
+
+def test_ghost_from_a_low_disk_session_is_still_published_without_video(tmp_path):
+    from sm64_events.ghost.clip import check_manifest, inputs_complete
+    service, row, archive = native_service(tmp_path)
+    archive.close()
+    rec, video, *_ = make(tmp_path / "capture")
+    rec._ghost_capture_factory = Source
+    rec.ring._free_bytes_fn = lambda: 1000
+    service.recorder = rec
+    try:
+        cycle(rec)  # a cold start: video never begins, poses do
+        assert rec.status()["storage_pressure"] and video.starts == 0
+        rec.ghost_capture.emit(producer(), tuple(frame(n) for n in (1, 2, 3)))
+        result = service.preserve_native(row.id, wait_tail=False)
+        assert result["native_ghost"] and result["native_ghost_reason"] is None
+        found = service.find_native(row.id)
+        assert inputs_complete(check_manifest(found[0], found[1], attempt=row, target=service._native_target(row)))
+    finally:
+        rec.stop(cleanup=False)

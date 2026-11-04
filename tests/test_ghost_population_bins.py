@@ -77,8 +77,8 @@ class Replays:
     def attempt(self, number):
         return self.runs[number].attempt(number)
 
-    def preserve_native(self, number):
-        return self.runs[number].preserve_native(number)
+    def preserve_native(self, number, *, wait_tail=True):
+        return self.runs[number].preserve_native(number, wait_tail=wait_tail)
 
     def find_native(self, number):
         return self.runs[number].find_native(number)
@@ -173,7 +173,7 @@ def test_a_run_past_the_ceiling_creates_no_ghost_and_no_offer_silently(tmp_path,
     assert not [record for record in caplog.records if record.levelno > logging.DEBUG]
     edge = attempt(frames=231, course_id=10, star_id=2, strat_tag="TJ Strat")
     assert recorder._admit(edge, community.contribution_context()) is True
-    assert population.calls == ["qualified_source", "metadata_snapshot", "accept_verified"]
+    assert population.calls == ["metadata_snapshot", "qualified_source", "accept_verified"]
     assert [source["frames"] for source, _ in community.offers] == [231]
 
 

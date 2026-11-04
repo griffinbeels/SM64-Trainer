@@ -16,7 +16,7 @@
 // here would look completely correct and quietly reintroduce the flicker in one
 // row while the others stayed smooth.
 import { Fragment, h } from "preact";
-import { useEffect, useReducer, useRef } from "preact/hooks";
+import { useEffect, useLayoutEffect, useReducer, useRef } from "preact/hooks";
 import htm from "htm";
 
 import { IDLE, OUT, identityOf, initialState, nextState, paintsShown, phaseMs,
@@ -108,6 +108,21 @@ function Exchanged({ className, identity: id, children }) {
     return () => clearTimeout(timer);
   }, [state.phase, state.shownId, state.absorbed]);
 
+  // A row too long for its card scrolls (`.starrow.segcells`), and a target
+  // that moved brings its cell into view once, without fighting his own scroll.
+  const box = useRef(null);
+  const lastActive = useRef(null);
+  useLayoutEffect(() => {
+    const row = box.current;
+    const cell = row && row.querySelector(":scope > .active-star");
+    if (!cell || cell === lastActive.current) { lastActive.current = cell; return; }
+    lastActive.current = cell;
+    const left = cell.offsetLeft - row.offsetLeft;
+    if (left < row.scrollLeft) row.scrollLeft = left;
+    else if (left + cell.offsetWidth > row.scrollLeft + row.clientWidth) {
+      row.scrollLeft = left + cell.offsetWidth - row.clientWidth;
+    }
+  });
   const { opacity, transitionMs } = rowStyle(state.phase, selectorTuning(),
                                              reduced);
   const shown = settled ? current : held.current;
@@ -125,7 +140,7 @@ function Exchanged({ className, identity: id, children }) {
   // Keyed on `state.shownId` and NOT on the incoming id: during the fade the
   // key must not move, or the outgoing content would be torn down and rebuilt
   // mid-fade — the very frame this whole mechanism exists to hide.
-  return html`<div class=${className}
+  return html`<div class=${className} ref=${box}
     style=${`opacity:${opacity};transition:opacity ${transitionMs}ms linear`}
     ><${Fragment} key=${state.shownId}>${shown}<//></div>`;
 }

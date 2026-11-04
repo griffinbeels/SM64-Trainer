@@ -22,6 +22,7 @@ class RevealBody(BaseModel):
 
 class SettingsBody(BaseModel):
     retention_attempts: StrictInt | None = None
+    retention_footage_s: float | None = None  # omitted = keep current; attempts mode only
     retention_s: float | None = None   # null/omitted = keep the whole session
     max_buffer_bytes: int
     pre_pad_s: float | None = None     # omitted = keep current
@@ -158,6 +159,8 @@ def create_replay_router(replay) -> APIRouter:
         try:
             options = ({"retention_attempts": body.retention_attempts}
                        if "retention_attempts" in body.model_fields_set else {})
+            if body.retention_footage_s is not None:
+                options["retention_footage_s"] = body.retention_footage_s
             return replay.update_settings(body.retention_s,
                                           body.max_buffer_bytes,
                                           body.pre_pad_s, body.post_pad_s, **options)
