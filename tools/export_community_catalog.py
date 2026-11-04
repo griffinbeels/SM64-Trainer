@@ -38,7 +38,7 @@ def main():
     catalog = build_catalog()
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(catalog, ensure_ascii=False, sort_keys=True,
-                                      separators=(",", ":")) + "\n", encoding="utf-8")
+                                      separators=(",", ":")) + "\n", encoding="utf-8", newline="\n")
     print(f"Exported {len(catalog['entries'])} canonical target/ROM entries; generation {catalog['generation']}.")
 
 

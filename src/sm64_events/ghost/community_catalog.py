@@ -10,6 +10,7 @@ import json
 from sm64_events.ghost.adaptive import MAX_STEP, _progress, _read_context, rank_entity_key
 from sm64_events.ghost.sharing_targets import binding_index, describe
 from sm64_events.ranks.calibration import resolve_curve
+from sm64_events.tracking.activestrat import PIPE_FAMILY_SUFFIX, reds_pipe_segments
 
 MAX_FRAMES = 100000
 GHOST_CEILING_PERCENT = 10
@@ -97,8 +98,12 @@ def within_strategy_ceiling(ranks, identity, frames):
 def export_catalog(ranks, definitions=()):
     entries = []
     bindings = binding_index(definitions)
+    # A Bowser reds->pipe segment has no ladder of its own: it races on the
+    # paired star's " (Pipe)" ladders, as Practice grades it (ladder_entity_key).
+    _, paired = reds_pipe_segments([row for row in definitions if isinstance(row, dict)])
+    borrowed = {f"segment:{segment}": star for segment, star in paired.items()}
     with ranks.read_context():
-        for key in sorted(ranks.graded_entities()):
+        for key in sorted(set(ranks.graded_entities()) | set(borrowed)):
             if key.startswith("star:"):
                 _, course, star = key.split(":")
                 kind, entity = "star", f"{course}-{star}"
@@ -114,12 +119,16 @@ def export_catalog(ranks, definitions=()):
                 continue  # Disabled or ambiguous segments cannot bind safely on another client.
             for version in ("us", "jp"):
                 strategies = []
-                for name in sorted(ranks.strategies(key)):
-                    cutoffs = model_cutoffs(ranks.ladder_cs(key, name, version), "strategy")
+                ladder, names = key, sorted(ranks.strategies(key))
+                if not names and key in borrowed:
+                    ladder = borrowed[key]
+                    names = sorted(n for n in ranks.strategies(ladder) if n.endswith(PIPE_FAMILY_SUFFIX))
+                for name in names:
+                    cutoffs = model_cutoffs(ranks.ladder_cs(ladder, name, version), "strategy")
                     if cutoffs:
                         strategies.append({"name": name, "cutoffs": cutoffs})
                 overall = model_cutoffs(resolve_curve(ranks, key, version), "overall")
-                if strategies:
+                if strategies and overall:
                     entries.append({"target": target, "clock": ranks.clock_for(key),
                                     "game_version": version, "strategies": strategies,
                                     "overall_cutoffs": overall})

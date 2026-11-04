@@ -76,7 +76,7 @@ validated digest from `catalog.json`:
 
 ```sql
 UPDATE settings
-SET generation = '89671c5769e024241a41290b19328b7b73f1eafddbb03b65cae1e50d3b99996e'
+SET generation = 'b28497c785746bb85ab82780443bd6c069aecc67b7e265f848c60ccf8817c28f'
 WHERE id = 1 AND generation = '';
 SELECT generation, enabled FROM settings WHERE id = 1;
 ```
