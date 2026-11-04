@@ -66,10 +66,6 @@ class Sharing(_Body):
     enabled: bool
 
 
-class EarlierAnswer(_Body):
-    share: bool
-
-
 class Confirmation(_Body):
     confirmation: Literal["WITHDRAW", "DELETE"]
 
@@ -109,23 +105,8 @@ def create_community_router(account, progress=None, sync=None):
         return account
 
     _mount_auth(router, require_account, pending)
-    _mount_account(router, require_account, pending, progress)
-    _mount_earlier_ghosts(router, sync)
+    _mount_account(router, require_account, pending, progress, sync)
     return router
-
-
-def _mount_earlier_ghosts(router, sync):
-    @router.get("/earlier-ghosts")
-    async def earlier():
-        if sync is None:
-            return {"ask": False, "offer": False}
-        return await _call(lambda: asyncio.to_thread(sync.earlier_ghosts))
-
-    @router.put("/earlier-ghosts")
-    async def answer(body: EarlierAnswer):
-        if sync is None:
-            raise HTTPException(503, "Community testing is not configured for this build.")
-        return await _call(lambda: asyncio.to_thread(sync.answer_earlier_ghosts, body.share))
 
 
 def _mount_auth(router, require_account, pending):
@@ -175,7 +156,7 @@ async def _complete_profile(active, body, progress):
     return active.snapshot()
 
 
-def _mount_account(router, require_account, pending, progress=None):
+def _mount_account(router, require_account, pending, progress=None, sync=None):
     @router.get("/names/check")
     async def check_name(name: str = Query(min_length=1, max_length=128)):
         """The live availability check while a name is typed (round 41).
@@ -225,6 +206,8 @@ def _mount_account(router, require_account, pending, progress=None):
         if body.confirmation != "WITHDRAW":
             raise HTTPException(400, "Confirm shared ghost removal.")
         active = require_account()
+        if sync is not None:
+            await asyncio.to_thread(sync.close_earlier_ghosts)
         return await _call(lambda: active.request_json("POST", "/v1/account/withdraw",
             json={'confirmation': 'WITHDRAW MY GHOSTS'}))
 
@@ -233,6 +216,8 @@ def _mount_account(router, require_account, pending, progress=None):
         if body.confirmation != "DELETE":
             raise HTTPException(400, "Confirm account deletion.")
         active = require_account()
+        if sync is not None:
+            await asyncio.to_thread(sync.close_earlier_ghosts)
         result = await _call(lambda: active.request_json("POST", "/v1/account/delete",
             json={'confirmation': 'DELETE MY ACCOUNT'}))
         await _call(active.sign_out)

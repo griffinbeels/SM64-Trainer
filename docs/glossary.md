@@ -1857,13 +1857,12 @@ PBs or the independent [[ghost]]-sharing setting.
 ### Earlier ghosts
 
 The [[ghost]]s this install recorded that its account may never have shared.
-The player's yes to one question, or the Settings button, puts them in the upload
-queue under the signed-in account. A login alone never does, because the published
-terms promise that signup shares future [[ghost]]s. After one account says yes, no
-other account can share them.
+The first account that shares from this install claims them, and they upload under
+that account with no question. Terms `beta-2` disclose this, so an account that last
+accepted older terms adopts nothing. No other account can share them, and removing
+shared [[ghost]]s closes the claim for good.
 
-- **Lives** — `src/sm64_events/community/earlier_ghosts.py`,
-  `src/sm64_events/ui/components/earlierghosts.js`
+- **Lives** — `src/sm64_events/community/earlier_ghosts.py`
 
 ### Community ghost
 

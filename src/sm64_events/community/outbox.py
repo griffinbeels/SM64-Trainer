@@ -1,8 +1,9 @@
 """Bounded metadata for previously consented native contributions, never clips.
 
 The admission worker remembers a qualified source and its current account UID.
-So does the player's own yes to sharing earlier ghosts (`earlier_ghosts.py`).
-Recovery never assigns historical, imported or packaged runs to a login.
+So does the first sharing account's claim on this install's earlier ghosts
+(`earlier_ghosts.py`), under terms that say so. Recovery itself never assigns
+imported or packaged runs to a login.
 Deleted/changed source bytes, capacity eviction and explicit cancellation can
 retire an intent; this file is not a second recording archive. Eviction spends
 what the community would miss least (`SourceOutbox._evict_one`).

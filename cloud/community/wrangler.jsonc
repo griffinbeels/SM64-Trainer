@@ -60,8 +60,8 @@
     "ACCESS_ISSUER": "https://REPLACE.cloudflareaccess.com",
     "ACCESS_AUD": "REPLACE_ACCESS_APP_AUD",
     "ADMIN_EMAILS": "",
-    "TERMS_VERSION": "beta-1",
-    "PRIVACY_VERSION": "beta-1",
+    "TERMS_VERSION": "beta-2",
+    "PRIVACY_VERSION": "beta-2",
     "OPERATOR_NAME": "",
     "OPERATOR_CONTACT": "",
     "CATALOG_GENERATION": ""

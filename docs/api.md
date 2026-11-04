@@ -112,8 +112,6 @@ mutations need the local request capability above. Cloud protocol:
 | `PUT /api/community/account` `{name, terms_version, privacy_version, sharing, sheet_runner?, share_pbs?}` | Create the account: name, consent and ghost sharing. The optional local-only PB choice defaults on for a new account; false is saved before activation. It is stripped from the strict cloud v1 profile body. |
 | `PUT /api/community/account/name` `{name}` | Rename (required after a moderation rename). |
 | `PUT /api/community/account/sharing` `{enabled}` | Turn automatic sharing on or off. |
-| `GET /api/community/earlier-ghosts` | `{ask, offer}`: whether to ask about [[earlier ghosts]] now, and whether Settings keeps its button. Both false when signed out or sharing is off. |
-| `PUT /api/community/earlier-ghosts` `{share}` | Keep the player's answer. `true` queues this install's own ghosts under the signed-in account. Returns `{ask, offer}`. |
 | `GET /api/community/account/export` | Download ghost/account data plus `player_page` (profile, controls and current snapshot). Both reads bind the same UUID/auth session; a switch discards the result. Older services explicitly mark unavailable player-page export. |
 | `POST /api/community/account/withdraw` `{confirmation: "WITHDRAW"}` | Unpublish every shared ghost. |
 | `POST /api/community/account/delete` `{confirmation: "DELETE"}` | Delete the account and its cloud data. |

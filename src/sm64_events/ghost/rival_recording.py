@@ -600,13 +600,13 @@ class PopulationRecorder:
         return self._admit(self.replay.attempt(attempt_id), contribution)
 
     def earlier_sources(self):
-        """Offers for every ghost this install recorded; the player's yes sends them."""
+        """Offers for every ghost this install recorded, or None while the store is not ready."""
         from sm64_events.community.earlier_ghosts import own_sources
         database, store = self.tracker.db, self.store
         player = database.get_state("ghost_player_id", None) if database is not None else None
         snapshot = getattr(store, "snapshot_all", None)
         if not player or snapshot is None:
-            return ()
+            return None
         return own_sources(snapshot(), player, store.root)
 
     def _prune(self):

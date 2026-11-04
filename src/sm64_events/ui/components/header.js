@@ -20,7 +20,6 @@ import { StreamOverlayDesigner } from "./streamoverlay.js";
 import { EMU, N64 } from "../platform.js";
 import { CommunityAccountModal } from "./communityaccount.js";
 import { useCommunityAccount } from "../community.js";
-import { EarlierGhostsQuestion } from "./earlierghosts.js";
 import { ReportingSettings } from "./reporting.js";
 
 const html = htm.bind(h);
@@ -601,7 +600,6 @@ export function Header({ t, settingsOpen, closeSettings, setTab, onOpenPlayer })
       ${community.open && !setupOpen && html`<${CommunityAccountModal} community=${community}
         onClose=${() => community.setOpen(false)} onPracticeRefresh=${t.refresh}
         onOpenPlayer=${uid => { community.setOpen(false); closeSettings?.(); onOpenPlayer?.(uid); }} />`}
-      ${!community.open && !setupOpen && !checkOpen && html`<${EarlierGhostsQuestion} account=${community.account} />`}
     <//>`}
   </header>`;
 }
