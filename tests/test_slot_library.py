@@ -395,6 +395,24 @@ def test_a_different_mario_word_is_reported_and_the_bytes_are_never_patched(game
     assert game.read(usamune.slot_address(4) + usamune.TRAILER_MARIO, 4) == struct.pack(">I", OTHER_MARIO)
 
 
+def test_the_seam_writes_and_reports_the_transformed_data_and_keeps_the_state(game, library):
+    kept_bytes = make_slot(0xD1, mario=OTHER_MARIO)
+    state = keep(library, game, kept_bytes)
+    report = place_states(game, library, {4: state.id}, transform=lambda _state, _data: make_slot(0xD1))
+    assert game.slot(4) == make_slot(0xD1) and report.placements[0].loadable_now
+    assert library.read_bytes(state.id) == kept_bytes and library.get(state.id).mario_object == OTHER_MARIO
+    low = usamune.slot_address(4)
+    assert all(low <= address and address + len(data) <= low + usamune.SLOT_BYTES for address, data in game.writes)
+
+
+def test_a_transform_that_breaks_the_slot_writes_and_captures_nothing(game, library):
+    game.save(1, make_slot(0xC1))
+    state = keep(library, game, make_slot(0xD1))
+    with pytest.raises(Refusal):
+        place_states(game, library, {0: state.id}, transform=lambda _state, data: data[:-1])
+    assert game.writes == [] and not library.has(state_id(make_slot(0xC1)))
+
+
 def test_a_matching_state_reports_it_loads_now(game, library):
     game.save(0, make_slot(0xD1))
     state = watch_step(game, library, NEVER_SEEN).captured[0][1]

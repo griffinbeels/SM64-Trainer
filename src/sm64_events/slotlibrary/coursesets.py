@@ -3,15 +3,17 @@
 A set is an ordered list of up to nine kept states; position n goes to slot n, and slots past the end of the
 list keep what they hold. A state may be written whatever the game is doing, so that entering a course can
 fill the slots. Usamune's own load refuses a state whose gMarioObject, level or area differ from the running
-game, so every placement reports whether those match, and never changes the slot's word to make them match:
-in the simulation a patched word crashes the game on the load frame.
+game, so every placement reports whether those match. Nothing here changes a state's bytes: in the simulation
+patching only the occupied word crashes the game on the load frame. `Transform` is the one seam where a later
+step may hand over relocated slot data; none exists yet. Griffin's rule (2026-11-05): Ghost Handoff writes data
+only, inside slot ranges, and never adds or patches code in the game or Usamune.
 
 Before the first write, every occupied slot is captured. A failure there writes nothing.
 """
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -36,6 +38,7 @@ from sm64_events.slotlibrary.usamune import (
 from sm64_events.slotlibrary.watcher import capture_all, read_slot
 
 SETS_VERSION = 1
+Transform = Callable[[KeptState, bytes], bytes]  # slot data in, slot data to write out; the kept state never changes
 
 
 @dataclass(frozen=True)
@@ -67,8 +70,8 @@ def _pointers_match(memory: GameMemory, state: KeptState) -> bool | None:
             and same_segments(memory.read(SEGMENT_TABLE, SEGMENT_BYTES), context.segments))
 
 
-def _checked_states(memory: GameMemory, library: SlotLibrary,
-                    placements: Mapping[int, str]) -> list[tuple[int, KeptState, bytes, SlotFacts]]:
+def _checked_states(memory: GameMemory, library: SlotLibrary, placements: Mapping[int, str],
+                    transform: Transform | None) -> list[tuple[int, KeptState, bytes, SlotFacts]]:
     """Everything that could refuse, before anything is captured or written."""
     fingerprint = routine_fingerprint(memory.read)
     loaded = []
@@ -80,15 +83,18 @@ def _checked_states(memory: GameMemory, library: SlotLibrary,
             raise Refusal(str(error)) from error
         if state.fingerprint != fingerprint:
             raise Refusal(f"state {identity} came from another Usamune build")
+        if transform is not None:
+            data = transform(state, data)
         loaded.append((slot, state, data, slot_facts(data)))
     return loaded
 
 
 def place_states(memory: GameMemory, library: SlotLibrary, placements: Mapping[int, str],
-                 *, dry_run: bool = False) -> InstallReport:
-    """Checks everything, captures every occupied slot, then writes each state into its slot."""
+                 *, dry_run: bool = False, transform: Transform | None = None) -> InstallReport:
+    """Checks everything, captures every occupied slot, then writes each state into its slot. A transform runs
+    with the checks, so its refusal writes nothing, and the report describes the bytes it returned."""
     check_cartridge(memory)
-    loaded = _checked_states(memory, library, placements)
+    loaded = _checked_states(memory, library, placements, transform)
     captured = () if dry_run else capture_all(memory, library)
     live = live_facts(memory)
     done: list[Placement] = []

@@ -21,8 +21,12 @@ paths:
 
 Contracts the tests pin:
 
-- **Never patch the occupied word.** Usamune refuses a load when gMarioObject differs, and that is reported per
-  state. In the simulation a patched word crashes the game on the load frame (2026-11-05, cause undiagnosed).
+- **Data only, inside slot ranges.** Griffin's rule (2026-11-05): Ghost Handoff never adds or patches code in the
+  game or Usamune.
+- **Never patch only the occupied word.** Usamune refuses a load when gMarioObject differs, and that is reported
+  per state. In the simulation a patched word crashes the game on the load frame (2026-11-05, cause undiagnosed).
+  A later step may relocate a slot's Mario by rewriting slot data, through `place_states(transform=)`. The seam is
+  unused. Written bytes that differ from the kept state are new bytes, so the watcher will keep them as a new state.
 - **Capture before the first write.** A capture that fails writes nothing.
 - **The watcher never runs on the poller's thread.** Nine slots cost 4.3 ms to read and 0.3 ms to hash, and a new
   state adds a compress and a disk write.
