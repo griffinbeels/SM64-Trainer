@@ -31,17 +31,24 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import frame_sim as sim  # noqa: E402
+from sm64_events.slotlibrary.usamune import (  # noqa: E402
+    CURR_AREA,
+    CURR_LEVEL,
+    CURRENT_AREA_POINTER,
+    FINGERPRINT_BYTES,
+    LOAD,
+    MARIO_OBJECT,
+    SAVE,
+    SLOT_BYTES,
+    TRAILER_AREA,
+    TRAILER_LEVEL,
+    TRAILER_MARIO,
+    slot_address,
+)
 
 SITE = 0x802CB248                    # the jal into Usamune's save and load dispatcher
-SAVE, LOAD = 0x8040392C, 0x80411CF0
 SETTINGS = 0x80417B4C
 SAVE_INDEX, LOAD_INDEX = SETTINGS + 0x119, SETTINGS + 0x118
-FINGERPRINT_BYTES = 0x400            # how much of each routine identifies this Usamune build
-SLOT_BASE, SLOT_BYTES, SLOT_COUNT = 0x80500000, 0x26460, 9
-BODY_BYTES = 0x26320                 # Usamune copies 0x8033B170 up to here
-TRAILER_MARIO = BODY_BYTES           # the occupied word: gMarioObject, 0 when empty
-TRAILER_LEVEL, TRAILER_AREA = BODY_BYTES + 4, BODY_BYTES + 6
-MARIO_OBJECT, CURR_LEVEL, CURR_AREA, CURRENT_AREA_POINTER = 0x80361158, 0x8032DDF8, 0x8033BACA, 0x8032DDCC
 GLOBAL_TIMER, AREA_UPDATE_COUNTER, RANDOM_SEED = 0x8032D5D4, 0x8032DF08, 0x8038EEE0
 CAMERA_BYTES = 0x6C                  # what Usamune copies from the current area's camera pointer
 GROUP_MASK, GROUP_AIRBORNE = 0x1C0, 0x080
@@ -136,12 +143,6 @@ class SlotCpu(sim.GameCpu):
         self.put_u8(LOAD_INDEX, index)
         self.call(LOAD)
         self.put_u8(LOAD_INDEX, kept)
-
-
-def slot_address(index: int) -> int:
-    if not 0 <= index < SLOT_COUNT:
-        raise ValueError(f"Usamune has slots 0 to {SLOT_COUNT - 1}, not {index}")
-    return SLOT_BASE + index * SLOT_BYTES
 
 
 @dataclass

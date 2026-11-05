@@ -28,32 +28,37 @@ import sys
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Protocol
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import handoff_slot as slots  # noqa: E402
-from sm64_events.memory.version_probe import USAMUNE_NAME_PREFIX, normalise_header, version_from_header  # noqa: E402
+from sm64_events.core.paths import slot_library_dir  # noqa: E402
+from sm64_events.slotlibrary.store import BUILT, KeptState, LoadContext, SlotLibrary  # noqa: E402
+from sm64_events.slotlibrary.usamune import (  # noqa: E402
+    SEGMENT_BYTES,
+    SEGMENT_TABLE,
+    GameMemory,
+    Refusal,
+    WriteFailed,
+    attach,
+    check_cartridge,
+    rom_identity,
+    routine_fingerprint,
+    same_segments,
+    slot_range,
+    write_slot_bytes,
+)
 
 BACKUP_MAGIC = b"SM64-HANDOFF-SLOT-1\n"
-OS_MEM_SIZE, EXPANSION_BYTES = 0x80000318, 0x800000
-SEGMENT_TABLE, SEGMENT_BYTES = 0x8033B400, 64
-SEGMENT_OF_GFX_POOL = 1              # alternates every frame, so it cannot identify a level
 
 
-class Refusal(RuntimeError):
-    """The game is not in a state this slot belongs to. Nothing was written."""
+class GameDiffers(Refusal):
+    """The running game cannot take this slot. `kinds` names why (build, no-mario, place, mario, loaded), first the
+    one a person should fix first; `seen` holds the game's level and area. Nothing was written."""
 
-
-class WriteFailed(RuntimeError):
-    """A write did not read back. The occupied word was cleared; the backup still holds the old slot."""
-
-
-class GameMemory(Protocol):
-    """The running game, in the N64's byte order and addresses."""
-
-    def read(self, address: int, size: int) -> bytes: ...
-    def write(self, address: int, data: bytes) -> None: ...
-    def cartridge_header(self) -> bytes | None: ...
+    def __init__(self, kinds: list[str], sentences: list[str], live_level: int, live_area: int):
+        super().__init__("; ".join(sentences))
+        self.kinds = kinds
+        self.seen = {"live_level": live_level, "live_area": live_area}
 
 
 @dataclass(frozen=True)
@@ -80,33 +85,6 @@ class SlotImage:
         return struct.unpack_from(">h", self.data, slots.TRAILER_AREA)[0]
 
 
-def routine_fingerprint(read) -> str:
-    """Usamune's save and load code, hashed: another Usamune build has another slot format."""
-    digest = hashlib.sha256()
-    for start in (slots.SAVE, slots.LOAD):
-        digest.update(read(start, slots.FINGERPRINT_BYTES))
-    return digest.hexdigest()
-
-
-def slot_range(index: int) -> tuple[int, int]:
-    try:
-        low = slots.slot_address(index)
-    except ValueError as error:
-        raise Refusal(str(error)) from error
-    return low, low + slots.SLOT_BYTES
-
-
-def check_cartridge(memory: GameMemory) -> None:
-    raw = memory.cartridge_header()
-    header = normalise_header(raw) if raw else None
-    if header is None:
-        raise Refusal("no cartridge image found: is a ROM running?")
-    if USAMUNE_NAME_PREFIX not in header or version_from_header(header) != "us":
-        raise Refusal("the running ROM is not Usamune US")
-    if int.from_bytes(memory.read(OS_MEM_SIZE, 4), "big") != EXPANSION_BYTES:
-        raise Refusal("the game runs without the 8 MB of RAM Usamune's slots live in")
-
-
 def check_image(image: SlotImage) -> None:
     if len(image.data) != slots.SLOT_BYTES:
         raise Refusal(f"a slot is {slots.SLOT_BYTES} bytes, this one {len(image.data)}")
@@ -116,29 +94,30 @@ def check_image(image: SlotImage) -> None:
 
 def check_game_matches(memory: GameMemory, image: SlotImage) -> None:
     """Usamune's own load gate, plus the two things that make the slot's pointers mean something."""
-    mismatches = []
+    mismatches, kinds = [], []
     if routine_fingerprint(memory.read) != image.fingerprint:
+        kinds.append("build")
         mismatches.append("Usamune's save and load code differ from the build this slot came from")
     level = struct.unpack(">h", memory.read(slots.CURR_LEVEL, 2))[0]
     area = struct.unpack(">h", memory.read(slots.CURR_AREA, 2))[0]
     mario = int.from_bytes(memory.read(slots.MARIO_OBJECT, 4), "big")
     if mario == 0:
+        kinds.append("no-mario")
         mismatches.append("no Mario: enter the level first")
     if (level, area) != (image.level, image.area):
+        kinds.append("place")
         mismatches.append(f"the game is in level {level} area {area}, the slot in level {image.level} area {image.area}")
     if mario != image.mario_object:
+        kinds.append("mario")
         mismatches.append(f"gMarioObject is {mario:08x}, the slot's is {image.mario_object:08x}")
     if int.from_bytes(memory.read(slots.CURRENT_AREA_POINTER, 4), "big") != image.current_area:
+        kinds.append("loaded")
         mismatches.append("the current-area pointer differs: this level loaded to other addresses")
     if not same_segments(memory.read(SEGMENT_TABLE, SEGMENT_BYTES), image.segments):
+        kinds.append("loaded")
         mismatches.append("the segment table differs: this level loaded to other addresses")
     if mismatches:
-        raise Refusal("; ".join(mismatches))
-
-
-def same_segments(live: bytes, recorded: bytes) -> bool:
-    keep = [at for at in range(0, SEGMENT_BYTES, 4) if at != SEGMENT_OF_GFX_POOL * 4]
-    return all(live[at:at + 4] == recorded[at:at + 4] for at in keep)
+        raise GameDiffers(kinds, mismatches, level, area)
 
 
 def backups_folder() -> Path:
@@ -171,19 +150,10 @@ def read_backup(path: Path) -> tuple[dict, bytes]:
     return meta, data
 
 
-def write_slot_bytes(memory: GameMemory, index: int, data: bytes) -> None:
-    """Occupied word cleared, then everything else, then the occupied word; all inside the slot."""
-    low, high = slot_range(index)
-    occupied = low + slots.TRAILER_MARIO
-    if len(data) != high - low:
-        raise Refusal("a slot image of the wrong size")
-    memory.write(occupied, bytes(4))
-    memory.write(low, data[:slots.TRAILER_MARIO])
-    memory.write(occupied + 4, data[slots.TRAILER_MARIO + 4:])
-    memory.write(occupied, data[slots.TRAILER_MARIO:slots.TRAILER_MARIO + 4])
-    if memory.read(low, high - low) != data:
-        memory.write(occupied, bytes(4))
-        raise WriteFailed(f"slot {index} did not read back; it is now empty")
+def keep_built(memory: GameMemory, image: SlotImage, library: SlotLibrary) -> tuple[KeptState, bool]:
+    """A built slot joins the Slot Library, so a later watcher reads it as known and not as his new save."""
+    return library.add(image.data, source=BUILT, fingerprint=image.fingerprint, rom=rom_identity(memory),
+                       name=image.source, context=LoadContext(image.current_area, image.segments))
 
 
 def install(memory: GameMemory, image: SlotImage, folder: Path, *, dry_run: bool, write_seed: bool) -> Path:
@@ -212,51 +182,6 @@ def restore(memory: GameMemory, path: Path, folder: Path, *, dry_run: bool) -> P
     if not dry_run:
         write_slot_bytes(memory, meta["slot"], data)
     return undo
-
-
-class Project64Game:
-    """GameMemory over the attached Project64: it stores RDRAM as little-endian words."""
-
-    def __init__(self, reader):
-        self.reader = reader
-
-    @staticmethod
-    def _swap(data: bytes) -> bytes:
-        if len(data) % 4:
-            raise ValueError("whole words only")
-        words = struct.unpack(f"<{len(data) // 4}I", data)
-        return struct.pack(f">{len(words)}I", *words)
-
-    @staticmethod
-    def _word_span(address: int, size: int) -> tuple[int, int]:
-        offset = address - 0x80000000
-        low = offset & ~3
-        return low, ((offset + size + 3) & ~3) - low
-
-    def read(self, address: int, size: int) -> bytes:
-        low, whole = self._word_span(address, size)
-        data = self._swap(self.reader._read_raw(low, whole))
-        start = address - 0x80000000 - low
-        return data[start:start + size]
-
-    def write(self, address: int, data: bytes) -> None:
-        low, whole = self._word_span(address, len(data))
-        words = bytearray(self.read(low + 0x80000000, whole))
-        start = address - 0x80000000 - low
-        words[start:start + len(data)] = data
-        host = self._swap(bytes(words))
-        self.reader._pm.write_bytes(self.reader._rdram_base + low, host, len(host))
-
-    def cartridge_header(self) -> bytes | None:
-        return self.reader.rom_header()
-
-
-def attach(pid: int | None) -> Project64Game:
-    from sm64_events.memory.pj64 import Pj64Memory
-    reader = Pj64Memory()
-    if not reader.attach(pid):
-        raise Refusal("no Project64 with a running game found")
-    return Project64Game(reader)
 
 
 def build_image(session: str, frame: int, index: int) -> SlotImage:
@@ -342,7 +267,10 @@ def main() -> int:
             return rehearse(args)
         image = build_image(args.session, args.frame, args.slot)
         print(f"slot {image.index}: level {image.level}, area {image.area}, gMarioObject {image.mario_object:08x}")
-        backup = install(attach(args.pid), image, backups_folder(), dry_run=args.dry_run, write_seed=args.write_seed)
+        game = attach(args.pid)
+        backup = install(game, image, backups_folder(), dry_run=args.dry_run, write_seed=args.write_seed)
+        if not args.dry_run:
+            keep_built(game, image, SlotLibrary(slot_library_dir()))
         print(f"{'dry run, nothing written' if args.dry_run else 'written and read back'}; backup: {backup}")
         return 0
     except (Refusal, WriteFailed) as error:

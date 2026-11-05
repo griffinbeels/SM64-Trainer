@@ -77,7 +77,10 @@ SCENE_LEVEL_SPANS = (("main_pool_start", "main_pool_end"),)
 # Copied whole with every task too, each only where this version's layout names
 # it: the act selector's coin score (gSaveBuffer) and Usamune's settings and
 # counters its act-select hook prints. A version without them loses those menus.
-SCENE_OPTIONAL_SPANS = (("save_buffer_start", "save_buffer_end"), ("usamune_state_start", "usamune_state_end"))
+# The last three: what a Usamune slot of a recorded frame needs and the scene spans stop short of (moment_slot.py).
+SCENE_OPTIONAL_SPANS = (("save_buffer_start", "save_buffer_end"), ("usamune_state_start", "usamune_state_end"),
+                        ("slot_tail_start", "slot_tail_end"), ("power_meter_hud_start", "power_meter_hud_end"),
+                        ("random_seed_start", "random_seed_end"))
 # Copied at every VI with SP DMEM (M4 stems): the audio task the game just dispatched,
 # whole, before the RSP runs it, and at the next VI what the RSP wrote.
 AUDIO_SPANS = (("audio_heap_start", "audio_heap_end"), ("audio_globals_start", "audio_globals_end"),

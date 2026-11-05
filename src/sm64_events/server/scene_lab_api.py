@@ -18,6 +18,8 @@ one reader, and without it this module is never imported and no route is added. 
     GET  /api/scene-lab/audio/{block}?session=N[&track=music|effects|ghost:<ref>]   one block of the open scene's sound
     POST /api/scene-lab/export, GET /export/{job}, POST /export/{job}/cancel   a recording made into a video
                                   (server/scene_exports.py)
+    POST /api/scene-lab/moment, POST /moment/{id}/write   one frame as a Usamune save state, into a slot of the
+                                  running game (server/scene_moments.py; the lab's one write to game memory)
 
 The lab config is a private JSON file of absolute paths: {"rom", "packages" (a folder of
 .sm64scene files), "pj64_plugin", "map" (the free camera's MappingUS.map), and optionally
@@ -1068,6 +1070,17 @@ def _mount_preset_routes(router: APIRouter, lab: SceneLab) -> None:
             raise HTTPException(422, str(refused)) from None
 
 
+def _mount_job_routes(router: APIRouter, lab: SceneLab, export_options: dict, moment_options: dict) -> None:
+    """What runs in a child of its own: a recording made into a video (scene_exports.py), and one frame made into a
+    Usamune save state (scene_moments.py)."""
+    from sm64_events.server.scene_exports import SceneExports, mount_export_routes
+    from sm64_events.server.scene_moments import SceneMoments, mount_moment_routes
+    lab.exports = SceneExports(lab, **export_options)
+    mount_export_routes(router, lab.exports)
+    lab.moments = SceneMoments(lab, **moment_options)
+    mount_moment_routes(router, lab.moments)
+
+
 def mount_scene_lab(app, config_path, **options) -> SceneLab:
     """Adds the scene viewer's routes to `app`, starts the live recording's lease and the attempt
     scenes when the app starts, and ends both and the open scene when it stops. `options` are
@@ -1075,6 +1088,7 @@ def mount_scene_lab(app, config_path, **options) -> SceneLab:
     what the stage and the ghost catalog read: {"tracker", "replay", "ghost", "community"} (scene_ghosts.py)."""
     sources = options.pop("ghost_sources", None) or {}
     export_options = options.pop("export_options", None) or {}
+    moment_options = options.pop("moment_options", None) or {}
     lab = SceneLab(Path(config_path), **options)
     from sm64_events.server.scene_ghosts import SceneGhosts
     lab.ghosts = SceneGhosts(sources.get("tracker"), scenes=lambda: lab.scenes, replay=sources.get("replay"),
@@ -1082,9 +1096,7 @@ def mount_scene_lab(app, config_path, **options) -> SceneLab:
     router = APIRouter(prefix="/api/scene-lab")
     _mount_ghost_routes(router, lab)
     _mount_preset_routes(router, lab)
-    from sm64_events.server.scene_exports import SceneExports, mount_export_routes
-    lab.exports = SceneExports(lab, **export_options)      # a recording made into a video (scene_exports.py)
-    mount_export_routes(router, lab.exports)
+    _mount_job_routes(router, lab, export_options, moment_options)
 
     @router.get("")
     def probe():
@@ -1140,6 +1152,7 @@ def mount_scene_lab(app, config_path, **options) -> SceneLab:
                 yield state
             finally:
                 await asyncio.to_thread(lab.exports.shutdown)
+                lab.moments.shutdown()
                 await lab.shutdown()
 
     app.router.lifespan_context = lifespan
