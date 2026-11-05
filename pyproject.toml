@@ -27,7 +27,7 @@ dependencies = [
 profiling = ["psutil>=6", "py-spy>=0.4"]
 dev = ["pytest>=8.0", "pytest-xdist>=3.8", "pytest-testmon>=2.1",
        "pytest-rerunfailures>=15.0",
-       "pyinstaller>=6.0", "playwright>=1.49"]
+       "pyinstaller>=6.0", "playwright>=1.49", "unicorn==2.1.4"]
 
 # playwright is declared HERE, not inherited from uilab, and that is on purpose.
 # uilab is resolved by PATH (see tests/test_responsive.py) because `uv sync`

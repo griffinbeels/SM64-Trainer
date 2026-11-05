@@ -1514,6 +1514,127 @@ for _field in ("usamune_state_start", "usamune_state_end"):
     ))
 
 
+# --- Usamune's save-state slots (Ghost Handoff's Slot Library)
+#
+# Structure the running game shows. Only a save and a load in the game prove a slot's format.
+
+USAMUNE_CODE_START = 0x80400000     # the expansion RAM Usamune copies its code into at boot
+SLOT_ROUTINE_BYTES = 0x400
+SLOT_STRIDE, SLOT_TOTAL = 0x26460, 9
+SLOT_TRAILER = 0x26320              # the occupied word: gMarioObject, 0 when empty
+RAM_END = 0x80800000
+SEGMENT_OF_BEHAVIOURS = 0x13
+
+
+def _check_slot_routine(field: str):
+    def check(ctx) -> Verdict:
+        address, end = ctx.candidate(field), ctx.candidate("usamune_state_start")
+        if address is None or end is None:
+            return Verdict("missing", evidence=f"{field} or usamune_state_start candidate missing")
+        if address % 4 or not USAMUNE_CODE_START <= address < end:
+            return Verdict("failed", evidence="not an aligned address in Usamune's code, before its settings")
+        if not any(ctx.raw().read_block(address, SLOT_ROUTINE_BYTES)):
+            return Verdict("failed", evidence="the candidate holds only zeros, not code")
+        return Verdict("verified", value=address, measured={"bytes": SLOT_ROUTINE_BYTES},
+                       evidence="code lies at this address in Usamune's copied code; only a save or load "
+                                "in the game proves it is the routine")
+    return check
+
+
+for _field in ("usamune_slot_save", "usamune_slot_load"):
+    register(Gate(
+        id=f"address.{_field}", feature="version", kind="address", auto=True, optional=True,
+        needs=("address.usamune_state_start",),
+        instruction="Nothing to do: checks that Usamune's code lies at this address.",
+        proves="The address holds code inside Usamune's copied code.",
+        check=_check_slot_routine(_field),
+    ))
+
+
+def _check_slots_start(ctx) -> Verdict:
+    start = ctx.candidate("usamune_slots_start")
+    pool = ctx.candidate("object_pool")
+    if start is None or pool is None:
+        return Verdict("missing", evidence="usamune_slots_start or object_pool candidate missing")
+    if start % 4 or not USAMUNE_CODE_START <= start or start + SLOT_TOTAL * SLOT_STRIDE > RAM_END:
+        return Verdict("failed", evidence="nine slots do not fit in expansion RAM from this address")
+    words = [int.from_bytes(ctx.raw().read_block(start + n * SLOT_STRIDE + SLOT_TRAILER, 4), "big")
+             for n in range(SLOT_TOTAL)]
+    occupied = [word for word in words if word]
+    if not all(pool <= word < start for word in occupied):
+        return Verdict("failed", measured={"occupied": len(occupied)},
+                       evidence="an occupied word does not point at an object in game memory")
+    return Verdict("verified", value=start, measured={"occupied": len(occupied)},
+                   evidence="every occupied word points past the object pool's start; only a save and a "
+                            "load in the game prove the format")
+
+
+register(Gate(
+    id="address.usamune_slots_start", feature="version", kind="address", auto=True, optional=True,
+    needs=("address.object_pool",),
+    instruction="Nothing to do: reads each slot's occupied word.",
+    proves="Nine slots fit there, and each is empty or names an object.",
+    check=_check_slots_start,
+))
+
+
+def _check_segment_table(ctx) -> Verdict:
+    table, behaviours = ctx.candidate("segment_table"), ctx.candidate("behaviour_base")
+    if table is None or behaviours is None:
+        return Verdict("missing", evidence="segment_table or behaviour_base candidate missing")
+    if table % 4:
+        return Verdict("failed", evidence="the table is not word-aligned")
+    entry = int.from_bytes(ctx.raw().read_block(table + SEGMENT_OF_BEHAVIOURS * 4, 4), "big")
+    if entry | 0x80000000 != behaviours:
+        return Verdict("failed", measured={"entry": entry},
+                       evidence="the table's behaviour segment differs from the verified behaviour base")
+    return Verdict("verified", value=table, measured={"entry": entry},
+                   evidence="the behaviour segment's entry equals the behaviour base found independently")
+
+
+register(Gate(
+    id="address.segment_table", feature="version", kind="address", auto=True, optional=True,
+    needs=("behaviour.base",),
+    instruction="Load a normal playable area; reads one table entry.",
+    proves="The table's behaviour segment is the behaviour base the Mario object gave.",
+    check=_check_segment_table,
+))
+
+
+# --- what a slot needs from the scene tap beyond the scene spans (moment_slot.py)
+#
+# Structure only: a slot built from a new recording, loaded in the game, proves them.
+
+SLOT_SPANS = {"slot_tail": ("slot_tail_start", "slot_tail_end", 0x220),
+              "power_meter_hud": ("power_meter_hud_start", "power_meter_hud_end", 16),
+              "random_seed": ("random_seed_start", "random_seed_end", 4)}
+
+
+def _check_slot_span(name: str, field: str):
+    start_field, end_field, size = SLOT_SPANS[name]
+
+    def check(ctx) -> Verdict:
+        start, end = ctx.candidate(start_field), ctx.candidate(end_field)
+        if start is None or end is None:
+            return Verdict("missing", evidence=f"{start_field} or {end_field} candidate missing")
+        if start % 4 or end - start != size or not 0x80000000 <= start < end <= USAMUNE_CODE_START:
+            return Verdict("failed", evidence=f"not {size} word-aligned bytes in the game's own RAM")
+        ctx.raw().read_block(start, size)
+        return Verdict("verified", value=ctx.candidate(field), measured={"bytes": size},
+                       evidence="the span reads; only a slot built from it and loaded in the game proves it")
+    return check
+
+
+for _name, (_start_field, _end_field, _size) in SLOT_SPANS.items():
+    for _field in (_start_field, _end_field):
+        register(Gate(
+            id=f"address.{_field}", feature="version", kind="address", auto=True, optional=True,
+            instruction="Nothing to do: reads this span once.",
+            proves="The span has the size Usamune's save copies and lies in the game's own RAM.",
+            check=_check_slot_span(_name, _field),
+        ))
+
+
 # --- the stems capture's audio spans (M4 stems, lab only)
 #
 # The scene tap copies these at every VI: at UpdateScreen the audio task the

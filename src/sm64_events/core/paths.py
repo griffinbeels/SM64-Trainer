@@ -156,6 +156,12 @@ def user_data_root() -> Path:
     return Path(base) / build_channel.current_build().app_dir_name
 
 
+def slot_library_dir() -> Path:
+    """Every kept Usamune save state. Shared across checkouts, so it survives a deleted worktree;
+    an isolated practice profile keeps its own."""
+    return (practice_root() or user_data_root()) / "slot-library"
+
+
 def shared_installation_root() -> Path:
     """The unchanged machine installation record, shared across build channels."""
     base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")

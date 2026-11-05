@@ -546,7 +546,7 @@ class SceneSession:
         for position in range(start, len(self.frames)):
             identity = self.outlines[self.frames[position]]["identity"]
             rows.append({"level": identity.get("curr_level"), "area": identity.get("curr_area"),
-                         "game_frame": identity.get("global_timer"),
+                         "game_frame": identity.get("global_timer"), "package_frame": self.frames[position],
                          "recorded_ms": (times[position] - times[0]) / 1000 if ordered else None})
         return rows
 
