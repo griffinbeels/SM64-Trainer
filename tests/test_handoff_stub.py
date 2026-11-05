@@ -286,6 +286,18 @@ def test_the_save_entry_stores_a_record_the_load_entry_accepts():
     assert restored(cpu) and cpu.u32(stub.SECOND_CAMERA_FOCUS) == FOCUS
 
 
+def test_the_chain_offsets_add_up_from_the_frame_sizes_in_the_code():
+    """Frames of the functions on the stack, read from their prologues; a wrong offset here repoints garbage."""
+    try_print, call_native, cur_obj_update, loop = 0x28, 0x20, 0x30, 0x20
+    saved_ra = 0x14
+    assert [row[0] for row in stub.CHAIN] == [
+        0x1C,                                           # try_print saves ra at 0x1C, the others at 0x14
+        try_print + saved_ra,
+        try_print + call_native + saved_ra,
+        try_print + call_native + cur_obj_update + saved_ra]
+    assert stub.FIRST_OBJ == try_print + call_native + cur_obj_update + 0x24   # the loop's second argument home
+
+
 def test_it_fits_above_the_slots_and_below_the_top_of_ram():
     built = stub.build()
     end_of_slots = slots.SLOT_BASE + slots.SLOT_COUNT * slots.SLOT_BYTES
