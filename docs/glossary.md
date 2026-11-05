@@ -326,12 +326,12 @@ it, and an [[attempt]] with a load in it is not a [[valid attempt]].
 
 ### Save this moment
 
-The [[scene viewer]]'s **Save states** row: one press of 1 to 9 makes a Usamune save state of the frame on screen
-and writes it to that slot of the running game. Usamune's menu shows the same numbers. It runs SM64's own code for
-that one frame from what the recording kept of the frame before, then lets Usamune's own save routine make the
-slot, and checks the rest of the frame against the recording. A frame Usamune could not save on makes no state, and
+The [[scene viewer]]'s **Save states** row: one press of 1 to 9 makes a Usamune save state of the [[frame]] on screen
+and writes it to that slot of the running game. Usamune's menu shows the same numbers. The lab plays SM64's own code for
+that one [[frame]] from what the recording kept of the [[frame]] before, then lets Usamune's own save routine make the
+slot, and checks the rest of the [[frame]] against the recording. A [[frame]] Usamune could not save on makes no state, and
 the row says why. So does a game in another level, or a Mario who loaded in another place. A recording made before
-this feature lacks a few small values, so the row says it may not be exact. A state that was written joins the
+this feature lacks a few small values, so the row says it may not be exact. A state the row writes joins the
 [[slot library]].
 
 - **Lives** -- `tools/scene_lab/moment_slot.py`, `src/sm64_events/server/scene_moments.py`,

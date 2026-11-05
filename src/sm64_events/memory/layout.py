@@ -173,15 +173,15 @@ LAYOUT_ROWS: tuple[LayoutRow, ...] = (
               "VERIFY: the first byte of Usamune's slot body past scene_bss_end", optional=True),
     LayoutRow("slot_tail_end", None, "usamune_code_refs",
               "VERIFY: end (exclusive) of the slot body: mario_struct + 0x26320", optional=True),
-    LayoutRow("power_meter_hud_start", "sPowerMeterHUD", None,
+    LayoutRow("power_meter_hud_start", None, "usamune_code_refs",
               "VERIFY: the four words Usamune's save copies to trailer +0x10", optional=True),
     LayoutRow("power_meter_hud_end", None, "usamune_code_refs",
               "VERIFY: end (exclusive) of those four words", optional=True),
-    LayoutRow("random_seed_start", "gRandomSeed16", None,
+    LayoutRow("random_seed_start", None, "linker_map_symbols",
               "VERIFY: the word holding gRandomSeed16; a load does not restore it", optional=True),
     LayoutRow("random_seed_end", None, "linker_map_symbols",
               "VERIFY: end (exclusive) of that word", optional=True),
-    LayoutRow("segment_table", "sSegmentTable", None,
+    LayoutRow("segment_table", None, "linker_map_symbols",
               "VERIFY: where the level's segments loaded; a slot's pointers mean something only "
               "under the table it was saved with", optional=True),
     # Audio spans the scene tap copies at every VI (M4 stems, lab only:
