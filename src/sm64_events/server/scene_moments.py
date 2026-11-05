@@ -16,6 +16,7 @@ that was written joins the Slot Library (handoff_try.keep_built).
 from __future__ import annotations
 
 import asyncio
+import importlib
 import json
 import logging
 import os
@@ -28,6 +29,8 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, model_validator
+
+from sm64_events.slotlibrary.usamune import MarioMoved
 
 log = logging.getLogger("sm64.scene_lab")
 
@@ -44,7 +47,8 @@ GAME_WORDS = {
     "no-mario": "Mario is not in a level yet. Enter the level, then press again.",
     "place": "The game is in level {live_level} area {live_area}. This save state is for level {level} area {area}. "
              "Go there, then press again.",
-    "mario": "Mario's place in the game's memory is different now. Leave the level, enter it again, then press again.",
+    "mario": "Mario's place in the game's memory changed while the Trainer checked it. Press again.",
+    "unclear": "This save state has a part the Trainer cannot move to Mario's new place safely. Nothing was written.",
     "loaded": "This level loaded in a different way. Leave the level, enter it again, then press again.",
 }
 
@@ -118,7 +122,7 @@ class SceneMoments:
             child.kill()
 
     async def _source(self, body: MomentBody) -> tuple[Path, str]:
-        from sm64_events.server import scene_lab_api as api
+        api = importlib.import_module("sm64_events.server.scene_lab_api")   # the module in sys.modules, as the routes catch
         config = await asyncio.to_thread(api.LabConfig.load, self.lab.config_path)
         if body.attempt is None:
             return await asyncio.to_thread(config.package_path, body.package), body.package
@@ -135,7 +139,7 @@ class SceneMoments:
     async def build(self, body: MomentBody) -> dict:
         """The built state with its level, area and Mario word, or {refused, reason}. LookupError: no such
         scene. SceneRefused or ConfigError: this scene cannot be read now."""
-        from sm64_events.server import scene_lab_api as api
+        api = importlib.import_module("sm64_events.server.scene_lab_api")   # the module in sys.modules, as the routes catch
         path, title = await self._source(body)
         config = await asyncio.to_thread(api.LabConfig.load, self.lab.config_path)
         if config.map is None:
@@ -174,6 +178,9 @@ class SceneMoments:
             return {"refused": kind, "reason": GAME_WORDS[kind].format(level=image.level, area=image.area, **differs.seen)}
         except tool.Refusal as refused:
             return {"refused": "game", "reason": game_sentence(str(refused))}
+        except MarioMoved:
+            return {"refused": "moved", "reason": f"Mario's place in the game's memory changed during the write. Slot {slot} "
+                                                  "is empty now, and its old save state is in the backup. Press again."}
         except tool.WriteFailed:
             return {"refused": "write", "reason": f"Slot {slot} could not be written. It is empty now, and its old "
                                                   "save state is in the backup."}

@@ -44,6 +44,7 @@ US_2026_08_15 = {
     # loaded a slot written at the base; their gates remain VERIFY.
     "usamune_slot_save": 0x8040392C, "usamune_slot_load": 0x80411CF0,
     "usamune_slots_start": 0x80500000, "segment_table": 0x8033B400,
+    "second_camera_focus": 0x8032DF30,
     # The stems capture's audio spans (2026-10-26): linker-map symbols checked
     # on three savestates; their live gates remain VERIFY.
     "audio_heap_start": 0x801CE000, "audio_heap_end": 0x801FF150,

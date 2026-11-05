@@ -69,9 +69,14 @@ def _walk_the_row(page, base, game, answers, folder) -> None:
     address = fakes.slots.slot_address(8) - 0x80000000
     assert bytes(game.ram[address:address + fakes.slots.SLOT_BYTES]) == moments_test.slot_bytes()
     assert answers["frames"] == [1]
-    fakes.set_mario(game)                      # re-entered another way: the live check refuses
+    fakes.set_mario(game)                      # a practice reset moved Mario: the write moves him in the slot too
     page.keyboard.press("ArrowRight")
     _says(page, "Press a number")              # the answer left with its frame
+    page.get_by_role("button", name="Put this frame in slot 6").click()
+    _says(page, "is in slot 6.")
+    occupied = fakes.slots.slot_address(5) + fakes.slots.TRAILER_MARIO - 0x80000000
+    assert bytes(game.ram[occupied:occupied + 4]) == game.read(fakes.slots.MARIO_OBJECT, 4)
+    fakes.set_area_pointer(game)               # re-entered another way: the live check refuses the same build
     page.get_by_role("button", name="Put this frame in slot 4").click()
     _says(page, "Leave the level, enter it again")
     assert page.locator(f"{STATUS}.is-bad").count() == 1

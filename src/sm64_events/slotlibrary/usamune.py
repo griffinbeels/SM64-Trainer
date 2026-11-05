@@ -4,7 +4,8 @@ Griffin decided the Trainer writes to game memory for Ghost Handoff (2026-11-04)
 `write_slot_bytes`, inside one slot's range. Slot n lives at SLOT_BASE + n * SLOT_BYTES; the body is copied
 from gMarioStates, the trailer starts with gMarioObject (the occupied word, 0 when empty), level and area.
 Usamune's load refuses a slot unless those three match the running game. The occupied word is never patched
-to get past that: in the simulation a patched word crashes the game on the load frame (2026-11-05).
+alone to get past that: in the simulation a patched word crashes the game on the load frame (2026-11-05).
+`relocate.to_live_place` moves Mario inside the slot's data instead, and every writer runs it.
 """
 from __future__ import annotations
 
@@ -45,6 +46,11 @@ class Refusal(RuntimeError):
 
 class WriteFailed(RuntimeError):
     """A write did not read back. The occupied word was cleared, so the slot reads as empty."""
+
+
+class MarioMoved(WriteFailed):
+    """Mario's place in the game changed while the slot was written. The occupied word stays clear: the slot reads
+    as empty, and Usamune cannot load bytes made for the old place."""
 
 
 class GameMemory(Protocol):
@@ -135,9 +141,12 @@ def same_segments(live: bytes, recorded: bytes) -> bool:
     return all(live[at:at + 4] == recorded[at:at + 4] for at in keep)
 
 
-def write_slot_bytes(memory: GameMemory, index: int, data: bytes) -> None:
+def write_slot_bytes(memory: GameMemory, index: int, data: bytes, *, mario_place: int | None) -> None:
     """Occupied word cleared, then everything else, then the occupied word; all inside the slot.
-    A load pressed during the write finds an empty slot and not half of one."""
+    A load pressed during the write finds an empty slot and not half of one.
+
+    mario_place: the game's gMarioObject the bytes were made for. It is read again right before the occupied word
+    goes in, and a change leaves the slot empty (MarioMoved). None only for putting a backup back as it was."""
     low, high = slot_range(index)
     occupied = low + TRAILER_MARIO
     if len(data) != high - low:
@@ -145,6 +154,8 @@ def write_slot_bytes(memory: GameMemory, index: int, data: bytes) -> None:
     memory.write(occupied, bytes(4))
     memory.write(low, data[:TRAILER_MARIO])
     memory.write(occupied + 4, data[TRAILER_MARIO + 4:])
+    if mario_place is not None and live_facts(memory).mario_object != mario_place:
+        raise MarioMoved(f"slot {index}: Mario's place changed during the write; the slot is empty")
     memory.write(occupied, data[TRAILER_MARIO:TRAILER_MARIO + 4])
     if memory.read(low, high - low) != data:
         memory.write(occupied, bytes(4))

@@ -701,7 +701,7 @@ def test_usamune_stop_that_never_moves_or_leaves_the_four_settings_fails():
 
 # --- Usamune's save-state slots (Ghost Handoff) -------------------------------
 
-_SLOT_FIELDS = ("usamune_slot_save", "usamune_slot_load", "usamune_slots_start", "segment_table")
+_SLOT_FIELDS = ("usamune_slot_save", "usamune_slot_load", "usamune_slots_start", "segment_table", "second_camera_focus")
 
 
 def _put_word(memory, address: int, word: int) -> None:
@@ -741,6 +741,18 @@ def test_each_slot_must_be_empty_or_name_an_object():
     _put_word(memory, occupied, 0x12345678)
     assert AG._check_slots_start(FakeContext(memory, candidates)).status == "failed"
     assert AG._check_slots_start(FakeContext(memory, candidates | {"usamune_slots_start": 0x807F0000})).status == "failed"
+
+
+def test_the_second_camera_focus_must_be_empty_or_name_an_object():
+    memory = BufferMemory()
+    candidates = {"second_camera_focus": US.second_camera_focus, "object_pool": US.object_pool}
+    assert AG._check_second_camera_focus(FakeContext(memory, candidates)).status == "verified"
+    _put_word(memory, US.second_camera_focus, US.object_pool + 3 * 0x260)
+    assert AG._check_second_camera_focus(FakeContext(memory, candidates)).status == "verified"
+    _put_word(memory, US.second_camera_focus, US.object_pool + 3 * 0x260 + 8)
+    assert AG._check_second_camera_focus(FakeContext(memory, candidates)).status == "failed"
+    _put_word(memory, US.second_camera_focus, 0x3F800000)
+    assert AG._check_second_camera_focus(FakeContext(memory, candidates)).status == "failed"
 
 
 def test_the_segment_table_must_agree_with_the_behaviour_base():
