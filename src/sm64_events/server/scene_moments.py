@@ -30,6 +30,8 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, model_validator
 
+from sm64_events.slotlibrary.usamune import MarioMoved
+
 log = logging.getLogger("sm64.scene_lab")
 
 CHILD_SECONDS = 120.0
@@ -176,7 +178,7 @@ class SceneMoments:
             return {"refused": kind, "reason": GAME_WORDS[kind].format(level=image.level, area=image.area, **differs.seen)}
         except tool.Refusal as refused:
             return {"refused": "game", "reason": game_sentence(str(refused))}
-        except tool.MarioMoved:
+        except MarioMoved:
             return {"refused": "moved", "reason": f"Mario's place in the game's memory changed during the write. Slot {slot} "
                                                   "is empty now, and its old save state is in the backup. Press again."}
         except tool.WriteFailed:

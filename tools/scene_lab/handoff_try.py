@@ -38,7 +38,6 @@ from sm64_events.slotlibrary.usamune import (  # noqa: E402
     SEGMENT_BYTES,
     SEGMENT_TABLE,
     GameMemory,
-    MarioMoved,
     Refusal,
     WriteFailed,
     attach,

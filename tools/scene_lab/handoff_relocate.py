@@ -27,7 +27,7 @@ import json
 import random
 import struct
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -339,73 +339,79 @@ def prove(args) -> int:
     session = sim.lab_root() / args.session
     report: dict = {"session": args.session, "follow": args.follow}
     for k, j in args.pair:
-        trip = ride(session, k, j, args.follow, args.slot, args.reset_at)
-        cpu = trip.replay.cpu
-        live = cpu.u32(slots.MARIO_OBJECT)
-        ours = slot_mario(trip.saved)
-        title = f"K={k} J={j}" + (f" L at {args.reset_at}" if args.reset_at else "")
-        print(f"\n{title}: slot Mario {ours:08x}, live {live:08x}, level/area {trip.identity}")
-        moved = relocate(trip.saved, [(ours, live)])
-        place = permutation([(ours, live)])
-        wm, check = twin_moves(trip, cpu, trip.saved)     # reads the live world: before any load below
-        rows: dict = {"slot_mario": f"{ours:08x}", "live_mario": f"{live:08x}", "pointers_by_structure": dict(moved.pointers),
-                      "raw_data_by_value": [(i, hex(o), hex(b)) for i, o, b in moved.raw_data]}
+        title, rows = prove_pair(args, session, k, j)
         report[title] = rows
-        print(f"  pointers by structure {dict(moved.pointers)}")
-        print(f"  rawData by value {rows['raw_data_by_value']}")
-        natural_seed = trip.natural[sim.phys(slots.RANDOM_SEED):sim.phys(slots.RANDOM_SEED) + 2].copy()
-        spans = ((sim.phys(slots.RANDOM_SEED), 2), (sim.phys(slots.GLOBAL_TIMER), 4), (sim.phys(slots.AREA_UPDATE_COUNTER), 4))
-        pads = (sim.phys(CONTROLLERS), CONTROLLERS_BYTES)
-
-        def put_back(cpu, chosen, natural=trip.natural) -> None:
-            for low, size in chosen:
-                cpu.ram[low:low + size] = natural[low:low + size]
-
-        run_row(trip, "relocated, Usamune's load alone", moved.data, place, rows)
-        # Not achievable without code: the load frame's own seed, clocks, controllers, to see the relocation by itself.
-        run_row(trip, "relocated + seed+clocks at the load instant (needs code)", moved.data, place, rows,
-                lambda c: put_back(c, spans))
-        run_row(trip, "relocated + seed+clocks+pads at the load instant (needs code)", moved.data, place, rows,
-                lambda c: put_back(c, (*spans, pads)))
-        run_row(trip, "control: flipped stick, all restored", moved.data, place, rows, lambda c: put_back(c, (*spans, pads)), stick=True)
-
-        # The warp nodes: a data-only cure is to put the slot's warp objects where those nodes already point.
-        rows["warp_rule"] = check
-        print(f"  warp objects by behavior+params: {check}")
-        all_moves = [(ours, live), *[(a, b) for a, b in wm if b != live and a != ours]]
-        rows["all_moves"] = [(f"{a:08x}", f"{b:08x}") for a, b in all_moves]
-        wider = relocate(trip.saved, all_moves)
-        wider_place = permutation(all_moves)
-        run_row(trip, "relocated with warp objects, Usamune's load alone", wider.data, wider_place, rows)
-        run_row(trip, "relocated with warp objects + seed+clocks+pads (needs code)", wider.data, wider_place, rows,
-                lambda c: put_back(c, (*spans, pads)))
-
-        # What a Trainer write can do: between frames, some frames after the load.
-        for after in args.write_after:
-            def write_true(cpu, after=after) -> None:
-                truth = trip.after[after - 2] if after >= 2 else None
-                source = trip.tap
-                if truth is None:
-                    put_back(cpu, spans, source)
-                    return
-                for low, size in spans:
-                    for begin, data in truth.spans:
-                        if data.size != sim.TAIL_BYTES and begin <= low and low + size <= begin + data.size:
-                            cpu.ram[low:low + size] = data[low - begin:low - begin + size]
-                            break
-
-            def write_stored(cpu, after=after, seed=natural_seed) -> None:
-                low = sim.phys(slots.RANDOM_SEED)
-                cpu.ram[low:low + 2] = seed
-                for at in (slots.GLOBAL_TIMER, slots.AREA_UPDATE_COUNTER):
-                    stored = struct.unpack_from(">I", trip.tap, sim.phys(at))[0]
-                    cpu.put_u32(at, stored + max(after - 1, 0))
-            run_row(trip, f"relocated + Trainer writes the stored seed and clocks {after} frames later", moved.data, place, rows,
-                    writes={after - 1: write_stored})
-            run_row(trip, f"relocated + Trainer writes the true seed and clocks {after} frames later (oracle)", moved.data, place, rows,
-                    writes={after - 1: write_true})
     write_report(args, report)
     return 0
+
+
+def prove_pair(args, session: Path, k: int, j: int) -> tuple[str, dict]:
+    """One saved frame K and one load frame J: every row the report compares, in order."""
+    trip = ride(session, k, j, args.follow, args.slot, args.reset_at)
+    cpu = trip.replay.cpu
+    live = cpu.u32(slots.MARIO_OBJECT)
+    ours = slot_mario(trip.saved)
+    title = f"K={k} J={j}" + (f" L at {args.reset_at}" if args.reset_at else "")
+    print(f"\n{title}: slot Mario {ours:08x}, live {live:08x}, level/area {trip.identity}")
+    moved = relocate(trip.saved, [(ours, live)])
+    place = permutation([(ours, live)])
+    wm, check = twin_moves(trip, cpu, trip.saved)     # reads the live world: before any load below
+    rows: dict = {"slot_mario": f"{ours:08x}", "live_mario": f"{live:08x}", "pointers_by_structure": dict(moved.pointers),
+                  "raw_data_by_value": [(i, hex(o), hex(b)) for i, o, b in moved.raw_data]}
+    print(f"  pointers by structure {dict(moved.pointers)}")
+    print(f"  rawData by value {rows['raw_data_by_value']}")
+    natural_seed = trip.natural[sim.phys(slots.RANDOM_SEED):sim.phys(slots.RANDOM_SEED) + 2].copy()
+    spans = ((sim.phys(slots.RANDOM_SEED), 2), (sim.phys(slots.GLOBAL_TIMER), 4), (sim.phys(slots.AREA_UPDATE_COUNTER), 4))
+    pads = (sim.phys(CONTROLLERS), CONTROLLERS_BYTES)
+
+    def put_back(cpu, chosen, natural=trip.natural) -> None:
+        for low, size in chosen:
+            cpu.ram[low:low + size] = natural[low:low + size]
+
+    run_row(trip, "relocated, Usamune's load alone", moved.data, place, rows)
+    # Not achievable without code: the load frame's own seed, clocks, controllers, to see the relocation by itself.
+    run_row(trip, "relocated + seed+clocks at the load instant (needs code)", moved.data, place, rows,
+            lambda c: put_back(c, spans))
+    run_row(trip, "relocated + seed+clocks+pads at the load instant (needs code)", moved.data, place, rows,
+            lambda c: put_back(c, (*spans, pads)))
+    run_row(trip, "control: flipped stick, all restored", moved.data, place, rows, lambda c: put_back(c, (*spans, pads)), stick=True)
+
+    # The warp nodes: a data-only cure is to put the slot's warp objects where those nodes already point.
+    rows["warp_rule"] = check
+    print(f"  warp objects by behavior+params: {check}")
+    all_moves = [(ours, live), *[(a, b) for a, b in wm if b != live and a != ours]]
+    rows["all_moves"] = [(f"{a:08x}", f"{b:08x}") for a, b in all_moves]
+    wider = relocate(trip.saved, all_moves)
+    wider_place = permutation(all_moves)
+    run_row(trip, "relocated with warp objects, Usamune's load alone", wider.data, wider_place, rows)
+    run_row(trip, "relocated with warp objects + seed+clocks+pads (needs code)", wider.data, wider_place, rows,
+            lambda c: put_back(c, (*spans, pads)))
+
+    # What a Trainer write can do: between frames, some frames after the load.
+    for after in args.write_after:
+        def write_true(cpu, after=after) -> None:
+            truth = trip.after[after - 2] if after >= 2 else None
+            source = trip.tap
+            if truth is None:
+                put_back(cpu, spans, source)
+                return
+            for low, size in spans:
+                for begin, data in truth.spans:
+                    if data.size != sim.TAIL_BYTES and begin <= low and low + size <= begin + data.size:
+                        cpu.ram[low:low + size] = data[low - begin:low - begin + size]
+                        break
+
+        def write_stored(cpu, after=after, seed=natural_seed) -> None:
+            low = sim.phys(slots.RANDOM_SEED)
+            cpu.ram[low:low + 2] = seed
+            for at in (slots.GLOBAL_TIMER, slots.AREA_UPDATE_COUNTER):
+                stored = struct.unpack_from(">I", trip.tap, sim.phys(at))[0]
+                cpu.put_u32(at, stored + max(after - 1, 0))
+        run_row(trip, f"relocated + Trainer writes the stored seed and clocks {after} frames later", moved.data, place, rows,
+                writes={after - 1: write_stored})
+        run_row(trip, f"relocated + Trainer writes the true seed and clocks {after} frames later (oracle)", moved.data, place, rows,
+                writes={after - 1: write_true})
+    return title, rows
 
 
 def controls(args) -> int:
@@ -523,24 +529,30 @@ def _move_everything(cpu: slots.SlotCpu, place: np.ndarray) -> None:
     cpu.uc.ctl_flush_tb()
 
 
+FIX_RNG_SITES = {0x8040A950: "the routine at 0x8040A518", 0x80405048: "the routine at 0x8040501C"}
+
+
+def watch_seed_writers(cpu: slots.SlotCpu, frame_now: list) -> tuple[list, list]:
+    """Log each frame where one of Usamune's fixed-seed writes runs, and each area unload (a practice reset)."""
+    writes: list = []
+    resets: list = []
+    for at, name in FIX_RNG_SITES.items():
+        def hook(_uc, _a, _s, _u, name=name) -> None:
+            writes.append((frame_now[0], name))
+        cpu.uc.hook_add(cpu.unicorn.UC_HOOK_CODE, hook, begin=sim.sext(at), end=sim.sext(at))
+    unload = sim.sext(cpu.symbols["unload_mario_area"])
+    cpu.uc.hook_add(cpu.unicorn.UC_HOOK_CODE, lambda *_: resets.append(frame_now[0]), begin=unload, end=unload)
+    return writes, resets
+
+
 def fixed_rng(args) -> int:
     """When does Usamune's fix-RNG setting (+0x25 = 1, value at +0x82) write the seed? Watch its write sites."""
     session = sim.lab_root() / args.session
     replay = slots.start_replay(session)
     cpu = replay.cpu
     press = Press(cpu)
-    sites = {0x8040A950: "the routine at 0x8040A518", 0x80405048: "the routine at 0x8040501C"}
     frame_now = [0]
-    writes: list = []
-    for at, name in sites.items():
-        def hook(_uc, _a, _s, _u, name=name) -> None:
-            writes.append((frame_now[0], name))
-        cpu.uc.hook_add(cpu.unicorn.UC_HOOK_CODE, hook, begin=sim.sext(at), end=sim.sext(at))
-    start_reset = sim.phys(cpu.symbols["load_mario_area"])
-    resets: list = []
-    cpu.uc.hook_add(cpu.unicorn.UC_HOOK_CODE, lambda *_: resets.append(frame_now[0]),
-                    begin=sim.sext(cpu.symbols["unload_mario_area"]), end=sim.sext(cpu.symbols["unload_mario_area"]))
-    _ = start_reset
+    writes, resets = watch_seed_writers(cpu, frame_now)
     value = 0x1234
     report: dict = {"session": args.session}
     press_frame = args.from_frame + 20
