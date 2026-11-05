@@ -699,6 +699,59 @@ def test_usamune_stop_that_never_moves_or_leaves_the_four_settings_fails():
                          AG._check_usamune_stop).status == "failed"
 
 
+# --- Usamune's save-state slots (Ghost Handoff) -------------------------------
+
+_SLOT_FIELDS = ("usamune_slot_save", "usamune_slot_load", "usamune_slots_start", "segment_table")
+
+
+def _put_word(memory, address: int, word: int) -> None:
+    for offset, value in enumerate(word.to_bytes(4, "big")):
+        memory.write_u8(address + offset, value)
+
+
+def test_every_slot_address_has_an_optional_gate_and_a_verify_row():
+    from sm64_events.memory.layout import LAYOUT_ROWS
+    for field in _SLOT_FIELDS:
+        gate = next(g for g in GATES if g.id == f"address.{field}")
+        assert gate.optional and gate.auto and gate.kind == "address"
+        row = next(r for r in LAYOUT_ROWS if r.field == field)
+        assert row.optional and row.note.startswith("VERIFY")
+
+
+def test_a_slot_routine_must_be_code_inside_usamunes_code():
+    memory = BufferMemory()
+    check = AG._check_slot_routine("usamune_slot_load")
+    limits = {"usamune_state_start": US.usamune_state_start}
+    assert check(FakeContext(memory, limits)).status == "missing"
+    good = limits | {"usamune_slot_load": US.usamune_slot_load}
+    assert check(FakeContext(memory, good)).status == "failed"
+    _put_word(memory, US.usamune_slot_load, 0x27BDFFE8)
+    assert check(FakeContext(memory, good)).status == "verified"
+    assert check(FakeContext(memory, good | {"usamune_slot_load": US.usamune_state_start})).status == "failed"
+
+
+def test_each_slot_must_be_empty_or_name_an_object():
+    memory = BufferMemory()
+    candidates = {"usamune_slots_start": US.usamune_slots_start, "object_pool": US.object_pool}
+    occupied = US.usamune_slots_start + 2 * AG.SLOT_STRIDE + AG.SLOT_TRAILER
+    assert AG._check_slots_start(FakeContext(memory, candidates)).status == "verified"
+    _put_word(memory, occupied, US.mario_object - 0x100)
+    _put_word(memory, occupied, US.object_pool + 0x260)
+    assert AG._check_slots_start(FakeContext(memory, candidates)).measured == {"occupied": 1}
+    _put_word(memory, occupied, 0x12345678)
+    assert AG._check_slots_start(FakeContext(memory, candidates)).status == "failed"
+    assert AG._check_slots_start(FakeContext(memory, candidates | {"usamune_slots_start": 0x807F0000})).status == "failed"
+
+
+def test_the_segment_table_must_agree_with_the_behaviour_base():
+    memory = BufferMemory()
+    base = 0x80200000
+    candidates = {"segment_table": US.segment_table, "behaviour_base": base}
+    assert AG._check_segment_table(FakeContext(memory, candidates)).status == "failed"
+    _put_word(memory, US.segment_table + AG.SEGMENT_OF_BEHAVIOURS * 4, base & 0x7FFFFFFF)
+    assert AG._check_segment_table(FakeContext(memory, candidates)).status == "verified"
+
+
 # --- the act selector's spans (M4 E2-live) ------------------------------------
 
 _ACT_SPANS = ("save_buffer_start", "save_buffer_end", "usamune_state_start", "usamune_state_end")

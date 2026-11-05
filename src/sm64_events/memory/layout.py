@@ -157,6 +157,19 @@ LAYOUT_ROWS: tuple[LayoutRow, ...] = (
     LayoutRow("usamune_state_end", None, "usamune_code_refs",
               "VERIFY: end (exclusive) past the counters after the settings: the u16 at +0x122 "
               "the act-select hook prints, usamune_overall, usamune_star_result", optional=True),
+    # Ghost Handoff's Slot Library (slotlibrary/usamune.py). Usamune's nine save-state slots and the
+    # routines that identify the build whose slot format they hold.
+    LayoutRow("usamune_slot_save", None, "usamune_code_refs",
+              "VERIFY: Usamune's save routine, read from its code; only its first 0x400 bytes "
+              "are read, as half of the build's fingerprint", optional=True),
+    LayoutRow("usamune_slot_load", None, "usamune_code_refs",
+              "VERIFY: Usamune's load routine, the fingerprint's other half", optional=True),
+    LayoutRow("usamune_slots_start", None, "usamune_code_refs",
+              "VERIFY: slot 0 of nine, 0x26460 bytes apart; he loaded a slot written here "
+              "(2026-11-05). The only address range the Trainer writes", optional=True),
+    LayoutRow("segment_table", "sSegmentTable", None,
+              "VERIFY: where the level's segments loaded; a slot's pointers mean something only "
+              "under the table it was saved with", optional=True),
     # Audio spans the scene tap copies at every VI (M4 stems, lab only:
     # tools/scene_lab/tap.py arm): at UpdateScreen the audio task the game just
     # dispatched is still unrun, so these hold its whole input, and at the next
@@ -231,6 +244,10 @@ class Layout:
     save_buffer_end: int | None = None
     usamune_state_start: int | None = None
     usamune_state_end: int | None = None
+    usamune_slot_save: int | None = None
+    usamune_slot_load: int | None = None
+    usamune_slots_start: int | None = None
+    segment_table: int | None = None
     audio_heap_start: int | None = None
     audio_heap_end: int | None = None
     audio_globals_start: int | None = None
@@ -347,6 +364,10 @@ US = Layout(
     save_buffer_end=0x80207900,
     usamune_state_start=0x80417B4C,
     usamune_state_end=0x80417C80,
+    usamune_slot_save=0x8040392C,
+    usamune_slot_load=0x80411CF0,
+    usamune_slots_start=0x80500000,
+    segment_table=0x8033B400,
     # VERIFY until the stems live session (G0/G1). STROOP MappingUS.map
     # symbols, checked on three savestates (two Usamune, one vanilla),
     # 2026-10-25: each holds exactly one message in gSPTaskMesgQueue, its
