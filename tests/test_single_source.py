@@ -133,7 +133,10 @@ def entity_breakdown_zone() -> tuple[Path, ...]:
 INVARIANTS = (
     SingleSource(
         concept="a RAM address",
-        owners=frozenset({"layout.py"}),
+        # The Ghost Handoff simulator also holds addresses: it runs the US Usamune game in
+        # Unicorn on a private copy of a recording and never reads the live game, so it
+        # cannot misread JP; anything live goes through layout.py and slotlibrary.
+        owners=frozenset({"layout.py", "frame_sim.py", "handoff_slot.py", "moment_slot.py"}),
         # The 16-bit prefixes every global the tracker reads sits under --
         # 0x8031 (play_sound)/0x8032/0x8033/0x8036 on both builds, JP's
         # gMarioObject under 0x8035, the behaviour segment 0x800E, Usamune's
