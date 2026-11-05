@@ -167,6 +167,20 @@ LAYOUT_ROWS: tuple[LayoutRow, ...] = (
     LayoutRow("usamune_slots_start", None, "usamune_code_refs",
               "VERIFY: slot 0 of nine, 0x26460 bytes apart; he loaded a slot written here "
               "(2026-11-05). The only address range the Trainer writes", optional=True),
+    # What a slot copies that the scene spans stop short of, and the seed a frame's random calls start from: with
+    # these the scene tap's copy of frame K-1 is all a slot of frame K needs (tools/scene_lab/moment_slot.py).
+    LayoutRow("slot_tail_start", None, "linker_map_sections",
+              "VERIFY: the first byte of Usamune's slot body past scene_bss_end", optional=True),
+    LayoutRow("slot_tail_end", None, "usamune_code_refs",
+              "VERIFY: end (exclusive) of the slot body: mario_struct + 0x26320", optional=True),
+    LayoutRow("power_meter_hud_start", "sPowerMeterHUD", None,
+              "VERIFY: the four words Usamune's save copies to trailer +0x10", optional=True),
+    LayoutRow("power_meter_hud_end", None, "usamune_code_refs",
+              "VERIFY: end (exclusive) of those four words", optional=True),
+    LayoutRow("random_seed_start", "gRandomSeed16", None,
+              "VERIFY: the word holding gRandomSeed16; a load does not restore it", optional=True),
+    LayoutRow("random_seed_end", None, "linker_map_symbols",
+              "VERIFY: end (exclusive) of that word", optional=True),
     LayoutRow("segment_table", "sSegmentTable", None,
               "VERIFY: where the level's segments loaded; a slot's pointers mean something only "
               "under the table it was saved with", optional=True),
@@ -247,6 +261,12 @@ class Layout:
     usamune_slot_save: int | None = None
     usamune_slot_load: int | None = None
     usamune_slots_start: int | None = None
+    slot_tail_start: int | None = None
+    slot_tail_end: int | None = None
+    power_meter_hud_start: int | None = None
+    power_meter_hud_end: int | None = None
+    random_seed_start: int | None = None
+    random_seed_end: int | None = None
     segment_table: int | None = None
     audio_heap_start: int | None = None
     audio_heap_end: int | None = None
@@ -367,6 +387,14 @@ US = Layout(
     usamune_slot_save=0x8040392C,
     usamune_slot_load=0x80411CF0,
     usamune_slots_start=0x80500000,
+    # VERIFY until a slot from a new recording loads live. Read off the save routine's own loads (0x804039C8,
+    # 0x804039D8) and MappingUS.map; moment_slot's comparison with the closed replay: 73 of 73 slots equal.
+    slot_tail_start=0x80361270,
+    slot_tail_end=0x80361490,
+    power_meter_hud_start=0x803325F0,
+    power_meter_hud_end=0x80332600,
+    random_seed_start=0x8038EEE0,
+    random_seed_end=0x8038EEE4,
     segment_table=0x8033B400,
     # VERIFY until the stems live session (G0/G1). STROOP MappingUS.map
     # symbols, checked on three savestates (two Usamune, one vanilla),

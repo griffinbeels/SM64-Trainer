@@ -1601,6 +1601,40 @@ register(Gate(
 ))
 
 
+# --- what a slot needs from the scene tap beyond the scene spans (moment_slot.py)
+#
+# Structure only: a slot built from a new recording, loaded in the game, proves them.
+
+SLOT_SPANS = {"slot_tail": ("slot_tail_start", "slot_tail_end", 0x220),
+              "power_meter_hud": ("power_meter_hud_start", "power_meter_hud_end", 16),
+              "random_seed": ("random_seed_start", "random_seed_end", 4)}
+
+
+def _check_slot_span(name: str, field: str):
+    start_field, end_field, size = SLOT_SPANS[name]
+
+    def check(ctx) -> Verdict:
+        start, end = ctx.candidate(start_field), ctx.candidate(end_field)
+        if start is None or end is None:
+            return Verdict("missing", evidence=f"{start_field} or {end_field} candidate missing")
+        if start % 4 or end - start != size or not 0x80000000 <= start < end <= USAMUNE_CODE_START:
+            return Verdict("failed", evidence=f"not {size} word-aligned bytes in the game's own RAM")
+        ctx.raw().read_block(start, size)
+        return Verdict("verified", value=ctx.candidate(field), measured={"bytes": size},
+                       evidence="the span reads; only a slot built from it and loaded in the game proves it")
+    return check
+
+
+for _name, (_start_field, _end_field, _size) in SLOT_SPANS.items():
+    for _field in (_start_field, _end_field):
+        register(Gate(
+            id=f"address.{_field}", feature="version", kind="address", auto=True, optional=True,
+            instruction="Nothing to do: reads this span once.",
+            proves="The span has the size Usamune's save copies and lies in the game's own RAM.",
+            check=_check_slot_span(_name, _field),
+        ))
+
+
 # --- the stems capture's audio spans (M4 stems, lab only)
 #
 # The scene tap copies these at every VI: at UpdateScreen the audio task the

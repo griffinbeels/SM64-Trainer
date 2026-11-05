@@ -155,8 +155,18 @@ def test_arming_names_the_act_selectors_spans_beside_the_renderers_within_the_wr
     assert sum(line.startswith("level_region=") for line in lines) == 1
 
 
+def test_the_tap_copies_every_part_of_a_slot_a_recorded_frame_needs():
+    """The slot body to its end, the trailer's four words outside the older spans, and the seed (moment_slot.py)."""
+    regions = _region_lines(tap.scene_state_lines(US))
+    for low, size in ((0x33B170, 0x26320), (0x3325F0, 16), (0x38EEE0, 4)):
+        for at in range(low, low + size, 4):
+            assert any(begin <= at and at + 4 <= begin + n for begin, n in regions), hex(at)
+
+
 def test_a_layout_without_the_act_selectors_spans_still_arms_the_renderers():
     bare = dataclasses.replace(US, save_buffer_start=None, save_buffer_end=None,
-                               usamune_state_start=None, usamune_state_end=None)
+                               usamune_state_start=None, usamune_state_end=None,
+                               slot_tail_start=None, slot_tail_end=None, power_meter_hud_start=None,
+                               power_meter_hud_end=None, random_seed_start=None, random_seed_end=None)
     assert len(_region_lines(tap.scene_state_lines(bare))) == len(tap.SCENE_SPANS)
     assert tap.scene_state_lines(dataclasses.replace(US, scene_bss_end=None)) == []

@@ -1698,6 +1698,18 @@ class Package:
             task, regions, scene = self._scene_parts(index)
             return scene.task_bytes(task, regions, wanted)
 
+    def scene_regions(self, index: int) -> tuple:
+        """(task fields, identity extras, [(begin, bytes)] of the frame's task regions, the level regions'
+        RDRAM, its known mask) with no closure on top, in Project64's word order (moment_slot.py). The
+        arrays are the cursor's own: copy what must outlive the next seek."""
+        with self.lock:
+            task, regions, scene = self._scene_parts(index)
+            spans, offset = [], 0
+            for begin, size in regions.spans if regions is not None else ():
+                spans.append((begin, regions.data[offset:offset + size]))
+                offset += size
+            return task.fields, task.extras, spans, scene.level, scene.level_known
+
     def _scene_parts(self, index: int) -> tuple:
         _require(self.states is not None, "this package carries no scene state")
         capture = self._frame(index)

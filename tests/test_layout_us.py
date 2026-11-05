@@ -31,6 +31,9 @@ US_2026_08_15 = {
     # section bounds and the main pool's bounds; their live gates remain VERIFY.
     "scene_data_start": 0x8032D560, "scene_data_end": 0x803312F0,
     "scene_bss_start": 0x8033AF90, "scene_bss_end": 0x80361270,
+    "slot_tail_start": 0x80361270, "slot_tail_end": 0x80361490,
+    "power_meter_hud_start": 0x803325F0, "power_meter_hud_end": 0x80332600,
+    "random_seed_start": 0x8038EEE0, "random_seed_end": 0x8038EEE4,
     "scene_engine_bss_start": 0x8038BCA0, "scene_engine_bss_end": 0x8038EEE0,
     "main_pool_start": 0x8005C010, "main_pool_end": 0x801C0FF0,
     # The act selector's spans (2026-10-25): gSaveBuffer off the linker map and

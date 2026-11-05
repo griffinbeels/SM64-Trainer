@@ -177,6 +177,24 @@ def test_every_state_rebuilds_from_the_package_alone_in_any_order(scene):
     assert package.scene_state(NO_REGIONS)[1] is None and known.sum() > 0
 
 
+def test_a_frames_regions_are_what_its_state_holds_with_no_closure_on_top(scene):
+    """moment_slot.py reads these: the task's own spans and the level regions."""
+    package = pk.Package(scene["data"], scene["rom"])
+    fields, _extras, spans, level, known = package.scene_regions(5)
+    _task, _regions, ram, _known = package.scene_state(5)
+    assert fields["task_index"] == 5 and [begin for begin, _ in spans] == sorted(begin for begin, _ in spans)
+    assert sum(len(data) for _, data in spans) == 0x2000 + 0x1000 + 0x100
+    for begin, data in spans:
+        assert bytes(data) == ram[begin:begin + len(data)].tobytes()
+    assert known[LEVEL[0]] and level[LEVEL[0]:LEVEL[0] + 16].tobytes() == ram[LEVEL[0]:LEVEL[0] + 16].tobytes()
+
+
+def test_spans_that_touch_are_two_runs_in_order():
+    """The new recording's slot tail starts exactly where the scene's bss span ends."""
+    runs, data = pk.canonical_runs([(0x108, 4), (0x100, 8)], b"BBBBAAAAAAAA", 0x1000)
+    assert runs == [(0x100, 0x108), (0x108, 0x10C)] and data == b"AAAAAAAABBBB"
+
+
 def test_checkpoints_fall_on_the_spacing_level_keys_and_shape_changes(scene):
     package = pk.Package(scene["data"], scene["rom"])
     checkpoints = [index for index, row in enumerate(package.states.rows) if row[3] & pk.CHECKPOINT]
