@@ -37,6 +37,10 @@ US_2026_08_15 = {
     # Usamune's settings and counters; their live gates remain VERIFY.
     "save_buffer_start": 0x80207700, "save_buffer_end": 0x80207900,
     "usamune_state_start": 0x80417B4C, "usamune_state_end": 0x80417C80,
+    # Usamune's save-state slots (Ghost Handoff, 2026-11-05): read from its code, and he
+    # loaded a slot written at the base; their gates remain VERIFY.
+    "usamune_slot_save": 0x8040392C, "usamune_slot_load": 0x80411CF0,
+    "usamune_slots_start": 0x80500000, "segment_table": 0x8033B400,
     # The stems capture's audio spans (2026-10-26): linker-map symbols checked
     # on three savestates; their live gates remain VERIFY.
     "audio_heap_start": 0x801CE000, "audio_heap_end": 0x801FF150,
