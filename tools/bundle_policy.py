@@ -16,7 +16,7 @@ DATA_FILES = frozenset({
     "error-reporting.json", "library_overrides.json", "oracle_glyphs_us.npz",
     "pad_glyphs_us.npz", "pad_icons_us.npz", "rank_standards.seed.json",
     "ranking_policy.json", "rom_candidates_jp.tsv", "segments.authored.json",
-    "sheet_ladders.seed.json", "sheet_library.seed.json.gz", "symbols_jp.tsv",
+    "setup_baseline.json", "sheet_ladders.seed.json", "sheet_library.seed.json.gz", "symbols_jp.tsv",
     "symbols_us.tsv", "video_checks.seed.json.gz",
 })
 ROOT_DATA_FILES = frozenset({
