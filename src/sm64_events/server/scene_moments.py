@@ -44,7 +44,8 @@ GAME_WORDS = {
     "no-mario": "Mario is not in a level yet. Enter the level, then press again.",
     "place": "The game is in level {live_level} area {live_area}. This save state is for level {level} area {area}. "
              "Go there, then press again.",
-    "mario": "Mario's place in the game's memory is different now. Leave the level, enter it again, then press again.",
+    "mario": "Mario's place in the game's memory changed while the Trainer checked it. Press again.",
+    "unclear": "This save state has a part the Trainer cannot move to Mario's new place safely. Nothing was written.",
     "loaded": "This level loaded in a different way. Leave the level, enter it again, then press again.",
 }
 
@@ -174,6 +175,9 @@ class SceneMoments:
             return {"refused": kind, "reason": GAME_WORDS[kind].format(level=image.level, area=image.area, **differs.seen)}
         except tool.Refusal as refused:
             return {"refused": "game", "reason": game_sentence(str(refused))}
+        except tool.MarioMoved:
+            return {"refused": "moved", "reason": f"Mario's place in the game's memory changed during the write. Slot {slot} "
+                                                  "is empty now, and its old save state is in the backup. Press again."}
         except tool.WriteFailed:
             return {"refused": "write", "reason": f"Slot {slot} could not be written. It is empty now, and its old "
                                                   "save state is in the backup."}

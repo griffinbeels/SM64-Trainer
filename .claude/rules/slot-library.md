@@ -9,6 +9,8 @@ paths:
   - "src/sm64_events/ui/components/scenemoment.js"
   - "tests/test_slot_library.py"
   - "tests/test_handoff_try.py"
+  - "tests/test_slot_relocate.py"
+  - "tools/scene_lab/handoff_relocate.py"
 ---
 
 # The Slot Library — where to change what
@@ -16,6 +18,7 @@ paths:
 | To change... | Edit |
 |---|---|
 | Slot format, cartridge checks, the one write into game memory | `slotlibrary/usamune.py`. Every write goes through `write_slot_bytes`, inside one slot's range |
+| Moving Mario inside a slot's data to the running game's place | `slotlibrary/relocate.py` (`to_live_place`); the simulation's evidence is `tools/scene_lab/handoff_relocate.py` |
 | How a kept state is stored, named or looked up | `slotlibrary/store.py`; `core/paths.py::slot_library_dir` says where. Nothing deletes a state |
 | What counts as a new save | `slotlibrary/watcher.py::watch_step` |
 | What goes into the slots on a course entry | `slotlibrary/coursesets.py` |
@@ -27,10 +30,13 @@ Contracts the tests pin:
 
 - **Data only, inside slot ranges.** Griffin's rule (2026-11-05): Ghost Handoff never adds or patches code in the
   game or Usamune.
-- **Never patch only the occupied word.** Usamune refuses a load when gMarioObject differs, and that is reported
-  per state. In the simulation a patched word crashes the game on the load frame (2026-11-05, cause undiagnosed).
-  A later step may relocate a slot's Mario by rewriting slot data, through `place_states(transform=)`. The seam is
-  unused. Written bytes that differ from the kept state are new bytes, so the watcher will keep them as a new state.
+- **Never patch only the occupied word.** In the simulation a patched word crashes the game on the load frame:
+  the object loop still holds the old Mario. Both writers (`place_states`, `handoff_try.install`) run
+  `relocate.to_live_place` instead: Mario swaps places inside the slot's data and every pointer follows, found by
+  structure. A pool address nothing explains refuses the write. A Mario already in place keeps the bytes as they are.
+- **The Mario place is read twice.** `write_slot_bytes(mario_place=)` reads gMarioObject again right before the
+  occupied word goes in; a change leaves the slot empty (`MarioMoved`). Only putting a backup back passes None.
+- **Relocated bytes are new bytes.** The watcher, once wired, will keep a written relocated slot as a new state.
 - **Capture before the first write.** A capture that fails writes nothing.
 - **The watcher never runs on the poller's thread.** Nine slots cost 4.3 ms to read and 0.3 ms to hash, and a new
   state adds a compress and a disk write.

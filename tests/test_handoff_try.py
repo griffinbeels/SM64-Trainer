@@ -132,7 +132,7 @@ def four_meg_console(game):
     game.poke(usamune.OS_MEM_SIZE, struct.pack(">I", 0x400000))
 
 
-@pytest.mark.parametrize("break_game", [set_level, set_area, set_mario, clear_mario, set_area_pointer, set_segment,
+@pytest.mark.parametrize("break_game", [set_level, set_area, clear_mario, set_area_pointer, set_segment,
                                         vanilla_rom, usamune_jp, no_rom, other_usamune_build, four_meg_console])
 def test_a_mismatch_refuses_before_any_write_or_backup(break_game, tmp_path):
     game = FakeGame()
@@ -230,7 +230,7 @@ def test_a_failed_read_back_leaves_the_slot_empty(tmp_path):
     backup = tool.save_backup(game, INDEX, tmp_path, "first")
     game.corrupt_next_read = True
     with pytest.raises(tool.WriteFailed):
-        tool.write_slot_bytes(game, INDEX, image.data)
+        tool.write_slot_bytes(game, INDEX, image.data, mario_place=None)
     assert game.read(slots.slot_address(INDEX) + slots.TRAILER_MARIO, 4) == bytes(4)
     assert backup.exists()
 

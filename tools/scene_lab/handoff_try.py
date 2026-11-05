@@ -25,7 +25,7 @@ import json
 import os
 import struct
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -33,10 +33,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import handoff_slot as slots  # noqa: E402
 from sm64_events.core.paths import slot_library_dir  # noqa: E402
 from sm64_events.slotlibrary.store import BUILT, KeptState, LoadContext, SlotLibrary  # noqa: E402
+from sm64_events.slotlibrary.relocate import Ambiguous, to_live_place  # noqa: E402
 from sm64_events.slotlibrary.usamune import (  # noqa: E402
     SEGMENT_BYTES,
     SEGMENT_TABLE,
     GameMemory,
+    MarioMoved,
     Refusal,
     WriteFailed,
     attach,
@@ -52,8 +54,8 @@ BACKUP_MAGIC = b"SM64-HANDOFF-SLOT-1\n"
 
 
 class GameDiffers(Refusal):
-    """The running game cannot take this slot. `kinds` names why (build, no-mario, place, mario, loaded), first the
-    one a person should fix first; `seen` holds the game's level and area. Nothing was written."""
+    """The running game cannot take this slot. `kinds` names why (build, no-mario, place, mario, loaded, unclear),
+    first the one a person should fix first; `seen` holds the game's level and area. Nothing was written."""
 
     def __init__(self, kinds: list[str], sentences: list[str], live_level: int, live_area: int):
         super().__init__("; ".join(sentences))
@@ -156,17 +158,31 @@ def keep_built(memory: GameMemory, image: SlotImage, library: SlotLibrary) -> tu
                        name=image.source, context=LoadContext(image.current_area, image.segments))
 
 
+def at_live_place(memory: GameMemory, image: SlotImage) -> SlotImage:
+    """The image with Mario moved inside its data to where the running game keeps him (slotlibrary/relocate.py),
+    the same step every writer runs. A slot whose data nothing can read by structure is refused, not guessed."""
+    try:
+        data = to_live_place(memory, image.data)
+    except Ambiguous as unclear:
+        level = struct.unpack(">h", memory.read(slots.CURR_LEVEL, 2))[0]
+        area = struct.unpack(">h", memory.read(slots.CURR_AREA, 2))[0]
+        raise GameDiffers(["unclear"], [str(unclear)], level, area) from unclear
+    return image if data == image.data else replace(image, data=data)
+
+
 def install(memory: GameMemory, image: SlotImage, folder: Path, *, dry_run: bool, write_seed: bool) -> Path:
-    """Every check, the backup, then (unless a dry run) the write. Returns the backup."""
+    """Every check, Mario moved to the live place, the backup, then (unless a dry run) the write. Returns the
+    backup. The write refuses, leaving the slot empty, if Mario's place changes before the occupied word."""
     slot_range(image.index)
     check_image(image)
     check_cartridge(memory)
+    image = at_live_place(memory, image)
     check_game_matches(memory, image)
     if write_seed and image.seed is None:
         raise Refusal("this slot image carries no seed")
     backup = save_backup(memory, image.index, folder, image.source)
     if not dry_run:
-        write_slot_bytes(memory, image.index, image.data)
+        write_slot_bytes(memory, image.index, image.data, mario_place=image.mario_object)
         if write_seed:
             memory.write(slots.RANDOM_SEED, struct.pack(">H", image.seed))
     return backup
@@ -180,7 +196,7 @@ def restore(memory: GameMemory, path: Path, folder: Path, *, dry_run: bool) -> P
         raise Refusal("this backup came from another Usamune build")
     undo = save_backup(memory, meta["slot"], folder, f"before restoring {path.name}")
     if not dry_run:
-        write_slot_bytes(memory, meta["slot"], data)
+        write_slot_bytes(memory, meta["slot"], data, mario_place=None)   # a backup goes back exactly as it was
     return undo
 
 

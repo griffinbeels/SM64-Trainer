@@ -35,124 +35,27 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import handoff_slot as slots  # noqa: E402
 
-BODY_START = 0x8033B170
-POOL_START, OBJECT_BYTES, OBJECT_COUNT = 0x8033D488, 0x260, 240
-POOL_END = POOL_START + OBJECT_BYTES * OBJECT_COUNT
-LIST_HEADS, LIST_HEAD_COUNT, LIST_HEAD_BYTES = 0x8033CBE0, 13, 0x68   # gObjectListArray
-FREE_LIST = 0x803610F0                                                # gFreeObjectList: an ObjectNode
-RAW_DATA = (0x88, 0x1C8)
-BEHAVIOR, BEH_PARAMS, ACTIVE_FLAGS = 0x20C, 0x188, 0x74
+from sm64_events.memory.addresses import OBJECT_COUNT  # noqa: E402
+from sm64_events.memory.addresses import OBJECT_SIZE as OBJECT_BYTES  # noqa: E402
+from sm64_events.slotlibrary.usamune import BODY_BYTES, SLOT_BASE  # noqa: E402
+from sm64_events.slotlibrary.relocate import (  # noqa: E402  (the one relocation; the writers run it too)
+    BODY_START,
+    POOL_END,
+    POOL_START,
+    Ambiguous,
+    in_pool,
+    map_pointers,
+    object_index,
+    permutation,
+    planned_moves,
+    relocate,
+)
 
-# Object fields that hold object pointers, by struct Object.
-OBJECT_POINTERS = {0x04: "gfx.prev", 0x08: "gfx.next", 0x0C: "gfx.parent", 0x10: "gfx.children",
-                   0x50: "gfx.throwMatrix", 0x60: "next", 0x64: "prev", 0x68: "parentObj", 0x6C: "prevObj",
-                   0x78: "collidedObjs[0]", 0x7C: "collidedObjs[1]", 0x80: "collidedObjs[2]",
-                   0x84: "collidedObjs[3]", 0x214: "platform"}
-MARIO_POINTERS = {0x78: "interactObj", 0x7C: "heldObj", 0x80: "usedObj", 0x84: "riddenObj", 0x88: "marioObj"}
-NAMED_GLOBALS = {0x80361158: "gMarioObject", 0x8036115C: "gLuigiObject", 0x80361160: "gCurrentObject"}
+__all__ = ["Ambiguous", "object_index"]
 
 
 def _be_words(data: bytes | np.ndarray) -> np.ndarray:
     return np.frombuffer(data if isinstance(data, bytes) else data.tobytes(), ">u4").astype(np.uint32)
-
-
-def in_pool(values: np.ndarray) -> np.ndarray:
-    return (values >= POOL_START) & (values < POOL_END)
-
-
-def object_index(address: int) -> int:
-    index, offset = divmod(address - POOL_START, OBJECT_BYTES)
-    if offset or not 0 <= index < OBJECT_COUNT:
-        raise ValueError(f"{address:08x} is not an object's start")
-    return index
-
-
-class Ambiguous(RuntimeError):
-    """A pool address sits somewhere no structure explains. Rewriting or leaving it would both be a guess."""
-
-
-@dataclass
-class Relocation:
-    data: bytes
-    moved: dict[int, int]
-    pointers: collections.Counter = field(default_factory=collections.Counter)
-    raw_data: list[tuple] = field(default_factory=list)      # (place, offset, behavior, value): by value alone
-    trailer: list[tuple] = field(default_factory=list)       # (trailer offset, value): pool addresses left in the trailer
-
-
-def permutation(moves: list[tuple[int, int]]) -> np.ndarray:
-    """Each object's new place. Each pair moves one object, named by where it sits now in the slot, to a place;
-    whatever is there takes the place it left."""
-    place = np.arange(OBJECT_COUNT)
-    for obj, target in moves:
-        here, there = int(place[object_index(obj)]), object_index(target)
-        if here == there:
-            continue
-        holders_here, holders_there = place == here, place == there
-        place[holders_here], place[holders_there] = there, here
-    return place
-
-
-def map_pointers(values: np.ndarray, place: np.ndarray) -> np.ndarray:
-    """Pool addresses to their new place, keeping the offset inside the object. Everything else is untouched."""
-    out = values.copy()
-    hits = in_pool(values)
-    offsets = values[hits].astype(np.int64) - POOL_START
-    out[hits] = (POOL_START + place[offsets // OBJECT_BYTES] * OBJECT_BYTES + offsets % OBJECT_BYTES).astype(np.uint32)
-    return out
-
-
-def relocate(slot: bytes, moves: list[tuple[int, int]]) -> Relocation:
-    """The same slot with these objects swapped, and every pointer to them following.
-
-    Moving Mario's place: moves = [(slot's Mario, live Mario)]. Raises Ambiguous rather than guessing."""
-    place = permutation(moves)
-    if len(slot) != slots.SLOT_BYTES:
-        raise ValueError("not a whole slot")
-    body = _be_words(slot[:slots.BODY_BYTES]).copy()
-    result = Relocation(b"", {int(POOL_START + i * OBJECT_BYTES): int(POOL_START + p * OBJECT_BYTES)
-                              for i, p in enumerate(place.tolist()) if i != p})
-    hits = np.flatnonzero(in_pool(body))
-    pool_low, pool_high = (POOL_START - BODY_START) // 4, (POOL_END - BODY_START) // 4
-    for word in hits.tolist():
-        address, value = BODY_START + word * 4, int(body[word])
-        name = _known_name(word, pool_low, pool_high, address)
-        if name is None:
-            if pool_low <= word < pool_high:
-                index, offset = divmod(address - POOL_START, OBJECT_BYTES)
-                if RAW_DATA[0] <= offset < RAW_DATA[1]:
-                    behavior = int(body[pool_low + (index * OBJECT_BYTES + BEHAVIOR) // 4])
-                    result.raw_data.append((index, offset, behavior, value))
-                    result.pointers["rawData"] += 1
-                    continue
-            raise Ambiguous(f"{address:08x} holds {value:08x}: no structure says what that word is")
-        result.pointers[name] += 1
-    mapped = map_pointers(body, place)
-    objects = mapped[pool_low:pool_high].reshape(OBJECT_COUNT, OBJECT_BYTES // 4).copy()
-    moved = objects.copy()
-    moved[place] = objects
-    mapped[pool_low:pool_high] = moved.reshape(-1)
-    out = bytearray(mapped.astype(">u4").tobytes()) + bytearray(slot[slots.BODY_BYTES:])
-    occupied = struct.unpack_from(">I", slot, slots.TRAILER_MARIO)[0]
-    if occupied:
-        new = int(map_pointers(np.array([occupied], np.uint32), place)[0])
-        struct.pack_into(">I", out, slots.TRAILER_MARIO, new)
-    trailer = _be_words(slot[slots.BODY_BYTES:len(slot) // 4 * 4])
-    result.trailer = [(int(w) * 4, int(trailer[w])) for w in np.flatnonzero(in_pool(trailer)) if int(w) != 0]
-    result.data = bytes(out)
-    return result
-
-
-def _known_name(word: int, pool_low: int, pool_high: int, address: int) -> str | None:
-    if pool_low <= word < pool_high:
-        return OBJECT_POINTERS.get((address - POOL_START) % OBJECT_BYTES)
-    if BODY_START <= address < BODY_START + slots.sim.MARIO_BYTES:
-        return MARIO_POINTERS.get(address - BODY_START)
-    if LIST_HEADS <= address < LIST_HEADS + LIST_HEAD_COUNT * LIST_HEAD_BYTES:
-        return OBJECT_POINTERS.get((address - LIST_HEADS) % LIST_HEAD_BYTES)
-    if FREE_LIST <= address < FREE_LIST + LIST_HEAD_BYTES:
-        return OBJECT_POINTERS.get(address - FREE_LIST)
-    return NAMED_GLOBALS.get(address)
 
 
 def slot_mario(slot: bytes) -> int:
@@ -307,7 +210,7 @@ def press_load(trip: Trip, slot_data: bytes | None, at_load=None, before_frame=N
 def loaded(seen: dict) -> bool:
     changed = seen["ram_after"] != seen["ram_before"]
     low = sim.phys(BODY_START)
-    return bool(changed[low:low + slots.BODY_BYTES].any())
+    return bool(changed[low:low + BODY_BYTES].any())
 
 
 def outside_pointers(ram: np.ndarray, natural: np.ndarray, place: np.ndarray, symbols: sim.Symbols) -> dict:
@@ -315,8 +218,8 @@ def outside_pointers(ram: np.ndarray, natural: np.ndarray, place: np.ndarray, sy
     words = _be_words(ram)
     truth = map_pointers(_be_words(natural), place)
     stale = in_pool(words) & (words != truth)
-    for low, high in ((sim.phys(BODY_START), sim.phys(BODY_START) + slots.BODY_BYTES),
-                      (sim.phys(slots.SLOT_BASE), sim.RDRAM_BYTES), *[(lo, hi) for _n, lo, hi in slots.PRESENTATION]):
+    for low, high in ((sim.phys(BODY_START), sim.phys(BODY_START) + BODY_BYTES),
+                      (sim.phys(SLOT_BASE), sim.RDRAM_BYTES), *[(lo, hi) for _n, lo, hi in slots.PRESENTATION]):
         stale[low // 4:high // 4] = False
     counts: collections.Counter = collections.Counter()
     for word in np.flatnonzero(stale).tolist():
@@ -399,41 +302,37 @@ def run_row(trip: Trip, name: str, slot_data: bytes | None, place: np.ndarray, r
     return row
 
 
+class SimulatedGame:
+    """GameMemory over the simulation's RAM, so the writers' own relocation step runs here unchanged."""
+
+    def __init__(self, cpu):
+        self.cpu = cpu
+
+    def read(self, address: int, size: int) -> bytes:
+        at = sim.phys(address)
+        return self.cpu.ram[at:at + size].tobytes()
+
+    def write(self, address: int, data: bytes) -> None:
+        raise AssertionError("the evidence harness never writes through GameMemory")
+
+    def cartridge_header(self) -> bytes:
+        return self.cpu.rom[:0x40]
+
+
 def twin_moves(trip: Trip, cpu: slots.SlotCpu, data: bytes) -> tuple[list, dict]:
-    """Move the slot's warp objects, and the camera's second focus, where live pointers already name them. Only the
-    live game and the slot are read: a slot from Griffin's own save has no copy of frame K's nodes. An object is
-    found by behavior and spawn parameters; frame K's own pointers check the rule."""
-    area = cpu.u32(slots.CURRENT_AREA_POINTER)
-    node = cpu.u32(area + WARP_LIST_IN_AREA)
-    moves, check = [], {"nodes": 0, "matched": 0, "not_unique": 0, "agrees_with_k": 0, "focus": "no object"}
-    body = _be_words(data[:slots.BODY_BYTES])
-    pool_low = (POOL_START - BODY_START) // 4
-    objects = body[pool_low:pool_low + OBJECT_COUNT * OBJECT_BYTES // 4].reshape(OBJECT_COUNT, OBJECT_BYTES // 4)
+    """The writers' plan (relocate.planned_moves) against the live world, checked against frame K's own pointers."""
+    ours, live = slot_mario(data), cpu.u32(slots.MARIO_OBJECT)
+    moves = planned_moves(SimulatedGame(cpu), data, ours, live)
     natural_word = lambda address: struct.unpack_from(">I", trip.natural, sim.phys(address))[0]  # noqa: E731
-    while 0x80000000 <= node < 0x80800000:
-        live = cpu.u32(node + 4)
-        if POOL_START <= live < POOL_END:
-            check["nodes"] += 1
-            behavior, params = cpu.u32(live + BEHAVIOR), cpu.u32(live + BEH_PARAMS)
-            twins = np.flatnonzero((objects[:, BEHAVIOR // 4] == behavior) & (objects[:, BEH_PARAMS // 4] == params)
-                                   & ((objects[:, ACTIVE_FLAGS // 4] >> 16) != 0))
-            if twins.size == 1:
-                twin = POOL_START + int(twins[0]) * OBJECT_BYTES
-                moves.append((twin, live))
-                check["matched"] += 1
-                check["agrees_with_k"] += int(natural_word(node + 4) == twin)
-            else:
-                check["not_unique"] += 1
+    area = cpu.u32(slots.CURRENT_AREA_POINTER)
+    node, k_names = cpu.u32(area + WARP_LIST_IN_AREA), {}
+    while 0x80000000 < node < 0x80800000:
+        k_names[cpu.u32(node + 4)] = natural_word(node + 4)
         node = cpu.u32(node + 8)
-    focus = cpu.u32(SECOND_CAMERA_FOCUS)
-    if POOL_START <= focus < POOL_END:
-        behavior, params = cpu.u32(focus + BEHAVIOR), cpu.u32(focus + BEH_PARAMS)
-        twins = np.flatnonzero((objects[:, BEHAVIOR // 4] == behavior) & (objects[:, BEH_PARAMS // 4] == params)
-                               & ((objects[:, ACTIVE_FLAGS // 4] >> 16) != 0))
-        check["focus"] = f"{twins.size} candidates; behavior {behavior:08x}; K's focus {natural_word(SECOND_CAMERA_FOCUS):08x}"
-        if twins.size == 1:
-            moves.append((POOL_START + int(twins[0]) * OBJECT_BYTES, focus))
-    return moves, check
+    check = {"twins_moved": len(moves) - 1, "warp_nodes": len(k_names),
+             "warp_twins_agree_with_k": sum(1 for twin, target in moves[1:] if k_names.get(target) == twin),
+             "focus_live": f"{cpu.u32(SECOND_CAMERA_FOCUS):08x}", "focus_at_k": f"{natural_word(SECOND_CAMERA_FOCUS):08x}"}
+    return moves[1:], check
 
 
 def prove(args) -> int:
@@ -450,11 +349,10 @@ def prove(args) -> int:
         place = permutation([(ours, live)])
         wm, check = twin_moves(trip, cpu, trip.saved)     # reads the live world: before any load below
         rows: dict = {"slot_mario": f"{ours:08x}", "live_mario": f"{live:08x}", "pointers_by_structure": dict(moved.pointers),
-                      "raw_data_by_value": [(i, hex(o), hex(b), hex(v)) for i, o, b, v in moved.raw_data],
-                      "trailer_pool_addresses": [(hex(o), hex(v)) for o, v in moved.trailer]}
+                      "raw_data_by_value": [(i, hex(o), hex(b)) for i, o, b in moved.raw_data]}
         report[title] = rows
         print(f"  pointers by structure {dict(moved.pointers)}")
-        print(f"  rawData by value {rows['raw_data_by_value']}; trailer addresses {rows['trailer_pool_addresses']}")
+        print(f"  rawData by value {rows['raw_data_by_value']}")
         natural_seed = trip.natural[sim.phys(slots.RANDOM_SEED):sim.phys(slots.RANDOM_SEED) + 2].copy()
         spans = ((sim.phys(slots.RANDOM_SEED), 2), (sim.phys(slots.GLOBAL_TIMER), 4), (sim.phys(slots.AREA_UPDATE_COUNTER), 4))
         pads = (sim.phys(CONTROLLERS), CONTROLLERS_BYTES)

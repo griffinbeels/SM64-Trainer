@@ -330,7 +330,8 @@ The [[scene viewer]]'s **Save states** row: one press of 1 to 9 makes a Usamune 
 and writes it to that slot of the running game. Usamune's menu shows the same numbers. The lab plays SM64's own code for
 that one [[frame]] from what the recording kept of the [[frame]] before, then lets Usamune's own save routine make the
 slot, and checks the rest of the [[frame]] against the recording. A [[frame]] Usamune could not save on makes no state, and
-the row says why. So does a game in another level, or a Mario who loaded in another place. A recording made before
+the row says why. So does a game in another level, or a level that loaded in another way. If Mario sits in another
+place in the game's memory, the write uses [[mario relocation]] first. A recording made before
 this feature lacks a few small values, so the row says it may not be exact. A state the row writes joins the
 [[slot library]].
 
@@ -362,11 +363,24 @@ hash of its bytes, so the same bytes are always one kept state.
 An ordered list of up to nine [[kept state]]s for a level, or for one [[star]]
 of that level. Position one goes to Usamune's first slot, and later slots keep
 what they hold. A [[star]]'s own list wins over its level's. The Trainer first
-captures every occupied slot, then writes the list. Usamune refuses to load a
-state whose Mario word differs from the running game, so each state reports
-whether it matches.
+captures every occupied slot, then writes the list. Each state goes through
+[[mario relocation]] on the way in, and each state reports whether Usamune will
+load it now.
 
 - **Lives** -- `src/sm64_events/slotlibrary/coursesets.py`
+
+### Mario relocation
+
+Usamune refuses to load a save state unless Mario sits in the same place in the
+game's memory as when Usamune saved it, and a practice [[reset]] often moves him. Before
+the Trainer writes a state, it moves Mario inside that state's own bytes to his
+place in the running game. Every link to Mario, and to the object that sat
+there, moves with him. The game's code and Usamune stay unchanged. The
+[[kept state]] keeps its old bytes. A state the Trainer cannot read all the way
+through is not written.
+
+- **Lives** -- `src/sm64_events/slotlibrary/relocate.py`; every write runs it
+- **Not** -- changing Usamune's check, which Griffin ruled out (2026-11-05)
 
 ### Share file
 

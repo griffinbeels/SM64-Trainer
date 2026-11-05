@@ -1601,6 +1601,28 @@ register(Gate(
 ))
 
 
+def _check_second_camera_focus(ctx) -> Verdict:
+    focus, pool = ctx.candidate("second_camera_focus"), ctx.candidate("object_pool")
+    if focus is None or pool is None:
+        return Verdict("missing", evidence="second_camera_focus or object_pool candidate missing")
+    if focus % 4:
+        return Verdict("failed", evidence="the address is not word-aligned")
+    value = int.from_bytes(ctx.raw().read_block(focus, 4), "big")
+    if value and not (pool <= value < pool + A.OBJECT_SIZE * A.OBJECT_COUNT and (value - pool) % A.OBJECT_SIZE == 0):
+        return Verdict("failed", measured={"value": value}, evidence="it holds neither zero nor an object's start")
+    return Verdict("verified", value=focus, measured={"value": value},
+                   evidence="it holds zero or an object's start; only a boss or cutscene that sets it proves it")
+
+
+register(Gate(
+    id="address.second_camera_focus", feature="version", kind="address", auto=True, optional=True,
+    needs=("address.object_pool",),
+    instruction="Nothing to do: reads one word.",
+    proves="The word is empty or names an object.",
+    check=_check_second_camera_focus,
+))
+
+
 # --- what a slot needs from the scene tap beyond the scene spans (moment_slot.py)
 #
 # Structure only: a slot built from a new recording, loaded in the game, proves them.

@@ -225,7 +225,7 @@ def test_a_trainer_write_is_not_a_new_save_unless_its_bytes_are_new(game, librar
     assert result.captured == [] and result.known == [(2, kept.id)]
     assert library.get(kept.id).source == BUILT
     new_bytes = make_slot(0xB2)
-    usamune.write_slot_bytes(game, 3, new_bytes)
+    usamune.write_slot_bytes(game, 3, new_bytes, mario_place=None)
     assert [state.id for _, state in watch_step(game, library, result.seen).captured] == [state_id(new_bytes)]
 
 
@@ -385,14 +385,14 @@ def test_an_unreadable_sets_file_is_not_overwritten(game, library, tmp_path):
     assert path.read_text(encoding="utf-8") == '{"version": 2, "sets": []}'
 
 
-def test_a_different_mario_word_is_reported_and_the_bytes_are_never_patched(game, library):
+def test_a_state_from_another_mario_place_is_moved_to_his_place_and_the_kept_state_stays(game, library):
     data = make_slot(0xD1, mario=OTHER_MARIO)
     state = keep(library, game, data)
     report = place_states(game, library, {4: state.id})
     placed = report.placements[0]
-    assert placed.written and not placed.mario_matches and not placed.loadable_now and placed.place_matches
-    assert game.slot(4) == data
-    assert game.read(usamune.slot_address(4) + usamune.TRAILER_MARIO, 4) == struct.pack(">I", OTHER_MARIO)
+    assert placed.written and placed.mario_matches and placed.loadable_now
+    assert game.read(usamune.slot_address(4) + usamune.TRAILER_MARIO, 4) == struct.pack(">I", MARIO)
+    assert library.read_bytes(state.id) == data
 
 
 def test_the_seam_writes_and_reports_the_transformed_data_and_keeps_the_state(game, library):

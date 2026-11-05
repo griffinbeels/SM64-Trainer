@@ -3,10 +3,11 @@
 A set is an ordered list of up to nine kept states; position n goes to slot n, and slots past the end of the
 list keep what they hold. A state may be written whatever the game is doing, so that entering a course can
 fill the slots. Usamune's own load refuses a state whose gMarioObject, level or area differ from the running
-game, so every placement reports whether those match. Nothing here changes a state's bytes: in the simulation
-patching only the occupied word crashes the game on the load frame. `Transform` is the one seam where a later
-step may hand over relocated slot data; none exists yet. Griffin's rule (2026-11-05): Ghost Handoff writes data
-only, inside slot ranges, and never adds or patches code in the game or Usamune.
+game, so every placement reports whether those match. Every state's bytes go through `relocate.to_live_place`
+after any `Transform`: Mario moves to the running game's place inside the slot data, and the kept state never
+changes. Patching only the occupied word crashes the game on the load frame in the simulation. Griffin's rule
+(2026-11-05): Ghost Handoff writes data only, inside slot ranges, and never adds or patches code in the game or
+Usamune.
 
 Before the first write, every occupied slot is captured. A failure there writes nothing.
 """
@@ -17,6 +18,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from sm64_events.slotlibrary.relocate import to_live_place
 from sm64_events.slotlibrary.store import Damaged, KeptState, SlotLibrary, write_atomic
 from sm64_events.slotlibrary.usamune import (
     CURRENT_AREA_POINTER,
@@ -85,6 +87,7 @@ def _checked_states(memory: GameMemory, library: SlotLibrary, placements: Mappin
             raise Refusal(f"state {identity} came from another Usamune build")
         if transform is not None:
             data = transform(state, data)
+        data = to_live_place(memory, data)
         loaded.append((slot, state, data, slot_facts(data)))
     return loaded
 
@@ -102,7 +105,8 @@ def place_states(memory: GameMemory, library: SlotLibrary, placements: Mapping[i
         written = not dry_run and read_slot(memory, slot) != data
         if written:
             try:
-                write_slot_bytes(memory, slot, data)
+                write_slot_bytes(memory, slot, data, mario_place=(
+                    facts.mario_object if facts.mario_object == live.mario_object else None))
             except WriteFailed as error:
                 return InstallReport(tuple(done), captured, (slot, str(error)))
         done.append(Placement(slot, state.id, written, facts.mario_object == live.mario_object,
