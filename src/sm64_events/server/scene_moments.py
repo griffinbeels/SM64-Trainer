@@ -16,6 +16,7 @@ that was written joins the Slot Library (handoff_try.keep_built).
 from __future__ import annotations
 
 import asyncio
+import importlib
 import json
 import logging
 import os
@@ -119,7 +120,7 @@ class SceneMoments:
             child.kill()
 
     async def _source(self, body: MomentBody) -> tuple[Path, str]:
-        from sm64_events.server import scene_lab_api as api
+        api = importlib.import_module("sm64_events.server.scene_lab_api")   # the module in sys.modules, as the routes catch
         config = await asyncio.to_thread(api.LabConfig.load, self.lab.config_path)
         if body.attempt is None:
             return await asyncio.to_thread(config.package_path, body.package), body.package
@@ -136,7 +137,7 @@ class SceneMoments:
     async def build(self, body: MomentBody) -> dict:
         """The built state with its level, area and Mario word, or {refused, reason}. LookupError: no such
         scene. SceneRefused or ConfigError: this scene cannot be read now."""
-        from sm64_events.server import scene_lab_api as api
+        api = importlib.import_module("sm64_events.server.scene_lab_api")   # the module in sys.modules, as the routes catch
         path, title = await self._source(body)
         config = await asyncio.to_thread(api.LabConfig.load, self.lab.config_path)
         if config.map is None:
