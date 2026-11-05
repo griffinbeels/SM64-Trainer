@@ -66,7 +66,7 @@ LOOP_HEAD = 0x80248B70                         # thread5_game_loop, the head of 
 LOOP_RETURN = 0x80248BE0                       # thread5_game_loop, after jal display_and_vsync
 RESUME = 0x802480F4                            # display_and_vsync, after jal send_display_list
 USAMUNE_VI_COUNT = 0x80417BDC                  # Usamune's own VI counter (its state block + 0x90)
-NEVER = 0x80000000                             # an emu_start stop address nothing here reaches
+NEVER = 0x80000800                             # an emu_start stop address nothing else reaches: routine calls return here
 
 STUB_NAMES = ("osRecvMesg", "osSendMesg", "osContStartReadData", "osContGetReadData", "osGetTime",
               "osWritebackDCache", "osWritebackDCacheAll", "osInvalDCache", "osInvalICache",
