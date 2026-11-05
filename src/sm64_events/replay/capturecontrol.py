@@ -131,10 +131,12 @@ class CaptureControl:
             values = _STATUS.unpack_from(raw_status)
             raw_build = C.string_at(self._view + 256, 80)
             from sm64_events.replay.gpufielddiagnostics import (
-                STARTUP, STARTUP_CONTEXT, STARTUP_CONTEXT_OFFSET, STARTUP_OFFSET, startup_receipt)
+                STARTUP, STARTUP_CONTEXT, STARTUP_CONTEXT_OFFSET, STARTUP_OFFSET, STARTUP_TRANSPORT,
+                STARTUP_TRANSPORT_OFFSET, startup_receipt)
 
             raw_startup = C.string_at(self._view + STARTUP_OFFSET, STARTUP.size)
             raw_context = C.string_at(self._view + STARTUP_CONTEXT_OFFSET, STARTUP_CONTEXT.size)
+            raw_transport = C.string_at(self._view + STARTUP_TRANSPORT_OFFSET, STARTUP_TRANSPORT.size)
             after = _U32.unpack(C.string_at(self._view + 16, 4))[0]
             if before != after:
                 continue
@@ -148,7 +150,7 @@ class CaptureControl:
                 raise RuntimeError("capture control protocol is not ready or supported")
             build_id = raw_build.split(b"\0", 1)[0].decode("ascii", "replace")
             status = CaptureStatus(*values[4:11], bool(values[11]), *values[12:14], build_id,
-                                   bool(values[14]), startup_receipt(raw_startup, raw_context))
+                                   bool(values[14]), startup_receipt(raw_startup, raw_context, raw_transport))
             if _process_creation(self._k, status.producer_pid) != (
                     status.producer_created_lo, status.producer_created_hi):
                 from dataclasses import replace

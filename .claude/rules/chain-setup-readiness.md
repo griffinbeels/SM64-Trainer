@@ -5,10 +5,12 @@ paths:
   - "src/sm64_events/core/plugin_installation.py"
   - "src/sm64_events/core/plugin_elevation*.py"
   - "src/sm64_events/core/plugin_ownership.py"
+  - "src/sm64_events/core/renderer_settings.py"
   - "tools/graphics_diagnostics.py"
   - "src/sm64_events/core/paths.py"
   - "src/sm64_events/core/setup_runtime.py"
   - "src/sm64_events/core/setup_gpu.py"
+  - "src/sm64_events/core/setup_profile.py"
   - "src/sm64_events/core/onboarding.py"
   - "src/sm64_events/server/setup_api.py"
   - "src/sm64_events/ui/setupflow.js"
@@ -34,6 +36,20 @@ paths:
   Both copies and settings roll back on failure. No shadow is created and no
   repair runs while Project64 is known to be running. The wrapper's configurable
   loader and undo's previous selection remain unchanged.
+- **The renderer's settings:** every `GLideN64.ini` Project64 may read (the
+  physical file, created when missing; an existing VirtualStore copy, never
+  created) loads frame buffer emulation off (`frame_buffer_emulation_off`).
+  `core/renderer_settings.py` owns the format and edits one key line by line,
+  never through configparser. Install (elevated helper included) and permitted
+  refresh write it inside their rollback; status only reads it. A setting that
+  is on reads like a stale DLL: refresh fixes it, and after a refused write
+  status and the header offer Install, which may elevate. The overlay's
+  `renderer_settings` keeps the first earlier value for undo.
+- **Setup check, beside readiness:** `core/setup_profile.py` compares the
+  emulator's configuration with the tested setup in `data/setup_baseline.json`
+  (also the one importance table). It reads the same registry and VirtualStore
+  policy, never writes, and says "unknown" without evidence. It never gates
+  readiness or completion: the wizard shows its differences as notes.
 - **One reader per process:** `setup_runtime.py` attaches one `Pj64Memory` by the
   target's pid and keeps it while that process runs (`alive()`); an observation is
   one header read. A fresh reader per poll re-walked Project64's memory every
@@ -85,6 +101,16 @@ incorrect transformation. For motion, sample computed positions during a real
 click; a declared transition or a settled screenshot alone cannot prove movement.
 
 ## Failure catalogue
+
+- 2026-10-30, hop 1: "we need to ship the default
+  https://github.com/Luna-Project64/GLideN64/releases settings ... MAKE SURE
+  THAT FRAME BUFFER EMULATION IS DISABLED. This is very important." The trainer
+  never wrote `GLideN64.ini`; a tester's Jabo-only Project64 had none, so
+  GLideN64 wrote its compiled defaults (frame buffer emulation on): ghosts did
+  not draw and the game lagged (reproduced on his NVIDIA machine). LINK's
+  package ini equals those defaults except that key. `test_renderer_settings.py`
+  covers the format, install, refresh, VirtualStore, rollback and undo;
+  `test_ui_renderer_settings.py` drives the wizard to a working Install.
 
 - 2026-10-24, hop 1: a beta.30 tester: "wait there is 2 graphics plugins now:
   sm64 trainer 1.0 and link v4.2(sm64 trainer)". Project64 lists every DLL in

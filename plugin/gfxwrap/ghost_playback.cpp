@@ -1270,9 +1270,9 @@ bool shared_model(uint32_t context,ghost_live::ModelBinding &out) {
     if(!model_current(binding))return false;
     out=binding;return true;
 }
-void safe_boundary(uint32_t rom,uint32_t configuration) {
+bool safe_boundary(uint32_t rom,uint32_t configuration) {
     const auto thread=GetCurrentThreadId();
-    if(render_thread && render_thread!=thread) {refusals.fetch_add(1);return;}
+    if(render_thread && render_thread!=thread) {refusals.fetch_add(1);return false;}
     render_thread=thread;live_rom=rom;live_configuration=configuration;path_ready=false;
     next_boundary();
     PublishedRequest published{};
@@ -1296,7 +1296,7 @@ void safe_boundary(uint32_t rom,uint32_t configuration) {
         if(!live_wanted || (have_model && !model_valid(current_cancel)))retire_model();
         if(live_wanted)adopt_model(render_live_demand.id,current_cancel);
         have_request=false;clear_timeline();live_recovery.detach();
-        sound_control(false,0);forget_heard(Forget::move);decide_all(GP_DISABLED);return;
+        sound_control(false,0);forget_heard(Forget::move);decide_all(GP_DISABLED);return true;
     }
     if(enabled_revision.load()!=next.revision) {
         // Withdrawal keeps reusable Owned clips and the model, but an explicit
@@ -1308,7 +1308,7 @@ void safe_boundary(uint32_t rom,uint32_t configuration) {
         // replacement must still be released at this safe render boundary.
         if(have_model && !model_valid(current_cancel))retire_model();
         if(live_wanted)adopt_model(render_live_demand.id,current_cancel);
-        sound_control(false,0);forget_heard(Forget::move);decide_all(GP_DISABLED);return;
+        sound_control(false,0);forget_heard(Forget::move);decide_all(GP_DISABLED);return true;
     }
     if(acquired_cancel!=current_cancel) {clear_timeline();retire_clips();live_recovery.detach();}
     if(have_request && (next.mode!=active_request.mode || next.model_id!=active_request.model_id))clear_timeline();
@@ -1324,7 +1324,7 @@ void safe_boundary(uint32_t rom,uint32_t configuration) {
         have_timeline=true;timeline_request=next;
     }
     if(have_model && (model.id!=next.model_id || !model_valid(current_cancel)))
-        if(!retire_model()) {decide_all(GP_PREPARING);return;}
+        if(!retire_model()) {decide_all(GP_PREPARING);return true;}
     const bool changed=touch_revision!=next.revision;
     const bool first=!have_request;
     const gp_request previous=active_request;
@@ -1382,6 +1382,7 @@ void safe_boundary(uint32_t rom,uint32_t configuration) {
     report.clip_count=active_request.clip_count;
     report.clips_active=active_count();
     decision(have_model && report.clips_active==active_request.clip_count?GP_READY:GP_PREPARING);
+    return true;
 }
 bool atlas(sg_atlas_view *out,uint64_t *id) {
     if(out)*out={};if(id)*id=0;

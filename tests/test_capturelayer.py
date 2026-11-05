@@ -28,6 +28,7 @@ from sm64_events.core.capturelayer import (
     LayerRefused,
 )
 from sm64_events.core.paths import RENDERER_DLL_NAME
+from sm64_events.core.renderer_settings import MINIMAL as FRAME_BUFFER_EMULATION_OFF, RENDERER_INI
 
 #: the installed app; a source checkout is {"kind": "checkout", "path": ...}
 FROZEN_APP = {"kind": "frozen", "version": "test"}
@@ -593,6 +594,7 @@ def test_bundle_discovery_recovers_without_recreating_layer(pj64_dir, dll_source
     (plugin / WRAPPER_DLL).write_bytes(dll_source.read_bytes())
     (plugin / RENDERER_FILE).write_bytes(renderer_for(dll_source).read_bytes())
     (plugin / WRAPPER_INI).write_text("wrapped=" + RENDERER_FILE)
+    (plugin / RENDERER_INI).write_bytes(FRAME_BUFFER_EMULATION_OFF)
     registry.set(REGISTRY_DLL_SUBKEY, GRAPHICS_DLL_VALUE, WRAPPER_DLL)
     processes.image_path = str(pj64_dir / "Project64.exe")
     assert layer.status().state == UNAVAILABLE

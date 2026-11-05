@@ -37,13 +37,13 @@ int main(int argc,char** argv) {
                       && std::fabs(dash.vertices[i].clip[1]-under.vertices[i].clip[1]-4*scale)<1e-6f,
                       "underscore keeps the original atlas coordinates and moves only the baseline");
         }
-        // Use the actual stack column calculation: two-digit controls leave
-        // 92 HUD pixels; three-digit extremes leave 83. Full 20-character
+        // Use the actual stack column: the stick box leaves 92 HUD pixels;
+        // numbers reserve three digits and leave 83. Full 20-character
         // names fit by pixels, or visibly end in an ellipsis when wider.
         for(unsigned digits:{2u,3u}) {
-            const float left=std::fmax(stack::buttons_x,stack::digits_start(digits)+stack::digits_width(digits)+3);
+            const float left=stack::buttons_left(digits==3);
             const float limit=stack::column_width-(left-usamune::letter_x)-2;
-            check(limit==(digits==2?92.0f:83.0f),"normal and three-digit corner budgets follow the live layout");
+            check(limit==(digits==2?92.0f:83.0f),"stick-box and numbers corner budgets follow the live layout");
             uint8_t chars[64]{};unsigned width=0;
             check(Layout::fitted("SullyLikesBigChungus",stack::scale,limit,chars,width)==20 && width==99,
                   "the longest measured Sheet credit fits both real corner widths");
@@ -156,7 +156,7 @@ int main(int argc,char** argv) {
         {
             Payload far=p;far.inputs=false;far.position[1]=-GP_ANNOTATION_HEIGHT;float persp[16]{};persp[0]=persp[5]=persp[10]=2.4f;persp[11]=1;
             auto width=[&](float z) {
-                far.position[2]=z;build(far,persp,1,1,1,ghost_occlusion::Region{},640,480,mesh);
+                far.position[2]=z;build(far,persp,1,1,1,ghost_occlusion::Region{},2560,1920,mesh);
                 float lo=1e9f,hi=-1e9f;for(unsigned i=0;i<mesh.count;++i) {
                     const float x=mesh.vertices[i].clip[0]/mesh.vertices[i].clip[3];lo=std::fmin(lo,x);hi=std::fmax(hi,x);}
                 return mesh.count?hi-lo:0.0f;
@@ -168,6 +168,27 @@ int main(int argc,char** argv) {
             width(20);const float cap=2.0f*GP_ANNOTATION_MAX_SCREEN/240*8*0.75f;
             const float close=(mesh.vertices[1].clip[0]-mesh.vertices[0].clip[0])/mesh.vertices[0].clip[3];
             check(close<=cap*1.001f,"a ghost beside the camera never exceeds the largest name size");
+            // Apeduden's 640x480 window, 2026-10-31: a name under two pixels a
+            // font texel lost strokes ("griffman1212" read "GRIFF(AN,2.2").
+            // There every glyph is whole pixels a texel, on the pixel grid.
+            for(float z:{300.0f,800.0f,1600.0f,5000.0f})for(unsigned flip:{0u,1u}) {
+                far.position[0]=z*0.013f;far.position[2]=z;build(far,persp,flip,1,1,ghost_occlusion::Region{},640,480,mesh);
+                check(mesh.count>0,"a small name still draws");
+                for(unsigned i=0;i<mesh.count;i+=6) {
+                    const auto& a=mesh.vertices[i];const auto& b=mesh.vertices[i+1];const auto& c=mesh.vertices[i+2];
+                    const float x0=(a.clip[0]/a.clip[3]+1)*320,x1=(b.clip[0]/b.clip[3]+1)*320;
+                    const float y0=(a.clip[1]/a.clip[3]+1)*240,y1=(c.clip[1]/c.clip[3]+1)*240;
+                    const float texels=(b.uv[0]-a.uv[0])*atlas_width;
+                    if(texels!=8)continue; // a glyph cell, not the name box
+                    const float per=(x1-x0)/texels;
+                    check(per==1 || per==2,"a small name's font texel is one or two whole pixels");
+                    check(std::fabs(std::fabs(y1-y0)-16*per)<1e-3f,"its texels are square on screen");
+                    if(a.rgba[0]==0)continue; // the shadow sits one texel off, also on the grid
+                    check(std::fabs(x0-std::round(x0))<1e-3f && std::fabs(y0-std::round(y0))<1e-3f,
+                          "every glyph of a small name starts on a pixel corner");
+                }
+            }
+            far.position[0]=0;
         }
         region.enabled=1;region.overlap=0.15f;vp[15]=10;region.minimum=0.15f;
         build(p,vp,0,1,1,region,640,480,mesh);
@@ -255,8 +276,9 @@ int main(int argc,char** argv) {
             check(std::fabs(mesh.vertices[1].clip[0]-mesh.vertices[6].clip[0]-ndc(1)+ndc(0))<1e-5f,
                   "the ghost's letter tucks against its digits in Usamune's own proportion");
             // "the buttons + the name need to be more compact & shifted to the left":
-            // they pack at half pitch in a column just past a two-digit ghost number.
-            const float column=his_middle+(usamune::digit_advance+16)*0.25f+3;
+            // they pack at half pitch in a column just past a three-digit ghost
+            // number, so no value moves them (his report, 2026-10-31).
+            const float column=usamune::digit_x+(2*usamune::digit_advance+16)*0.75f+3;
             check(std::fabs(mesh.vertices[36].clip[0]-ndc(column))<1e-5f && column<usamune::button_x
                   && std::fabs(mesh.vertices[42].clip[0]-ndc(column+usamune::button_advance*0.5f))<1e-5f,
                   "the ghost's buttons pack at half pitch just past its numbers, left of the player's");
@@ -273,6 +295,32 @@ int main(int argc,char** argv) {
             q.values=false;q.pad={0,0,0,0};build(q,vp,0,1,1,ghost_annotation_region(),640,480,mesh);
             check(std::fabs((mesh.vertices[0].clip[0]+mesh.vertices[1].clip[0])*0.5f-ndc(usamune::base_x+16))<1e-5f,
                   "the ghost's stick box is centred on the player's");
+            // His report, 2026-10-31: "wookis" and his buttons jumped right while his
+            // stick moved. "All names and buttons should be in line with each other":
+            // every stick value and every row draws its first button and its name at one x.
+            for(bool values:{false,true}) {
+                q.values=values;float button_x=NAN,name_x=NAN;
+                for(uint8_t rank=0;rank<3;++rank)for(gc_pad pad:{gc_pad{0,0,0x8000,0},gc_pad{-128,127,0x8000,0},
+                                                                gc_pad{100,-5,0x8000,0},gc_pad{7,-99,0x8000,0}}) {
+                    q.hud_rank=rank;q.pad=pad;build(q,vp,0,1,1,ghost_annotation_region(),640,480,mesh);
+                    // The A button is the one quad cut from Usamune's button row; the name is
+                    // drawn last, so its final glyph is the mesh's last quad.
+                    float a=NAN,name=INFINITY;
+                    for(unsigned i=0;i+3<mesh.count;i+=4) {
+                        float u=INFINITY,v=INFINITY;
+                        for(unsigned k=0;k<4;++k) {u=std::fmin(u,mesh.vertices[i+k].uv[0]);v=std::fmin(v,mesh.vertices[i+k].uv[1]);}
+                        if(std::fabs(v*atlas_height-cell::button_y)<0.5f && u*atlas_width<0.5f) {
+                            a=INFINITY;for(unsigned k=0;k<4;++k)a=std::fmin(a,mesh.vertices[i+k].clip[0]);
+                        }
+                    }
+                    for(unsigned k=4;k>0;--k)name=std::fmin(name,mesh.vertices[mesh.count-k].clip[0]);
+                    if(std::isnan(button_x)) {button_x=a;name_x=name;}
+                    check(!std::isnan(a) && std::fabs(a-button_x)<1e-5f && std::fabs(name-name_x)<1e-5f,
+                          values?"with numbers, every row's buttons and name hold one column"
+                                :"with the stick box, every row's buttons and name hold one column");
+                }
+            }
+            q.values=false;q.pad={0,0,0,0};
             q.hud_count=9;q.hud_rank=7;build(q,vp,0,1,1,ghost_annotation_region(),640,480,mesh);
             check(mesh.count==0,"the corner shows at most seven ghosts");
             q.hud_rank=6;build(q,vp,0,1,1,ghost_annotation_region(),640,480,mesh);

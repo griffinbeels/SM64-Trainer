@@ -14,6 +14,7 @@
 #include "runtime_delivery.h"
 #include "gpu_request.h"
 #include "gl_fixture.h"
+#include "gpu_transport_helper.h"
 #include <d3d11_1.h>
 #include <dxgi1_2.h>
 #include <wrl/client.h>
@@ -33,6 +34,8 @@ extern "C" int gd_test_bindings_cause(bool,gd_diagnostic*,gpu_startup_context_v1
 extern "C" int gd_test_reconstruct_notes(uint32_t*);
 extern "C" int gd_test_bootstrap_deadline(int,uint32_t*,uint32_t=0,uint32_t=RB_SURFACE_FAILED,bool=false);
 extern "C" int gd_test_take_omissions(const rs_api*,uint64_t*);
+extern "C" void gd_test_import_refusal_once(uint32_t);
+extern "C" int __cdecl rc_test_delivery_status(uint32_t*,uint32_t*);
 extern "C" int gd_test_pressure_omissions(const rs_api*,uint64_t*,uint64_t*);
 extern "C" int gd_test_retire_record(const rs_api*,uint32_t*);
 extern "C" int gd_test_channel_retry(unsigned,uint32_t*);
@@ -178,39 +181,33 @@ bool wait_state(unsigned target){for(unsigned n=0;n<4000;++n){const auto s=statu
 bool wait_mapping(){for(unsigned n=0;n<4000;++n){const auto s=status();if(s.state==GD_PREPARING&&s.mapping_bytes)return true;if(s.quarantined)return false;Sleep(1);}return false;}
 struct Consumer {
     Microsoft::WRL::ComPtr<ID3D11Device> device;Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
-    Microsoft::WRL::ComPtr<ID3D11Texture2D> texture[2];Microsoft::WRL::ComPtr<IDXGIKeyedMutex> mutex[2];
-    HANDLE share[2]{};
+    gpu_transport::HelperSlot slot[2];
     bool held[2]{};
-    // The encoder helper's role: create the keyed-mutex textures under the
-    // channel's names (the renderer imports them; it has no D3D device).
+    // The encoder helper's role, with the shipped helper's transport code:
+    // create the textures under the channel's names for the channel's
+    // transport (the renderer imports them; it has no D3D device).
     void open(const gc_header&h,const uint16_t (*names)[128]=nullptr){
         if(!names)names=h.texture_names;
         LUID luid{h.luid_low,h.luid_high};CHECK(device_for_luid(luid,&device,&context));
-        D3D11_TEXTURE2D_DESC desc{};desc.Width=h.width&~1u;desc.Height=h.height&~1u;desc.MipLevels=1;desc.ArraySize=1;
-        desc.Format=DXGI_FORMAT_R8G8B8A8_UNORM;desc.SampleDesc.Count=1;desc.Usage=D3D11_USAGE_DEFAULT;
-        desc.BindFlags=D3D11_BIND_RENDER_TARGET|D3D11_BIND_SHADER_RESOURCE;
-        desc.MiscFlags=D3D11_RESOURCE_MISC_SHARED_NTHANDLE|D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
-        for(unsigned i=0;i<2;++i){
-            CHECK(SUCCEEDED(device->CreateTexture2D(&desc,nullptr,&texture[i])));CHECK(SUCCEEDED(texture[i].As(&mutex[i])));
-            Microsoft::WRL::ComPtr<IDXGIResource1> resource;CHECK(SUCCEEDED(texture[i].As(&resource)));
-            CHECK(SUCCEEDED(resource->CreateSharedHandle(nullptr,DXGI_SHARED_RESOURCE_READ|DXGI_SHARED_RESOURCE_WRITE,
-                reinterpret_cast<const wchar_t*>(names[i]),&share[i])));
-        }
+        for(unsigned i=0;i<2;++i)CHECK(SUCCEEDED(slot[i].create(device.Get(),h.transport,reinterpret_cast<const wchar_t*>(names[i]),
+            h.width&~1u,h.height&~1u,DXGI_FORMAT_R8G8B8A8_UNORM,1)));
     }
-    bool take(unsigned i){CHECK(i<2&&!held[i]);const HRESULT result=mutex[i]->AcquireSync(1,0);held[i]=result==S_OK;CHECK(result==S_OK||result==WAIT_TIMEOUT);return held[i];}
-    void give(unsigned i){CHECK(i<2&&held[i]);CHECK(SUCCEEDED(mutex[i]->ReleaseSync(0)));held[i]=false;}
+    bool take(unsigned i){CHECK(i<2&&!held[i]);const HRESULT result=slot[i].acquire(context.Get());held[i]=result==S_OK;CHECK(result==S_OK||result==WAIT_TIMEOUT);return held[i];}
+    void give(unsigned i){CHECK(i<2&&held[i]);CHECK(SUCCEEDED(slot[i].after_read(context.Get())));context->Flush();
+        CHECK(SUCCEEDED(slot[i].release()));held[i]=false;}
     void verify(unsigned i,unsigned marker){
-        CHECK(held[i]);D3D11_TEXTURE2D_DESC d{};texture[i]->GetDesc(&d);
+        auto*texture=slot[i].texture();
+        CHECK(held[i]);D3D11_TEXTURE2D_DESC d{};texture->GetDesc(&d);
         CHECK(d.Width==(width&~1u)&&d.Height==(height&~1u));
         d.Usage=D3D11_USAGE_STAGING;d.BindFlags=0;d.MiscFlags=0;d.CPUAccessFlags=D3D11_CPU_ACCESS_READ;
         Microsoft::WRL::ComPtr<ID3D11Texture2D> staging;CHECK(SUCCEEDED(device->CreateTexture2D(&d,nullptr,&staging)));
-        context->CopyResource(staging.Get(),texture[i].Get());D3D11_MAPPED_SUBRESOURCE mapped{};
+        context->CopyResource(staging.Get(),texture);D3D11_MAPPED_SUBRESOURCE mapped{};
         CHECK(SUCCEEDED(context->Map(staging.Get(),0,D3D11_MAP_READ,0,&mapped)));
         for(unsigned y=0;y<d.Height;++y)for(unsigned x=0;x<d.Width;++x){const auto*b=static_cast<const uint8_t*>(mapped.pData)+y*mapped.RowPitch+x*4;
             for(unsigned c=0;c<3;++c)CHECK(b[c]==channel(marker,x,height-1-y,c));CHECK(b[3]==255);}
         context->Unmap(staging.Get(),0);
     }
-    void close(){for(unsigned i=0;i<2;++i){CHECK(!held[i]);mutex[i].Reset();texture[i].Reset();if(share[i])CloseHandle(share[i]);share[i]=nullptr;}context.Reset();device.Reset();}
+    void close(){for(unsigned i=0;i<2;++i){CHECK(!held[i]);slot[i].reset();}context.Reset();device.Reset();}
 };
 // The renderer's thread: owns the producer context; runs posted jobs (pictures)
 // and, between them, one capture tick every 2 ms while an epoch is armed.
@@ -518,6 +515,17 @@ int main(int argc,char**argv){
             fprintf(stderr,"host consumer opened\n");fflush(stderr);
             printf("prepared %u %u %llu %llu\n",gd_epoch(),GetCurrentProcessId(),request.nonce_lo,request.nonce_hi);
         }else if(op=="active"){CHECK(wait_state(GD_ACTIVE));printf("active\n");
+        }else if(op=="refuseimport"){gd_test_import_refusal_once(0x502);printf("refuseimport\n");
+        }else if(op=="startfail"){
+            // A request that fails before any channel: its control reason and transport receipt.
+            unsigned nonce=0;in>>nonce;request.nonce_lo=nonce;request.nonce_hi=GetCurrentProcessId();
+            CHECK(gd_request(&request,4u*1024*1024)==GD_ACCEPTED);CHECK(wait_state(GD_BOOTSTRAP));renderer.run([]{frame(0);});
+            CHECK(wait_state(GD_FAULT));uint32_t state=0,reason=0;CHECK(rc_test_delivery_status(&state,&reason));
+            const auto s=status();printf("startfail %u %u %u\n",s.reason,s.error,reason);
+        }else if(op=="receipt"){gpu_startup_transport_v1 t{};CHECK(gd_read_startup_transport(&t));
+            CHECK(!memcmp(t.magic,GPU_STARTUP_TRANSPORT_MAGIC,8)&&t.version==GPU_STARTUP_TRANSPORT_VERSION&&t.bytes==sizeof t);
+            printf("receipt %u 0x%08x %u %u %u %u\n",t.epoch==gd_epoch()||!gd_epoch(),t.capabilities,t.transport,t.floor,
+                t.failed_transport,t.failed_error);
         }else if(op=="frame"){unsigned marker=0;in>>marker;renderer.run([marker]{frame(marker);});printf("frame %u\n",marker);
         }else if(op=="guard"){unsigned value=0;in>>value;
             renderer.run([value]{guard_state.store(value!=0);if(!value)plain_state();});printf("guard\n");

@@ -103,7 +103,7 @@ def session_for(controller):
                want_capture=lambda: True, begin_audio=lambda: "handoff")
     session = CaptureSession(owner, NS(snapshot=NS(lifecycle=None, state="running")),
                              controller_factory=lambda **_kwargs: controller)
-    session.channel = NS(header=header, texture_names=("a", "b"),
+    session.channel = NS(header=header, texture_names=("a", "b"), transport=1,
                          encoder_ready=lambda: None)
     session._prepare_sink = lambda: True
     return session

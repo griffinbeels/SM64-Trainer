@@ -13,7 +13,9 @@ void observe(const ghost::RasterTarget&);
 // input display follows; -1 keeps the trainer's stored mode.
 void seal(const gc_sample&, const ghost::WorldPass&, bool usamune_hidden = false, int usamune_values = -1);
 void finish(const ghost::WorldPass*);
-void cancel();
+// why: the list gate (ghost_draw_facts.h) recorded when this discards an
+// image the list had sealed; 0 records nothing.
+void cancel(uint32_t why = 0);
 bool begin_hud();
 void end_hud();
 bool begin_layer(uint32_t pass, uint32_t framebuffer, uint64_t attachments);

@@ -39,6 +39,7 @@ CLIENT_OFF, CLIENT_READY = 0, 1
 GD_CHANNEL_FAILED = 10009
 GD_TWIN_SNAPSHOT_FAILED, GD_TWIN_IMPORT_FAILED, GD_TWIN_BRIDGE_FAILED = 10023, 10024, 10025
 GD_TWIN_KEY_ABANDONED, GD_TWIN_UNAVAILABLE = 10026, 10027
+GD_TWIN_TRANSPORT_UNSUPPORTED = 10037
 U32 = ctypes.c_uint32
 
 
@@ -229,7 +230,7 @@ class ChannelHost:
 def check_twin_header(wire, info, lo, hi):
     assert info["result"] == "ok" and info["header_bytes"] == HEADER_BYTES
     assert info["twin_names_offset"] == TWIN_NAMES_AT
-    assert wire.version == 3 and (wire.nonce_lo, wire.nonce_hi, wire.epoch, wire.generation) == (lo, hi, 7, 3)
+    assert wire.version == gpuchannel.VERSION and (wire.nonce_lo, wire.nonce_hi, wire.epoch, wire.generation) == (lo, hi, 7, 3)
     payload_offset, payload_stride = struct.unpack_from("<II", wire.raw(PAYLOAD_AT, 8))
     offer_count = wire.u32(OFFER_COUNT_AT)
     assert wire.twin_offset == info["twin_offset"] == payload_offset + payload_stride * offer_count
@@ -238,7 +239,9 @@ def check_twin_header(wire, info, lo, hi):
     assert wire.names(TWIN_NAMES_AT) == ("Local\\SM64.GpuChannel.fixture.copy.a",
                                         "Local\\SM64.GpuChannel.fixture.copy.b")
     assert wire.names(320) == ("Local\\SM64.GpuChannel.fixture.a", "Local\\SM64.GpuChannel.fixture.b")
-    assert not any(wire.raw(RESERVED_AT, HEADER_BYTES - RESERVED_AT))
+    # v4: the bridge transport, then nothing but zeros.
+    assert wire.u32(RESERVED_AT) == gpuchannel.TRANSPORT_KEYED_MUTEX
+    assert not any(wire.raw(RESERVED_AT + 4, HEADER_BYTES - RESERVED_AT - 4))
 
 
 def check_twin_client_and_status(wire, host):
@@ -358,12 +361,15 @@ def off_stops_only_the_twin(run, client, wire, helper, held):
     clean_active(run)
 
 
-def test_ghost_copy_records_the_display_while_clean_stays_clean(host, modern_gl):
+@pytest.mark.parametrize("transport", ["keyed", "semaphore"])
+def test_ghost_copy_records_the_display_while_clean_stays_clean(host, modern_gl, monkeypatch, transport):
     """Clean == clean with the lane on; the twin gets the displayed picture
     (or the clean one when no ghost was drawn); no free twin credit is a
     missed twin picture and never touches the clean one; OFF stops the twin
     while the clean capture keeps recording; nothing asks for the display
-    while the lane is off."""
+    while the lane is off. The twin uses the clean capture's bridge
+    transport; both zero-copy transports record it."""
+    monkeypatch.setenv("SM64_TEST_GPU_TRANSPORT", transport)
     run, client, helper, wire = TwinRunning(host, "twin"), None, None, None
     try:
         client = run.start(901)
@@ -564,6 +570,31 @@ def test_twin_lane_at_cadence_refuses_no_clean_picture_and_reports_renderer_cost
     off_p99 = float(measured["off"][0]["vi_us"].split(",")[1])
     on_p99 = float(measured["on"][0]["vi_us"].split(",")[1])
     assert on_p99 < off_p99 + 4000, (off_p99, on_p99)
+
+
+def test_the_readback_transport_declines_the_lane_and_records_clean(host, modern_gl, monkeypatch):
+    """The ghost copy declines READBACK (a second CPU copy per picture) with
+    its own reason; the clean capture records on through the readback."""
+    monkeypatch.setenv("SM64_TEST_GPU_TRANSPORT", "readback")
+    run, client, wire = TwinRunning(host, "twin"), None, None
+    try:
+        client = run.start(905)
+        assert client.transport == 3
+        wire = TwinWire(client.header.nonce_lo, client.header.nonce_hi)
+        wire.request(1)
+        status = eventually(lambda: (s := wire.status()).state == STOPPED and s)
+        assert (status.reason, status.lane) == (GD_TWIN_TRANSPORT_UNSUPPORTED, 1)
+        bridge = select(client, offer_for(run, client, 7), 1)
+        clean_return(run, client, bridge, 7)
+        clean_active(run)
+        finish(run, client)
+        client = None
+    finally:
+        if wire:
+            wire.close()
+        if client:
+            client.close()
+        run.close()
 
 
 def test_a_renderer_without_sourcev4_refuses_the_lane(host, modern_gl):

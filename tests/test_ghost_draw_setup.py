@@ -20,7 +20,8 @@ def test_actual_renderer_setup_retries_and_preserves_owned_context(tmp_path, res
         assert text.count(old) == 1
         text = text.replace(old, "if (!same_context(identity, owner))")
     functions = [_function(text, name) for name in (
-        "bool faulted()", "void fault()",
+        "bool faulted()", "void fault(uint32_t step)",
+        "uint32_t result_code(ghost_compositor::Result result)",
         "bool same_context(const renderer::Identity &a, const renderer::Identity &b)",
         "bool same(const renderer::Identity &a, const renderer::Identity &b)",
         "void begin(uint32_t rom, uint32_t config_id, const gc_sample *sample)")]

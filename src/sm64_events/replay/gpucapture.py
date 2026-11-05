@@ -147,8 +147,8 @@ class GpuCapture:
             lambda run: publish(run, (width, height)),
             audio_rate=cfg.audio_rate, audio_bitrate=160000,
             packet_limit=limits.packet_bytes, pcm_limit=limits.pcm_bytes,
-            max_bytes=limits.pending_bytes, max_blocks=limits.pcm_blocks,
-            max_age=limits.max_age, mid_run=True, name="replay-ghost-copy-sink",
+            max_bytes=limits.sink_bytes, max_blocks=limits.sink_blocks,
+            max_age=limits.sink_age_s, mid_run=True, name="replay-ghost-copy-sink",
         )
 
     def set_idle_check(self, check):
@@ -449,7 +449,8 @@ class GpuCapture:
         if self._worker is None:
             self._close_pending_control()
             return
-        self._worker.join(timeout=self.settings.close_s + 3.0)
+        # Off the event loop: the recorder's attach thread, or its bounded stop.
+        self._worker.join(timeout=self.settings.close_s + 3.0 + self.settings.sink_finish_s)
         if self._worker.is_alive():
             raise GpuCleanupError("GPU media worker did not finish; retain its scratch")
         pending = getattr(self, "_pending_cleanup", None)

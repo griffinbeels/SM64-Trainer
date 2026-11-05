@@ -1,9 +1,12 @@
 """Bounded metadata for previously consented native contributions, never clips.
 
-Only the admission worker remembers a qualified source and its current account
-UID. Recovery never assigns historical, imported or packaged runs to a login.
+The admission worker remembers a qualified source and its current account UID.
+So does the first sharing account's claim on this install's earlier ghosts
+(`earlier_ghosts.py`), under terms that say so. Recovery itself never assigns
+imported or packaged runs to a login.
 Deleted/changed source bytes, capacity eviction and explicit cancellation can
-retire an intent; this file is not a second recording archive.
+retire an intent; this file is not a second recording archive. Eviction spends
+what the community would miss least (`SourceOutbox._evict_one`).
 
 A reclassified run also leaves a durable retraction: its owner, the clip hash
 and the one strategy to keep. It survives a restart until the server answers,
@@ -22,11 +25,11 @@ from sm64_events.ghost.portable import checked_hash
 from sm64_events.ghost.sharing_targets import canonical, checked_target
 from .config import CommunityError
 
-MAX_OFFERS = 256
+MAX_OFFERS = 1024
 MAX_RETRACTIONS = 256
 MAX_BYTES = 1 << 20
 SOURCE_FIELDS = {"target", "clock", "game_version", "strategy", "frames", "path", "raw_sha256", "full_start", "valid"}
-STATE_FIELDS = {"mutation_keys", "mutation_generation"}
+STATE_FIELDS = {"mutation_keys", "mutation_generation", "bin"}
 
 
 def checked_source(value):
@@ -56,6 +59,9 @@ def checked_source(value):
         raise CommunityError("invalid_source") from None
     generation = value.get("mutation_generation")
     if generation is not None and (not isinstance(generation, str) or not 1 <= len(generation) <= 128):
+        raise CommunityError("invalid_source")
+    subdivision = value.get("bin")
+    if subdivision is not None and (type(subdivision) is not int or not 0 <= subdivision <= 1000):
         raise CommunityError("invalid_source")
     return {**deepcopy(value), "target": target}
 
@@ -150,10 +156,36 @@ class SourceOutbox:
             for row in rows:
                 self._rows.setdefault(source_id(row), row)
 
+    def _evict_one(self):
+        """Make room without losing a subdivision best to a burst of slower runs.
+
+        First a row with a faster row in its own subdivision (`bin`, the step
+        the admission worker graded it in). Then a row nothing could grade: the
+        slowest of the identity holding the most of them. Only MAX_OFFERS
+        pending bests of distinct subdivisions can push out the oldest best.
+        """
+        def identity(row):
+            return row["owner"], canonical(row["target"]), row["clock"], row["game_version"], row["strategy"]
+        fastest, ungraded = {}, {}
+        for key, row in self._rows.items():
+            if row.get("bin") is None:
+                ungraded.setdefault(identity(row), []).append((row["frames"], key))
+            else:
+                bin_key = (*identity(row), row["bin"])
+                fastest[bin_key] = min(fastest.get(bin_key, (row["frames"], key)), (row["frames"], key))
+        for key, row in self._rows.items():
+            if row.get("bin") is not None and fastest[(*identity(row), row["bin"])][1] != key:
+                self._rows.pop(key)
+                return
+        if ungraded:
+            self._rows.pop(max(max(ungraded.values(), key=len))[1])
+            return
+        self._rows.popitem(last=False)
+
     def _write(self):
         encoded = canonical({"v": 1, "offers": list(self._rows.values())})
         while len(encoded) > MAX_BYTES and len(self._rows) > 1:
-            self._rows.popitem(last=False)
+            self._evict_one()
             encoded = canonical({"v": 1, "offers": list(self._rows.values())})
         _replace(self.path, encoded)
 
@@ -166,8 +198,26 @@ class SourceOutbox:
             self._rows[key] = {**previous, **source}
             self._rows.move_to_end(key)
             while len(self._rows) > MAX_OFFERS:
-                self._rows.popitem(last=False)
+                self._evict_one()
             self._write()
+
+    def remember_many(self, sources):
+        """One write for a whole batch of already checked offers."""
+        with self._lock:
+            self.load()
+            for source in sources:
+                key = source_id(source)
+                self._rows[key] = {**self._rows.get(key, {}), **source}
+                self._rows.move_to_end(key)
+            while len(self._rows) > MAX_OFFERS:
+                self._evict_one()
+            self._write()
+
+    def held_by_others(self, owner):
+        """The clips an unsent offer of another account still names."""
+        with self._lock:
+            self.load()
+            return {row["raw_sha256"] for row in self._rows.values() if row["owner"] != owner}
 
     def contains(self, source):
         with self._lock:

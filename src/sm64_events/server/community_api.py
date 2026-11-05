@@ -90,7 +90,7 @@ def _private_response(response: Response):
     response.headers['X-Content-Type-Options'] = 'nosniff'
 
 
-def create_community_router(account, progress=None):
+def create_community_router(account, progress=None, sync=None):
     router = APIRouter(prefix="/api/community", tags=["community"], dependencies=[Depends(_private_response)])
     pending = {"attempt_id": None}
 
@@ -105,7 +105,7 @@ def create_community_router(account, progress=None):
         return account
 
     _mount_auth(router, require_account, pending)
-    _mount_account(router, require_account, pending, progress)
+    _mount_account(router, require_account, pending, progress, sync)
     return router
 
 
@@ -156,7 +156,7 @@ async def _complete_profile(active, body, progress):
     return active.snapshot()
 
 
-def _mount_account(router, require_account, pending, progress=None):
+def _mount_account(router, require_account, pending, progress=None, sync=None):
     @router.get("/names/check")
     async def check_name(name: str = Query(min_length=1, max_length=128)):
         """The live availability check while a name is typed (round 41).
@@ -206,6 +206,8 @@ def _mount_account(router, require_account, pending, progress=None):
         if body.confirmation != "WITHDRAW":
             raise HTTPException(400, "Confirm shared ghost removal.")
         active = require_account()
+        if sync is not None:
+            await asyncio.to_thread(sync.close_earlier_ghosts)
         return await _call(lambda: active.request_json("POST", "/v1/account/withdraw",
             json={'confirmation': 'WITHDRAW MY GHOSTS'}))
 
@@ -214,6 +216,8 @@ def _mount_account(router, require_account, pending, progress=None):
         if body.confirmation != "DELETE":
             raise HTTPException(400, "Confirm account deletion.")
         active = require_account()
+        if sync is not None:
+            await asyncio.to_thread(sync.close_earlier_ghosts)
         result = await _call(lambda: active.request_json("POST", "/v1/account/delete",
             json={'confirmation': 'DELETE MY ACCOUNT'}))
         await _call(active.sign_out)

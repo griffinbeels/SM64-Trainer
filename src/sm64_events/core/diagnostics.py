@@ -61,6 +61,40 @@ def _ghost_timeline(path: Path) -> list[str]:
     return [report_line(line)[:LINE_CLIP] for line in lines[-GHOST_TIMELINE:]]
 
 
+SETUP_CHECK_TITLE = "Setup compared with the tested setup"
+
+
+def _cell(value) -> str:
+    return scrub_text(str(value if value is not None else ""), 140).replace("|", "/").replace("\n", " ")
+
+
+def _folder(folder) -> str:
+    folder = folder if isinstance(folder, dict) else {}
+    state = "running" if folder.get("running") else "not running (the last one seen)"
+    return f"{_cell(folder.get('name') or 'unnamed')} ({_cell(folder.get('location') or 'unknown')}), {state}"
+
+
+def setup_check_markdown(check: dict | None) -> str:
+    """The setup check (core/setup_profile.py) as one table, differences first.
+    Plugin and file names and hashes are kept; folders never appear."""
+    if not check or not check.get("items"):
+        reason = check.get("error_type") if check else None
+        return f"unavailable: {_cell(reason)}" if reason else "unavailable: no setup observed yet"
+    flagged = check.get("flagged") or []
+    lines = [f"Tested setup recorded {_cell(check['baseline']['recorded'])}. "
+             + (f"Differences that may matter: {', '.join(map(_cell, flagged))}." if flagged
+                else "No required or recommended difference."),
+             "", f"- Project64 folder: {_folder(check.get('folder'))}",
+             f"- rom: {_cell(check.get('rom') or 'none')}",
+             f"- rdb read from: {_cell(check.get('rdb') or 'none')}",
+             "", "| Item | Importance | Status | Yours | Tested | Read from | sha256 |",
+             "| --- | --- | --- | --- | --- | --- | --- |"]
+    lines += [f"| {_cell(row['id'])} | {_cell(row['importance'])} | {_cell(row['status'])} | {_cell(row['yours'])} "
+              f"| {_cell(row['tested'])} | {'every Project64 on this Windows account' if row.get('shared') else 'this folder'} "
+              f"| {_cell(row.get('yours_sha256', ''))} |" for row in check["items"]]
+    return "\n".join(lines)
+
+
 def _fence(lines: list[str]) -> str:
     return "```\n" + "\n".join(lines) + "\n```"
 
@@ -94,7 +128,8 @@ def build_report(*, version: str, frozen: bool, port: int, data_dir: str,
                  health: Callable[[], dict],
                  events: Callable[[], list], replay: Callable[[], dict] | None = None,
                  setup: Callable[[], dict] | None = None, build: dict | None = None,
-                 snapshot: Callable[[], dict] | None = None, attached: bool = False) -> str:
+                 snapshot: Callable[[], dict] | None = None, attached: bool = False,
+                 setup_check: Callable[[], dict | None] | None = None) -> str:
     """`attached` changes only the header: automatic error reports carry this same text."""
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     sharing = ("Attached to an automatic error report." if attached
@@ -149,6 +184,7 @@ def build_report(*, version: str, frozen: bool, port: int, data_dir: str,
             report_value(health()), indent=2, default=str) + "\n```"),
         _section("Replay and GPU", lambda: "```json\n" + json.dumps(
             safe_snapshot({"capture": replay()})["capture"] if replay else {"available": False}, indent=2, default=str) + "\n```"),
+        _section(SETUP_CHECK_TITLE, lambda: setup_check_markdown(setup_check() if setup_check else None)),
         _section("Last observed setup", lambda: "```json\n" + json.dumps(
             report_value(setup() if setup else None), indent=2, default=str) + "\n```"),
         _section("Trainer diagnostic snapshot", lambda: "```json\n" + json.dumps(

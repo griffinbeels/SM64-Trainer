@@ -37,11 +37,14 @@ REGION = {1: "us", 2: "jp"}  # gclip_header.rom_layout, written independently of
 SEGMENT = {"kind": "segment", "entity_key": "7", "signature": "0" * 64, "name": "Fixture segment", "strat": None}
 
 
-def _native(version, clock=1, *, pads=KNOWN_PADS, actions=None, dance_tail=False, layout=1):
+def _native(version, clock=1, *, pads=KNOWN_PADS, actions=None, dance_tail=False, layout=1, unposed=(), lost=(),
+            level_from=None):
     raw = encode_clip(tuple(frame_from_bytes(frame(index,
         pad=pads[(index - 1) % len(pads)] if version == 7 else None,
+        valid=29 if index in unposed else 31,
+        level=36 if level_from is not None and index >= level_from else 24,
         action=None if actions is None else actions(index)))
-        for index in range(1, COUNT + 1)), producer(), clock_kind=clock,
+        for index in range(1, COUNT + 1) if index not in lost), producer(), clock_kind=clock,
         clip_id="22222222-2222-4222-8222-222222222222", dance_tail=dance_tail)
     if layout != 1:
         raw = raw[:24] + struct.pack("<I", layout) + raw[28:]
@@ -109,6 +112,13 @@ def _claims():
         "unknown_rom_layout": (unchecked(_native(7, layout=3), rom="us"), "invalid_clip"),
         "one_pad_in_three_unknown": (_case(_native(7, pads=PADS)), "incomplete_inputs"),
         **{f"format_{version}_has_no_pads": (_case(_native(version)), "incomplete_inputs") for version in (4, 5, 6)},
+        # The ghost must never vanish in the middle of a scene.
+        "two_refused_frames_are_bridged": (_case(_native(7, unposed=(100, 101))), None),
+        "three_refused_frames_mid_scene": (_case(_native(7, unposed=(100, 101, 102))), "playback_gaps"),
+        "a_lost_frame_mid_scene": (_case(_native(7, lost=(100,))), "playback_gaps"),
+        "hidden_across_a_level_change": (_case(_native(7, unposed=range(100, 120), level_from=110)), None),
+        "lost_frames_across_a_level_change": (_case(_native(7, lost=range(100, 110), level_from=110)), None),
+        "hidden_on_the_first_frames": (_case(_native(7, unposed=range(1, 20))), None),
         "one_frame_faster": (_case(raw, frames=CLAIM - 1), "frames_mismatch"),
         "one_frame_slower": (_case(raw, frames=CLAIM + 1), "frames_mismatch"),
         "hundred_coin_star_on_segment_clock": (_case(segment), None),

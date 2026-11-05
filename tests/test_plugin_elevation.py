@@ -23,6 +23,7 @@ from sm64_events.core import plugin_elevation, plugin_elevation_worker, plugin_i
 from sm64_events.core.plugin_installation import (
     ElevationCancelled, PluginInstallError, in_use,
 )
+from sm64_events.core.renderer_settings import MINIMAL, RENDERER_INI
 
 
 @pytest.fixture
@@ -270,10 +271,12 @@ def test_wrong_bundle_role_is_refused(privileged_request, install):
 def test_privileged_transaction_rolls_back_all_files_on_parent_failure(privileged_request, install):
     plugin = install[3] / "Plugin"
     (plugin / WRAPPER_DLL).write_bytes(b"old wrapper")
+    (plugin / RENDERER_INI).write_bytes(MINIMAL.replace(b"enable=0", b"enable=1"))
     before = {path.name: path.read_bytes() for path in plugin.iterdir()}
     with pytest.raises(OSError, match="parent settings failed"):
         with plugin_elevation_worker.privileged_files(privileged_request):
             assert (plugin / WRAPPER_DLL).read_bytes() == install[4].read_bytes()
+            assert (plugin / RENDERER_INI).read_bytes() == MINIMAL
             raise OSError("parent settings failed")
     assert {path.name: path.read_bytes() for path in plugin.iterdir()} == before
 
@@ -341,3 +344,5 @@ def test_authenticated_parent_helper_transaction_without_real_uac(privileged_req
     assert registry.selected == WRAPPER_DLL
     assert json.loads(settings.read_text())["consented_at"]
     assert (pj64 / "Plugin" / WRAPPER_INI).read_text() == f"wrapped={RENDERER_FILE}\n"
+    # The administrator half writes the renderer's settings file the same way.
+    assert (pj64 / "Plugin" / RENDERER_INI).read_bytes() == MINIMAL

@@ -32,11 +32,16 @@ A target with no strategy has no rivals, no PB, no chosen slots and no cloud
 request; the lineup reports `no_strategy`.
 
 The default range is one to five subdivisions above that basis. The floor stays
-above the PB until the final subdivision. Seats keep their player, slot and
-colour (his design, 2026-10-16): a new PB replaces only the seats it passed,
-and a passed seat first takes that same player's fastest recording still ahead
-inside the range. A seat above the range's top is dealt again, so an undone PB
-brings nearer rivals back. Only changed rival settings deal every seat afresh.
+above the PB until the final subdivision. **The set is held** (his rule,
+2026-11-03: "NOT automatically replace ghosts until either (1) the user changes
+stars, (2) the user explicitly requests a new set"): a PB or an undo moves only
+your own seat, and every rival keeps its recording, slot and colour, beaten or
+not. A new deal comes from arriving on a different star (`Rivals._hold_seats`;
+the target dropping to nothing or moving to one of this star's subsections is
+not a change, and a strategy keeps its own set meanwhile), the **New ghosts**
+button (`action: "new"`, which seats other players first and returns the old
+ones only when nobody else can fill a seat), changed rival settings, or a
+restart. A seat whose recording is gone is the only seat filled on its own.
 Chosen slots never move and stay when beaten. When the completed compatible pool
 has no automatic opponents in the chosen range, the fastest available recordings
 fill automatic slots. They can be slower than the user's PB or outside its rank

@@ -846,7 +846,7 @@ instantly. Three compounding causes, each fixed:
    (idle discards, so the ring only grows while recording). A full system disk
    squeezes the Windows pagefile → the same "out of memory / everything laggy"
    symptom as a RAM leak. Fix: `ring.effective_cap` gates the byte cap on
-   actual free disk (5 GiB margin), so the buffer shrinks rather than filling
+   actual free disk (2 GiB since 2026-11-02), so the buffer shrinks rather than filling
    the volume regardless of the configured cap. The current lifecycle, leases,
    all-temporary-file accounting and reduced new-install default are described
    in [replay storage](replay-storage.md).

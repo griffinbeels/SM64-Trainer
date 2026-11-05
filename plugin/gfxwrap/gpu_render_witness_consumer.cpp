@@ -1,10 +1,12 @@
 /* Test-only x64 consumer for the renderer-thread capture witnesses. It plays
- * the encoder helper: it creates the two keyed-mutex textures under the
- * producer's names (as gpu_encoder_dll's open does), takes key 1, checks every
- * pixel against the independent fixture (or dumps the first picture), encodes
- * with the shipped NVENC encoder when built with RENDER_WITNESS_NVENC, and
- * returns key 0.   usage: <name> verify|dump */
+ * the encoder helper: it creates the two textures under the producer's names
+ * for the producer's transport, with the shipped helper's own transport code
+ * (gpu_transport_helper.h, as gpu_encoder_dll's open does), takes each
+ * picture, checks every pixel against the independent fixture (or dumps the
+ * first picture), encodes with the shipped NVENC encoder when built with
+ * RENDER_WITNESS_NVENC, and hands the texture back.   usage: <name> verify|dump */
 #include "gpu_render_wire.h"
+#include "gpu_transport_helper.h"
 #include <d3d11_1.h>
 #include <dxgi1_2.h>
 #include <wrl/client.h>
@@ -41,18 +43,16 @@ int wmain(int argc, wchar_t **argv) {
     const unsigned width = ctl->width, height = ctl->height;
     ComPtr<ID3D11Device> device; ComPtr<ID3D11DeviceContext> context;
     REQUIRE(device_for_luid(ctl->adapter, &device, &context));
-    D3D11_TEXTURE2D_DESC desc{}; desc.Width = width; desc.Height = height; desc.MipLevels = 1; desc.ArraySize = 1;
-    desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM; desc.SampleDesc.Count = 1; desc.Usage = D3D11_USAGE_DEFAULT;
-    desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
-    desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_NTHANDLE | D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
-    ComPtr<ID3D11Texture2D> textures[2], staging; ComPtr<IDXGIKeyedMutex> mutex[2]; HANDLE shares[2]{};
+    gpu_transport::HelperSlot slots[2];
     for (unsigned i = 0; i < 2; ++i) {
-        REQUIRE(SUCCEEDED(device->CreateTexture2D(&desc, nullptr, &textures[i])) && SUCCEEDED(textures[i].As(&mutex[i])));
-        ComPtr<IDXGIResource1> resource; REQUIRE(SUCCEEDED(textures[i].As(&resource)));
-        REQUIRE(SUCCEEDED(resource->CreateSharedHandle(nullptr, DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE,
-                                                       ctl->names[i], &shares[i])));
-        REQUIRE(mutex[i]->AcquireSync(1, 0) == WAIT_TIMEOUT); // a new texture starts at key 0
+        const HRESULT made = slots[i].create(device.Get(), ctl->transport, ctl->names[i], width, height,
+                                             DXGI_FORMAT_R8G8B8A8_UNORM, 1 /* GBENC_INPUT_RGBA8 */);
+        if (FAILED(made)) fprintf(stderr, "transport %u create failed hr=0x%08lx\n", ctl->transport, made);
+        REQUIRE(SUCCEEDED(made));
+        REQUIRE(slots[i].acquire(context.Get()) == WAIT_TIMEOUT); // nothing handed over yet
     }
+    D3D11_TEXTURE2D_DESC desc{}; slots[0].texture()->GetDesc(&desc);
+    ComPtr<ID3D11Texture2D> staging;
     desc.Usage = D3D11_USAGE_STAGING; desc.BindFlags = 0; desc.MiscFlags = 0; desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
     REQUIRE(SUCCEEDED(device->CreateTexture2D(&desc, nullptr, &staging)));
 #ifdef RENDER_WITNESS_NVENC
@@ -72,14 +72,15 @@ int wmain(int argc, wchar_t **argv) {
         for (unsigned n = 0; n < 10000 && !InterlockedCompareExchange(&packet.ready, 0, 0); ++n) Sleep(1);
         REQUIRE(packet.ready == 1 && packet.occurrence == occurrence && packet.qpc == int64_t(occurrence) * 101);
         HRESULT acquired = WAIT_TIMEOUT;
-        for (unsigned n = 0; n < 10000 && acquired == WAIT_TIMEOUT; ++n) { acquired = mutex[index]->AcquireSync(1, 0); if (acquired == WAIT_TIMEOUT) Sleep(1); }
+        for (unsigned n = 0; n < 10000 && acquired == WAIT_TIMEOUT; ++n) { acquired = slots[index].acquire(context.Get()); if (acquired == WAIT_TIMEOUT) Sleep(1); }
         REQUIRE(acquired == S_OK);
+        ID3D11Texture2D *texture = slots[index].texture();
 #ifdef RENDER_WITNESS_NVENC
         const uint64_t pts[6] = {0, 3001, 3002, 90000, 91000, 180000}, durations[6] = {3001, 1, 86998, 1000, 89000, 9000};
         const bool idr = occurrence == 1 || occurrence == 4 || occurrence == 6;
-        REQUIRE(encoder.encode(textures[index].Get(), occurrence, pts[occurrence - 1], durations[occurrence - 1], idr));
+        REQUIRE(encoder.encode(texture, occurrence, pts[occurrence - 1], durations[occurrence - 1], idr));
 #endif
-        context->CopyResource(staging.Get(), textures[index].Get());
+        context->CopyResource(staging.Get(), texture);
         D3D11_MAPPED_SUBRESOURCE data{}; REQUIRE(SUCCEEDED(context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &data)));
         unsigned errors = 0;
         if (dump) {
@@ -102,7 +103,8 @@ int wmain(int argc, wchar_t **argv) {
             checked += width * height * 4;
         }
         context->Unmap(staging.Get(), 0);
-        REQUIRE(SUCCEEDED(mutex[index]->ReleaseSync(0)));
+        REQUIRE(SUCCEEDED(slots[index].after_read(context.Get()))); context->Flush();
+        REQUIRE(SUCCEEDED(slots[index].release()));
         InterlockedExchange(&packet.ready, 0);
         if (errors) { InterlockedExchange(&ctl->failed, 1); return 1; }
         InterlockedIncrement(&ctl->consumed);
@@ -112,8 +114,8 @@ int wmain(int argc, wchar_t **argv) {
     REQUIRE(encoder.submitted() == 6 && encoder.completed() == 6 && encoder.delivered() == 6);
     printf("drained submitted=%llu completed=%llu eos=yes\n", encoder.submitted(), encoder.completed());
 #endif
-    printf("consumer passed: bits=%u pictures=%u bytes_checked=%u output=%ux%u created_textures=yes\n",
-           unsigned(sizeof(void *) * 8), ctl->pictures, checked, width, height);
-    for (auto share : shares) CloseHandle(share);
+    printf("consumer passed: bits=%u pictures=%u bytes_checked=%u output=%ux%u created_textures=yes transport=%u\n",
+           unsigned(sizeof(void *) * 8), ctl->pictures, checked, width, height, ctl->transport);
+    for (auto &slot : slots) slot.reset();
     UnmapViewOfFile(ctl); CloseHandle(mapping); return 0;
 }

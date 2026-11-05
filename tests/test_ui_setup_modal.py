@@ -693,6 +693,7 @@ def test_restored_bundle_recovers_the_open_setup_modal(tmp_path, monkeypatch):
     import ui_fixture
     from types import SimpleNamespace
     from sm64_events.core.capturelayer import CaptureLayer, RENDERER_FILE, WRAPPER_DLL, WRAPPER_INI
+    from sm64_events.core.renderer_settings import MINIMAL, RENDERER_INI
 
     folder = tmp_path / "PJ64"
     plugin = folder / "Plugin"
@@ -704,6 +705,7 @@ def test_restored_bundle_recovers_the_open_setup_modal(tmp_path, monkeypatch):
     renderer.write_bytes(b"matching offline renderer")
     (plugin / RENDERER_FILE).write_bytes(renderer.read_bytes())
     (plugin / WRAPPER_INI).write_text(f"wrapped={RENDERER_FILE}")
+    (plugin / RENDERER_INI).write_bytes(MINIMAL)
     registry = SimpleNamespace(get=lambda key, name: WRAPPER_DLL if name == "Graphics Dll" else None)
     processes = SimpleNamespace(pj64_image_path=lambda: str(folder / "Project64.exe"))
     layer = CaptureLayer(registry, processes, tmp_path / "capture.json",

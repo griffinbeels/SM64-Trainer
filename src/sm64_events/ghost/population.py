@@ -18,7 +18,7 @@ import tempfile
 import threading
 import unicodedata
 
-from sm64_events.ghost.clip import attempt_origin, blink_frames, read_clip, require_complete_inputs
+from sm64_events.ghost.clip import NO_POSE_ARCHIVE, attempt_origin, blink_frames, read_clip, require_complete_inputs
 from sm64_events.ghost.pb import local_attempt_source
 from sm64_events.ghost.portable import checked_author, checked_hash
 from sm64_events.ghost.sharing import PortableGhost
@@ -27,7 +27,23 @@ from sm64_events.inputs.service import entity_key_of
 from sm64_events.tracking.caveats import pb_blocked_by, save_state_run
 
 MAX_RECORDINGS = 16384
-MAX_POPULATION_BYTES = 512 << 20
+# One best per player per subdivision is the real bound, so this only stops a
+# runaway. His rule, 2026-11-02: "keep all of them". Measured clips average
+# 727 KB, so MAX_RECORDINGS is the limit that a real player would reach first.
+MAX_POPULATION_BYTES = 16 << 30
+
+
+class PopulationFull(ValueError):
+    """The run is fine and there is no room for its row. Never silent."""
+
+
+class PreservationFailed(ValueError):
+    """The run may be fine; its poses did not reach disk this time.
+
+    Worth retrying while the rolling archive still holds them, unlike a plain
+    ValueError, which says the run is not eligible. Its text can reach logs,
+    so it never holds a path (`ReplayService._preserve_ghost`).
+    """
 
 
 def _normalize_player(value: str) -> str:
@@ -78,6 +94,20 @@ def _admissible(attempt, clock, game_version, full_start):
         raise ValueError("Automatic ghosts require a measured time and strategy.")
     attempt_origin(attempt)
     return frames
+
+
+def still_admissible(attempt, row) -> bool:
+    """Whether today's rules still admit the run behind a stored ghost.
+
+    A row's `valid` is what was true when it was saved. Validity is derived
+    from the journal, so a run can lose it later and the row would not know.
+    """
+    if local_attempt_source(attempt) != row.get("source") or attempt.strat_tag != row.get("strategy"):
+        return False
+    try:
+        return _admissible(attempt, row["clock"], row["game_version"], True) == row["frames"]
+    except (ValueError, TypeError, KeyError, AttributeError):
+        return False
 
 
 def searched_versions(identity):
@@ -133,10 +163,12 @@ def committed_digest(replay, attempt):
 def _preserved_asset(replay, attempt):
     kept = replay.preserve_native(attempt.id)
     if not kept.get("path"):
-        raise ValueError(kept.get("native_ghost_reason") or "This run has no preserved Mario recording.")
+        reason = kept.get("native_ghost_reason") or "This run has no preserved Mario recording."
+        # No pose recorder ran at all, so no retry can find any.
+        raise (ValueError if reason == NO_POSE_ARCHIVE else PreservationFailed)(reason)
     found = replay.find_native(attempt.id)  # the existing strict owner/hash validator
     if found is None:
-        raise ValueError("This run's Mario recording could not be validated.")
+        raise PreservationFailed("This run's Mario recording could not be validated.")
     source, digest = _playback_copy(replay, attempt, found)
     # His rule: a recording the input track could not complete never becomes
     # a rival here nor a community upload (ghost/clip.py::INCOMPLETE_INPUTS).
@@ -168,6 +200,9 @@ class LocalPopulation:
             CREATE INDEX IF NOT EXISTS recordings_player ON recordings(target,clock,version,normalized,frames,id);
             CREATE INDEX IF NOT EXISTS recordings_strategy ON recordings(target,clock,version,json_extract(document,'$.target.strat'),frames,id);
             CREATE INDEX IF NOT EXISTS recordings_strategy_player ON recordings(target,clock,version,json_extract(document,'$.target.strat'),normalized,frames,id);
+            CREATE TABLE IF NOT EXISTS owed (
+                attempt_id INTEGER NOT NULL, session_id INTEGER NOT NULL, started_utc TEXT NOT NULL,
+                owner TEXT, noted_utc TEXT NOT NULL, PRIMARY KEY (attempt_id, session_id, started_utc));
             PRAGMA user_version=1;
         """)
         self._verified = {}
@@ -259,6 +294,33 @@ class LocalPopulation:
                                     "json_extract(document,'$.source.started_utc') FROM recordings LIMIT ?",
                                     (MAX_RECORDINGS,)).fetchall()
         return {tuple(row) for row in rows if type(row[1]) is int}
+
+    def note_owed(self, source, owner, noted_utc):
+        """A finished run owes an admission until `settle_owed`; see `ghost/rival_recording.py`.
+
+        `owner` is the account that was sharing when the run finished, or None.
+        Written on the admission worker only, never the poll loop.
+        """
+        with self._lock, self._db:
+            self._db.execute("INSERT OR IGNORE INTO owed VALUES (?,?,?,?,?)",
+                             (source["attempt_id"], source["session_id"], source["started_utc"], owner, noted_utc))
+
+    def settle_owed(self, source):
+        with self._lock, self._db:
+            self._db.execute("DELETE FROM owed WHERE attempt_id=? AND session_id=? AND started_utc=?",
+                             (source["attempt_id"], source["session_id"], source["started_utc"]))
+
+    def owed_runs(self, limit):
+        """Runs an earlier session did not finish admitting, newest first."""
+        with self._lock:
+            rows = self._db.execute("SELECT * FROM owed ORDER BY noted_utc DESC, attempt_id DESC LIMIT ?",
+                                    (limit,)).fetchall()
+        return tuple(dict(row) for row in rows)
+
+    def portable_target(self, attempt):
+        """The descriptor a community offer of this run would carry, read without its clip."""
+        kind, key = entity_key_of(attempt)
+        return describe(kind, key, attempt.strat_tag, self._defs())
 
     def remove(self, ids):
         """Delete rows; a clip goes only when no remaining row references its bytes.
@@ -422,7 +484,7 @@ class LocalPopulation:
                                    "(SELECT sha256,MAX(bytes) bytes FROM recordings GROUP BY sha256)").fetchone()[0]
             present = self._db.execute("SELECT 1 FROM recordings WHERE sha256=?", (digest,)).fetchone()
             if count >= MAX_RECORDINGS or used + (0 if present else size) > MAX_POPULATION_BYTES:
-                raise ValueError("The local ghost population has reached its storage limit.")
+                raise PopulationFull("The local ghost population has reached its storage limit.")
             destination = self.root / "clips" / f"{digest}.ghost"
             destination.parent.mkdir(exist_ok=True)
             if not destination.resolve().is_relative_to(self.root):

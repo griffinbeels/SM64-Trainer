@@ -5,6 +5,7 @@ from datetime import datetime
 import string
 import threading
 
+from sm64_events.ghost import draw_facts
 from sm64_events.ghost.clip import INCOMPLETE_INPUTS, OLDER_POSE_FORMAT_TEXT
 from sm64_events.ghost.native_layout import GHOSTS, GIPC_ROM_REASONS, GP_WRONG_SCENE, LABEL_BYTES
 from sm64_events.ghost.pb import attempt_id_of
@@ -591,6 +592,9 @@ class NativeGhost:
                     "progress": tuple(status.get(key) for key in
                         ("state", "reason", "playback_state", "playback_reason", "prepared_generation",
                          "active_generation", "clips_prepared")),
+                    # Which step stopped the latest list and picture (draw_facts.py),
+                    # beside progress, never in it: it changes with what is on screen.
+                    "draw": draw_facts.timeline(status) if "draw_list_gate" in status else None,
                     "observed_unix_s": status.get("observed_unix_s"),
                     "scope": (id(self._source), self._target, self._adaptive_generation,
                               getattr(producer, "configuration", None), getattr(producer, "epoch", None))}

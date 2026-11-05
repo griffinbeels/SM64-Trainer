@@ -70,12 +70,16 @@ def test_scoped_clear_then_delete_previous_session_refreshes_real_pb_and_roster(
         assert rivals.pb["frames"] == 900 and rivals.rows
         before = tuple(row["id"] for row in rivals.rows)
         await service.wipe_data("all", scope="session")
-        assert rivals.pb["frames"] == 1200 and rivals.rows
-        assert tuple(row["id"] for row in rivals.rows) != before
+        # The PB follows the wipe at once; the set is held until asked for.
+        assert rivals.pb["frames"] == 1200
+        assert tuple(row["id"] for row in rivals.rows) == before
         assert [row.id for row in db.attempts()] == [old.id]
         await service.delete_session(old.session_id)
-        assert rivals.pb is None and len(rivals.rows) == 4
-        # No PB spreads across the two lowest tiers; seats already there keep their slots.
+        assert rivals.pb is None and tuple(row["id"] for row in rivals.rows) == before
+        # A deal with no PB spreads across the two lowest tiers.
+        rivals.rows = ()
+        rivals.pb_changed()
+        rivals.refresh(TARGET, CONTROLS, enabled=True)
         steps = {row["frames"]: rank_frames(service.ranks, identity, row["frames"])["step"] for row in rivals.rows}
         assert all(step <= 9 for step in steps.values()) and len({row["player_id"] for row in rivals.rows}) == 4
         assert len(native.preparations[-1][1]) == 4
@@ -507,6 +511,7 @@ def test_fresh_profile_fills_from_below_like_normal_play(tmp_path,monkeypatch,si
     monkeypatch.setattr(rivals,"_simulation",lambda:{"zero_practice":True} if simulated else None)
     monkeypatch.setattr(module,"saved_pb_basis",lambda *_args:basis(step=44,frames=frames))
     rivals.options.update(mode="adaptive")
+    rivals.rows=()
     rivals.pb_changed()
     before=rivals.generation
     rivals.refresh(TARGET,CONTROLS,enabled=True)
@@ -518,6 +523,86 @@ def test_fresh_profile_fills_from_below_like_normal_play(tmp_path,monkeypatch,si
     expected=sorted(population.rows,key=lambda row:row["frames"])[:4]
     assert {row["id"] for row in rows}=={row["id"] for row in expected}
     assert native.preparations[-1][-1]==rivals.generation
+
+
+def _seated(rivals):
+    return {row["slot"]:row["id"] for row in rivals.rows}
+
+
+def test_the_set_is_held_until_he_changes_stars_or_asks(tmp_path,monkeypatch):
+    """His rule (2026-11-03). The target dropping to nothing, or moving to one
+    of this star's subsections, is ordinary play and not changing stars."""
+    rivals,tracker,native,_,_ = controller(tmp_path,monkeypatch)
+    try:
+        monkeypatch.setattr(module,"saved_pb_basis",lambda *_args:basis(step=9,frames=1300))
+        rivals.pb_changed()
+        rivals.refresh(TARGET,CONTROLS,enabled=True,force=True)
+        dealt = _seated(rivals)
+        assert len(dealt)==4
+        monkeypatch.setattr(module,"saved_pb_basis",lambda *_args:basis(step=44,frames=100))
+
+        rivals.pb_changed(TARGET)
+        rivals.refresh(TARGET,CONTROLS,enabled=True)
+        assert rivals.pb["frames"]==100 and _seated(rivals)==dealt, "a PB moved the set"
+
+        rivals.refresh(None,CONTROLS,enabled=True)
+        assert not rivals.rows
+        rivals.refresh(TARGET,CONTROLS,enabled=True)
+        assert _seated(rivals)==dealt, "dropping to no target moved the set"
+
+        tracker.db.segment_defs = lambda:[{"id":7,"parents":["star:2:1"]},{"id":8,"parents":[]}]
+        piece = {"kind":"segment","entity_key":"7","strat":TARGET["strat"]}
+        monkeypatch.setattr(module,"describe",lambda *_args,**_kwargs:{"signature":"piece"})
+        rivals.refresh(piece,CONTROLS,enabled=True)
+        rivals.refresh(TARGET,CONTROLS,enabled=True)
+        assert _seated(rivals)==dealt, "a subsection of this star moved the set"
+
+        other = {**TARGET,"entity_key":"3-1"}
+
+        rivals.pb_changed(TARGET)
+        monkeypatch.setattr(module,"saved_pb_basis",lambda *_args:basis(step=9,frames=1300))
+        rivals.refresh(other,CONTROLS,enabled=True)
+        rivals.refresh(TARGET,CONTROLS,enabled=True)
+        assert rivals.held=={} and rivals.family==frozenset({"star:2:1"})
+        # A fresh deal, not a carry: seats come from the PB's range again.
+        fresh = module.select_rivals(*_deal_inputs(rivals),scope=rivals.identity.scope)
+        assert _seated(rivals)=={row["slot"]:row["id"] for row in fresh}
+    finally:
+        tracker.db.close()
+
+
+def _deal_inputs(rivals):
+    ranked,_ = rivals._ranked_population(rivals.identity,{})
+    return ranked,rivals._pb_basis(rivals.identity),rivals.options,{}
+
+
+def test_asking_for_new_ghosts_replaces_the_set_and_says_when_nobody_else_exists(tmp_path,monkeypatch):
+    rivals,tracker,_,population,_ = controller(tmp_path,monkeypatch)
+    try:
+        rivals.refresh(TARGET,CONTROLS,enabled=True,force=True)
+        first = set(_seated(rivals).values())
+        assert len(first)==4
+        checked = rivals.checked({"action":"new"},TARGET)
+        rivals.apply(checked)
+        rivals.refresh(TARGET,CONTROLS,enabled=True)
+        assert first.isdisjoint(_seated(rivals).values()) and len(rivals.rows)==4
+        assert rivals.payload()["no_new_ghosts"] is False
+
+        # Only four recordings exist: the same four stay, and the card says why.
+        population.rows = [row for row in population.rows if row["id"] in set(_seated(rivals).values())]
+        population.generation += 1
+        rivals.refresh(TARGET,CONTROLS,enabled=True)
+        same = _seated(rivals)
+        rivals.apply(rivals.checked({"action":"new"},TARGET))
+        rivals.refresh(TARGET,CONTROLS,enabled=True)
+        assert set(_seated(rivals).values())==set(same.values())
+        assert rivals.payload()["no_new_ghosts"] is True
+        # The next deal clears the sentence.
+        rivals.pb_changed(TARGET)
+        rivals.refresh(TARGET,CONTROLS,enabled=True)
+        assert rivals.payload()["no_new_ghosts"] is False
+    finally:
+        tracker.db.close()
 
 
 def test_reopening_preserves_referenced_local_choices_across_many_targets(tmp_path,monkeypatch):

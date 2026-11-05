@@ -249,7 +249,7 @@ def test_the_want_signal_and_the_copy_sink_reach_the_gpu_route(tmp_path, process
             settings = video.settings
             assert sink.ledger is NULL_LEDGER and sink.template == NativeFormat("av1", 640, 480, 30)
             assert (sink.max_bytes, sink.max_blocks, sink.max_age) == (
-                settings.pending_bytes, settings.pcm_blocks, settings.max_age), "the clean sink's bounds"
+                settings.sink_bytes, settings.sink_blocks, settings.sink_age_s), "the clean sink's bounds"
             assert sink._worker.name == "replay-ghost-copy-sink"
             sink.bind(MediaRun("copy-run", ORIGIN))
         finally:

@@ -16,15 +16,10 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from sm64_events.core.profiling import measured
+from sm64_events.replay.config import DISK_RESERVE_BYTES
 from sm64_events.replay.media import MediaRun
 
 log = logging.getLogger("sm64.replay")
-
-# Free disk we refuse to consume: a near-full system volume thrashes the whole
-# machine (Windows squeezes the pagefile), which reads as the same "everything
-# is laggy / out of memory" symptom as a RAM leak. The buffer never grows so
-# large that free space would drop below this.
-_DISK_MARGIN_BYTES = 5 * 1024 ** 3
 
 # Temporary groups a fragment archive owns: the clean recording's and the
 # ghost copy's (fragmentstore.py). Their archives expire them GOP-aware, and a
@@ -33,7 +28,7 @@ FRAGMENT_PREFIXES = ("fragments:", "ghostcopy:")
 
 
 def effective_cap(configured_cap: int, free_bytes: int, current_total: int,
-                  *, margin_bytes: int = _DISK_MARGIN_BYTES) -> int:
+                  *, margin_bytes: int = DISK_RESERVE_BYTES) -> int:
     """The byte cap actually enforced: the configured cap, but never so large
     that free disk would fall below margin_bytes. free_bytes is space free NOT
     counting our buffer; on top of what we already hold we may grow into
@@ -73,7 +68,7 @@ class _Temporary:
 class SegmentRing:
     def __init__(self, retention_s: float | None, max_bytes: int,
                  free_bytes_fn=None,
-                 disk_margin_bytes: int = _DISK_MARGIN_BYTES,
+                 disk_margin_bytes: int = DISK_RESERVE_BYTES,
                  on_evict=None, scratch_root: Path | None = None,
                  deletion_guard=None, on_temp_evict=None):
         self._retention_s = retention_s
@@ -103,10 +98,15 @@ class SegmentRing:
         self._clear_segments: set[Path] = set()
         self._now: datetime | None = None
         self.storage_pressure = False
+        self.free_bytes: int | None = None  # the last probe; polling never touches the disk
 
     @property
     def total_bytes(self) -> int:
         return self._total_bytes
+
+    @property
+    def disk_reserve_bytes(self) -> int:
+        return self._disk_margin
 
     def temporary_groups(self) -> frozenset[str]:
         """Published group identities; archive pruning needs no filesystem walk."""
@@ -403,6 +403,7 @@ class SegmentRing:
                 free = self._free_bytes_fn()
             except OSError:
                 free = None  # scratch volume not ready/gone — fall back to cap
+            self.free_bytes = free
             if free is not None:
                 floor_cap = self._total_bytes + free - self._disk_margin
                 cap = effective_cap(self._max_bytes, free, self._total_bytes,

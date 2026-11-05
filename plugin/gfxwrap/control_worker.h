@@ -59,6 +59,8 @@ static void control_publish(control_page_t *page, uint32_t state, uint32_t reaso
     if (gd_read_startup(&startup)) page->gpu_startup = startup;
     gpu_startup_context_v1 startup_context;
     if (gd_read_startup_context(&startup_context)) page->gpu_startup_context = startup_context;
+    gpu_startup_transport_v1 startup_transport;
+    if (gd_read_startup_transport(&startup_transport)) page->gpu_startup_transport = startup_transport;
     #endif
     MemoryBarrier();
     InterlockedIncrement((volatile LONG *)&page->seq);

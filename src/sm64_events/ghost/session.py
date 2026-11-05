@@ -7,6 +7,7 @@ frame. Shutdown joins in-flight selection before revoking the final command.
 """
 import asyncio
 import logging
+import sqlite3
 import threading
 from contextlib import suppress
 from datetime import datetime, timezone
@@ -15,6 +16,8 @@ from types import SimpleNamespace
 
 from sm64_events.core.error_reporting_privacy import GHOST_STATE_LOGGER
 from sm64_events.core.events import Event
+from sm64_events.ghost.clip import NO_POSE_ARCHIVE
+from sm64_events.ghost.display_stall import DisplayStall
 from sm64_events.ghost.dpad_toggle import hotkey_for
 from sm64_events.ghost.native_session import ghost_hue
 from sm64_events.ghost.pb import GhostLibrary
@@ -141,10 +144,13 @@ class GhostSession:
                 source_of=lambda:id(getattr(getattr(replay,"recorder",None),"ghost_capture",None)), community=community)
             self._population_recorder = PopulationRecorder(population,replay,tracker,self._attempt_identity,community=community)
         self._native_answer = {}
+        # Ghosts asked for and unseen too long: the card's setup notice.
+        self._display_stall = DisplayStall()
         # The last `sm64.ghost.state` line, and the renderer's last readable
         # progress (its lock is only tried, so a busy read keeps the old one).
         self._noted_state: str | None = None
         self._noted_native: tuple = ()
+        self._noted_draw: str | None = None
         # When the last resolve ran, and what the world it read looked like
         # (`_world`): a change there is itself the event that re-resolves.
         self._resolved_at: float | None = None
@@ -215,6 +221,7 @@ class GhostSession:
                 "source": dict(self._source),
                 "window": self._window_state(),
                 "hotkey": self._hotkey,
+                "display_stalled": self._display_stall.stalled,
                 **({"rivals":self._rivals.payload()} if self._rivals else {})}
 
     def note_hotkey(self, hotkey: str) -> None:
@@ -336,6 +343,7 @@ class GhostSession:
         async with self._lock:
             target = self._read_target()
             await asyncio.to_thread(self._cycle, target, resolve)
+            self._display_stall.observe(self.silent_failure_status())
             body = self.payload()
             self._note_state(body)
             if body == self._published:
@@ -357,6 +365,9 @@ class GhostSession:
         progress = self.silent_failure_status()
         if progress.get("progress") is not None:
             self._noted_native = (*progress["progress"], progress.get("displayed"))
+            # The renderer's first refusal of the latest list and picture
+            # (ghost/draw_facts.py), "unknown/unknown" from a renderer that says none.
+            self._noted_draw = progress.get("draw")
         # (state, reason, playback state, playback reason, prepared and active
         # generation, clips prepared, displayed); generations change every
         # arm, so they stay out of the line.
@@ -373,7 +384,7 @@ class GhostSession:
             ("playing", len(selection.get("playing") or ())),
             ("pb_seat", _pb_seat(rivals, selection)),
             ("native", f"{native[0]}/{native[1]}"), ("playback", f"{native[2]}/{native[3]}"),
-            ("clips", native[6]), ("displayed", native[7])))
+            ("clips", native[6]), ("displayed", native[7]), ("draw", self._noted_draw)))
         if line != self._noted_state:
             self._noted_state = line
             state_log.info("ghost: %s", line)
@@ -647,6 +658,7 @@ class GhostSession:
                         # 2026-10-25 this was silent: an AMD tester's PBs became no
                         # ghost and nothing said why ("i still dont see any ghost").
                         state_log.error("A saved PB kept no Mario poses: %s", reason)
+                        self._keep_pb_later(attempt, reason, reported=True)
                     elif isinstance(kept, dict) and kept.get("native_ghost"):
                         state_log.info("PB attempt %s kept %s Mario poses", attempt.id,
                                        kept["native_ghost"].get("records"))
@@ -661,8 +673,31 @@ class GhostSession:
                             self._tail_task.cancel()
                         self._tail_task = asyncio.create_task(self._complete_tail(attempt.id, preserve),
                                                               name="ghost-pb-tail")
+                except (ValueError, LookupError, OSError, sqlite3.Error) as error:
+                    # The PB itself is saved, and the worker keeps trying for its ghost.
+                    from sm64_events.ghost.rival_recording import failure_reason
+                    reason = failure_reason(error)
+                    log.warning("PB %s Mario poses were not kept yet: %s", attempt.id, reason)
+                    self._keep_pb_later(attempt, reason)
                 except Exception:  # noqa: BLE001 - the PB itself is saved; say why in the picker
                     log.exception("PB %s Mario poses could not be kept", attempt.id)
+        await self.refresh(resolve=True)
+
+    def _keep_pb_later(self, attempt, reason, *, reported=False):
+        """A PB ghost is kept forever, whatever population admission thinks of the run."""
+        if self._population_recorder is not None and reason != NO_POSE_ARCHIVE:
+            self._population_recorder.keep_pb(attempt, self._pb_kept, reason if reported else None)
+
+    async def _pb_kept(self, attempt_id):
+        """The worker kept a PB's poses after all: the ghost follows them now."""
+        if self._closing:
+            return
+        if self._rivals is not None:
+            async with self._lock:
+                def committed():
+                    with self._lifecycle_lock:
+                        self._rivals.pb_preserved(attempt_id)
+                await asyncio.to_thread(committed)
         await self.refresh(resolve=True)
 
     async def _complete_tail(self, attempt_id, preserve) -> None:

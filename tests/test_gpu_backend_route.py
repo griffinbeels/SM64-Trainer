@@ -317,7 +317,7 @@ def test_a_refusal_by_codec_leaves_the_helper_answering_for_the_other_codec(tmp_
     controller = Controller(command=command, identity={}, env=env,
                             limits=GpuSettings().helper())
     open_command = {"op": "Open", "dll_path": "C:/fixture/SM64GpuEncoderV1.dll",
-                    "adapter_luid": [0, 1], "names": ["a", "b"], "options": {}}
+                    "adapter_luid": [0, 1], "names": ["a", "b"], "transport": 1, "options": {}}
     try:
         for _codec in ("av1", "h264"):
             request = controller.enqueue(open_command)

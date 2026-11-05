@@ -38,6 +38,7 @@ bool header_config(const gc_header &h) {
         || h.ram_budget > GC_MAX_MAP_BYTES || !text_valid(h.texture_names[0])
         || !text_valid(h.texture_names[1])
         || !memcmp(h.texture_names[0], h.texture_names[1], sizeof h.texture_names[0])
+        || h.transport == GT_TRANSPORT_NONE || h.transport >= GT_TRANSPORT_COUNT
         || !zero(h.reserved, sizeof h.reserved)) return false;
     // Four distinct names: the twin helper never opens a clean texture.
     for (unsigned i = 0; i < GC_BRIDGES; ++i) {
