@@ -526,12 +526,15 @@ def press_load(trip: Ride, stub: Stub | None, tamper=None, before_frame=None) ->
         sp = cpu.uc.reg_read(cpu.mips.UC_MIPS_REG_SP) & 0xFFFFFFFF
         seen["loop_return"] = cpu.u32(sp + CHAIN[2][0])
         cpu.put_u8(slots.LOAD_INDEX, trip.slot)
-        if tamper is not None:
-            tamper(cpu)
+        undo_tamper = tamper(cpu) if tamper is not None else None
         seen["ram_before"] = cpu.ram.copy()
         seen["slot_before"] = slot_bytes(cpu, trip.slot)
-        trip.press.press(PRESS_LOAD, 0, lambda _buttons: seen.update(ram_after=cpu.ram.copy(),
-                                                                     slot_after=slot_bytes(cpu, trip.slot)))
+
+        def after_press(_buttons) -> None:
+            seen.update(ram_after=cpu.ram.copy(), slot_after=slot_bytes(cpu, trip.slot))
+            if undo_tamper is not None:
+                undo_tamper()
+        trip.press.press(PRESS_LOAD, 0, after_press)
     cpu.pending = at_site
     replay.feed(trip.frame_j)
     seen["ran"] = cpu.run_frame(sim.RESUME)
@@ -539,6 +542,11 @@ def press_load(trip: Ride, stub: Stub | None, tamper=None, before_frame=None) ->
     if seen["ran"]:
         cpu.scheduler_model()
     return seen
+
+
+def press_changed(seen: dict, cpu: slots.SlotCpu) -> dict:
+    """What a press changed outside thread 5's stack (the calls themselves scribble below the stack pointer)."""
+    return dict(slots.group_diff(seen["ram_after"], seen["ram_before"], cpu.symbols, skip=(("thread 5's stack", 0x204E00, 0x206E00),)))
 
 
 def named(groups: dict, limit: int = 24) -> dict:
@@ -637,10 +645,12 @@ def controls(args) -> int:
         plain = press_load(trip, None)
         ours = press_load(trip, build(Options(restore=False)))
         cpu = trip.replay.cpu
+        patched = tuple((f"patched word {at:08x}", sim.phys(at), sim.phys(at) + 4) for at in ORIGINAL)
         difference = slots.group_diff(plain["ram_after"], ours["ram_after"], cpu.symbols,
-                                      skip=(*slots.PRESENTATION, ("stub", sim.phys(STUB_BASE), sim.phys(STUB_BASE) + 0x10000)))
+                                      skip=(*slots.PRESENTATION, *patched, ("stub", sim.phys(STUB_BASE), sim.phys(STUB_BASE) + 0x10000)))
         rows["stub without restore vs Usamune's plain load, right after the load"] = dict(difference)
-        print(f"no reset K={k} J={j}: stub without restore against the plain load, whole RAM: {sum(difference.values())} bytes {dict(difference)}")
+        print(f"no reset K={k} J={j}: stub without restore against the plain load, all RAM but the two patched words, "
+              f"the stack and the stub: {sum(difference.values())} bytes {dict(difference)}")
         row = play(trip, "stub, seed+clocks+pads", stub, rows)
         if "crashed_at" not in row and not row.get("crashed_on_load_frame"):
             row["end_named"] = end_state(trip, trip.after)
@@ -653,11 +663,11 @@ def controls(args) -> int:
         report[f"wrong level K={k} J={j}"] = rows
         cpu = trip.replay.cpu
         seen = press_load(trip, stub)
-        changed = int((seen["ram_after"] != seen["ram_before"]).sum())
-        rows["bytes the press changed"] = changed
+        changed = press_changed(seen, cpu)
+        rows["what the press changed"] = changed
         rows["ran"] = seen["ran"]
-        print(f"wrong level K={k} J={j} (slot level {trip.identity}, live {cpu.u16(slots.CURR_LEVEL)}): "
-              f"{'refused' if changed == 0 else f'CHANGED {changed} BYTES'}; frame ran {seen['ran']}")
+        print(f"wrong level K={k} J={j} (slot level {trip.identity}, live {cpu.u16(slots.CURR_LEVEL)}): press changed {changed}; "
+              f"frame ran {seen['ran']}")
     if args.moved:
         k, j = args.moved
         trip = ride(session, k, j, args.follow, args.slot, stub)
@@ -671,20 +681,25 @@ def controls(args) -> int:
         def empty(cpu) -> None:
             cpu.put_u32(slots.slot_address(args.slot) + slots.TRAILER_MARIO, 0)
 
-        def strange_chain(cpu) -> None:
-            sp = cpu.uc.reg_read(cpu.mips.UC_MIPS_REG_SP) & 0xFFFFFFFF
-            cpu.put_u32(sp + 0x8C, cpu.u32(sp + 0x8C) + 8)     # a caller the stub never proved
+        def changed_for_the_press(cpu, at: int, value: int):
+            kept = cpu.u32(at)
+            cpu.put_u32(at, value)
+            return lambda: cpu.put_u32(at, kept)
 
-        def strange_held(cpu) -> None:
+        def strange_chain(cpu):
             sp = cpu.uc.reg_read(cpu.mips.UC_MIPS_REG_SP) & 0xFFFFFFFF
-            cpu.put_u32(sp + FIRST_OBJ, cpu.u32(sp + FIRST_OBJ) + sim.OBJECT_BYTES)
+            return changed_for_the_press(cpu, sp + 0x8C, cpu.u32(sp + 0x8C) + 8)     # a caller the stub never proved
+
+        def strange_held(cpu):
+            sp = cpu.uc.reg_read(cpu.mips.UC_MIPS_REG_SP) & 0xFFFFFFFF
+            return changed_for_the_press(cpu, sp + FIRST_OBJ, cpu.u32(sp + FIRST_OBJ) + sim.OBJECT_BYTES)
 
         for name, tamper in (("wrong area", wrong_area), ("empty slot", empty), ("unknown caller on the stack", strange_chain),
                              ("firstObj is not live Mario", strange_held)):
             seen = press_load(trip, stub, tamper)
-            changed = int((seen["ram_after"] != seen["ram_before"]).sum()) if "ram_after" in seen else -1
-            rows[name] = {"bytes the press changed": changed, "ran": seen["ran"]}
-            print(f"{name}: {'refused' if changed == 0 else f'press changed {changed} bytes'}; frame ran {seen['ran']} {seen['violations'][:1]}")
+            changed = press_changed(seen, cpu)
+            rows[name] = {"what the press changed": changed, "ran": seen["ran"]}
+            print(f"{name}: press changed {changed}; frame ran {seen['ran']} {seen['violations'][:1]}")
     write_report(args, report)
     return 0
 
