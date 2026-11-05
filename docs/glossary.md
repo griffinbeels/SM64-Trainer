@@ -324,6 +324,44 @@ it, and an [[attempt]] with a load in it is not a [[valid attempt]].
 - **Not** — a [[reset]]. A [[reset]] starts the [[attempt]] over; a load puts
   you back part-way through it.
 
+### Slot Library
+
+Every Usamune save state the Trainer has seen, kept on disk so it can come back.
+You can keep more than nine, and only nine sit in the game at a time. Saving
+over a slot in the game loses nothing, because the old [[kept state]] stays
+here. Nothing in the library deletes a state on its own.
+
+- **Lives** -- `src/sm64_events/slotlibrary/`, in the app's user data folder
+- **Not** -- a [[save-state load]], which is the game loading one
+
+### Kept state
+
+One save state in the [[slot library]]: the slot's exact bytes, packed, with a
+name, level, area, Mario's object word, the Usamune build it came from, the time
+the Trainer first saw it and its source: captured, imported or built. Its id is a
+hash of its bytes, so the same bytes are always one kept state.
+
+- **Lives** -- `src/sm64_events/slotlibrary/store.py`
+
+### Course set
+
+An ordered list of up to nine [[kept state]]s for a level, or for one [[star]]
+of that level. Position one goes to Usamune's first slot, and later slots keep
+what they hold. A [[star]]'s own list wins over its level's. The Trainer first
+captures every occupied slot, then writes the list. Usamune refuses to load a
+state whose Mario word differs from the running game, so each state reports
+whether it matches.
+
+- **Lives** -- `src/sm64_events/slotlibrary/coursesets.py`
+
+### Share file
+
+One [[kept state]] as a `.sm64state` file you can send to a friend. Opening one
+adds it to the [[slot library]] and writes nothing to the game. The Trainer
+refuses a damaged or oversized file, and one from another Usamune build.
+
+- **Lives** -- `src/sm64_events/slotlibrary/sharefile.py`
+
 ### Valid attempt
 
 An [[attempt]] whose time could stand as a real result. A [[star]] [[attempt]] is
