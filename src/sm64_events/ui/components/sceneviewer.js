@@ -63,6 +63,9 @@
 // for the course and area on screen: keys 1-9 or a click cut to one as a free camera (cutTo), and
 // Play keeps playing.
 //
+// Under the Cameras strip, the Save states row (scenemoment.js) puts the frame on screen in a Usamune slot of the
+// running game, one press, numbered as Usamune's menu numbers them.
+//
 // Play stops only when the person pauses (Pause, Space, a step, the slider):
 // moving the camera, by any of the ways above, keeps it playing. Restart goes
 // to the first frame and keeps playing or stays paused; Loop plays on from the
@@ -86,6 +89,7 @@ import { LensBar } from "./scenelens.js";
 import { SceneSound, SoundBar } from "./sceneaudio.js";
 import { RecordBar } from "./scenerecord.js";
 import { CameraPresets, CameraSlots, placeKey, placeOf, presetCamera } from "./scenepresets.js";
+import { SaveStates } from "./scenemoment.js";
 import { heardInto, pictureAt, playLength, recordedTimes } from "./sceneclock.js";
 import { CinematicBar, orbitFolded, orbitPhase, rigChanged, rigHint, rigName, rigRequest, seenOnScreen,
   startRig } from "./scenerigs.js";
@@ -1666,6 +1670,7 @@ function Player({ link, canvas, surface, ghosts }) {
     <${RecordBar} link=${link} />
     <${CameraBar} link=${link} tuning=${tuning} setTuning=${setTuning} />
     <${CameraSlots} link=${link} />
+    <${SaveStates} link=${link} />
     <${Readout} link=${link} />
   </section>
   ${ghosts}

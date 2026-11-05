@@ -4,6 +4,9 @@ paths:
   - "tools/scene_lab/slot_library.py"
   - "tools/scene_lab/handoff_slot.py"
   - "tools/scene_lab/handoff_try.py"
+  - "tools/scene_lab/moment_slot.py"
+  - "src/sm64_events/server/scene_moments.py"
+  - "src/sm64_events/ui/components/scenemoment.js"
   - "tests/test_slot_library.py"
   - "tests/test_handoff_try.py"
 ---
@@ -18,6 +21,7 @@ paths:
 | What goes into the slots on a course entry | `slotlibrary/coursesets.py` |
 | The `.sm64state` file and its refusals | `slotlibrary/sharefile.py` |
 | Driving it by hand | `tools/scene_lab/slot_library.py` |
+| One recorded frame as a slot, the Scene viewer's Save states row | `tools/scene_lab/moment_slot.py` (the build and `compare`, its evidence), `server/scene_moments.py` (routes), `ui/components/scenemoment.js` (the row) |
 
 Contracts the tests pin:
 

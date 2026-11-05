@@ -79,6 +79,14 @@
 .scene-lab-cameras-undo { color: var(--muted); font-size: .8rem; }
 .scene-lab-cameras-undo button { min-height: 26px; padding: 0 8px; font-size: .78rem; }
 .scene-lab-slots { display: grid; grid-template-columns: repeat(9, minmax(0, 1fr)); gap: 6px; margin: 0; padding: 0; list-style: none; }
+/* The Save states row (components/scenemoment.js): nine numbers on the Cameras strip's grid. */
+.scene-lab-moment { display: grid; gap: 6px; min-width: 0; }
+.scene-lab-moment-slots { display: grid; grid-template-columns: repeat(9, minmax(0, 1fr)); gap: 6px; margin: 0; padding: 0; list-style: none; }
+.scene-lab-moment-slots li { display: grid; min-width: 0; }
+.scene-lab-moment-slots button { justify-content: center; min-height: 34px; padding: 3px 7px; }
+.scene-lab-moment-slots button[aria-busy="true"] { border-color: var(--gold); }
+.scene-lab-moment-slots kbd { min-width: 1.5em; padding: 0 .3em; border: 1px solid var(--border-soft); border-radius: 4px;
+  color: var(--muted); font: inherit; font-size: .72rem; font-weight: 700; line-height: 1.4; text-align: center; }
 .scene-lab-slot { position: relative; display: grid; min-width: 0; }
 .scene-lab-slot.is-target > button, .scene-lab-slot.is-target > .scene-lab-slot-edit { outline: 2px dashed var(--gold); outline-offset: 1px; }
 .scene-lab-slot.is-dragged { opacity: .45; }

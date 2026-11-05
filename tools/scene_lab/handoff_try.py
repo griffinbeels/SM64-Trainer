@@ -51,6 +51,16 @@ from sm64_events.slotlibrary.usamune import (  # noqa: E402
 BACKUP_MAGIC = b"SM64-HANDOFF-SLOT-1\n"
 
 
+class GameDiffers(Refusal):
+    """The running game cannot take this slot. `kinds` names why (build, no-mario, place, mario, loaded), first the
+    one a person should fix first; `seen` holds the game's level and area. Nothing was written."""
+
+    def __init__(self, kinds: list[str], sentences: list[str], live_level: int, live_area: int):
+        super().__init__("; ".join(sentences))
+        self.kinds = kinds
+        self.seen = {"live_level": live_level, "live_area": live_area}
+
+
 @dataclass(frozen=True)
 class SlotImage:
     """What a slot is, and what it needs from the running game."""
@@ -84,24 +94,30 @@ def check_image(image: SlotImage) -> None:
 
 def check_game_matches(memory: GameMemory, image: SlotImage) -> None:
     """Usamune's own load gate, plus the two things that make the slot's pointers mean something."""
-    mismatches = []
+    mismatches, kinds = [], []
     if routine_fingerprint(memory.read) != image.fingerprint:
+        kinds.append("build")
         mismatches.append("Usamune's save and load code differ from the build this slot came from")
     level = struct.unpack(">h", memory.read(slots.CURR_LEVEL, 2))[0]
     area = struct.unpack(">h", memory.read(slots.CURR_AREA, 2))[0]
     mario = int.from_bytes(memory.read(slots.MARIO_OBJECT, 4), "big")
     if mario == 0:
+        kinds.append("no-mario")
         mismatches.append("no Mario: enter the level first")
     if (level, area) != (image.level, image.area):
+        kinds.append("place")
         mismatches.append(f"the game is in level {level} area {area}, the slot in level {image.level} area {image.area}")
     if mario != image.mario_object:
+        kinds.append("mario")
         mismatches.append(f"gMarioObject is {mario:08x}, the slot's is {image.mario_object:08x}")
     if int.from_bytes(memory.read(slots.CURRENT_AREA_POINTER, 4), "big") != image.current_area:
+        kinds.append("loaded")
         mismatches.append("the current-area pointer differs: this level loaded to other addresses")
     if not same_segments(memory.read(SEGMENT_TABLE, SEGMENT_BYTES), image.segments):
+        kinds.append("loaded")
         mismatches.append("the segment table differs: this level loaded to other addresses")
     if mismatches:
-        raise Refusal("; ".join(mismatches))
+        raise GameDiffers(kinds, mismatches, level, area)
 
 
 def backups_folder() -> Path:

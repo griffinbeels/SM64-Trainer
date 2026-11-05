@@ -9,8 +9,10 @@ executable spec. Use [the glossary](docs/glossary.md) for project names.
 A Python server reads Super Mario 64 Usamune practice-ROM memory from Project64
 1.6 on Windows through `ReadProcessMemory`, detects events, records attempts,
 and broadcasts JSON over WebSocket. Stack: Python 3.12+ via uv, FastAPI,
-uvicorn, pymem, pytest. Never write to emulator memory. Layout support and its
-live evidence belong to the version-sync rules, not assumptions about a ROM.
+uvicorn, pymem, pytest. Never write to emulator memory, except Ghost Handoff's
+Usamune slots, inside one slot's range, through `slotlibrary/usamune.py`
+(his decision, 2026-11-04). Layout support and its live evidence belong to the
+version-sync rules, not assumptions about a ROM.
 
 ## Start here
 

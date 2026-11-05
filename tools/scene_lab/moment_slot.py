@@ -260,6 +260,8 @@ def build(source, rom: bytes, map_path: Path, frame: int, index: int, *, symbols
     target, before = source.moment(frame), source.moment(frame - 1)
     if not next_frame(before, target):
         raise Refused("jump")
+    if not (covers(before, sim.phys(sim.SCENE_BSS), sim.phys(sim.SCENE_BSS) + 4) and covers(target, sim.phys(sim.SCENE_BSS), sim.phys(sim.SCENE_BSS) + 4)):
+        raise Refused("no-state")
     windows = source.code_windows()
     if not any(sim.phys(address) <= sim.phys(slots.SAVE) < sim.phys(address) + length for address, length, _ in windows):
         raise Refused("no-code")

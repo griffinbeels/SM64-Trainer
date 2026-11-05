@@ -180,9 +180,10 @@ def test_every_state_rebuilds_from_the_package_alone_in_any_order(scene):
 def test_a_frames_regions_are_what_its_state_holds_with_no_closure_on_top(scene):
     """moment_slot.py reads these: the task's own spans and the level regions."""
     package = pk.Package(scene["data"], scene["rom"])
-    fields, _extras, spans, level, known = package.scene_regions(5)
-    _task, _regions, ram, _known = package.scene_state(5)
-    assert fields["task_index"] == 5 and [begin for begin, _ in spans] == sorted(begin for begin, _ in spans)
+    frame = next(index for index in range(len(package)) if package.scene_regions(index)[2])
+    fields, _extras, spans, level, known = package.scene_regions(frame)
+    _task, _regions, ram, _known = package.scene_state(frame)
+    assert fields["task_index"] == frame and [begin for begin, _ in spans] == sorted(begin for begin, _ in spans)
     assert sum(len(data) for _, data in spans) == 0x2000 + 0x1000 + 0x100
     for begin, data in spans:
         assert bytes(data) == ram[begin:begin + len(data)].tobytes()
