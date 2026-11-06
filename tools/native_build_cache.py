@@ -16,6 +16,14 @@ Only successful compiles are stored; a failure always reruns cl.
 
 Limit: a header newly added EARLIER on the include path than one recorded in
 the manifest would be missed. No test does that; clear the folder if one does.
+
+Each output is stored under its folder's ROLE: "cwd", or "Fe", "Fo" and "Fd"
+for a folder named by that option. Before recipe 3 the role kept the option's
+slash ("/Fe"), and `entry / "out" / "/Fe"` is the drive root on Windows: every
+output outside the working folder was stored in, and restored from, C:\\Fe,
+where two builds with one output name shared one file and a hit could restore
+the wrong binary (found 2026-11-06). Store and restore now refuse any path
+that leaves the entry.
 """
 from __future__ import annotations
 
@@ -28,7 +36,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-RECIPE = "2"  # 2: /showIncludes reaches the compiler when the call links
+RECIPE = "3"  # 2: /showIncludes reaches the compiler when the call links; 3: roles stay inside the entry
 REPO = Path(__file__).resolve().parents[1]
 MAX_ENTRIES = 400
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -74,7 +82,7 @@ def _output_dirs(args: list[str], cwd: Path) -> dict[str, Path]:
             if arg.startswith(option) and len(arg) > len(option):
                 value = arg[len(option):]
                 target = Path(value) if Path(value).is_absolute() else cwd / value
-                role = option[:3]
+                role = option[1:3]  # "Fe", never "/Fe": that joins onto the drive root
                 dirs[role] = target if value.endswith(("\\", "/")) else target.parent
                 break
     return dirs
@@ -124,13 +132,21 @@ def _snapshot(dirs: dict[str, Path]) -> dict[Path, tuple[int, int]]:
     return seen
 
 
+def _stored(entry: Path, role: str, name: str) -> Path:
+    """Where one output lives inside its cache entry, and never anywhere else."""
+    path = entry / "out" / role / name
+    if not path.resolve().is_relative_to(entry.resolve()):
+        raise ValueError(f"cache output {role}/{name} would leave its entry {entry}")
+    return path
+
+
 def _restore(entry: Path, manifest: dict, dirs: dict[str, Path]) -> bool:
     for role, _name in manifest["outputs"]:
         if role not in dirs:
             return False
     for role, name in manifest["outputs"]:
         dirs[role].mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(entry / "out" / role / name, dirs[role] / name)
+        shutil.copyfile(_stored(entry, role, name), dirs[role] / name)
     os.utime(entry / "manifest.json")
     return True
 
@@ -227,8 +243,9 @@ def cl(vcvars: Path, args: list, cwd: Path, root: Path) -> None:
     root.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix="entry-", dir=root))
     for role, name in outputs:
-        (staging / "out" / role).mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(dirs[role] / name, staging / "out" / role / name)
+        stored = _stored(staging, role, name)
+        stored.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(dirs[role] / name, stored)
     (staging / "manifest.json").write_text(json.dumps(
         {"includes": sorted(includes.items()), "outputs": sorted(outputs)}), encoding="utf-8")
     entry.parent.mkdir(parents=True, exist_ok=True)
