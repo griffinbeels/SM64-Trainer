@@ -40,6 +40,8 @@ def natives(tmp_path, monkeypatch):
 
     fake = module.Native("fake.dll", lambda: build_id(world["source"]), build, "the fake toolchain")
     monkeypatch.setattr(module, "natives", lambda: (fake,))
+    world["scanned"] = []
+    monkeypatch.setattr(module, "scan", lambda paths, log: world["scanned"].append(list(paths)))
     return module, world, tmp_path / "bundle" / "fake.dll"
 
 
@@ -84,6 +86,46 @@ def test_without_a_toolchain_a_build_another_checkout_made_still_installs(native
     world["toolchain"] = False
     monkeypatch.setattr(module, "BUNDLE", tmp_path / "fresh clone")
     assert module.ensure(log=lambda _: None) == {"fake.dll": "built"}
+
+
+def test_every_native_a_run_installs_is_scanned_and_a_fresh_one_is_not(natives):
+    module, world, target = natives
+    module.ensure(log=lambda _: None)
+    assert world["scanned"] == [[target]]
+    module.ensure(log=lambda _: None)
+    assert world["scanned"] == [[target]], "a fresh bundle is not rescanned at every launch"
+
+
+def test_a_threat_stops_the_run_naming_the_file_and_removes_it_from_bundle_and_cache(natives, monkeypatch):
+    """2026-11-06: Defender quarantined our renderer as Trojan:Win32/Bearfoos.A!ml.
+    Builds are repeatable, so a flagged build must not stay cached for the next run."""
+    module, world, target = natives
+    scanner = module._load("defender_scan")
+
+    def flag(paths, log):
+        return scanner.require_clean(paths, log=log, runner=lambda command: (
+            2, "Threat                  : Trojan:Win32/Bearfoos.A!ml\nfound 1 threats"))
+    monkeypatch.setattr(module, "scan", flag)
+    said = []
+    with pytest.raises(scanner.ThreatFound) as stopped:
+        module.ensure(log=said.append)   # not strict: a threat stops every run
+    assert str(target) in str(stopped.value) and "Bearfoos" in str(stopped.value)
+    assert any(line.startswith("  STOP:") and "fake.dll" in line for line in said)
+    assert not target.exists()
+    assert not any((module.cache_root() / "fake.dll").glob("*/fake.dll")), "the flagged build stayed cached"
+    monkeypatch.setattr(module, "scan", lambda paths, log: None)
+    assert module.ensure(log=lambda _: None) == {"fake.dll": "built"}
+    assert world["compiles"] == 2, "the next run builds it again instead of copying the flagged bytes"
+
+
+def test_a_scan_that_cannot_run_is_reported_and_the_build_continues(natives, monkeypatch):
+    module, _, target = natives
+    scanner = module._load("defender_scan")
+    monkeypatch.setattr(module, "scan", lambda paths, log: scanner.require_clean(
+        paths, log=log, runner=lambda command: (1, "scan engine unavailable")))
+    said = []
+    assert module.ensure(log=said.append) == {"fake.dll": "built"}
+    assert target.is_file() and any("could not scan" in line for line in said)
 
 
 def test_nothing_under_the_bundle_folder_is_tracked():
