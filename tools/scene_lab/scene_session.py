@@ -89,10 +89,8 @@ import importlib.util
 import logging
 import math
 import re
-import shutil
 import struct
 import sys
-import tempfile
 import time
 from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -170,10 +168,9 @@ def world_camera(camera) -> tuple:
 
 @dataclass
 class OwnedHost:
-    """A renderer host and the private plugin folder it reads its config from (removed on close).
-    keeps_rdram: nothing but the session's requests writes the host's RDRAM (HostImage)."""
+    """A renderer host the session owns. keeps_rdram: nothing but the session's requests writes
+    the host's RDRAM (HostImage)."""
     host: viewer.Host
-    plugin_dir: Path | None = None
     keeps_rdram: bool = False
 
     @property
@@ -203,23 +200,19 @@ class OwnedHost:
         return self.host.ghost_load(slot, clip, label)
 
     def close(self) -> int:
-        try:
-            return self.host.close()
-        finally:
-            if self.plugin_dir is not None:
-                shutil.rmtree(self.plugin_dir, ignore_errors=True)
+        return self.host.close()
 
 
 FRAME_BUFFER_SWITCH = re.compile(r"^frameBufferEmulation\\enable\s*=\s*(\d+)\s*$", re.MULTILINE)
 
 
-def renderer_keeps_rdram(plugin_dir: Path) -> bool:
+def renderer_keeps_rdram(settings: Path) -> bool:
     """True when the renderer config turns GLideN64's frame-buffer emulation off everywhere
     (frameBufferEmulation\\enable=0, and no section turning it on): the only way the renderer
     itself writes RDRAM. Absent, GLideN64's default is on."""
     switches = []
     for name in replay.CONFIG_FILES:
-        path = plugin_dir / name
+        path = settings / name
         if path.is_file():
             switches += FRAME_BUFFER_SWITCH.findall(path.read_text(encoding="utf-8", errors="replace"))
     return bool(switches) and all(value == "0" for value in switches)
@@ -272,24 +265,28 @@ class HostImage:
 
 
 def renderer_host(config):
-    """The real host factory: viewer_host.c over the configured renderer, with Project64's
-    renderer config copied to a private folder (the live install is only read)."""
+    """The real host factory: viewer_host.c over the Trainer's renderer where the bundle keeps it
+    (replay.trainer_renderer(): loaded in place, never copied), reading Project64's renderer
+    settings from the renderer settings folder (replay.settings_folder: Project64's Plugin folder
+    is only read). No other renderer: one that cannot take a settings folder would read and write
+    the folder it sits in."""
     def start(header: str) -> OwnedHost:
         plugin = config.pj64_plugin
         if plugin is None or not (plugin / replay.CONFIG_FILES[0]).is_file():
             raise Refused("The lab config does not name Project64's Plugin folder, which holds the "
                           "renderer settings the pictures are drawn with.")
+        if config.renderer != "trainer":
+            raise Refused('The lab config names another renderer. The scene viewer draws only with the '
+                          'Trainer\'s own renderer, so remove "renderer" from the lab config.')
         try:
-            renderer = replay.resolve_renderer(config.renderer, plugin)
+            renderer = replay.trainer_renderer()
         except SystemExit as missing:
             raise Refused(str(missing)) from None
-        plugin_dir = Path(tempfile.mkdtemp(prefix="scene-viewer-plugin-"))
         try:
-            viewer.prepare_plugin_dir(plugin_dir, plugin, config.resolution)
-            return OwnedHost(viewer.Host(renderer, plugin_dir, header, ghosts=True), plugin_dir,
-                             renderer_keeps_rdram(plugin_dir))
+            # The Record child's config (scene_export.py) carries no lab root: the default one.
+            settings = replay.settings_folder(plugin, config.resolution, getattr(config, "lab_root", None))
+            return OwnedHost(viewer.Host(renderer, settings, header, ghosts=True), renderer_keeps_rdram(settings))
         except (OSError, RuntimeError) as error:
-            shutil.rmtree(plugin_dir, ignore_errors=True)
             raise Refused(f"The renderer could not start: {error}") from None
     return start
 
@@ -298,7 +295,7 @@ def command_host(command: list[str], keeps_rdram: bool = True):
     """A host factory over another program that speaks the host protocol
     (fake_viewer_host.command(): tests and dry runs)."""
     def start(header: str) -> OwnedHost:
-        return OwnedHost(viewer.Host(Path("renderer.dll"), Path(tempfile.gettempdir()), header, command=command),
+        return OwnedHost(viewer.Host(Path("renderer.dll"), Path("settings"), header, command=command),
                          keeps_rdram=keeps_rdram)
     return start
 

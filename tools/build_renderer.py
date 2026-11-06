@@ -52,6 +52,7 @@ OVERLAY_SOURCES = (
     "ghost_draw.h", "ghost_draw.cpp", "ghost_playback.h", "ghost_playback.cpp",
     "ghost_dispatch.h", "ghost_dispatch.cpp", "ghost_presentation.h", "ghost_presentation.cpp",
     "ghost_audio.h", "ghost_audio.cpp",
+    "renderer_settings_folder.h", "renderer_settings_folder.cpp",
 )
 OVERLAY_MODULES = ("link_dispatch.cpp", "renderer_boundary.cpp", "link_source_api.cpp", "context_lifetime.cpp",
                    "ghost_capture.cpp", "ghost_root.cpp", "ghost_clock.cpp", "ghost_origin.cpp",
@@ -60,8 +61,10 @@ OVERLAY_MODULES = ("link_dispatch.cpp", "renderer_boundary.cpp", "link_source_ap
                    "ghost_draw.cpp", "ghost_playback.cpp", "ghost_dispatch.cpp", "ghost_presentation.cpp",
                    "ghost_audio.cpp", "ghost_annotation_assets.cpp", "ghost_font_cache.cpp",
                    "ghost_live_codec.cpp", "ghost_live_input.cpp", "ghost_live_render.cpp",
-                   "ghost_live_session.cpp", "ghost_live_ipc.cpp", "ghost_viewer.cpp")
-DEFINES = "SM64_REPLAY_GL_WITNESS;SM64_REPLAY_SOURCE;SM64_REPLAY_CONTEXT_LIFETIME;SM64_GHOST_RENDERER;"
+                   "ghost_live_session.cpp", "ghost_live_ipc.cpp", "ghost_viewer.cpp",
+                   "renderer_settings_folder.cpp")
+DEFINES = ("SM64_REPLAY_GL_WITNESS;SM64_REPLAY_SOURCE;SM64_REPLAY_CONTEXT_LIFETIME;SM64_GHOST_RENDERER;"
+           "SM64_RENDERER_SETTINGS_FOLDER;")
 RECIPE_VERSION = "3"
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
@@ -175,8 +178,30 @@ def prebuilt_libraries(cache: Path) -> dict[str, Path]:
 
 # -- staging ----------------------------------------------------------------
 
+SETTINGS_GUARD = "#if defined(OS_WINDOWS) && defined(SM64_RENDERER_SETTINGS_FOLDER)\n"
+
+
+def stage_settings_folder(staged: Path) -> None:
+    """The renderer's settings folder (renderer_settings_folder.h): upstream's one
+    folder lookup asks it first, so a scene-lab host loads the renderer where the
+    Trainer keeps it. Inside Project64 nothing names one: upstream's own folder."""
+    gl = staged / witness.GL
+    for name in ("renderer_settings_folder.h", "renderer_settings_folder.cpp"):
+        shutil.copyfile(REPO / "plugin" / "gfxwrap" / name, gl / name)
+    path = staged / "src" / "windows" / "CommonAPIImpl_windows.cpp"
+    data = witness.replace_once(path.read_bytes(), '#include "../RSP.h"\n',
+        '#include "../RSP.h"\n' + SETTINGS_GUARD
+        + '#include "../Graphics/OpenGLContext/renderer_settings_folder.h"\n#endif\n')
+    data = witness.replace_once(data, "\tif (_strPath == NULL)\n\t\treturn;\n\t::GetModuleFileName(",
+        "\tif (_strPath == NULL)\n\t\treturn;\n" + SETTINGS_GUARD
+        + "\tif (renderer_settings_folder::named(_strPath, PLUGIN_PATH_SIZE))\n\t\treturn;\n#endif\n"
+        + "\t::GetModuleFileName(")
+    path.write_bytes(data)
+
+
 def stage(pristine: Path, staged: Path, libraries: dict[str, Path], build_id: str) -> None:
     witness.overlay(pristine, staged, boundary=True, label=LABEL, context_lifetime=True, ghost=True)
+    stage_settings_folder(staged)
     gl = staged / witness.GL
     (gl / "renderer_build_identity.h").write_text(
         f'#define SM64_TRAINER_RENDERER_BUILD_ID "{build_id}"\n', encoding="ascii")

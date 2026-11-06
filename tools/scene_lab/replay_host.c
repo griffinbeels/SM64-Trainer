@@ -3,14 +3,15 @@
  * presented. It is the oracle for the closure proof: if a frame directory
  * (savestate_frames.py) reproduces a picture here, its bytes suffice.
  *
- *   replay_host --renderer <dll> --plugin-dir <dir> --out <dir> [--fresh]
+ *   replay_host --renderer <dll> --settings <dir> --out <dir> [--fresh]
  *               [--warmup <frame_dir>] [--list <file>] frame_dir...
  *
  * --list names a file of frame dirs, one per line, taken in place among the
  * frame_dir arguments.
  *
- * GLideN64 reads GLideN64.ini and GLideN64.custom.ini from its OWN folder,
- * so the host copies --renderer into --plugin-dir and loads that copy.
+ * GLideN64 reads GLideN64.ini and GLideN64.custom.ini from its settings
+ * folder: the host loads --renderer where it is and names --settings as that
+ * folder before any plugin call (renderer_load.h); it never copies the DLL.
  * Per frame: rdram.bin -> RDRAM, dmem.bin -> DMEM (OSTask at 0xFC0),
  * frame.json's VI registers, ProcessDList, UpdateScreen, ReadScreen ->
  * <out>/<index>.raw (BGR rows, bottom-up) plus <index>.json. ProcessDList
@@ -40,6 +41,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "zilmar.h"
+#include "renderer_load.h"
 
 #define RDRAM_BYTES (8u << 20)
 #define SP_BYTES 0x2000u
@@ -63,6 +65,7 @@ static volatile ULONGLONG g_progress;  /* last tick the worker made progress */
 static frame_t *g_frames;
 static const char *g_out;
 static int g_warmup = -1;              /* g_frames index of --warmup, or -1 */
+static const char *g_settings;         /* --settings: the renderer's settings folder */
 
 static void check_interrupts(void) {}
 
@@ -183,8 +186,9 @@ typedef struct {
 /* Load the renderer, render frames [first, first+count) in order, unload it. */
 static DWORD WINAPI run_session(LPVOID parameter) {
     session_t *session = (session_t *)parameter;
-    HMODULE module = LoadLibraryExA(session->dll, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
-    if (!module) fail("LoadLibrary of the renderer failed", session->first);
+    const char *why = NULL;
+    HMODULE module = renderer_load(session->dll, g_settings, &why);
+    if (!module) fail(why, session->first);
     gfx_api_t api;
     RESOLVE_GFX_API(api, module);
     if (!api.GetDllInfo || !api.InitiateGFX || !api.RomOpen || !api.ProcessDList || !api.UpdateScreen
@@ -297,20 +301,8 @@ static void run_pumped(session_t *session) {
     DestroyWindow(session->window);
 }
 
-static int copy_renderer(const char *renderer, const char *plugin_dir, char *loaded, size_t size) {
-    const char *base = strrchr(renderer, '\\');
-    const char *forward = strrchr(renderer, '/');
-    if (forward > base) base = forward;
-    base = base ? base + 1 : renderer;
-    snprintf(loaded, size, "%s\\%s", plugin_dir, base);
-    char source[MAX_PATH], target[MAX_PATH];
-    if (!GetFullPathNameA(renderer, MAX_PATH, source, NULL) || !GetFullPathNameA(loaded, MAX_PATH, target, NULL))
-        return 0;
-    return _stricmp(source, target) == 0 || CopyFileA(source, target, FALSE);
-}
-
 int main(int argc, char **argv) {
-    const char *renderer = NULL, *plugin_dir = NULL;
+    const char *renderer = NULL;
     const char *warmup = NULL;
     int fresh = 0, count = 0, capacity = argc;
     g_frames = calloc((size_t)capacity, sizeof *g_frames);
@@ -333,15 +325,15 @@ int main(int argc, char **argv) {
             fclose(list);
         }
         else if (strcmp(argv[index], "--renderer") == 0 && index + 1 < argc) renderer = argv[++index];
-        else if (strcmp(argv[index], "--plugin-dir") == 0 && index + 1 < argc) plugin_dir = argv[++index];
+        else if (strcmp(argv[index], "--settings") == 0 && index + 1 < argc) g_settings = argv[++index];
         else if (strcmp(argv[index], "--out") == 0 && index + 1 < argc) g_out = argv[++index];
         else if (strcmp(argv[index], "--fresh") == 0) fresh = 1;
         else if (strcmp(argv[index], "--warmup") == 0 && index + 1 < argc) warmup = argv[++index];
         else if (argv[index][0] == '-') { fprintf(stderr, "unknown option %s\n", argv[index]); return 1; }
         else g_frames[count++].dir = argv[index];
     }
-    if (!renderer || !plugin_dir || !g_out || !count) {
-        fprintf(stderr, "usage: replay_host --renderer <dll> --plugin-dir <dir> --out <dir> "
+    if (!renderer || !g_settings || !g_out || !count) {
+        fprintf(stderr, "usage: replay_host --renderer <dll> --settings <dir> --out <dir> "
                         "[--fresh] [--warmup <frame_dir>] frame_dir...\n");
         return 1;
     }
@@ -350,9 +342,6 @@ int main(int argc, char **argv) {
      * unscaled window fits on screen, where front-buffer reads are owned. */
     SetProcessDPIAware();
     CreateDirectoryA(g_out, NULL);
-    char loaded[MAX_PATH];
-    if (!copy_renderer(renderer, plugin_dir, loaded, sizeof loaded))
-        fail("cannot copy the renderer into --plugin-dir", -1);
     if (warmup) {
         g_warmup = count;
         g_frames[count].dir = warmup;
@@ -369,7 +358,7 @@ int main(int argc, char **argv) {
     if (!g_rdram) fail("cannot allocate RDRAM", -1);
     session_t session;
     memset(&session, 0, sizeof session);
-    session.dll = loaded;
+    session.dll = renderer;
     if (fresh) {
         for (int index = 0; index < count; index++) {
             session.first = index;
