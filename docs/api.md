@@ -1075,9 +1075,12 @@ Exists only when `SM64_SCENE_LAB` names a lab config (`main.py::_mount_scene_lab
 is the one reader); otherwise only the probe exists, answering `{lab: null}`, and
 the shell shows no Lab entry. The config is a private JSON file of absolute paths:
 `{"rom", "packages", "pj64_plugin", "map"}` plus optional `"renderer"`
-(`trainer`, `link` or a DLL path), `"resolution"` (`"WxH"`), `"idle_seconds"` and
+(only `trainer`, the default: a scene opens only with this checkout's own renderer,
+loaded where the bundle keeps it, and any other value is refused when a scene opens),
+`"resolution"` (`"WxH"`), `"idle_seconds"` and
 `"lab_root"` (where the live recording and the attempt scenes live;
-`%LOCALAPPDATA%\SM64Trainer\scene-lab` when absent). The server itself (not the UI
+`%LOCALAPPDATA%\SM64Trainer\scene-lab` when absent; the renderer reads its ini from
+its [renderer settings folder](glossary.md#renderer-settings-folder) there). The server itself (not the UI
 fixture) also holds the live recording's lease while it runs and cuts each
 completed attempt, stars and segments alike, into an [attempt scene](glossary.md)
 under `<lab_root>\attempts\` (the newest 20 attempts' scenes are kept; a restarted

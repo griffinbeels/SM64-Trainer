@@ -1,14 +1,17 @@
 """Render scene-lab frame inputs through a REAL GLideN64 offline (E0/E1 oracle).
 
-    uv run python tools/scene_lab/replay.py render --out <dir> [--renderer trainer|link|<dll>]
+    uv run python tools/scene_lab/replay.py render --out <dir>
         [--pj64-plugin <dir>] [--fresh] [--warmup <frame_dir>] <frame_dir>...
     uv run python tools/scene_lab/replay.py compare <a> <b> [--diff <png>]
     uv run python tools/scene_lab/replay.py poison <frame_dir> <out_dir> [--closure <json>] [--pattern 0xA5]
 
-render builds replay_host.c (x86, cached by source hash), copies Project64's
-GLideN64.ini and GLideN64.custom.ini into a private plugin folder (texture
-paths redirected there, so the live install is only read), and renders the
-frames in one renderer instance in the order given (--fresh: one per frame).
+render builds replay_host.c (x86, cached by source hash) and renders the
+frames through the Trainer's renderer, loaded where the Trainer keeps it (the
+bundle, core/paths.py's bundled_renderer_dll(); never a copy), in one renderer
+instance in the order given (--fresh: one per frame). The renderer reads its
+settings from the renderer settings folder (settings_folder(): Project64's
+GLideN64.ini and GLideN64.custom.ini, texture paths redirected inside it, so
+Project64's Plugin folder is only read).
 An instance's first list renders unlike Project64's steady state, so compare
 like positions or pass --warmup (replay_host.c explains the carried state).
 Each <index>.raw keeps ReadScreen's bytes; <index>.png is the viewable copy.
@@ -37,15 +40,19 @@ from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
+from sm64_events.core import paths  # noqa: E402
 from sm64_events.core.childproc import quiet_spawn_kwargs  # noqa: E402
 sys.path.insert(0, str(ROOT / "tools/scene_lab"))
 from gpu_gate import require_gpu  # noqa: E402
 
-SOURCES = (ROOT / "tools/scene_lab/replay_host.c", ROOT / "plugin/gfxwrap/zilmar.h")
-TRAINER_RENDERER = ROOT / "src/sm64_events/data/plugin/GLideN64_SM64Trainer.dll"
-STOCK_RENDERER = "GLideN64_LINK_4.2.dll"
+SOURCES = (ROOT / "tools/scene_lab/replay_host.c", ROOT / "tools/scene_lab/renderer_load.h",
+           ROOT / "plugin/gfxwrap/zilmar.h")
 CONFIG_FILES = ("GLideN64.ini", "GLideN64.custom.ini")
+SETTINGS_FOLDER_NAME = "renderer-settings"   # under the lab root: %LOCALAPPDATA%\SM64Trainer\scene-lab
 _TEXTURE_PATH = re.compile(r"^(textureFilter\\tx(?:Path|CachePath|DumpPath))=.*$", re.MULTILINE)
+_WINDOWED = re.compile(r"^(video\\windowed(?:Width|Height))=\d+$", re.MULTILINE)
+_SHADER_STORE = re.compile(r"^(generalEmulation\\enableShadersStorage)=\d+$", re.MULTILINE)
+_PROFILE = re.compile(r"^profile=(.+)$", re.MULTILINE)
 
 
 def build() -> Path:
@@ -66,22 +73,51 @@ def build() -> Path:
     return target
 
 
-def prepare_plugin_dir(plugin_dir: Path, pj64_plugin: Path) -> None:
-    """Project64's renderer config, private: GLideN64 may rewrite its ini."""
-    plugin_dir.mkdir(parents=True, exist_ok=True)
-    for name in CONFIG_FILES:
-        text = (pj64_plugin / name).read_text(encoding="utf-8")
-        if name == "GLideN64.ini":
-            text = _TEXTURE_PATH.sub(lambda match: f"{match[1]}={(plugin_dir / 'textures').as_posix()}", text)
-        (plugin_dir / name).write_text(text, encoding="utf-8")
+def default_lab_root() -> Path:
+    base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+    return Path(base) / "SM64Trainer" / "scene-lab"
 
 
-def resolve_renderer(choice: str, pj64_plugin: Path) -> Path:
-    path = {"trainer": TRAINER_RENDERER, "link": pj64_plugin / STOCK_RENDERER}.get(choice, Path(choice))
-    if not path.is_file():
-        hint = " (uv run python tools/build_natives.py)" if choice == "trainer" else ""
-        raise SystemExit(f"renderer not found: {path}{hint}")
-    return path
+def settings_folder(pj64_plugin: Path, resolution: tuple[int, int] | None = None,
+                    lab_root: Path | None = None) -> Path:
+    """THE RENDERER SETTINGS FOLDER: where a lab host's renderer reads its ini (and would keep its
+    log), one stable folder per window size under <lab root>/renderer-settings ("project64" keeps
+    Project64's own size). It holds Project64's GLideN64.ini and GLideN64.custom.ini with the
+    texture paths redirected inside it and, with `resolution`, the windowed size replaced in both
+    (GLideN64.custom.ini sets it per ROM). The shader store is off in both: in a folder every start
+    shares, GLideN64 would load a store another host was still writing, or one a killed host
+    left torn, and its loader does not check the programs it reads back (a private folder per
+    start never had a store to load, so the pictures are the ones drawn before, 2026-11-06).
+    Rewritten only where Project64's files changed; Project64's Plugin folder is only read."""
+    name = "project64" if resolution is None else f"{resolution[0]}x{resolution[1]}"
+    folder = ((lab_root or default_lab_root()) / SETTINGS_FOLDER_NAME / name).resolve()
+    folder.mkdir(parents=True, exist_ok=True)
+    for config in CONFIG_FILES:
+        text = (pj64_plugin / config).read_text(encoding="utf-8")
+        if config == "GLideN64.ini":
+            text = _TEXTURE_PATH.sub(lambda match: f"{match[1]}={(folder / 'textures').as_posix()}", text)
+            if not _SHADER_STORE.search(text):          # absent means on: name it in the profile GLideN64 reads
+                profile = _PROFILE.search(text)
+                header = f"[{profile[1].strip() if profile else 'User'}]\n"
+                text = text.replace(header, header + "generalEmulation\\enableShadersStorage=0\n", 1)
+        text = _SHADER_STORE.sub(lambda match: f"{match[1]}=0", text)
+        if resolution:
+            text = _WINDOWED.sub(lambda match: f"{match[1]}={resolution[match[1].endswith('Height')]}", text)
+        target = folder / config
+        if not (target.is_file() and target.read_text(encoding="utf-8", errors="replace") == text):
+            target.write_text(text, encoding="utf-8")
+    return folder
+
+
+def trainer_renderer() -> Path:
+    """The Trainer's renderer where the Trainer keeps it: the bundle (core/paths.py). The hosts
+    load it in place and never copy it; nothing else is drawn with (LINK's own renderer cannot
+    take a settings folder, so it would read and write Project64's Plugin folder)."""
+    path = paths.bundled_renderer_dll()
+    if path is None:
+        raise SystemExit(f"renderer not found: {paths.RENDERER_DLL_NAME} is not in this build's bundle "
+                         "(uv run python tools/build_natives.py)")
+    return path.resolve()
 
 
 def load_picture(raw: Path) -> tuple[np.ndarray, dict]:
@@ -98,16 +134,15 @@ def render(args) -> int:
     pj64_plugin = Path(args.pj64_plugin or os.environ.get("SM64_PJ64_PLUGIN", ""))
     if not (pj64_plugin / CONFIG_FILES[0]).is_file():
         raise SystemExit("--pj64-plugin (or SM64_PJ64_PLUGIN) must name Project64's Plugin folder")
-    renderer = resolve_renderer(args.renderer, pj64_plugin)
+    renderer = trainer_renderer()
     out = args.out.resolve()
     out.mkdir(parents=True, exist_ok=True)
     for stale in [*out.glob("*.raw"), *out.glob("[0-9]*.json"), *out.glob("[0-9]*.png")]:
         stale.unlink()
-    plugin_dir = (args.plugin_dir or out / "plugin").resolve()
-    prepare_plugin_dir(plugin_dir, pj64_plugin)
+    settings = settings_folder(pj64_plugin)
     listing = out / "host-frames.txt"
     listing.write_text("".join(f"{frame.resolve()}\n" for frame in args.frames), encoding="utf-8")
-    command = [str(build()), "--renderer", str(renderer), "--plugin-dir", str(plugin_dir),
+    command = [str(build()), "--renderer", str(renderer), "--settings", str(settings),
                "--out", str(out), *(["--fresh"] if args.fresh else []),
                *(["--warmup", str(args.warmup.resolve())] if args.warmup else []), "--list", str(listing)]
     result = subprocess.run(command, capture_output=True, text=True, check=False,
@@ -185,9 +220,7 @@ def main() -> int:
     run = commands.add_parser("render")
     run.add_argument("frames", type=Path, nargs="+")
     run.add_argument("--out", type=Path, required=True)
-    run.add_argument("--renderer", default="trainer", help="trainer, link, or a renderer DLL path")
     run.add_argument("--pj64-plugin", help="Project64's Plugin folder (read only); default SM64_PJ64_PLUGIN")
-    run.add_argument("--plugin-dir", type=Path, help="private renderer folder; default <out>/plugin")
     run.add_argument("--fresh", action="store_true", help="restart the renderer between frames")
     run.add_argument("--warmup", type=Path, help="render this frame first in every instance, unsaved")
     run.set_defaults(handler=render)

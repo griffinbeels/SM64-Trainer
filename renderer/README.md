@@ -37,9 +37,14 @@ so this modified build is too. The complete corresponding source is:
   `build-inputs.json`;
 - the overlay in `plugin/gfxwrap/` (`link_dispatch.*`, `renderer_boundary.*`,
   `link_source_api.*`, `context_lifetime.*`, `renderer_gl_state.h`,
-  `gl_snapshot.h`, `source_format.h`, `practice_rom.h`) and the edits
-  `tools/stage_link_witness.py` makes to the upstream files;
-- the project adaptations and build steps in `tools/build_renderer.py`.
+  `gl_snapshot.h`, `source_format.h`, `practice_rom.h`,
+  `renderer_settings_folder.*`) and the edits `tools/stage_link_witness.py`
+  makes to the upstream files;
+- the project adaptations and build steps in `tools/build_renderer.py`
+  (including the one edit that lets a scene-lab host name the renderer's
+  settings folder: `PluginAPI::FindPluginPath` asks
+  `renderer_settings_folder::named()` first, and inside Project64 nothing
+  names one).
 
 Project64 shows the wrapper's About box (credits and the build id). Since
 2026-10-24 the renderer is not a selectable plugin, so its own About dialog

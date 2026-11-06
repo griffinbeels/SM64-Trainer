@@ -1227,9 +1227,34 @@ user's existing GLideN64 settings carry over.
   `renderer/build-inputs.json` and the overlay in `plugin/gfxwrap/`
   (`renderer/README.md` has the provenance and credits) into
   the git-ignored bundle folder (its BUNDLE constant in `tools/build_natives.py`), a
-  build output that tool refreshes at launch
+  build output that tool refreshes at launch. The [[scene viewer]]'s helpers load
+  that bundle file where it is, never a copy, and point it at the
+  [[renderer settings folder]]
 - **Not** -- the graphics plugin the user had before; that one stays in the
   folder untouched, and "Remove Practice Replay" selects it again
+
+### Renderer settings folder
+
+The folder where the [[renderer]] reads its settings when the scene lab's
+helpers draw with it outside Project64: a copy of Project64's `GLideN64.ini`
+and `GLideN64.custom.ini` with the shader cache turned off, so the
+[[renderer]] keeps nothing there from one start to the next but its log. There
+is one folder per window size in the scene lab's own folder (`project64` keeps
+Project64's own size, `1600x1200` names another), and a helper reuses the same
+folder every time. A helper names it to the [[renderer]] before its first call,
+and only the Trainer's [[renderer]] accepts one. Inside Project64 nothing names
+one, so the [[renderer]] reads Project64's Plugin folder as GLideN64 always has.
+Before 2026-11-06 each helper copied the [[renderer]] into a new random folder
+under `%TEMP%` and loaded the copy. Defender flagged that copy as a trojan: a
+program loading a DLL it has just written into a temporary folder looks like
+malware.
+
+- **Lives** -- on disk under %LOCALAPPDATA%\SM64Trainer\scene-lab\renderer-settings;
+  made by `tools/scene_lab/replay.py` (its settings_folder function); the
+  renderer's setter `plugin/gfxwrap/renderer_settings_folder.cpp` (staged into
+  GLideN64's folder lookup by `tools/build_renderer.py`); the helpers' loader
+  `tools/scene_lab/renderer_load.h`
+- **Not** -- Project64's Plugin folder, which the scene lab only reads
 
 ### Source date
 

@@ -3,7 +3,7 @@
  * REAL GLideN64 without Project64. replay_host.c is the batch oracle; this
  * is the same renderer setup kept alive behind a binary pipe protocol.
  *
- *   viewer_host --renderer <dll> --plugin-dir <dir> --header <128 hex digits>
+ *   viewer_host --renderer <dll> --settings <dir> --header <128 hex digits>
  *               [--ghosts 1] [--ghost-consumer 1]
  *
  * --ghost-consumer (M4 multi-runner probe) stands in for the capture wrapper's
@@ -51,7 +51,8 @@
  * recorded camera reproduces the recorded picture exactly.
  *
  * replay_host.c documents the renderer's quirks this relies on: the ini is
- * read from the renderer's own folder (hence --plugin-dir), an instance's
+ * read from the renderer's settings folder (--settings, named before any
+ * plugin call while the DLL loads where it is: renderer_load.h), an instance's
  * FIRST list renders wrong (the caller warms with a discard request), and
  * one instance opens one ROM. Same thread shape as Project64 1.6: the window
  * thread pumps while a second thread makes every plugin call; the window is
@@ -65,6 +66,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "zilmar.h"
+#include "renderer_load.h"
 
 #define RDRAM_BYTES (8u << 20)
 #define SP_BYTES 0x2000u
@@ -98,7 +100,7 @@ static unsigned char g_sp[SP_BYTES];   /* DMEM then IMEM, as Project64 lays them
 static unsigned char g_header[0x40];
 static volatile LONG g_busy;           /* 1 while a request is inside the renderer */
 static volatile ULONGLONG g_progress;  /* tick the current request started */
-static const char *g_dll;
+static const char *g_dll, *g_settings;
 static double g_ticks_per_us;
 static int g_ghost_consumer, g_ghosts;
 static unsigned char *g_payload;         /* a setup or load request's bytes */
@@ -338,8 +340,9 @@ static int32_t ghost_request(const request_t *request) {
 
 static DWORD WINAPI serve(LPVOID parameter) {
     HWND window = (HWND)parameter;
-    HMODULE module = LoadLibraryExA(g_dll, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
-    if (!module) fail("LoadLibrary of the renderer failed");
+    const char *why = NULL;
+    HMODULE module = renderer_load(g_dll, g_settings, &why);
+    if (!module) fail(why);
     gfx_api_t api;
     RESOLVE_GFX_API(api, module);
     if (!api.GetDllInfo || !api.InitiateGFX || !api.RomOpen || !api.ProcessDList || !api.UpdateScreen
@@ -474,29 +477,17 @@ static HWND make_window(void) {
     return window;
 }
 
-static int copy_renderer(const char *renderer, const char *plugin_dir, char *loaded, size_t size) {
-    const char *base = strrchr(renderer, '\\');
-    const char *forward = strrchr(renderer, '/');
-    if (forward > base) base = forward;
-    base = base ? base + 1 : renderer;
-    snprintf(loaded, size, "%s\\%s", plugin_dir, base);
-    char source[MAX_PATH], target[MAX_PATH];
-    if (!GetFullPathNameA(renderer, MAX_PATH, source, NULL) || !GetFullPathNameA(loaded, MAX_PATH, target, NULL))
-        return 0;
-    return _stricmp(source, target) == 0 || CopyFileA(source, target, FALSE);
-}
-
 int main(int argc, char **argv) {
-    const char *renderer = NULL, *plugin_dir = NULL, *header = NULL;
+    const char *header = NULL;
     for (int index = 1; index + 1 < argc; index += 2) {
-        if (strcmp(argv[index], "--renderer") == 0) renderer = argv[index + 1];
-        else if (strcmp(argv[index], "--plugin-dir") == 0) plugin_dir = argv[index + 1];
+        if (strcmp(argv[index], "--renderer") == 0) g_dll = argv[index + 1];
+        else if (strcmp(argv[index], "--settings") == 0) g_settings = argv[index + 1];
         else if (strcmp(argv[index], "--header") == 0) header = argv[index + 1];
         else if (strcmp(argv[index], "--ghost-consumer") == 0) g_ghost_consumer = atoi(argv[index + 1]) != 0;
         else if (strcmp(argv[index], "--ghosts") == 0) g_ghosts = atoi(argv[index + 1]) != 0;
     }
-    if (!renderer || !plugin_dir || !header || strlen(header) != 128) {
-        fprintf(stderr, "usage: viewer_host --renderer <dll> --plugin-dir <dir> --header <128 hex>\n");
+    if (!g_dll || !g_settings || !header || strlen(header) != 128) {
+        fprintf(stderr, "usage: viewer_host --renderer <dll> --settings <dir> --header <128 hex>\n");
         return 1;
     }
     for (int byte = 0; byte < 0x40; byte++) {
@@ -509,9 +500,6 @@ int main(int argc, char **argv) {
     LARGE_INTEGER frequency;
     QueryPerformanceFrequency(&frequency);
     g_ticks_per_us = (double)frequency.QuadPart / 1e6;
-    static char loaded[MAX_PATH];
-    if (!copy_renderer(renderer, plugin_dir, loaded, sizeof loaded)) fail("cannot copy the renderer");
-    g_dll = loaded;
     g_rdram = VirtualAlloc(NULL, RDRAM_BYTES, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
     g_staging = VirtualAlloc(NULL, RDRAM_BYTES, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
     g_runs = VirtualAlloc(NULL, MAX_RUNS * 8, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
