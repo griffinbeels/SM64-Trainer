@@ -4,13 +4,18 @@
     live_spool.py lease [--seconds N] [--lab-root DIR]   hold a lease (a manual check)
 
 Intent: open the scene of an attempt right after playing it. The Trainer holds a Lease
-(lease.txt beside the sessions, renewed every 2 s); the wrapper's scene tap
-(plugin/gfxwrap/scene_tap.cpp) checks it at most once a second, records continuously
-while it is fresh and stops once it is stale (8 s without renewal) or gone. Its writer
-(scene_spool.cpp) keeps rolling segments under <lab>/live/<session>/: each one starts
-with keys from the writer's own shadows, so Spool.source() decodes any recent span from
-that segment's first byte, and an append-only index names every task, its global_timer,
-level, area and time. A reader sees a task once the next one arrives or 100 ms later.
+(lease.txt beside the spool files, renewed every 2 s while the scene lab's recording is on;
+the Scene viewer shows that it runs and has the switch, server/scene_lab_api.py); the
+wrapper's scene tap (plugin/gfxwrap/scene_tap.cpp) checks it at most once a second, records
+continuously while it is fresh and stops once it is stale (8 s without renewal) or gone.
+Nothing else starts it. Its writer (scene_spool.cpp) writes segments over a fixed set of
+spool files in <lab>/live/ (format 2: spool-00 to spool-63, .tap and .idx, reused in turn
+and never deleted; spool-table.bin says which segment each holds): each one starts with keys
+from the writer's own shadows, so Spool.source() decodes any recent span from that
+segment's first byte, and an append-only index names every task, its global_timer, level,
+area and time. A reader sees a task once the next one arrives or 100 ms later. One session
+(one set of lease lines in one ROM run) at a time: a new one takes over the files, and a
+reader of the old one sees its segments leave.
 Spool.follow() keeps a scene's captures coming while he plays (a cutter writes the
 package as the attempt goes and finishes at its end); Spool.source() cuts a finished span.
 The lease asks for tap.py arm's identity and scene-state lines and the per-VI audio spans
@@ -23,10 +28,17 @@ MB = 10^6 bytes, writer = its busy time on one thread:
     raw records          675 MB/min   writer 0.3% of a core
     256-byte dedupe      139 MB/min   0.2%
     XPRESS alone         247 MB/min   2.0%
-    dedupe + XPRESS       42 MB/min   0.45%   (the default; keys included)
-plus the index (0.06 MB/min) and boot.bin (4 MiB once per session). The default bound is
-15 minutes or 2 GiB (2,147,483,648 bytes) of segments, whichever is less, plus the open
-segment (at most 15 s); at 42 MB/min the window holds about 630 MB. Producer, savestates
+    dedupe + XPRESS       42 MB/min   0.45%   (format 1's default; keys included)
+plus the index (0.06 MB/min) and boot.bin (4 MiB once per session). Format 2 (2026-11-06)
+compresses with XPRESS_HUFF through the Windows Compression API instead of ntdll's XPRESS
+found by name. The same BoB session through both real writers (--spool-bench, dedupe on):
+62,981,216 bytes (42.0 MB/min, writer 0.40 s busy, 0.44% of a core) became 55,625,088
+(37.1 MB/min, -11.7%; writer 0.72 s, 0.80% of a core, on the tap thread, never the
+emulation thread). On 8 segments (2 minutes) of his 2026-11-05 session's own packed
+streams: 57.9 MB became 51.5 MB (-11%); MSZIP and zlib were smaller still but 6 to 47
+times slower than XPRESS_HUFF. The bound is the 64 spool files, each at most max_bytes / 64
+(2 GiB / 64 = 32 MiB): at most 2 GiB, which 15 s segments fill only past about 128 MiB a
+minute; at 42 MB/min the files hold the last 16 minutes in about 670 MB. Producer, savestates
 at 30 Hz through tap_offline_host: 212 us p50 and 384 us p99 per task live, the same as
 the armed tap before this change (211/388); 0.4 us per call with no lease. Reader at
 30 Hz: a task is listed 50 ms p50, 67 ms p99 and max after the game made it. Lease:
@@ -50,11 +62,14 @@ binds only past 143 MB a minute). The producer's cost per VI rose from 18 to 35 
 Limits:
 - Lab only. The lease file lives under %LOCALAPPDATA% of the Project64 process; a
   lab_root elsewhere is seen only by a test host that sets LOCALAPPDATA to its parent.
-- One Trainer per machine: Lease.stop() deletes the file whoever else holds it.
+- One Trainer per machine: Lease.stop() deletes the file whoever else holds it. One
+  Project64 records at a time: the writer holds writer.lock open, and a second one waits.
+- A new session (new lease lines, or Project64 reopening the game) ends the last one's
+  segments at once: its readers end with a reason, and its recording cannot be cut after.
 - Only Project64.exe takes the lease (a test host must opt in).
 - A full ring still drops records: health()["holes"] names the tasks left incomplete,
   and a consumer must not cut a scene across one.
-- A segment's first task carries a whole key (1.4 MB of level state before XPRESS), so
+- A segment's first task carries a whole key (1.4 MB of level state before compression), so
   the segment length trades disk (a key per segment) against how far a reader decodes
   to reach a task (at most one segment, under a second).
 - Task indexes count the tasks the tap saw: a lapse leaves no gap in them; time and
@@ -67,7 +82,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
+import re
 import struct
 import sys
 import threading
@@ -83,11 +100,19 @@ import package  # noqa: E402
 import provenance  # noqa: E402
 import tap  # noqa: E402
 
+log = logging.getLogger("sm64.scene_lab")
+
 ROW = struct.Struct("<IIIIqQ")          # kind, a, b, c, d, e (scene_spool.cpp's header comment)
-ROW_OPEN, ROW_TASK, ROW_SHOWN, ROW_HOLE, ROW_BEAT, ROW_CLOSE = 1, 2, 3, 4, 5, 6
+ROW_OPEN, ROW_TASK, ROW_SHOWN, ROW_HOLE, ROW_BEAT, ROW_CLOSE, ROW_SESSION = 1, 2, 3, 4, 5, 6, 7
 TASK_SHOWN, TASK_REFUSED = 1, 2
 CLOSE_ROLLOVER = 1
-REASONS = {2: "The Trainer ended the lease.",
+FORMAT = 2                              # spool-table.bin and the SESSION row (scene_spool.h kFormat)
+TABLE = "spool-table.bin"
+TABLE_HEAD = struct.Struct("<IIQIIII")  # magic, format, session, files, 0, 0, 0
+TABLE_MAGIC = 0x32534C53                # "SLS2"
+MAX_FILES = 64                          # spool-00 .. spool-63 (scene_spool.h kMaxFiles)
+ENTRY = struct.Struct("<II")            # the segment a file holds, and its complement
+REASONS = {2: "The Trainer stopped the scene recording.",
            3: "The lease lapsed: the Trainer stopped renewing it.",
            4: "Project64 closed the game.",
            5: "The spool could not be written.",
@@ -101,7 +126,7 @@ RENEW_SECONDS = 2.0
 LEASE_MS = 8000
 STALE_SECONDS = 3.0                     # an open segment with no row this long: the writer stopped
 FOLLOW_POLL = 0.02                      # a follower at the live edge re-reads this often
-MAX_BYTES = 2 << 30                     # the segments' byte cap; the window (15 minutes) is the usual bound
+MAX_BYTES = 2 << 30                     # every spool file at most MAX_BYTES / 64; 15 s segments usually bind first
 
 
 def resolve_lab_root(override: Path | None = None) -> Path:
@@ -109,14 +134,13 @@ def resolve_lab_root(override: Path | None = None) -> Path:
 
 
 def lease_text(version: str = "us", extra_lines: Sequence[str] = (), *, audio: bool = True,
-               window_seconds: float = 900, max_bytes: int = MAX_BYTES, segment_seconds: float = 15) -> str:
-    """The lease's lines: tap.py arm's identity and scene-state lines, the per-VI audio spans
-    unless `audio` is off (never pictures), the live settings, the boot span, then the
-    caller's extra lines (which win)."""
+               max_bytes: int = MAX_BYTES, segment_seconds: float = 15) -> str:
+    """The lease's lines: tap.arming_text's identity and scene-state lines, the per-VI audio
+    spans unless `audio` is off (never pictures), the live settings, the boot span, then the
+    caller's extra lines (which win; spool_files=<2..64> makes a test's spool wrap sooner)."""
     arming = tap.arming_text(SimpleNamespace(version=version, seconds=600, no_reference=True, reference_every=1,
                                              full_every=0, no_scene_state=False, no_audio_state=not audio))
-    live = [f"lease_ms={LEASE_MS}", f"window_ms={int(window_seconds * 1000)}", f"max_bytes={int(max_bytes)}",
-            f"segment_ms={int(segment_seconds * 1000)}",
+    live = [f"lease_ms={LEASE_MS}", f"max_bytes={int(max_bytes)}", f"segment_ms={int(segment_seconds * 1000)}",
             f"boot_region={provenance.EXPANSION_RAM:x}:{(8 << 20) - provenance.EXPANSION_RAM}"]
     return "# scene-lab live lease (tools/scene_lab/live_spool.py)\n" + arming + "\n".join([*live, *extra_lines]) + "\n"
 
@@ -125,16 +149,18 @@ class Lease:
     """The Trainer's side of continuous capture: lease.txt, renewed while it runs."""
 
     def __init__(self, lab_root: Path | None = None, *, extra_lines: Sequence[str] = (), version: str = "us",
-                 audio: bool = True, window_seconds: float = 900, max_bytes: int = MAX_BYTES,
-                 segment_seconds: float = 15) -> None:
-        self.path = resolve_lab_root(lab_root) / "live" / "lease.txt"
-        self.text = lease_text(version, extra_lines, audio=audio, window_seconds=window_seconds,
-                               max_bytes=max_bytes, segment_seconds=segment_seconds)
+                 audio: bool = True, max_bytes: int = MAX_BYTES, segment_seconds: float = 15) -> None:
+        self.lab_root = resolve_lab_root(lab_root)
+        self.path = self.lab_root / "live" / "lease.txt"
+        self.text = lease_text(version, extra_lines, audio=audio, max_bytes=max_bytes,
+                               segment_seconds=segment_seconds)
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
     def start(self) -> None:
-        """Arm with these lines (the wrapper notices within a second) and keep renewing."""
+        """Arm with these lines (the wrapper notices within a second) and keep renewing. The
+        first start in a lab moves format 1's folders out (clear_old_layout)."""
+        clear_old_layout(self.lab_root)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._write()
         if self._thread is None:
@@ -210,7 +236,9 @@ class FollowSource(LiveSource):
 @dataclass
 class _Segment:
     number: int
+    file: int                                           # the spool file holding it (spool-KK)
     read: int = 0                                       # index bytes consumed
+    verified: bool = False                              # its SESSION row named this session
     opened: tuple[int, int] | None = None               # (qpc, FILETIME)
     tasks: dict = field(default_factory=dict)           # index -> [timer, place, qpc, offset, flags]
     holes: list = field(default_factory=list)
@@ -224,67 +252,125 @@ def _filetime(value: int) -> datetime:
     return FILETIME_EPOCH + timedelta(microseconds=value // 10)
 
 
-def _sessions(root: Path) -> list[Path]:
-    def order(path: Path):
-        parts = path.name.split("-")
-        return (parts[1:3], int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 1)
-    live = root / "live"
-    found = [path for path in live.glob("live-*") if (path / "session.txt").is_file()] if live.is_dir() else []
-    return sorted(found, key=order)
+@dataclass(frozen=True)
+class SpoolTable:
+    """spool-table.bin as read: the session the files hold now (0 while none) and which
+    segment each spool file holds."""
+    session: int
+    files: dict                         # segment number -> spool file number
 
 
-def open_spool(lab_root: Path | None = None, *, session: str | Path | None = None) -> Spool | None:
-    """The newest live session, or the named one (a Spool.session folder or its name); None
-    when there is none."""
-    root = resolve_lab_root(lab_root)
-    if session is not None:
-        folder = Path(session) if Path(session).is_absolute() else root / "live" / session
-        return Spool(folder) if (folder / "session.txt").is_file() else None
-    sessions = _sessions(root)
-    return Spool(sessions[-1]) if sessions else None
+def read_table(folder: Path) -> SpoolTable | None:
+    """The spool table, or None without one (no format 2 writer has run here)."""
+    try:
+        data = (Path(folder) / TABLE).read_bytes()
+    except OSError:
+        return None
+    if len(data) < TABLE_HEAD.size + ENTRY.size * MAX_FILES:
+        return None
+    magic, version, session, _files, *_ = TABLE_HEAD.unpack_from(data)
+    if magic != TABLE_MAGIC or version != FORMAT:
+        return None
+    files = {}
+    for number in range(MAX_FILES):
+        segment, check = ENTRY.unpack_from(data, TABLE_HEAD.size + ENTRY.size * number)
+        if segment and check == segment ^ 0xFFFFFFFF:     # 0 while reused; a torn entry fails the check
+            files[segment] = number
+    return SpoolTable(session, files)
+
+
+def spool_file(folder: Path, number: int, suffix: str) -> Path:
+    return Path(folder) / f"spool-{number:02d}.{suffix}"
+
+
+def session_name(session: int) -> str:
+    """A session's name (the stem renderer and the cutter tag its rows with it): its local
+    start time, then the start's 100 ns ticks within that second."""
+    started = _filetime(session).astimezone()
+    return f"live-{started:%Y%m%d-%H%M%S}-{session % 10_000_000:07d}"
+
+
+def open_spool(lab_root: Path | None = None) -> Spool | None:
+    """The session the spool files hold now; None when there is none (or one is starting)."""
+    folder = resolve_lab_root(lab_root) / "live"
+    table = read_table(folder)
+    if table is None or not table.session:
+        return None
+    try:
+        spool = Spool(folder)
+    except (OSError, KeyError, ValueError):
+        return None                     # session.txt is being rewritten: the next look finds it
+    return spool if spool.id == table.session else None
 
 
 class Spool:
-    """One live session as its segments stand now; refresh() reads only new index rows."""
+    """One live session as its segments stand now; refresh() reads only new index rows.
+    `session` is the spool folder (where the session's files are), `id` the session and
+    `name` its session_name."""
 
     def __init__(self, session: Path):
         self.session = Path(session)
         self.header = tap.session_header(self.session)
+        self.id = int(self.header["session"])
+        self.name = session_name(self.id)
         self.frequency = int(self.header.get("qpc_frequency") or 0) or 1
         self.rdram_size = int(self.header["rdram_size"])
         self._segments: dict[int, _Segment] = {}
         self.refresh()
 
+    def _files(self) -> dict:
+        """segment -> spool file for this session now; {} once another session took the files."""
+        table = read_table(self.session)
+        return table.files if table is not None and table.session == self.id else {}
+
+    def holds(self, number: int, file: int) -> bool:
+        """The spool table still names segment `number` in spool file `file` (checked after a read)."""
+        return self._files().get(number) == file
+
     def refresh(self) -> None:
-        present = {}
-        for path in self.session.glob("seg-*.idx"):
-            try:
-                present[int(path.stem.removeprefix("seg-"))] = path
-            except ValueError:
-                continue
-        for number in [number for number in self._segments if number not in present]:
+        """New index rows of every segment not yet closed. The table is read before and after
+        the index files: a file whose turn came meanwhile is dropped, not misread."""
+        files = self._files()
+        for number in [n for n, segment in self._segments.items() if files.get(n) != segment.file]:
             del self._segments[number]
-        for number, path in sorted(present.items()):
-            segment = self._segments.setdefault(number, _Segment(number))
+        reads = []
+        for number, file in sorted(files.items()):
+            segment = self._segments.setdefault(number, _Segment(number, file))
             if segment.closed:
                 continue   # a closed segment's rows are all read
             try:
-                with path.open("rb") as handle:
+                with spool_file(self.session, file, "idx").open("rb") as handle:
                     handle.seek(segment.read)
-                    data = handle.read()
+                    reads.append((segment, handle.read()))
             except FileNotFoundError:
                 self._segments.pop(number, None)
+        after = self._files()
+        for segment, data in reads:
+            if after.get(segment.number) != segment.file:
+                self._segments.pop(segment.number, None)
                 continue
             whole = len(data) - len(data) % ROW.size
             for at in range(0, whole, ROW.size):
-                if not self._row(segment, ROW.unpack_from(data, at)):
+                verdict = self._row(segment, ROW.unpack_from(data, at))
+                if verdict is None:          # not this session's or not this segment's rows
+                    self._segments.pop(segment.number, None)
+                    break
+                if not verdict:
                     whole = at
                     break
             segment.read += whole
 
-    @staticmethod
-    def _row(segment: _Segment, row: tuple) -> bool:
+    def _row(self, segment: _Segment, row: tuple) -> bool | None:
+        """Takes one index row: True, False past the last whole row, None when the file does not
+        hold this session's segment (its first rows: SESSION for this session, OPEN for it)."""
         kind, a, b, c, d, e = row
+        if not segment.verified:
+            if kind == 0:
+                return False
+            segment.verified = kind == ROW_SESSION and e == self.id and b == FORMAT
+            return True if segment.verified else None
+        if kind == ROW_OPEN and a != segment.number:
+            return None
         if kind == ROW_TASK:
             segment.tasks[a] = [b, c, d, e & ((1 << 48) - 1), e >> 48]
         elif kind == ROW_SHOWN and a in segment.tasks:
@@ -418,11 +504,15 @@ class Spool:
     def _segment_records(self, source: FollowSource, first: int, number: int, position: int):
         """One segment's records as it grows (a later segment's keys skipped: the state
         continues); returns True when following ends, False once a rollover closed it."""
-        reader, path = tap.SegmentReader(self.rdram_size), self.session / f"seg-{number:06d}.tap"
+        held = self._segments.get(number)
+        file = held.file if held is not None else -1
+        reader, path = tap.SegmentReader(self.rdram_size), spool_file(self.session, file, "tap")
         while not self._stopping(source, first):
             data = _read_from(path, reader.read)
             self.refresh()                             # after the bytes: a hole they reveal is listed now
             segment = self._segments.get(number)
+            if segment is not None and segment.file != file:
+                segment = None                         # its file's turn came: the bytes read are another's
             if data is None or segment is None:
                 source.ended = (f"Segment {number} left the spool before it was read: the scene "
                                 "fell behind the spool's window.")
@@ -460,11 +550,13 @@ class Spool:
         """The chain's records in order, the keys of every segment after the first skipped
         (the state continues), stopping before the first task past `last`."""
         for position, number in enumerate(chain):
-            path = self.session / f"seg-{number:06d}.tap"
+            file = self._segments[number].file
             try:
-                data = path.read_bytes()
-            except FileNotFoundError as error:
-                raise LookupError(f"segment {number} left the spool while it was read") from error
+                data = spool_file(self.session, file, "tap").read_bytes()
+            except FileNotFoundError:
+                data = None
+            if data is None or not self.holds(number, file):
+                raise LookupError(f"segment {number} left the spool while it was read")
             for _offset, flags, record in tap.read_segment(data, self.rdram_size):
                 if position and flags & tap.WRITER_KEY:
                     continue
@@ -475,11 +567,16 @@ class Spool:
     def _boot(self) -> bytes | None:
         """RDRAM-sized bytes with the boot copy in place (package.code_load reads only
         from the expansion base, which the boot span starts at), or None without one."""
-        path = self.session / "boot.bin"
-        if not path.is_file():
+        try:   # read whole, never mapped: the writer empties this file in place at a new session
+            data = (self.session / "boot.bin").read_bytes()
+        except OSError:
             return None
-        for record in tap.read_records(path):
+        for at, kind, size, sequence, qpc, _flags in tap._walk(data, torn_ok=True):
+            record = tap._parse_record(kind, sequence, qpc, memoryview(data)[at + 32:at + size])
             if isinstance(record, tap.Boot) and record.begin + len(record.data) <= self.rdram_size:
+                table = read_table(self.session)
+                if table is None or table.session != self.id:
+                    return None             # a newer session's copy, or its emptied file
                 return bytes(record.begin) + record.data + bytes(self.rdram_size - record.begin - len(record.data))
         return None
 
@@ -507,11 +604,13 @@ class Spool:
                 "newest_utc": newest.isoformat() if newest else None, "holes": merged}
 
     def _state(self) -> tuple[bool, str | None]:
-        summary = self.session / "summary.txt"
-        if summary.is_file():
-            ended = dict(line.partition("=")[::2] for line in summary.read_text(encoding="ascii").splitlines())
+        ended = _summary(self.session)
+        if ended.get("session") == str(self.id):        # the session's last write names it
             return False, REASONS.get(END_REASONS.get(ended.get("end_reason", ""), 0),
                                       "This capture session ended.")
+        table = read_table(self.session)
+        if table is None or table.session != self.id:
+            return False, "A newer scene recording session took over the spool."
         if not self._segments:
             return False, "The spool holds no capture yet."
         segment = self._segments[max(self._segments)]
@@ -523,8 +622,79 @@ class Spool:
         return True, None
 
 
+def _summary(folder: Path) -> dict:
+    """summary.txt as key=value strings ({} without one); its session= says whose it is."""
+    try:
+        text = (Path(folder) / "summary.txt").read_text(encoding="ascii")
+    except (OSError, UnicodeDecodeError):
+        return {}
+    return dict(line.partition("=")[::2] for line in text.splitlines())
+
+
+# Format 1's names: a folder per session under live/ (and the stem renderer's under stems/),
+# holding only these. clear_old_layout removes such a folder whole, never anything else.
+OLD_SPOOL_FILES = re.compile(r"seg-\d{6}\.(tap|idx)|boot\.bin|session\.txt|armed\.txt|summary\.txt|writer\.lock")
+OLD_STEM_FILES = re.compile(r"vi-\d{8}-\d{20}\.stm")
+OLD_LAYOUT_LIMIT = 64                   # folders looked at per call: the bound on one migration
+OLD_LAYOUT_LOG = "old-layout-removed.txt"
+
+
+def clear_old_layout(lab_root: Path | None = None) -> dict:
+    """Moves format 1 out of the lab, once: each live/live-* and stems/live-* folder that holds
+    only format 1's files is removed, at most OLD_LAYOUT_LIMIT folders a call; a folder whose
+    writer.lock an older wrapper still holds open, or with anything else in it, stays. What it
+    removed is logged and appended to live/old-layout-removed.txt. Format 2 creates no such
+    folder, so once they are gone every later call only looks and finds none."""
+    root = resolve_lab_root(lab_root)
+    removed = {"folders": 0, "files": 0, "bytes": 0, "kept": []}
+    candidates = [(folder, OLD_SPOOL_FILES) for folder in sorted((root / "live").glob("live-*"))]
+    candidates += [(folder, OLD_STEM_FILES) for folder in sorted((root / "stems").glob("live-*"))]
+    for folder, names in candidates[:OLD_LAYOUT_LIMIT]:
+        try:
+            files = list(folder.iterdir()) if folder.is_dir() else None
+        except OSError:
+            files = None
+        if files is None or any(not path.is_file() or not names.fullmatch(path.name) for path in files):
+            removed["kept"].append(folder.name)
+            continue
+        sizes = {}
+        for path in files:
+            try:
+                sizes[path] = path.stat().st_size
+            except OSError:
+                continue
+        try:
+            (folder / "writer.lock").unlink(missing_ok=True)   # held open by a wrapper still writing it
+        except OSError:
+            removed["kept"].append(folder.name)
+            continue
+        for path, size in sizes.items():
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                continue
+            removed["files"] += 1
+            removed["bytes"] += size
+        try:
+            folder.rmdir()
+            removed["folders"] += 1
+        except OSError:
+            removed["kept"].append(folder.name)
+    if removed["folders"] or removed["files"]:
+        line = (f"{datetime.now(UTC).isoformat(timespec='seconds')} removed {removed['folders']} format 1 "
+                f"folders, {removed['files']} files, {removed['bytes']} bytes; kept {removed['kept']}")
+        log.info("The scene recording moved to fixed spool files: %s", line)
+        try:
+            (root / "live").mkdir(parents=True, exist_ok=True)
+            with (root / "live" / OLD_LAYOUT_LOG).open("a", encoding="utf-8") as handle:
+                handle.write(line + "\n")
+        except OSError:
+            pass
+    return removed
+
+
 def _read_from(path: Path, offset: int) -> bytes | None:
-    """The file's bytes from `offset` (opened and closed again: the writer may delete it), or None."""
+    """The file's bytes from `offset` (opened and closed again, so the writer can reuse it), or None."""
     try:
         with path.open("rb") as handle:
             handle.seek(offset)

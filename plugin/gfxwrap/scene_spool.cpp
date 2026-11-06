@@ -1,14 +1,37 @@
-/* The live spool's writer (M4 round 2): the scene tap's records as rolling
- * segment files under <lab>\live\<session>\, each one readable on its own
- * given the ROM, while the newest one grows.
+/* The live spool's writer (M4 round 2): the scene tap's records as segments,
+ * each one readable on its own given the ROM, while the newest one grows.
  *
- * A segment is seg-NNNNNN.tap (tap records, the same 32-byte headers as
- * tap.bin) and seg-NNNNNN.idx (32-byte rows, append-only). It starts at a
+ * Files (format 2, 2026-11-06): one folder, <lab>\live\, used by every
+ * session. Segments go into a FIXED set of spool files in turn: segment n
+ * into spool-KK.tap and spool-KK.idx with KK = (n - 1) % files. A file is
+ * created once, the first time any session reaches it, then emptied and
+ * written again in place each time its turn comes; the writer never deletes
+ * a file or a folder, and no file outlives its turn by more than one lap.
+ * Every spool file holds at most max_bytes / files (32 MiB by default: 64
+ * files, 2 GiB), plus the last task of a segment that crossed it.
+ * spool-table.bin (544 bytes, rewritten in place) says which segment each
+ * file holds now: {magic 'SLS2', format 2, session (u64, the session's start
+ * as a UTC FILETIME, 0 while none), files, 0, 0, 0}, then 64 entries
+ * {segment, ~segment} (0 while the file is being reused). A file's turn:
+ * its entry goes to 0, both files are emptied, the index's first rows are
+ * written, then its entry names the segment, so a reader that sees the
+ * entry reads that segment's bytes only, and a reader that read a file and
+ * then sees the entry changed drops what it read. The session's own files
+ * (session.txt, lease-lines.txt, boot.bin, summary.txt) are rewritten in place;
+ * writer.lock is held open while a session runs, so a second Project64
+ * cannot write the same folder. Format 1 (a folder per session with
+ * seg-NNNNNN files deleted after 15 minutes) was replaced because creating
+ * and deleting thousands of files a session reads like ransomware staging
+ * (tools/scene_lab/live_spool.py moves an old layout out once).
+ *
+ * A segment's .tap holds tap records (the same 32-byte headers as tap.bin);
+ * its .idx 32-byte rows, append-only. It starts at a
  * task: first the writer's keys (the level regions and, when copied, the VI
  * spans, whole, from the writer's own shadows of what the producer emitted;
  * header flag WRITER_KEY), then that task's records as the producer made
  * them. A reader decoding from the segment's first byte rebuilds every
  * task's scene state without any earlier segment. Rows:
+ *   SESSION {file, format, 0, qpc, session}       first: this file's segment belongs to that session
  *   OPEN  {segment, first task, 0, qpc, utc}      the (qpc, UTC) pair
  *   TASK  {index, global_timer, level | area << 16, qpc, offset | flags << 48}
  *         written when the next task arrives or 100 ms later; flags 1 shown
@@ -25,52 +48,64 @@
  * reference image (what closures and task regions showed at that address
  * since the segment began, zero at its start) is left out and named by a
  * cleared bit. Level and VI records are already deltas and pass whole. Every
- * packed stream of 256 bytes or more is then compressed with XPRESS through
- * ntdll's RtlCompressBuffer (part of Windows: no vendored code) when it gets
- * smaller. REC_PACKED body: {inner type, inner body bytes, codec (0 stored,
- * 1 XPRESS), stream bytes, payload bytes, pieces, dedupe, 0}, then the
- * payload; the stream is [bitmap, padded to 4][the inner body without the
- * pieces left out]. The disk rate and the writer's cost of each choice, measured
- * on a recorded session: tools/scene_lab/live_spool.py's docstring.
+ * packed stream of 256 bytes or more is then compressed with XPRESS_HUFF
+ * through the Windows Compression API (compressapi.h, cabinet.dll, linked by
+ * import: no vendored code, no function looked up by name) in its buffer
+ * mode, when that makes it smaller. REC_PACKED body: {inner type, inner body
+ * bytes, codec (0 stored, 2 XPRESS_HUFF; 1 was format 1's ntdll XPRESS),
+ * stream bytes, payload bytes, pieces, dedupe, 0}, then the payload; the
+ * stream is [bitmap, padded to 4][the inner body without the pieces left
+ * out]. The disk rate and the writer's cost of each choice, measured on a
+ * recorded session: tools/scene_lab/live_spool.py's docstring.
  *
- * Bounds: the writer deletes its own oldest closed segments once older than
- * the window or while the session holds more than the byte cap (a segment a
- * reader holds open is retried later), and opens a new segment every
- * segment_ms or segment_bytes. */
+ * Bounds: a new segment every segment_ms, or at the next task once the open
+ * one holds max_bytes / files; the spool files in turn bound the total. */
 #define NOMINMAX
 #define _CRT_SECURE_NO_WARNINGS
 #include "scene_spool.h"
 #include <stdio.h>
 #include <string.h>
 #include <wchar.h>
+#pragma comment(lib, "cabinet.lib")   // the Compression API, by import
 
 namespace scene_spool {
 namespace {
 
 using namespace scene_record;
 
-enum : uint32_t { ROW_OPEN = 1, ROW_TASK = 2, ROW_SHOWN = 3, ROW_HOLE = 4, ROW_BEAT = 5, ROW_CLOSE = 6 };
+enum : uint32_t { ROW_OPEN = 1, ROW_TASK = 2, ROW_SHOWN = 3, ROW_HOLE = 4, ROW_BEAT = 5, ROW_CLOSE = 6,
+                  ROW_SESSION = 7 };
 enum : uint32_t { TASK_SHOWN = 1, TASK_REFUSED = 2 };
-enum : uint32_t { CODEC_STORED = 0, CODEC_XPRESS = 1 };
+enum : uint32_t { CODEC_STORED = 0, CODEC_XPRESS_HUFF = 2 };
 constexpr uint32_t kPackedHead = 32, kBlock = 256, kCompressMin = 256;
-constexpr USHORT kFormatXpress = 3;              // COMPRESSION_FORMAT_XPRESS, standard engine
-constexpr uint64_t kRowDelayMs = 100, kBeatMs = 1000, kPruneMs = 2000;
-
-typedef LONG(NTAPI *WorkSpaceSizeFn)(USHORT, PULONG, PULONG);
-typedef LONG(NTAPI *CompressFn)(USHORT, PUCHAR, ULONG, PUCHAR, ULONG, ULONG, PULONG, PVOID);
+constexpr uint32_t kTableMagic = 0x32534C53;     // "SLS2" little-endian
+constexpr uint32_t kTableHead = 32, kTableBytes = kTableHead + 8 * kMaxFiles;
+constexpr uint64_t kRowDelayMs = 100, kBeatMs = 1000;
 
 uint32_t align32(uint64_t bytes) { return (uint32_t)((bytes + 31) & ~31ull); }
 uint32_t word(const uint8_t *at, uint32_t index) { uint32_t v; memcpy(&v, at + 4 * index, 4); return v; }
 
-CompressFn compressor(uint32_t *work_bytes) {
-    HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
-    if (!ntdll) return nullptr;
-    auto size = (WorkSpaceSizeFn)(void *)GetProcAddress(ntdll, "RtlGetCompressionWorkSpaceSize");
-    auto compress = (CompressFn)(void *)GetProcAddress(ntdll, "RtlCompressBuffer");
-    ULONG buffer = 0, fragment = 0;
-    if (!size || !compress || size(kFormatXpress, &buffer, &fragment) != 0) return nullptr;
-    *work_bytes = buffer;
-    return compress;
+// Our own file in the spool folder, opened for writing (created the first
+// time only); readers may hold it open for reading meanwhile.
+HANDLE open_own(const wchar_t *path, bool *created) {
+    HANDLE file = CreateFileW(path, GENERIC_WRITE, FILE_SHARE_READ, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL,
+                              nullptr);
+    if (created) *created = file != INVALID_HANDLE_VALUE && GetLastError() != ERROR_ALREADY_EXISTS;
+    return file;
+}
+
+// Emptied in place: the file keeps its name and identity.
+bool empty_file(HANDLE file) {
+    LARGE_INTEGER zero = {};
+    return SetFilePointerEx(file, zero, nullptr, FILE_BEGIN) && SetEndOfFile(file);
+}
+
+bool write_at(HANDLE file, uint64_t offset, const void *bytes, uint32_t n) {
+    OVERLAPPED at = {};
+    at.Offset = (DWORD)offset;
+    at.OffsetHigh = (DWORD)(offset >> 32);
+    DWORD done = 0;
+    return WriteFile(file, bytes, n, &done, &at) && done == n;
 }
 
 // A game value (big-endian) from a task record's identity extras, which hold
@@ -143,34 +178,67 @@ void Buffer::release() {
 }
 
 Writer::~Writer() {
-    if (open_) close_segment(CLOSE_UNLOADED);
+    release();
     ref_.release(); level_shadow_.release(); vi_shadow_.release();
     stream_.release(); out_.release(); key_.release(); pieces_.release();
-    if (xpress_work_) VirtualFree(xpress_work_, 0, MEM_RELEASE);
+    if (compressor_) CloseCompressor(compressor_);
 }
 
-bool Writer::begin(const wchar_t *session_dir, const Layout &layout, const Settings &settings) {
+bool Writer::claim(const wchar_t *spool_dir) {
+    release();
+    wcsncpy(dir_, spool_dir, MAX_PATH - 1);
+    dir_[MAX_PATH - 1] = 0;
+    wchar_t path[MAX_PATH];
+    swprintf(path, MAX_PATH, L"%ls\\writer.lock", dir_);
+    lock_ = open_own(path, nullptr);   // a second writer's open fails here: sharing violation
+    if (lock_ == INVALID_HANDLE_VALUE) return false;
+    swprintf(path, MAX_PATH, L"%ls\\spool-table.bin", dir_);
+    table_ = open_own(path, nullptr);
+    uint8_t table[kTableBytes] = {};
+    const uint32_t head[2] = {kTableMagic, kFormat};
+    memcpy(table, head, sizeof head);
+    swprintf(path, MAX_PATH, L"%ls\\boot.bin", dir_);
+    HANDLE boot = open_own(path, nullptr);
+    const bool emptied = boot != INVALID_HANDLE_VALUE && empty_file(boot);
+    if (boot != INVALID_HANDLE_VALUE) CloseHandle(boot);
+    // No session and no segment: every reader of the last session lets go now.
+    if (table_ == INVALID_HANDLE_VALUE || !write_at(table_, 0, table, kTableBytes) || !emptied) {
+        release();
+        return false;
+    }
+    return true;
+}
+
+void Writer::release() {
+    if (open_) close_segment(CLOSE_UNLOADED);
+    if (table_ != INVALID_HANDLE_VALUE) CloseHandle(table_);
+    if (lock_ != INVALID_HANDLE_VALUE) CloseHandle(lock_);
+    table_ = lock_ = INVALID_HANDLE_VALUE;
+    began_ = false;
+}
+
+bool Writer::begin(uint64_t session, const Layout &layout, const Settings &settings) {
     if (open_) close_segment(CLOSE_REARMED);
+    if (table_ == INVALID_HANDLE_VALUE) return false;
     layout_ = layout;
     settings_ = settings;
-    wcsncpy(dir_, session_dir, MAX_PATH - 1);
-    dir_[MAX_PATH - 1] = 0;
+    settings_.files = settings.files < 2 ? 2 : settings.files > kMaxFiles ? kMaxFiles : settings.files;
+    file_bytes_ = settings_.max_bytes / settings_.files;
     level_total_ = vi_total_ = 0;
     for (uint32_t i = 0; i < layout.level_count; ++i) level_total_ += layout.level[i].bytes;
     for (uint32_t i = 0; i < layout.vi_count; ++i) vi_total_ += layout.vi[i].bytes;
     if (!ref_.reserve(layout.rdram_size) || !level_shadow_.reserve(level_total_ + 1)
         || !vi_shadow_.reserve(vi_total_ + 1)) return false;
-    uint32_t work_bytes = 0;
-    if (!xpress_work_ && (compress_ = (void *)compressor(&work_bytes)) != nullptr)
-        xpress_work_ = VirtualAlloc(nullptr, work_bytes ? work_bytes : 1, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    if (!compressor_ && !CreateCompressor(COMPRESS_ALGORITHM_XPRESS_HUFF, nullptr, &compressor_)) compressor_ = nullptr;
+    session_ = session;
+    const uint32_t named[4] = {(uint32_t)session, (uint32_t)(session >> 32), settings_.files, 0};
+    if (!write_at(table_, 8, named, sizeof named)) return false;
     stats_ = Stats();
     failed_ = boot_written_ = false;
     error_ = 0;
     next_segment_ = 1;
-    closed_count_ = 0;
-    closed_bytes_ = 0;
     pending_ = Pending();
-    last_beat_ = last_prune_ = 0;
+    last_beat_ = 0;
     began_ = true;
     resume();
     return true;
@@ -228,23 +296,49 @@ void Writer::flush_task_row() {
     pending_.written = true;
 }
 
-bool Writer::open_segment(uint32_t first_task, int64_t qpc) {
+// The table's entry for one spool file: the segment it holds, 0 while none.
+bool Writer::table_entry(uint32_t file, uint32_t segment) {
+    const uint32_t entry[2] = {segment, segment ? ~segment : 0};
+    return write_at(table_, kTableHead + 8ull * file, entry, sizeof entry);
+}
+
+// One spool file, opened and emptied in place (created only the first time
+// any session reaches it).
+HANDLE Writer::reuse(uint32_t file, const wchar_t *suffix) {
     wchar_t path[MAX_PATH];
-    swprintf(path, MAX_PATH, L"%ls\\seg-%06u.tap", dir_, next_segment_);
-    tap_ = CreateFileW(path, GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    swprintf(path, MAX_PATH, L"%ls\\seg-%06u.idx", dir_, next_segment_);
-    index_ = CreateFileW(path, GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    swprintf(path, MAX_PATH, L"%ls\\spool-%02u.%ls", dir_, file, suffix);
+    bool created = false;
+    HANDLE handle = open_own(path, &created);
+    if (handle == INVALID_HANDLE_VALUE) return handle;
+    if (!empty_file(handle)) {
+        CloseHandle(handle);
+        return INVALID_HANDLE_VALUE;
+    }
+    ++(created ? stats_.files_created : stats_.files_reused);
+    return handle;
+}
+
+// The next spool file in turn, for segment next_segment_: its entry names no
+// segment while both files are emptied and the index's first rows written,
+// then names this one (the header comment says why in that order).
+bool Writer::open_segment(uint32_t first_task, int64_t qpc) {
+    const uint32_t file = (next_segment_ - 1) % settings_.files;
+    if (!table_entry(file, 0)) { fail(GetLastError()); return false; }
+    index_ = reuse(file, L"idx");
+    tap_ = reuse(file, L"tap");
     if (tap_ == INVALID_HANDLE_VALUE || index_ == INVALID_HANDLE_VALUE) {
         fail(GetLastError());
         return false;
     }
-    current_ = {next_segment_++, 0, qpc, qpc, false};
+    current_ = {next_segment_++, file, 0, qpc, qpc};
     open_ = true;
     ++stats_.segments;
     memset(ref_.data, 0, layout_.rdram_size);    // the reference image starts empty
     int64_t now = 0;
     const uint64_t utc = utc_now(&now);
-    if (!row(ROW_OPEN, current_.number, first_task, 0, now, utc)) return false;
+    if (!row(ROW_SESSION, file, kFormat, 0, now, session_) || !row(ROW_OPEN, current_.number, first_task, 0, now, utc))
+        return false;
+    if (!table_entry(file, current_.number)) { fail(GetLastError()); return false; }
     last_beat_ = now;
     if (hole_waiting_) {
         hole_waiting_ = false;
@@ -362,13 +456,12 @@ bool Writer::put_packed(const RecordHeader &header, const uint8_t *body, uint32_
     const size_t room = (size_t)stream_bytes + stream_bytes / 8 + 4096;
     if (!out_.reserve(64 + room)) { fail(ERROR_OUTOFMEMORY); return false; }
     uint32_t codec = CODEC_STORED, payload = stream_bytes;
-    if (settings_.compress && xpress_work_ && stream_bytes >= kCompressMin) {
-        const CompressFn compress = (CompressFn)compress_;
-        ULONG final_bytes = 0;
-        if (compress(kFormatXpress, (PUCHAR)stream, stream_bytes, out_.data + 64, (ULONG)room, 4096,
-                     &final_bytes, xpress_work_) == 0 && final_bytes < stream_bytes) {
-            codec = CODEC_XPRESS;
-            payload = final_bytes;
+    if (settings_.compress && compressor_ && stream_bytes >= kCompressMin) {
+        SIZE_T final_bytes = 0;   // a stream that will not fit in `room` is stored
+        if (Compress(compressor_, stream, stream_bytes, out_.data + 64, room, &final_bytes)
+            && final_bytes < stream_bytes) {
+            codec = CODEC_XPRESS_HUFF;
+            payload = (uint32_t)final_bytes;
             ++stats_.compressed;
         }
     }
@@ -417,11 +510,8 @@ bool Writer::add(const uint8_t *record) {
         if (boot_written_) return true;
         wchar_t path[MAX_PATH];
         swprintf(path, MAX_PATH, L"%ls\\boot.bin", dir_);
-        HANDLE file = CreateFileW(path, GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS,
-                                  FILE_ATTRIBUTE_NORMAL, nullptr);
-        DWORD done = 0;
-        boot_written_ = file != INVALID_HANDLE_VALUE && WriteFile(file, record, header.bytes, &done, nullptr)
-                        && done == header.bytes;
+        HANDLE file = open_own(path, nullptr);   // claim() emptied it for this session
+        boot_written_ = file != INVALID_HANDLE_VALUE && empty_file(file) && write_at(file, 0, record, header.bytes);
         if (file != INVALID_HANDLE_VALUE) CloseHandle(file);
         return true;   // without it a package only lacks the act selector's code row
     }
@@ -433,7 +523,7 @@ bool Writer::add(const uint8_t *record) {
         flush_task_row();
         if (header.lost != lost_seen_) note_loss(header.lost, owner, true, header.qpc);
         if (open_ && (header.qpc - current_.first_qpc >= ticks(settings_.segment_ms)
-                      || current_.bytes >= settings_.segment_bytes)) close_segment(CLOSE_ROLLOVER);
+                      || current_.bytes >= file_bytes_)) close_segment(CLOSE_ROLLOVER);
         if (!open_ && !open_segment(owner, header.qpc)) return false;
         const uint64_t offset = current_.bytes;
         if (!put_packed(header, body, body_bytes, true, 0)) return false;
@@ -476,40 +566,6 @@ void Writer::close_segment(uint32_t reason) {
     if (index_ != INVALID_HANDLE_VALUE) CloseHandle(index_);
     tap_ = index_ = INVALID_HANDLE_VALUE;
     open_ = false;
-    if (closed_count_ == kMaxClosed) {   // cannot happen while pruning works; forget the oldest
-        memmove(closed_, closed_ + 1, sizeof closed_[0] * (kMaxClosed - 1));
-        --closed_count_;
-    }
-    closed_[closed_count_++] = current_;
-    closed_bytes_ += current_.bytes;
-    prune(now);
-}
-
-// Oldest first, while older than the window or over the byte cap. The index
-// goes first so readers stop listing the segment; a .tap a reader holds open
-// stays until a later pass.
-void Writer::prune(int64_t now_qpc) {
-    last_prune_ = now_qpc;
-    while (closed_count_) {
-        Segment &oldest = closed_[0];
-        const bool expired = now_qpc - oldest.last_qpc > ticks(settings_.window_ms);
-        const bool over = closed_bytes_ + (open_ ? current_.bytes : 0) > settings_.max_bytes;
-        if (!expired && !over) break;
-        wchar_t path[MAX_PATH];
-        if (!oldest.index_gone) {
-            swprintf(path, MAX_PATH, L"%ls\\seg-%06u.idx", dir_, oldest.number);
-            oldest.index_gone = DeleteFileW(path) || GetLastError() == ERROR_FILE_NOT_FOUND;
-        }
-        swprintf(path, MAX_PATH, L"%ls\\seg-%06u.tap", dir_, oldest.number);
-        if (!oldest.index_gone || !(DeleteFileW(path) || GetLastError() == ERROR_FILE_NOT_FOUND)) {
-            ++stats_.delete_retries;
-            break;
-        }
-        closed_bytes_ -= oldest.bytes;
-        memmove(closed_, closed_ + 1, sizeof closed_[0] * (closed_count_ - 1));
-        --closed_count_;
-        ++stats_.deleted;
-    }
 }
 
 void Writer::tick(int64_t now_qpc) {
@@ -521,7 +577,6 @@ void Writer::tick(int64_t now_qpc) {
         row(ROW_BEAT, stats_.lost, stats_.refused, stats_.tasks, now, utc);
         last_beat_ = now;
     }
-    if (now_qpc - last_prune_ >= ticks(kPruneMs)) prune(now_qpc);
 }
 
 }  // namespace scene_spool

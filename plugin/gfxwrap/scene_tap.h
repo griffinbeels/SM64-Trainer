@@ -1,7 +1,7 @@
 /* The scene tap: a recorder of graphics-task closures and the game state the
- * scene renderer reads (M4). Idle and allocation-free unless a one-shot arming
- * file exists when a practice ROM opens, or the Trainer holds the live
- * spool's lease; see scene_tap.cpp. */
+ * scene renderer reads (M4). Idle and allocation-free unless the Trainer holds
+ * the live spool's lease (or, in the offline host's build only, a one-shot
+ * arming file exists when its ROM opens); see scene_tap.cpp. */
 #pragma once
 #include "zilmar.h"
 #ifdef __cplusplus

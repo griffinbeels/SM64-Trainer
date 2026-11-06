@@ -9,7 +9,9 @@
  *
  * <lab_root> stands in for %LOCALAPPDATA%: the arming file must already be at
  * <lab_root>\SM64Trainer\scene-lab\armed.txt (tools/scene_lab/tap.py offline
- * writes it), and the session lands beside it. Frames are fed in the order
+ * writes it), and the session lands beside it. Only this host's build has the
+ * one-shot mode (tap.py compiles it with SCENE_TAP_ONE_SHOT); the shipped
+ * wrapper records only through the lease. Frames are fed in the order
  * given, one ProcessDList each; repeat a folder to repeat a task. A folder
  * prefixed vi: is one UpdateScreen instead (a VI with no new task), which is
  * where the tap's VI regions are copied. Exit 0 when
@@ -152,14 +154,14 @@ int spool_bench(char **argv) {
     const std::string session = argv[2];
     const scene_spool::Layout layout = bench_layout(session);
     scene_spool::Settings settings;
-    settings.window_ms = settings.max_bytes = 1ull << 40;   // the bench keeps everything
+    settings.max_bytes = 1ull << 40;   // no size rollover: segments of segment_ms, in the 64 files in turn
     settings.dedupe = atoi(argv[4]) != 0;
     settings.compress = atoi(argv[5]) != 0;
     wchar_t out[MAX_PATH];
     MultiByteToWideChar(CP_UTF8, 0, argv[3], -1, out, MAX_PATH);
     CreateDirectoryW(out, nullptr);
     static scene_spool::Writer writer;
-    if (!writer.begin(out, layout, settings)) return 2;
+    if (!writer.claim(out) || !writer.begin(1, layout, settings)) return 2;
     HANDLE file = CreateFileA((session + "\\tap.bin").c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
                               OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
     if (file == INVALID_HANDLE_VALUE) return 2;
@@ -209,10 +211,12 @@ int spool_bench(char **argv) {
     const scene_spool::Stats &s = writer.stats();
     printf("{\"input_bytes\": %llu, \"output_bytes\": %llu, \"index_bytes\": %llu, \"key_bytes\": %llu, "
            "\"skipped_bytes\": %llu, \"tasks\": %u, \"segments\": %u, \"compressed\": %u, "
-           "\"seconds\": %.3f, \"writer_seconds\": %.3f}\n",
+           "\"files_created\": %u, \"files_reused\": %u, \"seconds\": %.3f, \"writer_seconds\": %.3f}\n",
            (unsigned long long)s.input_bytes, (unsigned long long)s.output_bytes, (unsigned long long)s.index_bytes,
            (unsigned long long)s.key_bytes, (unsigned long long)skipped, s.tasks, s.segments, s.compressed,
+           s.files_created, s.files_reused,
            (double)(last_task - first_task) / (double)layout.qpc_frequency, (double)busy / (double)frequency.QuadPart);
+    writer.release();
     return 0;
 }
 
