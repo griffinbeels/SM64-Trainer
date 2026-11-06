@@ -89,9 +89,11 @@ class WinRegistry:
 
 class WinProcesses:
     """The live process list, read only far enough to find Project64.exe's
-    own image path. Uses `PROCESS_QUERY_LIMITED_INFORMATION` -- the same
-    same-privilege handle level pymem's own attach uses -- so no admin
-    elevation is ever required."""
+    own image path. Names come from the kernel's process table, which opens
+    no process; only a process already named Project64.exe is opened, with
+    `PROCESS_QUERY_LIMITED_INFORMATION` alone, for its full path, so no admin
+    elevation is ever required. Until 2026-11-06 every process on the machine
+    was opened at every check."""
 
     def pj64_image_path(self) -> str | None:
         images = self._images()
@@ -120,7 +122,7 @@ class WinProcesses:
         return {**target, "pid": pid}
 
     def _images(self) -> list:
-        psapi = ctypes.WinDLL("psapi", use_last_error=True)
+        from sm64_events.memory.winprocess import pids_named
         kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
         kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
         kernel32.OpenProcess.restype = wintypes.HANDLE
@@ -128,23 +130,8 @@ class WinProcesses:
         kernel32.QueryFullProcessImageNameW.argtypes = [
             wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)]
 
-        pid_slots = 1024
-        while True:
-            pids = (wintypes.DWORD * pid_slots)()
-            bytes_returned = wintypes.DWORD()
-            ok = psapi.EnumProcesses(ctypes.byref(pids), ctypes.sizeof(pids),
-                                      ctypes.byref(bytes_returned))
-            if not ok:
-                return []
-            pid_count = bytes_returned.value // ctypes.sizeof(wintypes.DWORD)
-            if pid_count < pid_slots:
-                break
-            pid_slots *= 2   # the table was full; it may have truncated -- grow and re-read
-
         images = []
-        for pid in pids[:pid_count]:
-            if pid == 0:
-                continue
+        for pid in pids_named("Project64.exe"):
             handle = kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
             if not handle:
                 continue

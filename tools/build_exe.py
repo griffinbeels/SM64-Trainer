@@ -39,7 +39,7 @@ from bundle_policy import data_inputs, ui_inputs  # noqa: E402
 # analysis finds neither — without collecting it the shipped exe silently
 # falls back to device-wide loopback (i.e. records the whole desktop).
 COLLECT = ["av", "proctap", "pyaudiowpatch", "pycaw",
-           "comtypes", "pymem", "webview", "pystray", "numpy", "yt_dlp", "sentry_sdk"]
+           "comtypes", "webview", "pystray", "numpy", "yt_dlp", "sentry_sdk"]
 
 
 def needs_reexec(environ) -> bool:

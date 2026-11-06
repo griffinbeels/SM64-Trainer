@@ -80,6 +80,19 @@ on the db), then journals, then feeds the projector; derived `attempt_completed`
 events re-enter the same pipeline (the projector ignores derived types — no
 recursion possible).
 
+**Project64 is opened read-only, with no debug privilege (2026-11-06).**
+`memory/winprocess.py` is the one module that reads or writes another
+process's memory. The reader's handle holds `PROCESS_VM_READ`,
+`PROCESS_QUERY_INFORMATION` (VirtualQueryEx's documented right) and
+`SYNCHRONIZE`, nothing else. Ghost Handoff's slot write opens a second handle
+with only `PROCESS_VM_WRITE | PROCESS_VM_OPERATION` for that one write.
+Finding Project64 by name reads the kernel's process table and opens no
+process. pymem is gone: its default open enabled SeDebugPrivilege and asked
+for `PROCESS_ALL_ACCESS` on every attach, as password stealers and code
+injectors do. `tests/test_process_access.py` forbids both and records every
+mask; `tests/test_pj64_rom_header.py` proves the masks suffice, and that
+Windows refuses the reader a write, against a real child process.
+
 ## Attempt tracking (phase 1, 2026-06-10)
 
 Design decisions and their evidence — recorded so the choices aren't re-litigated.
