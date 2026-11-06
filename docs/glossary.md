@@ -387,11 +387,11 @@ through is not written.
 After every spawn (a practice [[reset]], entering a level or an area), the Trainer gives each Usamune save state
 made for that same level and area Mario's new place, using [[mario relocation]]. Then Usamune's own load works
 without a visit to the [[scene viewer]]. States for other places stay as they are, and a state already in place is
-not written again. A state he saves over while it runs is skipped. Before its first refit, his save joins the
+not written again. The pass skips a state he saves over while it works. Before its first refit, his save joins the
 [[slot library]]. Lab only.
 
-- **Lives** -- `src/sm64_events/slotlibrary/refit.py`; each pass is one line in `data/slot_refit.jsonl`
-- **Not** -- a journal event: the Trainer did it, not the game
+- **Lives** -- `src/sm64_events/slotlibrary/refit.py`; each pass writes one line to its own log file
+- **Not** -- something the game did, so it never enters the [[journal]]
 
 ### Share file
 

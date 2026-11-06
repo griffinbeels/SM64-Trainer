@@ -84,7 +84,7 @@ def _walk_the_row(page, base, game, answers, folder) -> None:
     page.keyboard.press("ArrowRight")
     fakes.set_level(game)
     page.get_by_role("button", name="Put this frame in slot 2").click()
-    _says(page, "This save state is for level 9 area 1.")
+    _says(page, "This save state is for Bob-omb Battlefield.")
     page.locator(ROW).screenshot(path=str(folder / "other-level.png"))
     answers["refuse"] = {"refused": "never-reached", "reason": "Usamune cannot save on this frame. The game is not "
                          "running Mario here, such as during a level start, a fade or a door."}
