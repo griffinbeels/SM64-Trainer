@@ -294,7 +294,7 @@ def msbuild(staged: Path, vcvars32: Path, log: Path) -> Path:
             "/p:PostBuildEventUseInBuild=false", "/p:BuildProjectReferences=false"]
     script = staged / "build_renderer.bat"
     script.write_text(
-        f'@echo off\r\ncall "{vcvars32}" >nul\r\nif errorlevel 1 exit /b %errorlevel%\r\n'
+        f'@echo off\r\nset VSCMD_SKIP_SENDTELEMETRY=1\r\ncall "{vcvars32}" >nul\r\nif errorlevel 1 exit /b %errorlevel%\r\n'
         "set N64PluginsDir=\r\nset Mupen64PluginsDir=\r\nset Mupen64PluginsDir_x64=\r\n"
         f'"{find_msbuild(vcvars32)}" GLideN64.vcxproj {" ".join(args)}\r\nexit /b %errorlevel%\r\n',
         encoding="utf-8")

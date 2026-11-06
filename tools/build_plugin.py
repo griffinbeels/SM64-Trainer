@@ -118,7 +118,9 @@ def _cl(vcvars: Path, args: list, cwd: Path, *, version=None, identity=None) -> 
         # an argument holding quotes, and cmd then sees `\"` literally.
         quoted = " ".join(f'"{arg}"' if " " in str(arg) else str(arg) for arg in args)
         script = cwd / "build_step.bat"
-        script.write_text(f'@echo off\r\ncall "{vcvars}" >nul\r\ncl {quoted}\r\n',
+        # Without the telemetry opt-out vcvars may start vctip.exe, which then
+        # outlives the build (one was still running 47 minutes on, 2026-11-06).
+        script.write_text(f'@echo off\r\nset VSCMD_SKIP_SENDTELEMETRY=1\r\ncall "{vcvars}" >nul\r\ncl {quoted}\r\n',
                           encoding="utf-8")
         result = subprocess.run(["cmd.exe", "/d", "/c", str(script)], cwd=str(cwd),
                                 capture_output=True, text=True, creationflags=_NO_WINDOW,

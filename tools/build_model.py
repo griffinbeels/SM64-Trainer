@@ -425,7 +425,7 @@ def build_model(staging: Path, cache: Path | None = None, vcvars32: Path | None 
              "/D_CRT_SECURE_NO_WARNINGS", "/DSM64_LIB_STATIC", "/DGBI_FLOATS", "/DVERSION_US", "/DNO_SEGMENTED_MEMORY"]
     if testing:
         flags.append("/DSG_MODEL_TESTING")
-    lines = ["@echo off", f'call "{vcvars32}" >nul', "if errorlevel 1 exit /b 1"]
+    lines = ["@echo off", "set VSCMD_SKIP_SENDTELEMETRY=1", f'call "{vcvars32}" >nul', "if errorlevel 1 exit /b 1"]
     objects = []
     for i, path in enumerate(sources):
         obj = output / f"{i:02d}-{path.stem}.obj"
