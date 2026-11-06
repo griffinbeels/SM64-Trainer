@@ -1,19 +1,19 @@
 """Arm, read and replay scene-tap sessions (plugin/gfxwrap/scene_tap.cpp).
 
-    tap.py arm [--seconds N] [--no-reference] [--reference-every N] [--full-every N] [--version us|jp]
-        [--no-scene-state] [--no-audio-state]
-    tap.py disarm
     tap.py summary <session>
     tap.py frames <session> <out> [--pattern 0xA5] [--limit N] [--every N] [--pair origin|next]
     tap.py offline <lab_root> <frame_dir>... [--seconds N] [--no-scene-state]
 
-`arm` writes the one-shot arming file the wrapper consumes when a practice ROM
-next opens; its identity reads (gGlobalTimer, level, area) come from
-memory/layout.py so the plugin still knows no game address. `frames` turns
+`arming_text` is the arming both modes read (the live spool's lease starts
+from it, live_spool.lease_text); its identity reads (gGlobalTimer, level, area)
+come from memory/layout.py so the plugin still knows no game address. Since
+2026-11-06 Project64's wrapper records only through the lease: the one-shot
+arming file (armed.txt at the lab root, consumed when a ROM opens) exists in
+the offline host's build alone, so `tap.py arm` is gone. `frames` turns
 each recorded task into a frame input (savestate_frames.py format) whose
 RDRAM holds ONLY the captured closure, every other byte set to --pattern,
 paired with the presented picture that followed it (ref.bgr); --every N keeps
-only every N-th frame that has a reference picture. `arm` also
+only every N-th frame that has a reference picture. The arming also
 names the scene state spans (layout.py's scene_* and main_pool_* rows, plus the
 act selector's save_buffer_* and usamune_state_* where the layout has them) the tap
 copies with each task, so SM64's own renderer can re-run offline (E2-live:
@@ -31,7 +31,7 @@ The live spool (live_spool.py) writes the same records into rolling segments:
 as it grows), stops at a torn tail (the open segment is still being written),
 and rebuilds the writer's packed records
 (REC_PACKED: RDRAM pieces equal to the segment's reference image left out,
-then XPRESS) through an Unpacker. REC_BOOT (Boot) is the live capture's one
+then XPRESS_HUFF through the Windows Compression API) through an Unpacker. REC_BOOT (Boot) is the live capture's one
 copy of the expansion RAM, in its session's boot.bin. A header's flags carry
 WRITER_KEY on the keys the writer starts each segment with.
 """
@@ -47,6 +47,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -62,7 +63,8 @@ REC_PAD, REC_TASK, REC_PRESENT, REC_FULL, REC_REGIONS, REC_VI, REC_BOOT, REC_PAC
 HEADER = struct.Struct("<IIIIqII")      # magic, type, bytes, sequence, qpc, records lost so far, flags
 WRITER_KEY = 1                          # header flag: a live-spool key the writer wrote from its own shadow
 PACKED = struct.Struct("<8I")           # inner type, inner body bytes, codec, stream bytes, payload bytes, pieces, dedupe, 0
-CODEC_STORED, CODEC_XPRESS = 0, 1
+CODEC_STORED, CODEC_XPRESS_HUFF = 0, 2    # 1 was format 1's ntdll XPRESS: no reader decodes it now
+COMPRESS_ALGORITHM_XPRESS_HUFF = 4      # compressapi.h
 SPOOL_BLOCK = 256                       # a packed record's pieces end at every multiple of this RDRAM address
 REGION_KINDS = ("task", "level_key", "level_delta")
 REGION_FIELDS = ("task_index", "kind", "count", "data_bytes", "copy_ns", "scan_ns", "block_bytes", "reserved")
@@ -222,20 +224,41 @@ class SegmentReader:
         self.offset += consumed
 
 
-_ntdll = None
+_capi = threading.local()             # one Compression API decompressor per thread (a handle is not shared)
 
 
-def _xpress(payload: bytes, size: int) -> bytes:
-    """XPRESS (ntdll's RtlDecompressBuffer, the writer's RtlCompressBuffer format)."""
-    global _ntdll
-    import ctypes
-    if _ntdll is None:
-        _ntdll = ctypes.WinDLL("ntdll")
-    out, final = ctypes.create_string_buffer(size), ctypes.c_ulong()
-    status = _ntdll.RtlDecompressBuffer(ctypes.c_ushort(3), out, size, payload, len(payload), ctypes.byref(final))
-    if status != 0 or final.value != size:
-        raise ValueError(f"packed record does not decompress (status {status & 0xFFFFFFFF:#x})")
-    return out.raw
+def _decompressor():
+    """This thread's XPRESS_HUFF decompressor (cabinet.dll's documented Compression API)."""
+    handle = getattr(_capi, "handle", None)
+    if handle is None:
+        import ctypes
+        from ctypes import wintypes
+        cabinet = ctypes.WinDLL("cabinet", use_last_error=True)
+        cabinet.CreateDecompressor.argtypes = (wintypes.DWORD, ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p))
+        cabinet.CreateDecompressor.restype = wintypes.BOOL
+        cabinet.Decompress.argtypes = (ctypes.c_void_p, ctypes.c_char_p, ctypes.c_size_t, ctypes.c_void_p,
+                                       ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t))
+        cabinet.Decompress.restype = wintypes.BOOL
+        handle = ctypes.c_void_p()
+        if not cabinet.CreateDecompressor(COMPRESS_ALGORITHM_XPRESS_HUFF, None, ctypes.byref(handle)):
+            raise OSError(ctypes.get_last_error(), "the Compression API has no XPRESS_HUFF decompressor")
+        _capi.handle, _capi.cabinet = handle, cabinet
+    return _capi.cabinet, handle
+
+
+def unpack_payload(codec: int, payload: bytes, size: int) -> bytes:
+    """A REC_PACKED payload back into its `size`-byte stream (scene_spool.cpp's codecs)."""
+    if codec == CODEC_STORED and len(payload) == size:
+        return payload
+    if codec == CODEC_XPRESS_HUFF:
+        import ctypes
+        cabinet, handle = _decompressor()
+        out, got = ctypes.create_string_buffer(size), ctypes.c_size_t()
+        if not cabinet.Decompress(handle, payload, len(payload), out, size, ctypes.byref(got)) or got.value != size:
+            raise ValueError(f"packed record does not decompress (error {ctypes.get_last_error()})")
+        return out.raw
+    raise ValueError(f"packed record: codec {codec} is not one this reader knows (format 1's XPRESS was 1), "
+                     "or its payload is short")
 
 
 class Unpacker:
@@ -251,13 +274,7 @@ class Unpacker:
 
     def unpack(self, body) -> tuple[int, bytes]:
         inner, inner_bytes, codec, stream_bytes, payload_bytes, pieces, dedupe, _ = PACKED.unpack_from(body, 0)
-        payload = bytes(body[32:32 + payload_bytes])
-        if codec == CODEC_XPRESS:
-            stream = _xpress(payload, stream_bytes)
-        elif codec == CODEC_STORED and len(payload) == stream_bytes:
-            stream = payload
-        else:
-            raise ValueError(f"packed record: unknown codec {codec} or short payload")
+        stream = unpack_payload(codec, bytes(body[32:32 + payload_bytes]), stream_bytes)
         if not dedupe:
             return inner, stream
         bitmap = ((pieces + 7) // 8 + 3) & ~3
@@ -358,9 +375,11 @@ def session_header(session: Path) -> dict:
 
 
 def identity_spec(session: Path) -> list[tuple[str, int, int]]:
-    """The identity extras the arming tool named: (name, physical address, bytes)."""
+    """The identity extras the arming tool named: (name, physical address, bytes). A live
+    session keeps its lease's lines in lease-lines.txt, a one-shot session its armed.txt."""
     identity = []
-    for line in (session / "armed.txt").read_text(encoding="ascii").splitlines():
+    lines = session / "lease-lines.txt"
+    for line in (lines if lines.is_file() else session / "armed.txt").read_text(encoding="ascii").splitlines():
         if line.startswith("# identity="):
             for item in filter(None, line.removeprefix("# identity=").split(",")):
                 name, address, size = item.split(":")
@@ -459,18 +478,6 @@ def arming_text(args) -> str:
     if not getattr(args, "no_audio_state", False):
         lines += audio_state_lines(layout)
     return "\n".join(lines) + "\n"
-
-
-def arm(args) -> int:
-    lab_root().mkdir(parents=True, exist_ok=True)
-    (lab_root() / "armed.txt").write_text(arming_text(args), encoding="ascii")
-    print("armed:", lab_root() / "armed.txt")
-    return 0
-
-
-def disarm(_args) -> int:
-    (lab_root() / "armed.txt").unlink(missing_ok=True)
-    return 0
 
 
 class SceneState:
@@ -716,7 +723,11 @@ def build_offline_host() -> Path:
     spec = importlib.util.spec_from_file_location("scene_lab_build", ROOT / "tools/build_plugin.py")
     compiler = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(compiler)
-    digest = hashlib.sha256(b"".join(path.read_bytes() for path in HOST_SOURCES)).hexdigest()[:16]
+    # SCENE_TAP_ONE_SHOT: the armed.txt mode, which only this host has (scene_tap.cpp's header).
+    flags = [*(flag for flag in compiler.COMMON_FLAGS if not flag.startswith("/std:")), "/std:c++17", "/EHsc",
+             "/DSCENE_TAP_ONE_SHOT"]
+    digest = hashlib.sha256(b"".join(path.read_bytes() for path in HOST_SOURCES)
+                            + " ".join(flags).encode()).hexdigest()[:16]
     work = Path(os.environ.get("LOCALAPPDATA", tempfile.gettempdir())) / "SM64Trainer/build-cache/scene-lab" / digest
     target = work / "tap_offline_host.exe"
     if target.is_file():
@@ -725,8 +736,7 @@ def build_offline_host() -> Path:
     vcvars = compiler.find_vcvars32()
     if vcvars is None:
         raise RuntimeError("x86 MSVC toolchain is required")
-    flags = [flag for flag in compiler.COMMON_FLAGS if not flag.startswith("/std:")]
-    compiler._cl(vcvars, [*flags, "/std:c++17", "/EHsc", f"/I{ROOT / 'plugin/gfxwrap'}",
+    compiler._cl(vcvars, [*flags, f"/I{ROOT / 'plugin/gfxwrap'}",
                           *map(str, HOST_SOURCES[:3]), f"/Fe:{target}", f"/Fo{work}\\",
                           "/link", "kernel32.lib", "user32.lib"], work)
     return target
@@ -759,18 +769,6 @@ def offline(args) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
-    p = sub.add_parser("arm")
-    p.add_argument("--seconds", type=int, default=20)
-    p.add_argument("--no-reference", action="store_true")
-    p.add_argument("--reference-every", type=int, default=1)
-    p.add_argument("--full-every", type=int, default=0)
-    p.add_argument("--version", choices=("us", "jp"), default="us")
-    p.add_argument("--no-scene-state", action="store_true",
-                   help="do not copy the scene renderer's state spans (E2-live)")
-    p.add_argument("--no-audio-state", action="store_true",
-                   help="do not copy the audio task's spans and SP DMEM at every VI (M4 stems)")
-    p.set_defaults(run=arm)
-    sub.add_parser("disarm").set_defaults(run=disarm)
     p = sub.add_parser("summary")
     p.add_argument("session")
     p.set_defaults(run=summary)

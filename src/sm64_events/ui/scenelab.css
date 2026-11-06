@@ -8,6 +8,16 @@
 .scene-lab-open select { min-width: 0; max-width: 360px; background: var(--surface-2); }
 .scene-lab-title { min-width: 0; max-width: 560px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 .scene-lab-reason { margin: 0; flex-basis: 100%; color: var(--muted); line-height: 1.5; }
+/* The live recording's sign and switch (components/scenerecording.js): its own row of the hero, so
+   whether the lab records his play is never hidden behind a menu. A steady light, no animation. */
+.scene-recording { flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; min-width: 0;
+  padding: 8px 12px; border: 1px solid var(--border-soft); border-radius: var(--radius); background: var(--surface-2); }
+.scene-recording-light { width: 10px; height: 10px; flex: 0 0 auto; border-radius: 50%; background: var(--muted); }
+.scene-recording.is-running { border-color: rgba(255,123,115,.55); }
+.scene-recording.is-running .scene-recording-light { background: var(--coral); box-shadow: 0 0 0 3px rgba(255,123,115,.22); }
+.scene-recording-words { flex: 1 1 260px; min-width: 0; line-height: 1.4; }
+.scene-recording.is-off .scene-recording-words { color: var(--muted); }
+.scene-recording .scene-lab-reason { color: var(--coral); }
 .scene-lab-error { margin: 0; padding: 10px 14px; border-left: 3px solid var(--coral); background: rgba(255,123,115,.06); }
 .scene-lab-player { display: grid; gap: 10px; min-width: 0; }
 .scene-lab-stage { position: relative; background: #000; border: 1px solid var(--border-soft); border-radius: var(--radius); overflow: hidden; }

@@ -2,11 +2,13 @@
 
 tools/scene_lab/tap_offline_host.cpp feeds frame inputs through plugin/gfxwrap/scene_tap.cpp
 (and its writer, scene_spool.cpp) as Project64 would, with --live: the tap thread watches the
-lease tools/scene_lab/live_spool.py writes and records rolling segments. Synthetic RDRAM and a
-synthetic ROM only. The contracts: a span read from the middle of the spool packages to the same
-closures and scene states, byte for byte, as the one-shot tap of the same tasks; capture stops
-when the lease ends or lapses and resumes in a new segment; old segments leave the window and
-the byte cap; a forced ring overflow shows as lost records and a hole; a torn tail is ignored.
+lease tools/scene_lab/live_spool.py writes and records segments over the fixed spool files.
+Synthetic RDRAM and a synthetic ROM only. The contracts: a span read from the middle of the spool
+packages to the same closures and scene states, byte for byte, as the one-shot tap of the same
+tasks (through the Compression API's XPRESS_HUFF on the way); capture stops when the lease ends or
+lapses and resumes in a new segment; the spool files are reused in turn and never deleted, a
+later session included, within the byte cap; format 1's folders move out once; a forced ring
+overflow shows as lost records and a hole; a torn tail is ignored.
 
 Skipped (not failed) on a machine without the x86 MSVC toolchain."""
 from __future__ import annotations
@@ -131,6 +133,16 @@ def _lab(root: Path) -> Path:
     return root / "SM64Trainer" / "scene-lab"
 
 
+def _taps(spool) -> list[Path]:
+    """The session's segment files (.tap), oldest segment first, as the spool table names them."""
+    table = live_spool.read_table(spool.session)
+    return [live_spool.spool_file(spool.session, table.files[number], "tap") for number in sorted(table.files)]
+
+
+def _summary(folder: Path) -> dict:
+    return dict(line.partition("=")[::2] for line in (folder / "summary.txt").read_text().splitlines())
+
+
 @pytest.fixture(scope="module")
 def recorded(tmp_path_factory):
     if not build_plugin.toolchain_available():
@@ -179,8 +191,7 @@ def test_a_mid_session_span_packages_to_the_one_shot_closures_and_states_byte_fo
     assert {(ref.level, ref.area) for ref in refs[:3]} == {(9, 1)} and refs[3].area == 2
     shown = [present is not None for _, present in tap.paired(tap.read_records(recorded["one_shot"] / "tap.bin"))]
     assert [ref.has_present for ref in refs] == shown and not all(shown)   # a repeated origin shows nothing new
-    segments = sorted(spool.session.glob("seg-*.tap"))
-    assert len(segments) == 5, "segment_ms=50 rolls a segment at every 70 ms pause"
+    assert len(_taps(spool)) == 5, "segment_ms=50 rolls a segment at every 70 ms pause"
     # Task 8 opens a segment with no level change of its own: its state comes from the writer's key.
     # The span starts mid-segment and crosses two later segment starts.
     first, last = 9, 17
@@ -205,19 +216,27 @@ def test_a_mid_session_span_packages_to_the_one_shot_closures_and_states_byte_fo
 @needs_toolchain
 def test_the_spool_is_packed_and_its_session_closes_when_the_rom_closes(recorded):
     spool = recorded["spool"]
-    summary = dict(line.partition("=")[::2] for line in (spool.session / "summary.txt").read_text().splitlines())
-    assert summary["end_reason"] == "rom_closed" and summary["spool_tasks"] == "20"
-    assert summary["spool_lost_records"] == "0" and summary["spool_holes"] == "0"
+    summary = _summary(spool.session)
+    assert summary["session"] == str(spool.id) and summary["end_reason"] == "rom_closed"
+    assert summary["spool_tasks"] == "20" and summary["spool_lost_records"] == "0" and summary["spool_holes"] == "0"
     assert int(summary["spool_compressed"]) > 0
+    # Five segments: five spool files made, the first time any session reached them; nothing deleted.
+    assert (summary["spool_segments"], summary["spool_files_created"], summary["spool_files_reused"]) == ("5", "10", "0")
+    codecs = set()
     # Inside a segment, a task's regions travel as the blocks that changed (synthetic RAM is noise,
-    # so XPRESS gains nothing here; the disk rate on his recording is in live_spool's docstring).
-    for path in spool.session.glob("seg-*.tap"):
+    # so compression gains little here; the disk rate on his recording is in live_spool's docstring).
+    for path in _taps(spool):
         data, packed = path.read_bytes(), []
         for at, kind, size, _sequence, _qpc, _flags in tap._walk(data, torn_ok=True):
             inner = struct.unpack_from("<8I", data, at + 32)
+            if kind == tap.REC_PACKED:
+                codecs.add(inner[2])
             if kind == tap.REC_PACKED and inner[0] == tap.REC_REGIONS and inner[6]:
                 packed.append((size, inner[1]))
         assert packed and all(size < inner_bytes / 20 for size, inner_bytes in packed[1:]), path.name
+        assert [offset for offset, _, _ in tap.read_segment(data, RDRAM)]    # every record decodes in Python
+    # The native writer's Compression API records are what the Python reader decoded above.
+    assert codecs == {tap.CODEC_STORED, tap.CODEC_XPRESS_HUFF}
     health = spool.health()
     assert health["recording"] is False and health["reason"] == "Project64 closed the game."
     assert health["lost"] == 0 and health["holes"] == []
@@ -229,11 +248,6 @@ def test_capture_stops_when_the_lease_ends_or_lapses_and_resumes_in_a_new_segmen
     frames = recorded["frames"]
     lease = live_spool.Lease(_lab(tmp_path), extra_lines=["segment_ms=60000"])
     spools = _lab(tmp_path) / "live"
-    for name in ("live-20200101-000000", "live-20200101-000001"):   # earlier runs' sessions
-        (spools / name).mkdir(parents=True)
-        (spools / name / "session.txt").write_text("schema=old\n", encoding="ascii")
-        (spools / name / "seg-000001.tap").write_bytes(b"old")
-    held = (spools / "live-20200101-000001" / "writer.lock").open("wb")   # a writer still holds this one
     host = Host(tmp_path, frames[0])
     try:
         assert host.send("poke") == "ok 0", "no lease: no capture"
@@ -244,15 +258,15 @@ def test_capture_stops_when_the_lease_ends_or_lapses_and_resumes_in_a_new_segmen
         assert host.send("poke") == "ok 1"
         spool = live_spool.open_spool(_lab(tmp_path))
         assert [ref.index for ref in spool.tasks()] == [0, 1, 2] and spool.health()["recording"]
-        assert sorted(path.name for path in spools.iterdir()) == ["lease.txt", "live-20200101-000001",
-                                                                  spool.session.name]
-        assert (spools / "live-20200101-000001" / "seg-000001.tap").read_bytes() == b"old"
-        held.close()
+        # One folder, the session's own files and the first spool file pair; no folder per session.
+        assert sorted(path.name for path in spools.iterdir()) == [
+            "boot.bin", "lease-lines.txt", "lease.txt", "session.txt", "spool-00.idx", "spool-00.tap",
+            "spool-table.bin", "writer.lock"]
         lease.stop()
         assert host.send("poke") == "ok 0"
         host.send(f"frame {frames[3]}")                  # not recorded, not counted
         health = spool.health()
-        assert health["recording"] is False and health["reason"] == "The Trainer ended the lease."
+        assert health["recording"] is False and health["reason"] == "The Trainer stopped the scene recording."
         lease.start()                                    # the same lines: the same session, a new segment
         assert host.send("poke") == "ok 1"
         host.send(f"frame {frames[4]}")
@@ -260,7 +274,7 @@ def test_capture_stops_when_the_lease_ends_or_lapses_and_resumes_in_a_new_segmen
         spool.refresh()
         refs = spool.tasks()
         assert [ref.index for ref in refs] == [0, 1, 2, 3] and refs[3].global_timer == 1004
-        assert len(list(spool.session.glob("seg-*.idx"))) == 2
+        assert len(_taps(spool)) == 2
         lease._stop.set()                                # the Trainer crashes: no renewal, no delete
         lease._thread.join()
         stale = time.time() - 60
@@ -271,7 +285,6 @@ def test_capture_stops_when_the_lease_ends_or_lapses_and_resumes_in_a_new_segmen
         source = spool.source(1, 3)
         assert [capture.fields[10] for capture in source.captures] == [1, 2, 3]
     finally:
-        held.close()
         lease.stop()
         host.close()
 
@@ -299,7 +312,7 @@ def test_a_later_segment_rebuilds_the_audio_spans_alone_when_the_lease_asks_for_
         lease.stop()
         host.close()
     spool = live_spool.open_spool(_lab(tmp_path))
-    segments = sorted(spool.session.glob("seg-*.tap"))
+    segments = _taps(spool)
     assert len(segments) == 2
 
     def states(paths):
@@ -317,44 +330,107 @@ def test_a_later_segment_rebuilds_the_audio_spans_alone_when_the_lease_asks_for_
         assert np.array_equal(alone[index][0], whole[index][0]) and alone[index][1:] == whole[index][1:], index
 
 
+def _spool_names(folder: Path) -> set[str]:
+    return {path.name for path in folder.glob("spool-??.*")}
+
+
 @needs_toolchain
-def test_old_segments_leave_the_window_and_the_byte_cap(recorded, tmp_path):
+def test_the_spool_files_are_reused_in_turn_never_deleted_and_hold_the_byte_cap(recorded, tmp_path):
     frames = recorded["frames"]
-    lease = live_spool.Lease(_lab(tmp_path), extra_lines=["segment_ms=30", "window_ms=150"])
+    folder = _lab(tmp_path) / "live"
+    lease = live_spool.Lease(_lab(tmp_path), extra_lines=["segment_ms=30", "spool_files=3"])
     lease.start()
-    host = Host(tmp_path, frames[0])
+    host, closed = Host(tmp_path, frames[0]), False
     try:
         assert host.send("poke") == "ok 1"
+        seen = set()
         for group in range(8):
             host.send(f"frame {frames[group % FRAMES]}")
             host.send(f"frame {frames[(group + 1) % FRAMES]}")
             host.send("sleep 60")
+            seen |= _spool_names(folder)
         host.send("poke")
         spool = live_spool.open_spool(_lab(tmp_path))
-        kept = sorted(spool.session.glob("seg-*.tap"))
-        assert 1 <= len(kept) <= 4 and kept[0].name != "seg-000001.tap"
+        files = ["spool-00.idx", "spool-00.tap", "spool-01.idx", "spool-01.tap", "spool-02.idx", "spool-02.tap"]
+        assert sorted(seen) == sorted(_spool_names(folder)) == files       # never more files, none gone
+        table = live_spool.read_table(folder)
+        assert sorted(table.files) == [6, 7, 8] and table.files == {6: 2, 7: 0, 8: 1}   # segment n in file (n-1) % 3
         refs = spool.tasks()
-        assert refs[-1].index == 15 and refs[0].index >= 6
+        assert refs[-1].index == 15 and refs[0].index >= 6               # the files hold the newest segments
         assert spool.source(refs[0].index, refs[-1].index) is not None
-        # The byte cap: about a segment and a half (each starts with a 1.4 MB level key of noise)
-        # keeps the open segment and at most the newest closed one.
         lease.stop()
         host.send("poke")
-        capped = live_spool.Lease(_lab(tmp_path), extra_lines=["segment_ms=30", "max_bytes=2500000"])
+        # The byte cap, a new session (new lines): each file holds at most max_bytes / files, so with a
+        # cap below one level key (1.4 MB of noise) every task opens a segment; the same files again.
+        capped = live_spool.Lease(_lab(tmp_path), extra_lines=["segment_ms=60000", "spool_files=3",
+                                                                "max_bytes=2500000"])
         capped.start()
         assert host.send("poke") == "ok 1"
+        summary = _summary(folder)                       # the new lines ended the first session
+        assert summary["session"] == str(spool.id) and (
+            summary["spool_segments"], summary["spool_files_created"], summary["spool_files_reused"]) == ("8", "6", "10")
         for group in range(5):
             host.send(f"frame {frames[group % FRAMES]}")
-            host.send("sleep 40")
-        host.send("poke")
-        capped.stop()
         host.send("poke")
         newest = live_spool.open_spool(_lab(tmp_path))
-        assert newest.session != spool.session              # new lines: a new session
-        assert len(list(newest.session.glob("seg-*.tap"))) <= 2
+        assert newest.id != spool.id and newest.name != spool.name
+        spool.refresh()
+        assert spool.tasks() == [] and spool.health()["recording"] is False   # the old one's readers let go
+        assert spool.health()["reason"] == "The lease's settings changed."
+        assert len(newest.tasks()) == 3 and all(len(segment.tasks) == 1 for segment in newest._segments.values())
+        capped.stop()
+        host.close()                                     # the game closes: the second session's summary
+        closed = True
+        summary = _summary(folder)
+        assert summary["session"] == str(newest.id) and summary["spool_files_created"] == "0"
+        assert summary["spool_files_reused"] == "10" and _spool_names(folder) == set(files)
     finally:
         lease.stop()
-        host.close()
+        if not closed:
+            host.close()
+
+
+def test_format_1s_folders_move_out_once_and_only_whole(tmp_path):
+    """clear_old_layout: a folder holding only format 1's files goes; one an older wrapper still
+    writes (its writer.lock open) or with anything else in it stays; the run is logged."""
+    lab = _lab(tmp_path)
+    old = lab / "live" / "live-20261105-115544"
+    old.mkdir(parents=True)
+    for name in ("seg-000001.tap", "seg-000001.idx", "boot.bin", "session.txt", "armed.txt", "summary.txt",
+                 "writer.lock"):
+        (old / name).write_bytes(b"x" * 10)
+    held = lab / "live" / "live-20261106-090000"
+    held.mkdir()
+    (held / "seg-000002.tap").write_bytes(b"y")
+    lock = (held / "writer.lock").open("wb")              # an older wrapper still writes this one
+    mixed = lab / "live" / "live-20261106-100000"
+    mixed.mkdir()
+    (mixed / "notes.txt").write_text("mine", encoding="ascii")
+    stems = lab / "stems" / "live-20261105-115544"
+    stems.mkdir(parents=True)
+    (stems / "vi-00000001-00000000000000000001.stm").write_bytes(b"z" * 5)
+    try:
+        removed = live_spool.clear_old_layout(lab)
+        assert (removed["folders"], removed["files"], removed["bytes"]) == (2, 8, 75)
+        assert sorted(removed["kept"]) == ["live-20261106-090000", "live-20261106-100000"]
+        assert not old.exists() and not stems.exists() and (held / "seg-000002.tap").exists()
+        assert (mixed / "notes.txt").read_text(encoding="ascii") == "mine"
+        assert "removed 2 format 1 folders, 8 files, 75 bytes" in (lab / "live" / live_spool.OLD_LAYOUT_LOG).read_text()
+    finally:
+        lock.close()
+    assert live_spool.clear_old_layout(lab)["folders"] == 1               # the wrapper let go: it goes now
+    log = (lab / "live" / live_spool.OLD_LAYOUT_LOG).read_text().splitlines()
+    assert len(log) == 2 and live_spool.clear_old_layout(lab) == {"folders": 0, "files": 0, "bytes": 0,
+                                                                  "kept": ["live-20261106-100000"]}
+    assert len((lab / "live" / live_spool.OLD_LAYOUT_LOG).read_text().splitlines()) == 2   # nothing removed: no line
+
+
+def test_the_reader_decodes_only_this_formats_codecs():
+    assert tap.unpack_payload(tap.CODEC_STORED, b"abcd", 4) == b"abcd"
+    with pytest.raises(ValueError, match="format 1's XPRESS"):
+        tap.unpack_payload(1, b"\x00" * 8, 64)
+    with pytest.raises(ValueError, match="does not decompress"):
+        tap.unpack_payload(tap.CODEC_XPRESS_HUFF, b"\x00" * 8, 64)
 
 
 @needs_toolchain
@@ -453,7 +529,7 @@ def test_follow_yields_tasks_as_they_flush_across_segments_and_matches_source(re
         abandoned.join(timeout=1)
         assert abandoned.indexes == [] and abandoned.source.ended is None
         assert live.indexes == list(range(1, 12)) and live.source.ended is None and live.source.last == 11
-        assert len(list(spool.session.glob("seg-*.tap"))) >= 3
+        assert len(_taps(spool)) >= 3
         expected = tmp_path / "source.sm64scene"
         cut = spool.source(1, 11)
         pk.write_package(cut, rom, expected, pk.ZLIB, group=3, checkpoint_every=4)
@@ -472,7 +548,7 @@ def test_follow_yields_tasks_as_they_flush_across_segments_and_matches_source(re
         lease.stop()
         assert host.send("poke") == "ok 0"
         tail.join()
-        assert tail.indexes == [12, 13] and tail.source.ended == "The Trainer ended the lease."
+        assert tail.indexes == [12, 13] and tail.source.ended == "The Trainer stopped the scene recording."
     finally:
         lease.stop()
         host.close()
@@ -481,7 +557,7 @@ def test_follow_yields_tasks_as_they_flush_across_segments_and_matches_source(re
 @needs_toolchain
 def test_follow_ends_with_a_reason_when_it_falls_behind_or_reaches_a_hole(recorded, tmp_path):
     frames = recorded["frames"]
-    lease = live_spool.Lease(_lab(tmp_path), extra_lines=["segment_ms=30", "window_ms=150", "ring_mib=16"])
+    lease = live_spool.Lease(_lab(tmp_path), extra_lines=["segment_ms=30", "spool_files=2", "ring_mib=16"])
     lease.start()
     host = Host(tmp_path, frames[0])
     try:
@@ -496,8 +572,8 @@ def test_follow_ends_with_a_reason_when_it_falls_behind_or_reaches_a_hole(record
         for group in range(6):
             host.send("sleep 60")
             host.send(f"frame {frames[group % FRAMES]}")
-        host.send("poke")                                    # segment 1 left the 150 ms window
-        assert not (spool.session / "seg-000001.idx").exists()
+        host.send("poke")                                    # segment 1's file took a later segment
+        assert 1 not in live_spool.read_table(spool.session).files
         rest = [capture.fields[10] for capture in slow.captures]
         assert [first.fields[10], *rest] == list(range(len(rest) + 1))   # never a silent skip
         assert "fell behind" in slow.ended
@@ -567,12 +643,13 @@ def test_the_shared_capture_loop_gives_what_tap_source_gives(recorded, tmp_path)
 @needs_toolchain
 def test_a_torn_segment_tail_and_index_row_are_ignored(recorded, tmp_path):
     spool = recorded["spool"]
-    copy = tmp_path / spool.session.name
+    copy = tmp_path / "live"
     copy.mkdir()
     for path in spool.session.iterdir():
         (copy / path.name).write_bytes(path.read_bytes())
     (copy / "summary.txt").unlink()
-    newest = max(copy.glob("seg-*.tap"))
+    table = live_spool.read_table(copy)
+    newest = live_spool.spool_file(copy, table.files[max(table.files)], "tap")
     data = newest.read_bytes()
     records = list(tap.read_segment(data, RDRAM))
     last_offset = records[-1][0]

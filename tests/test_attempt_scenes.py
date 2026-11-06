@@ -129,16 +129,41 @@ def test_the_probe_says_whether_the_live_recording_runs(lab):
     app, server, cutters = _app(lab)
     with TestClient(app) as client:
         assert client.get("/api/scene-lab").json() == {
-            "lab": "scene-viewer", "live": {"recording": False, "reason": attempt_scenes.STARTING}}
+            "lab": "scene-viewer", "live": {"recording": False, "reason": attempt_scenes.STARTING, "on": True,
+                                            "switch": True}}
         cutters[0].on_event({"live": {"recording": True, "reason": None}})
-        assert client.get("/api/scene-lab").json()["live"] == {"recording": True, "reason": None}
+        live = client.get("/api/scene-lab").json()["live"]
+        assert (live["recording"], live["on"], live["switch"], live["reason"]) == (True, True, True, None)
         assert FakeLease.made[-1].running and FakeLease.made[-1].lab_root == lab["root"]
     assert not FakeLease.made[-1].running and cutters[0].closed
     off, _server, none = _app(lab, live=False)
     with TestClient(off) as client:
-        assert client.get("/api/scene-lab").json()["live"] == {
-            "recording": False, "reason": "This server does not run the live scene recording."}
+        live = client.get("/api/scene-lab").json()["live"]
+        assert (live["recording"], live["switch"], live["reason"]) == (
+            False, False, "This server does not run the live scene recording.")
+        assert client.post("/api/scene-lab/recording", json={"on": True}).status_code == 409
     assert none == []
+
+
+def test_the_switch_stops_and_starts_the_recording_and_the_next_server_keeps_it_off(lab):
+    """The Scene viewer's switch: off deletes the lease (the wrapper stops within a second), on
+    renews it again; the cutter keeps running for the scenes already cut; off survives a restart."""
+    app, server, cutters = _app(lab)
+    with TestClient(app) as client:
+        lease = FakeLease.made[-1]
+        cutters[0].on_event({"live": {"recording": True, "reason": None}})
+        answer = client.post("/api/scene-lab/recording", json={"on": False}).json()["live"]
+        assert (answer["recording"], answer["on"], answer["switch"]) == (False, False, True)
+        assert answer["reason"] == scene_lab_api.RECORDING_OFF and not lease.running and not cutters[0].closed
+        assert json.loads((lab["root"] / scene_lab_api.RECORDING_SWITCH).read_text()) == {"on": False}
+    later, _server, cutters = _app(lab)
+    with TestClient(later) as client:
+        lease = FakeLease.made[-1]
+        assert not lease.running and client.get("/api/scene-lab").json()["live"]["on"] is False
+        answer = client.post("/api/scene-lab/recording", json={"on": True}).json()["live"]
+        assert answer["on"] is True and lease.running
+        assert client.post("/api/scene-lab/recording", json={"on": "maybe"}).status_code == 422
+    assert json.loads((lab["root"] / scene_lab_api.RECORDING_SWITCH).read_text()) == {"on": True}
 
 
 def test_each_completed_attempt_is_cutting_at_once_and_the_replay_still_gets_its_call(lab, recording):
