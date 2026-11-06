@@ -416,7 +416,12 @@ def build_model(staging: Path, cache: Path | None = None, vcvars32: Path | None 
     sources = [source / name for name in (*SOURCE_FILES, *AUDIO_FILES)]
     sources += [source / f"src/decomp/held/{name}{suffix}.c" for name in HELD_MODELS for suffix in ("", "_lists")]
     sources += [MODEL / name for name in ("model.c", "assets.c", "particles.c", "memory.c", "audio.c", "held.c")]
-    flags = ["/nologo", "/O2", "/W3", "/TC", "/std:c17", "/MT", "/Gy", "/Gw",
+    # The renderer links this library, so its objects are built repeatably
+    # too: the same switches and path names (tools/native_identity.py),
+    # whatever scratch folder holds the staging.
+    repro = _module("model_native_identity", ROOT / "tools/native_identity.py")
+    maps = [f'"{flag}"' for flag in repro.path_maps((staging, r"\sm64-model"))]
+    flags = ["/nologo", "/O2", "/W3", "/TC", "/std:c17", "/MT", "/Gy", "/Gw", *repro.REPRO_COMPILE, *maps,
              "/D_CRT_SECURE_NO_WARNINGS", "/DSM64_LIB_STATIC", "/DGBI_FLOATS", "/DVERSION_US", "/DNO_SEGMENTED_MEMORY"]
     if testing:
         flags.append("/DSG_MODEL_TESTING")

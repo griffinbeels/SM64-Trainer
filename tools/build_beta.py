@@ -25,7 +25,8 @@ sys.path.insert(0, str(REPO / "src"))
 from sm64_events.core.build_channel import (BETA_APP_DIR, BuildChannel, CONFIG_FILENAME,
                                            read_metadata)  # noqa: E402
 from sm64_events.core.reporting_setup import CONFIG_FILE as REPORTING_CONFIG, read_config_dsn  # noqa: E402
-from build_exe import COLLECT, SEP, _source_date_epoch, app_args, needs_reexec, stage_reporting  # noqa: E402
+from build_exe import (COLLECT, SEP, _source_date_epoch, app_args, needs_reexec, sign_and_scan,  # noqa: E402
+                       stage_reporting)
 from make_manifest import build_zip  # noqa: E402
 from beta_ghosts import (ApprovedCollection, COLLECTION_NAME, matches, review_collection,
                          candidate_author, seed_descriptor)  # noqa: E402
@@ -65,7 +66,11 @@ def check_prerequisites(ffmpeg: str | None) -> str:
     if missing:
         raise RuntimeError("build environment is missing: " + ", ".join(missing))
     import build_natives
+    import defender_scan
     build_natives.ensure(build=False, strict=True)
+    # A Defender verdict can arrive long after a build (2026-11-06): refuse a flagged native.
+    defender_scan.require_clean([build_natives.BUNDLE / native.name for native in build_natives.natives()],
+                                strict=True)
     from build_defaults_seed import main as check_defaults
     if check_defaults(["--check"]):
         raise RuntimeError("defaults seed is stale; regenerate it before packaging")
@@ -234,6 +239,7 @@ def main(argv: list[str] | None = None) -> int:
         third_party_notices.stage(DIST / BETA_APP_DIR / "_internal",
                                   third_party_notices.bundled_import_names(DIST / BETA_APP_DIR, BETA_APP_DIR),
                                   Path(ffmpeg))
+        sign_and_scan(DIST / BETA_APP_DIR, BETA_APP_DIR)  # before the ZIP carries the bytes
         archive = package_beta(DIST / BETA_APP_DIR, build, DIST, ghosts=ghosts, ghost_author=author)
         pyi.run(installer_args())
         executable = package_installer(WORK / "installer" / "SM64TrainerBetaSetup.exe", archive, build, DIST)

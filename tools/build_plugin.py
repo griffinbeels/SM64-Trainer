@@ -17,6 +17,11 @@ BuildTools folder) with a STATIC CRT (/MT): a user's machine need not carry
 a VC redistributable for the layer to load. Every compiler is spawned with
 no console window (spawned-processes rule). Prints the outputs it wrote;
 exits non-zero with cl's own text on a failure.
+
+Every cl call goes through `_cl`, which gives the file it links a version
+resource and makes the build repeatable (tools/native_identity.py): the
+wrapper and the encoder helper built twice from the same commit are the same
+bytes, and their PE timestamp is the source date, not the clock.
 """
 from __future__ import annotations
 
@@ -84,35 +89,76 @@ def toolchain_available() -> bool:
     return find_vcvars32() is not None
 
 
-def _cl(vcvars: Path, args: list, cwd: Path) -> None:
-    """Run one cl.exe invocation inside vcvars32's environment, in `cwd`."""
-    # The test suite reuses identical earlier compiles (tools/native_build_cache.py).
-    if os.environ.get("SM64_NATIVE_BUILD_CACHE", "0") != "0":
-        if str(REPO / "tools") not in sys.path:  # one shared module: its toolchain memo too
-            sys.path.insert(0, str(REPO / "tools"))
-        import native_build_cache
-        native_build_cache.cl(vcvars, args, cwd, native_build_cache.enabled())
-        return
-    # A batch file rather than a `cmd /c "..."` string: subprocess re-quotes
-    # an argument holding quotes, and cmd then sees `\"` literally.
-    quoted = " ".join(f'"{arg}"' if " " in str(arg) else str(arg) for arg in args)
-    script = cwd / "build_step.bat"
-    script.write_text(f'@echo off\r\ncall "{vcvars}" >nul\r\ncl {quoted}\r\n',
-                      encoding="utf-8")
-    result = subprocess.run(["cmd.exe", "/d", "/c", str(script)], cwd=str(cwd),
-                            capture_output=True, text=True, creationflags=_NO_WINDOW,
-                            check=False)
-    if result.returncode != 0:
-        raise RuntimeError(f"cl failed ({result.returncode}):\n{result.stdout}\n{result.stderr}")
+def _tool(name: str):
+    """A sibling module of tools/ (this file is often loaded by path)."""
+    if str(REPO / "tools") not in sys.path:  # one shared module: its toolchain memo too
+        sys.path.insert(0, str(REPO / "tools"))
+    return __import__(name)
+
+
+def _cl(vcvars: Path, args: list, cwd: Path, *, version=None, identity=None) -> None:
+    """Run one cl.exe invocation inside vcvars32's environment, in `cwd`.
+
+    Every call is made repeatable (/experimental:deterministic with fixed
+    path names, /Brepro at link), and one that links an .exe or .dll first
+    gets that file's version resource (tools/native_identity.py:
+    `version` and `identity` name a shipped native; other outputs are
+    development builds named by their file name)."""
+    native_identity = _tool("native_identity")
+    scratch = Path(tempfile.mkdtemp(prefix="sm64_identity_"))
+    try:
+        args = native_identity.prepare(vcvars, args, Path(cwd), scratch,
+                                       version=version or native_identity.DEVELOPMENT, identity=identity)
+        # The test suite reuses identical earlier compiles (tools/native_build_cache.py).
+        if os.environ.get("SM64_NATIVE_BUILD_CACHE", "0") != "0":
+            native_build_cache = _tool("native_build_cache")
+            native_build_cache.cl(vcvars, args, cwd, native_build_cache.enabled())
+            return
+        # A batch file rather than a `cmd /c "..."` string: subprocess re-quotes
+        # an argument holding quotes, and cmd then sees `\"` literally.
+        quoted = " ".join(f'"{arg}"' if " " in str(arg) else str(arg) for arg in args)
+        script = cwd / "build_step.bat"
+        script.write_text(f'@echo off\r\ncall "{vcvars}" >nul\r\ncl {quoted}\r\n',
+                          encoding="utf-8")
+        result = subprocess.run(["cmd.exe", "/d", "/c", str(script)], cwd=str(cwd),
+                                capture_output=True, text=True, creationflags=_NO_WINDOW,
+                                check=False)
+        if result.returncode != 0:
+            raise RuntimeError(f"cl failed ({result.returncode}):\n{result.stdout}\n{result.stderr}")
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
+def _source_files() -> list[Path]:
+    """Everything of plugin/gfxwrap the wrapper and the helper compile from,
+    the vendored NVENC header included."""
+    files = [path for path in sorted(SOURCE.iterdir()) if path.suffix in {".c", ".cpp", ".h", ".def"}]
+    return files + sorted(path for path in (SOURCE / "vendor").glob("*.h"))
+
+
+def _build_term() -> tuple[bytes, int]:
+    """This recipe, the identity recipe, the toolchain and the source date
+    (tools/native_identity.py), and that date."""
+    inputs = [*_source_files(), Path(__file__)]
+    term, date = _tool("native_identity").build_term(inputs, find_vcvars32())
+    return Path(__file__).read_bytes() + b"\0" + term, date
 
 
 def wrapper_build_id() -> str:
-    """Identify the native source bundle, including headers used by the wrapper."""
+    """Identify everything that changes the wrapper's and the helper's bytes:
+    the native sources (headers included), this recipe, the toolchain and the
+    source date the build stamps."""
     digest = hashlib.sha256()
-    for path in sorted(SOURCE.iterdir()):
-        if path.suffix in {".c", ".cpp", ".h", ".def"}:
-            digest.update(path.name.encode() + b"\0" + path.read_bytes() + b"\0")
+    for path in _source_files():
+        digest.update(path.name.encode() + b"\0" + path.read_bytes() + b"\0")
+    digest.update(_build_term()[0])
     return digest.hexdigest()
+
+
+def _shipped_version():
+    """The FileVersion (named by the source date) and the date a shipped native carries."""
+    date = _build_term()[1]
+    return _tool("native_identity").calendar_version(date), date
 
 
 def _runtime_objects(vcvars, work, identity):
@@ -148,10 +194,12 @@ def build_wrapper(out_dir: Path, vcvars: Path | None = None) -> Path:
     defines = ["/DGFXWRAP_GPU_RUNTIME"]
     objects = _runtime_objects(vcvars, work, identity)
     extra_libs = ["d3d11.lib", "dxgi.lib"]
+    version, date = _shipped_version()
     try:
         _cl(vcvars, COMMON_FLAGS + defines + [f"/FI{identity}", "/LD", str(SOURCE / "gfxwrap.c"), f"/Fe:{target}",
                                     *objects, f"/Fo{work}\\", "/link", f"/DEF:{SOURCE / 'gfxwrap.def'}",
-                                    *LIBS, *extra_libs], work)
+                                    *LIBS, *extra_libs], work, version=version)
+        _tool("native_identity").stamp(target, date)
         delivered = out_dir / target.name
         shutil.copy2(target, delivered)
     finally:
@@ -182,10 +230,12 @@ def build_encoder_helper(out_dir: Path, vcvars64: Path | None = None) -> Path:
     identity = work / "build_identity.h"
     identity.write_text(f'#define GBENC_BUILD_ID "{helper_build_id()}"\n', encoding="ascii")
     flags = [flag for flag in COMMON_FLAGS if not flag.startswith("/std:")]
+    version, date = _shipped_version()
     try:
         _cl(vcvars64, flags + ["/std:c++17", "/EHsc", "/WX", f"/I{SOURCE}", f"/I{SOURCE / 'vendor'}",
                                f"/FI{identity}", "/LD", *(str(path) for path in sources),
-                               f"/Fe:{target}", f"/Fo{work}\\", "/link", *ENCODER_LIBS], work)
+                               f"/Fe:{target}", f"/Fo{work}\\", "/link", *ENCODER_LIBS], work, version=version)
+        _tool("native_identity").stamp(target, date)
         delivered = out_dir / target.name
         shutil.copy2(target, delivered)
     finally:

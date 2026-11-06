@@ -103,14 +103,28 @@ def overlay_sources() -> tuple[str, ...]:
     return (*OVERLAY_SOURCES, *extra)
 
 
+def _date_inputs() -> list[Path]:
+    """The files whose newest commit dates the renderer (tools/native_identity.py)."""
+    tools = REPO / "tools"
+    return [Path(__file__), INPUTS, tools / "stage_link_witness.py", tools / "stage_ghost_renderer.py",
+            tools / "stage_ghost_presentation.py", tools / "build_model.py", REPO / "renderer" / "model",
+            *(REPO / "plugin" / "gfxwrap" / name for name in overlay_sources())]
+
+
+def _build_term() -> tuple[bytes, int]:
+    return build_plugin._tool("native_identity").build_term(_date_inputs(), build_plugin.find_vcvars32())
+
+
 def renderer_build_id() -> str:
-    """Names everything the DLL is made of: the pinned upstream tree, the
-    overlay sources, the staging tool, the label and this recipe. The static
-    libraries are pinned inputs of the same tree, so they need no separate
-    term. A wrapper-only edit does not change it."""
+    """Names everything the DLL is made of: the pinned upstream tree and the
+    prebuilt libraries (build-inputs.json), the overlay sources, the staging
+    tool, the label, this recipe, and the identity term (the toolchain and
+    the source date the build stamps; tools/native_identity.py). A
+    wrapper-only edit does not change it."""
     digest = hashlib.sha256()
     digest.update(f"{witness.TREE_HASH}\0{LABEL}\0{RECIPE_VERSION}\0".encode())
     digest.update(Path(__file__).read_bytes() + b"\0")
+    digest.update(INPUTS.read_bytes() + b"\0")
     digest.update((REPO / "tools" / "stage_link_witness.py").read_bytes() + b"\0")
     digest.update((REPO / "tools" / "stage_ghost_renderer.py").read_bytes() + b"\0")
     digest.update((REPO / "tools" / "stage_ghost_presentation.py").read_bytes() + b"\0")
@@ -118,6 +132,7 @@ def renderer_build_id() -> str:
     digest.update(model.component_hash().encode() + b"\0")
     for name in overlay_sources():
         digest.update(name.encode() + b"\0" + (REPO / "plugin" / "gfxwrap" / name).read_bytes() + b"\0")
+    digest.update(_build_term()[0])
     return digest.hexdigest() + "-renderer"
 
 
@@ -209,6 +224,37 @@ def stage(pristine: Path, staged: Path, libraries: dict[str, Path], build_id: st
     lib_dir.mkdir(parents=True)
     for name, path in libraries.items():
         shutil.copyfile(path, lib_dir / name)
+    stage_identity(staged)
+
+
+VERSION_RC = "sm64_trainer_version.rc"
+
+
+def stage_identity(staged: Path) -> None:
+    """The renderer's version resource and the repeatable-build switches
+    (tools/native_identity.py) for every compile and the link: the staged
+    tree reads as \\sm64-renderer inside the objects, so two builds of these
+    sources from different scratch folders are the same bytes."""
+    native_identity = build_plugin._tool("native_identity")
+    version = native_identity.calendar_version(_build_term()[1])
+    (staged / "src" / VERSION_RC).write_text(native_identity.rc_text(SHIPPED_RENDERER.name, version),
+                                             encoding="ascii", newline="\r\n")
+    project = staged / "projects" / "msvc" / "GLideN64.vcxproj"
+    data = project.read_bytes()
+    anchor = b'  <Import Project="$(VCTargetsPath)\\Microsoft.Cpp.targets" />'
+    if data.count(anchor) != 1:
+        raise ValueError("GLideN64.vcxproj targets anchor is not unique")
+    compile_options = " ".join([*native_identity.REPRO_COMPILE,
+                                *(f'"{flag}"' for flag in native_identity.path_maps((staged, r"\sm64-renderer")))])
+    link_options = " ".join(native_identity.REPRO_LINK)
+    identity = (
+        f'  <ItemGroup>\r\n    <ResourceCompile Include="..\\..\\src\\{VERSION_RC}" />\r\n  </ItemGroup>\r\n'
+        "  <ItemDefinitionGroup>\r\n"
+        f"    <ClCompile>\r\n      <AdditionalOptions>{compile_options} %(AdditionalOptions)</AdditionalOptions>\r\n"
+        "    </ClCompile>\r\n"
+        f"    <Link>\r\n      <AdditionalOptions>{link_options} %(AdditionalOptions)</AdditionalOptions>\r\n"
+        "    </Link>\r\n  </ItemDefinitionGroup>\r\n").encode()
+    project.write_bytes(data.replace(anchor, identity + anchor))
 
 
 def stage_model_library(staged: Path, library: Path) -> None:
@@ -285,6 +331,7 @@ def build_renderer(out_dir: Path, *, cache: Path | None = None, source: Path | N
         built = msbuild(staged, vcvars32, scratch / "msbuild.log")
         if embedded_identity(built) != build_id:
             raise RuntimeError("the built renderer does not carry its own build id")
+        build_plugin._tool("native_identity").stamp(built, _build_term()[1])
         delivered = out_dir / SHIPPED_RENDERER.name
         shutil.copyfile(built, delivered)
     finally:

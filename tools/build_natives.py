@@ -21,6 +21,15 @@ MSVC toolchain, or the renderer's prebuilt libraries missing from the build
 cache) is REMOVED from the bundle rather than left stale: the setup screen
 then reports the capture layer as unavailable instead of offering to
 install code built from other sources (his report, 2026-09-15).
+
+Every native this run puts in the bundle is then scanned by Microsoft
+Defender (tools/defender_scan.py). A threat stops the run loudly, naming the
+file, and the file leaves the bundle and the cache: on 2026-11-06 Defender
+quarantined a renderer built here as Trojan:Win32/Bearfoos.A!ml, and the
+builds are repeatable now (tools/native_identity.py), so the same sources
+would give the same flagged bytes again until the sources or the verdict
+change. A scan that cannot run (not Windows, no MpCmdRun, or it did not
+finish) is reported and the run continues.
 """
 from __future__ import annotations
 
@@ -101,6 +110,9 @@ def _cached_build(native: Native, expected: str, log) -> Path:
         started = time.monotonic()
         log(f"  building {native.name} (not built from these sources yet)...")
         built = native.build(staging)
+        if not built.is_file():
+            raise RuntimeError(f"{native.name} was built and then disappeared: Microsoft Defender's real-time "
+                               "protection may have quarantined it")
         if embedded_id(built) != expected:
             raise RuntimeError(f"{native.name} built without the expected id {expected}")
         log(f"  built {native.name} in {time.monotonic() - started:.0f} s")
@@ -129,13 +141,38 @@ def _install(source: Path, target: Path) -> None:
     os.replace(partial, target)
 
 
+def scan(paths, log):
+    """Microsoft Defender's verdict on files this run put in the bundle
+    (tools/defender_scan.py); tests replace it."""
+    return _load("defender_scan").require_clean(paths, log=log)
+
+
+def _scan_installed(installed: list, states: dict, log) -> None:
+    """A threat removes the flagged file from the bundle and the cache, then
+    stops the run (ThreatFound names each file and its verdict)."""
+    if not installed:
+        return
+    try:
+        scan([target for _, _, target in installed], log)
+    except _load("defender_scan").ThreatFound as found:
+        flagged = {Path(verdict.path) for verdict in found.verdicts}
+        for native, expected, target in installed:
+            if target in flagged:
+                target.unlink(missing_ok=True)
+                shutil.rmtree(_entry(native, expected), ignore_errors=True)
+                states[native.name] = "flagged"
+        raise
+
+
 def ensure(*, build: bool = True, strict: bool = False, log=print) -> dict[str, str]:
     """Each native's state after the run: fresh, built, stale or missing.
 
     With `build`, an out-of-date native is taken from the cache or compiled;
-    one that cannot be is removed from the bundle. `strict` raises instead of
-    returning when any native is not fresh afterwards."""
-    states, problems = {}, []
+    one that cannot be is removed from the bundle. Each native put in the
+    bundle is scanned (`scan`); a threat raises defender_scan.ThreatFound
+    whatever `strict` says. `strict` raises instead of returning when any
+    native is not fresh afterwards."""
+    states, problems, installed = {}, [], []
     for native in natives():
         target = BUNDLE / native.name
         expected = native.identity()
@@ -149,6 +186,7 @@ def ensure(*, build: bool = True, strict: bool = False, log=print) -> dict[str, 
         try:
             _install(_cached_build(native, expected, log), target)
             states[native.name] = "built"
+            installed.append((native, expected, target))
         except PermissionError as failure:
             states[native.name] = "stale"
             problems.append(f"{native.name} is in use and was not replaced ({failure})")
@@ -157,6 +195,7 @@ def ensure(*, build: bool = True, strict: bool = False, log=print) -> dict[str, 
             states[native.name] = "missing"
             problems.append(f"{native.name} could not be built: it needs {native.needs}. "
                             f"({str(failure).splitlines()[0] if str(failure) else type(failure).__name__})")
+    _scan_installed(installed, states, log)
     for problem in problems:
         log(f"  WARNING: {problem}")
     if strict and problems:
@@ -173,6 +212,9 @@ def main() -> int:
     sys.path.insert(0, str(REPO / "src"))
     try:
         states = ensure(build=not args.check, strict=args.strict)
+    except _load("defender_scan").ThreatFound as found:
+        print(f"natives: STOPPED: {found}")
+        return 3
     except RuntimeError as failure:
         print(f"natives: FAILED: {failure}")
         return 1

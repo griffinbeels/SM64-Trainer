@@ -239,6 +239,42 @@ def stage_reporting(work: Path) -> Path:
     return output
 
 
+def ready_natives() -> None:
+    """The three natives are build outputs, not tracked files: package only
+    ones built from THESE sources (tools/build_natives.py), or raise. Fresh
+    ones were not scanned by this run, and a Defender verdict can arrive long
+    after a build (2026-11-06), so packaging scans all three again."""
+    sys.path.insert(0, str(REPO / "tools"))
+    import build_natives
+    import defender_scan
+    build_natives.ensure(strict=True)
+    defender_scan.require_clean([build_natives.BUNDLE / native.name for native in build_natives.natives()],
+                                strict=True)
+
+
+PLUGIN_FOLDER = Path("_internal") / "sm64_events" / "data" / "plugin"
+
+
+def our_files(app_dir: Path, exe_name: str) -> list[Path]:
+    """The files of a built app that this repository compiled: the app's own
+    exe and the three natives (tools/native_identity.py SHIPPED)."""
+    import native_identity
+    return [app_dir / f"{exe_name}.exe", *(app_dir / PLUGIN_FOLDER / name for name in native_identity.SHIPPED)]
+
+
+def sign_and_scan(app_dir: Path, exe_name: str) -> None:
+    """Sign our own files when this machine is set up for Artifact Signing
+    (tools/code_signing.py; otherwise it says they are unsigned), then refuse
+    the build if Microsoft Defender flags one or cannot scan it
+    (tools/defender_scan.py). Runs before the zip and manifest are made, so
+    they and the candidate record carry the signed bytes."""
+    import code_signing
+    import defender_scan
+    files = our_files(app_dir, exe_name)
+    code_signing.sign(files)
+    defender_scan.require_clean(files, strict=True)
+
+
 def stage_notices(distpath: Path | None, ffmpeg: Path) -> Path | None:
     """Stage `_internal/licenses/` into the app PyInstaller just built and
     return its folder, or print why the build is refused and return None."""
@@ -290,12 +326,8 @@ def main() -> int:
             print("Build refused: ffmpeg.exe is required for a complete application.", file=sys.stderr)
             return 2
         print(f"bundling ffmpeg: {ffmpeg}")
-        # The three natives are build outputs, not tracked files: package
-        # only ones built from THESE sources, or refuse (tools/build_natives.py).
-        sys.path.insert(0, str(REPO / "tools"))
-        import build_natives
         try:
-            build_natives.ensure(strict=True)
+            ready_natives()
         except RuntimeError as failure:
             print(f"cannot package the natives: {failure}", file=sys.stderr)
             return 2
@@ -313,6 +345,11 @@ def main() -> int:
                          version_metadata=version_metadata, distpath=args.distpath,
                          workpath=work / "app", specpath=work / "spec"))
         if (app_dir := stage_notices(args.distpath, Path(ffmpeg))) is None:
+            return 2
+        try:
+            sign_and_scan(app_dir, "SM64Trainer")
+        except RuntimeError as failure:
+            print(f"Build refused: {failure}", file=sys.stderr)
             return 2
         print("\nBuilt:", app_dir)
     if args.mode in ("bootstrap", "all"):
