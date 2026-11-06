@@ -318,7 +318,14 @@ def _spawn_place(level, payload: dict) -> str:
     should actually have a special 'Spawned into Lethal Lava Land [Subarea
     Name]' event"), the plain level name otherwise (including every
     historical row, which carries no area)."""
-    sub = subarea_name(level, payload.get("area"))
+    return place_name(level, payload.get("area"))
+
+
+def place_name(level, area) -> str:
+    """A level and area in words: "Lethal Lava Land: Volcano" for a named
+    subarea, else the level's name. The one owner for every screen that names
+    where something is (spawn rows, the Scene viewer's Save states row)."""
+    sub = subarea_name(level, area)
     return f"{_level_name(level)}: {sub}" if sub else _level_name(level)
 
 

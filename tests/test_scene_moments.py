@@ -130,8 +130,8 @@ def test_an_older_recording_says_so(lab):
 
 
 @pytest.mark.parametrize(("change", "kind", "words"), [
-    (fakes.set_level, "place", "The game is in level 16 area 1. This save state is for level 9 area 1."),
-    (fakes.set_area, "place", "The game is in level 9 area 2."),
+    (fakes.set_level, "place", "The game is in Castle Grounds. This save state is for Bob-omb Battlefield."),
+    (fakes.set_area, "place", "The game is in Bob-omb Battlefield: Area 2."),
     (fakes.clear_mario, "no-mario", "Enter the level"),
     (fakes.set_area_pointer, "loaded", "Leave the level, enter it again"),
     (fakes.set_segment, "loaded", "Leave the level, enter it again"),
