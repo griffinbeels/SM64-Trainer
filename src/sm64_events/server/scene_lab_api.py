@@ -260,6 +260,7 @@ class SceneLab:
     """The one open scene (or none) and the pages showing it."""
 
     ghosts = None                  # scene_ghosts.SceneGhosts: the stage and the ghost catalog (mount_scene_lab)
+    refitter = None                # slotlibrary.refit.SlotRefitter: the live server's slots follow each spawn
     heading = {"title": "Lab recording", "target": None}     # the open scene's, as _heading says it
 
     def __init__(self, config_path: Path, *, session_options: dict | None = None,
@@ -376,8 +377,11 @@ class SceneLab:
             lease.stop()
 
     async def start_live(self) -> None:
-        """At server start: the lease that keeps the scene tap recording, and the attempt scenes."""
+        """At server start: the lease that keeps the scene tap recording, the attempt scenes, and the slot
+        refit's thread."""
         await asyncio.to_thread(self._start_live_blocking)
+        if self.refitter is not None:
+            self.refitter.start()
 
     def live(self) -> dict:
         """{recording, reason} for the probe; no I/O (the cutter reports the recording's state)."""
@@ -414,6 +418,22 @@ class SceneLab:
         broadcaster = getattr(tracker, "broadcaster", None)
         if broadcaster is not None and hasattr(broadcaster, "observe"):
             broadcaster.observe(scenes.observe_event)
+
+    def follow_spawns(self, tracker, *, game=None, library=None, log_file=None) -> None:
+        """After every spawn the event stream announces, the slots made for that place get Mario's new place
+        (slotlibrary/refit.py). The observer only stamps a deadline; the refitter's own thread and reader do the
+        work, started and stopped with the app. Tests inject the game, the library and the log file."""
+        broadcaster = getattr(tracker, "broadcaster", None)
+        if broadcaster is None or not hasattr(broadcaster, "observe"):
+            return
+        from sm64_events.slotlibrary import refit, usamune
+        if library is None:
+            from sm64_events.core.paths import slot_library_dir
+            from sm64_events.slotlibrary.store import SlotLibrary
+            library = SlotLibrary(slot_library_dir())
+        self.refitter = refit.SlotRefitter(game or (lambda: usamune.attach(None)), library,
+                                           log_file=log_file or refit.log_path())
+        broadcaster.observe(self.refitter.observe)
 
     # ------------------------------------------------------------ status, open, close
 
@@ -516,6 +536,8 @@ class SceneLab:
             self.watch_task.cancel()
         await self.close("shutdown")
         await asyncio.to_thread(self._stop_live_blocking)
+        if self.refitter is not None:
+            await asyncio.to_thread(self.refitter.stop)
 
     def _start_watch(self) -> None:
         loop = asyncio.get_running_loop()

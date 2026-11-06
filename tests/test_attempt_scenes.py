@@ -274,9 +274,34 @@ def test_main_feeds_the_lab_from_its_own_tracker_only(monkeypatch, lab):
     replay_hook = tracker.on_replay_history
     app = main._mount_scene_lab(FastAPI(), tracker=tracker)
     assert app.state.scene_lab.live_on and tracker.on_replay_history is not replay_hook
-    assert len(tracker.broadcaster._observers) == 1
+    refitter = app.state.scene_lab.refitter
+    assert refitter is not None and tracker.broadcaster._observers == {app.state.scene_lab.scenes.observe_event,
+                                                                       refitter.observe}
     fixture_app = main._mount_scene_lab(FastAPI())                   # the UI fixture: the viewer alone
-    assert not fixture_app.state.scene_lab.live_on
+    assert not fixture_app.state.scene_lab.live_on and fixture_app.state.scene_lab.refitter is None
+
+
+def test_a_published_spawn_refits_the_slots_while_the_app_runs_and_the_thread_ends_with_it(lab, tmp_path):
+    """The live server's path: the broadcaster publishes a spawn, the lab's refitter (started with the app) refits
+    the slot on its own thread, and the app's stop ends that thread. Fake memory; slotlibrary/refit.py."""
+    sys.path.insert(0, str(ROOT / "tests"))
+    import test_slot_library as libfakes
+    import test_slot_relocate as world
+    from sm64_events.slotlibrary import refit, usamune
+    game = libfakes.FakeGame()
+    world.live_world(game)
+    game.save(0, world.make_slot())
+    app, server, _cutters = _app(lab)
+    tracker = _tracker()
+    server.follow_spawns(tracker, game=lambda: game, library=None, log_file=tmp_path / refit.LOG_NAME)
+    with TestClient(app):
+        asyncio.run(tracker.broadcaster.publish(Event("spawned", 700, T0, {"level": 9, "area": 1})))
+        deadline = time.monotonic() + 10
+        while server.refitter.passes == 0 and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert server.refitter.passes == 1
+        assert usamune.slot_facts(game.slot(0)) == usamune.live_facts(game)
+    assert not server.refitter._thread.is_alive()
 
 
 def test_end_to_end_the_real_cutter_child_cuts_a_completed_attempt_that_then_opens(lab, recording):

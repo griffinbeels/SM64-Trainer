@@ -112,7 +112,7 @@ def test_startup_debug_cleanup_has_a_fixed_scope(tmp_path):
     data.mkdir()
     stale = [artifact(logs, name, age=100000) for name in ("sm64_events.log", "sm64_events.log.1")]
     stale += [artifact(data, name, age=100000) for name in
-              ("ui_log.jsonl", "perf_log.jsonl", "perf_log.jsonl.prev")]
+              ("ui_log.jsonl", "perf_log.jsonl", "perf_log.jsonl.prev", "slot_refit.jsonl")]
     unrelated = [artifact(data, name, age=100000) for name in ("tracker.db", "events.jsonl", "personal.log")]
     fresh = artifact(logs, "unrelated.log", age=100000)
     retention.prune_debug_logs(logs, data_directory=data, now=200000)
