@@ -274,16 +274,14 @@ class FakeProject64:
     def __init__(self):
         self.host = bytearray(0x1000)
         self._rdram_base = 0x10000
-        self._pm = self
         self.calls: list[tuple[int, int]] = []
 
     def _read_raw(self, offset: int, size: int) -> bytes:
         return bytes(self.host[offset:offset + size])
 
-    def write_bytes(self, address: int, data: bytes, length: int) -> None:
-        self.calls.append((address, length))
-        at = address - self._rdram_base
-        self.host[at:at + length] = data
+    def write_rdram(self, offset: int, data: bytes) -> None:
+        self.calls.append((self._rdram_base + offset, len(data)))
+        self.host[offset:offset + len(data)] = data
 
     def rom_header(self) -> bytes:
         return USAMUNE_US
