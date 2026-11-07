@@ -3,13 +3,15 @@
 On 2026-11-06 Defender's cloud model flagged the scene viewer's host (viewer_host.exe, built on
 this machine) opening a copy of the renderer it had just written into a random %TEMP% folder:
 how a dropper behaves. Now both hosts (tools/scene_lab/viewer_host.c, replay_host.c, through
-renderer_load.h) load the renderer by its full path and name the renderer settings folder through
-the renderer's own setter (plugin/gfxwrap/renderer_settings_folder.cpp) before any plugin call.
+renderer_load.h) load the Trainer's graphics plugin (one file since 2026-11-07, the renderer
+inside it) by its full path, run it as the renderer alone (SM64RendererOnlyV1: no control page,
+no capture, no plugin log) and name the renderer settings folder through the renderer's own
+setter (plugin/gfxwrap/renderer_settings_folder.cpp), all before any plugin call.
 
-The native half runs the REAL built hosts over a stand-in renderer (tests/native/
-settings_folder_renderer.cpp) linked with the REAL setter: no GL, no GPU, no Project64. The
-Python half checks who decides what the hosts load (replay.trainer_renderer, settings_folder,
-scene_session.renderer_host) without starting anything.
+The native half runs the REAL built hosts over a test plugin: the REAL capture layer linked with
+a stand-in renderer (tests/native/settings_folder_renderer.cpp) and the REAL setter: no GL, no
+GPU, no Project64. The Python half checks who decides what the hosts load
+(replay.trainer_renderer, settings_folder, scene_session.renderer_host) without starting anything.
 """
 import os
 import subprocess
@@ -48,9 +50,10 @@ def _settings_files(plugin: Path, store: str = "") -> None:
 
 @pytest.fixture(scope="module")
 def stand_ins(tmp_path_factory):
-    """The stand-in renderer twice, each in a folder of its own (its bundle): with the
-    settings-folder export, and without it (as LINK's own renderer). Each DLL is linked into
-    its compile's own folder: the test build cache keys outputs by folder."""
+    """The stand-in renderer twice, each in a folder of its own (its bundle): inside a test
+    plugin (the real capture layer, so the real SM64RendererOnlyV1, and the real settings-folder
+    setter), and as a DLL of its own with neither (LINK's own renderer, or an older Trainer build
+    whose renderer was a second file)."""
     if sys.platform != "win32":
         pytest.skip("Win32 hosts")
     sys.path.insert(0, str(ROOT / "tools"))
@@ -58,20 +61,16 @@ def stand_ins(tmp_path_factory):
     vcvars = build_plugin.find_vcvars32()
     assert vcvars, "the x86 MSVC toolchain is required to build the scene-lab hosts"
     root = tmp_path_factory.mktemp("stand-ins")
+    stand_in = ROOT / "tests/native/settings_folder_renderer.cpp"
+    trainer = build_plugin.build_test_plugin(root / "trainer", (stand_in, "renderer_settings_folder.cpp"), vcvars)
+    work = root / "stock"
+    work.mkdir()
+    stock = work / "GLideN64.dll"
     flags = [flag for flag in build_plugin.COMMON_FLAGS if not flag.startswith("/std:")]
-    built = {}
-    for name, extra in (("trainer", []), ("stock", ["/DNO_SETTINGS_FOLDER"])):
-        work = root / name
-        work.mkdir()
-        target = work / paths.RENDERER_DLL_NAME
-        sources = [ROOT / "tests/native/settings_folder_renderer.cpp"]
-        if not extra:
-            sources.append(ROOT / "plugin/gfxwrap/renderer_settings_folder.cpp")
-        build_plugin._cl(vcvars, [*flags, "/std:c++17", "/EHsc", "/LD", *extra, f"/I{ROOT / 'plugin/gfxwrap'}",
-                                  *(str(path) for path in sources), f"/Fe:{target}", f"/Fo{work}\\",
-                                  "/link", f"/IMPLIB:{work / 'renderer.lib'}", "user32.lib", "kernel32.lib"], work)
-        built[name] = target
-    return {"hosts": {"viewer": viewer.build(), "replay": replay.build()}, **built}
+    build_plugin._cl(vcvars, [*flags, "/std:c++17", "/EHsc", "/LD", "/DSTANDALONE", f"/I{ROOT / 'plugin/gfxwrap'}",
+                              str(stand_in), f"/Fe:{stock}", f"/Fo{work}\\",
+                              "/link", f"/IMPLIB:{work / 'renderer.lib'}", "user32.lib", "kernel32.lib"], work)
+    return {"hosts": {"viewer": viewer.build(), "replay": replay.build()}, "trainer": trainer, "stock": stock}
 
 
 def _run(command: list[str], tmp_path: Path, stdin: bytes = b"") -> tuple[subprocess.CompletedProcess, list[str]]:
@@ -127,14 +126,15 @@ def test_a_host_loads_the_renderer_where_it_is_and_writes_no_dll(stand_ins, tmp_
 
 
 @pytest.mark.parametrize("host", ["viewer", "replay"])
-def test_a_renderer_that_cannot_take_a_settings_folder_never_draws(stand_ins, tmp_path, host):
-    """LINK's own renderer would read and write the folder it sits in (Project64's Plugin folder):
-    the host unloads it before any plugin call and says why."""
+def test_a_renderer_that_cannot_run_alone_never_draws(stand_ins, tmp_path, host):
+    """LINK's own renderer would read and write the folder it sits in (Project64's Plugin folder),
+    and an older Trainer build cannot run its renderer alone: the host unloads such a DLL before
+    any plugin call and says why."""
     settings = tmp_path / "settings"
     settings.mkdir()
     result, log = _run(_commands(stand_ins, stand_ins["stock"], settings, tmp_path)[host], tmp_path)
     assert result.returncode != 0
-    assert b"SM64RendererSettingsFolderV1" in result.stderr
+    assert b"SM64RendererOnlyV1" in result.stderr
     assert [line for line in log if line.startswith("call ")] == [], log
 
 
@@ -174,10 +174,10 @@ def test_the_settings_folder_is_stable_named_and_leaves_project64_alone(tmp_path
 
 
 def test_the_scene_viewer_starts_its_host_on_the_bundle_renderer(tmp_path, monkeypatch):
-    bundle = tmp_path / "bundle" / paths.RENDERER_DLL_NAME
+    bundle = tmp_path / "bundle" / paths.WRAPPER_DLL_NAME
     bundle.parent.mkdir()
     bundle.write_bytes(b"MZ stand-in")
-    monkeypatch.setattr(paths, "bundled_renderer_dll", lambda: bundle)
+    monkeypatch.setattr(paths, "bundled_plugin_dll", lambda: bundle)
     started = []
 
     class Recorded:
@@ -199,6 +199,6 @@ def test_the_scene_viewer_starts_its_host_on_the_bundle_renderer(tmp_path, monke
         with pytest.raises(scene_session.Refused, match="only with the Trainer's own renderer"):
             scene_session.renderer_host(SimpleNamespace(pj64_plugin=plugin, renderer=other, resolution=None,
                                                         lab_root=lab))(HEADER)
-    monkeypatch.setattr(paths, "bundled_renderer_dll", lambda: None)
+    monkeypatch.setattr(paths, "bundled_plugin_dll", lambda: None)
     with pytest.raises(scene_session.Refused, match="build_natives"):
         scene_session.renderer_host(config)(HEADER)
