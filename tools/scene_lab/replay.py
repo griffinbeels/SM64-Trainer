@@ -6,9 +6,10 @@
     uv run python tools/scene_lab/replay.py poison <frame_dir> <out_dir> [--closure <json>] [--pattern 0xA5]
 
 render builds replay_host.c (x86, cached by source hash) and renders the
-frames through the Trainer's renderer, loaded where the Trainer keeps it (the
-bundle, core/paths.py's bundled_renderer_dll(); never a copy), in one renderer
-instance in the order given (--fresh: one per frame). The renderer reads its
+frames through the Trainer's renderer: its graphics plugin, loaded where the
+Trainer keeps it (the bundle, core/paths.py's bundled_plugin_dll(); never a
+copy) and run as the renderer alone (SM64RendererOnlyV1, renderer_load.h), in
+one renderer instance in the order given (--fresh: one per frame). The renderer reads its
 settings from the renderer settings folder (settings_folder(): Project64's
 GLideN64.ini and GLideN64.custom.ini, texture paths redirected inside it, so
 Project64's Plugin folder is only read).
@@ -110,13 +111,14 @@ def settings_folder(pj64_plugin: Path, resolution: tuple[int, int] | None = None
 
 
 def trainer_renderer() -> Path:
-    """The Trainer's renderer where the Trainer keeps it: the bundle (core/paths.py). The hosts
-    load it in place and never copy it; nothing else is drawn with (LINK's own renderer cannot
-    take a settings folder, so it would read and write Project64's Plugin folder)."""
-    path = paths.bundled_renderer_dll()
+    """The Trainer's renderer where the Trainer keeps it: inside its graphics plugin, in the
+    bundle (core/paths.py). The hosts load it in place, never copy it, and run it as the renderer
+    alone (renderer_load.h); nothing else is drawn with (LINK's own renderer cannot take a
+    settings folder, so it would read and write Project64's Plugin folder)."""
+    path = paths.bundled_plugin_dll()
     if path is None:
-        raise SystemExit(f"renderer not found: {paths.RENDERER_DLL_NAME} is not in this build's bundle "
-                         "(uv run python tools/build_natives.py)")
+        raise SystemExit("renderer not found: the graphics plugin (sm64_trainer_gfx.dll) is not in this build's "
+                         "bundle (uv run python tools/build_natives.py)")
     return path.resolve()
 
 

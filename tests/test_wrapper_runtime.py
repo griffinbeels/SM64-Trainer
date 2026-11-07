@@ -1,4 +1,4 @@
-"""Actual wrapper exports/IPC with CPU-only source and delivery fixtures."""
+"""A test plugin's actual exports/IPC: the capture layer linked with CPU-only source and delivery fixtures."""
 import importlib.util
 import os
 from pathlib import Path
@@ -36,24 +36,25 @@ def binaries(tmp_path_factory):
     shutil.copy2(source / "wrapper_runtime_fake.cpp", source / "gpu_delivery.cpp")
     build = load_build()
     build.SOURCE = source
-    # Graphics internals have independent real-GPU witnesses. This host exercises
-    # the actual production composition modules through the fixture gd facade.
-    build.RUNTIME_SOURCES = ("wrapper_runtime", "stamp_adapter", "runtime_control",
-                             "runtime_delivery", "gpu_request", "gpu_delivery", "scene_tap",
-                             "scene_spool")
     vcvars = build.find_vcvars32()
     assert vcvars
-    wrapper = build.build_wrapper(work, vcvars)
+    # Graphics internals have independent real-GPU witnesses. This host exercises
+    # the actual production composition modules through the fixture gd facade,
+    # linked with the stand-in renderer (renderer_entries.h) in one test plugin
+    # each: one that captures, one whose renderer has no source export.
+    runtime = ("wrapper_runtime", "stamp_adapter", "runtime_control", "runtime_delivery", "gpu_request",
+               "gpu_delivery", "scene_tap", "scene_spool")
+    renderer = ("wrapper_runtime_original.cpp", "renderer_boundary.cpp")
+    plugins = {}
+    for name, extra in [("original", ()), ("unsupported", ("/DWR_UNSUPPORTED",))]:
+        plugins[name] = build.build_test_plugin(work / name, renderer, vcvars, defines=extra, runtime=runtime)
     flags = [flag for flag in build.COMMON_FLAGS if not flag.startswith("/std:")]
     flags += ["/std:c++17", "/EHsc", f"/I{source}"]
     link = ["/link", "/MANIFEST:EMBED", "/MANIFESTUAC:level='asInvoker'", *build.LIBS]
-    for name, extra in [("original", []), ("unsupported", ["/DWR_UNSUPPORTED"])]:
-        build._cl(vcvars, flags + extra + ["/LD", str(source / "wrapper_runtime_original.cpp"),
-            str(source / "renderer_boundary.cpp"), f"/Fe:{work / (name + '.dll')}", f"/Fo{work}\\", *link], work)
     host = work / "wrapper_runtime.exe"
     build._cl(vcvars, flags + [str(source / "wrapper_runtime_host.cpp"),
         f"/Fe:{host}", f"/Fo{work}\\", *link], work)
-    return work, wrapper, host
+    return work, plugins, host
 
 
 def eventual(call, predicate=bool, timeout=4):
@@ -77,27 +78,29 @@ def command(child, text):
 
 @pytest.fixture
 def start(binaries, tmp_path):
-    work, wrapper, host = binaries
-    for path in [wrapper, host, work / "original.dll", work / "unsupported.dll"]:
-        shutil.copy2(path, tmp_path / path.name)
+    work, plugins, host = binaries
+    shutil.copy2(host, tmp_path / host.name)
+    for kind, plugin in plugins.items():
+        (tmp_path / kind).mkdir()
+        shutil.copy2(plugin, tmp_path / kind / plugin.name)
     running = []
 
     def launch(*, unsupported=False, fail=False):
         name = "sm64_wrapper_runtime_" + uuid.uuid4().hex
-        original = "unsupported.dll" if unsupported else "original.dll"
-        ini = tmp_path / "sm64_trainer_gfx.ini"
-        ini.write_text(f"wrapped={original}\nstream={name}\n", encoding="ascii")
+        plugin = tmp_path / ("unsupported" if unsupported else "original") / plugins["original"].name
+        # A test plugin's control page name (gfxwrap.c control_name): never the live one.
         env = dict(os.environ)
+        env["SM64_TEST_CONTROL_NAME"] = name
         if fail:
             env["WR_FAIL_INIT"] = "1"
-        child = subprocess.Popen([str(tmp_path / host.name), str(tmp_path / wrapper.name)],
+        child = subprocess.Popen([str(tmp_path / host.name), str(plugin)],
             cwd=tmp_path, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, text=True, **quiet_spawn_kwargs())
         running.append((child, None))
         assert child.stdout.readline().strip() == f"ready {int(not fail)}"
         control = None if fail else eventual(lambda: C.CaptureControl(name))
         running[-1] = (child, control)
-        return child, control, name, ini
+        return child, control, name, plugin
 
     yield launch
     for child, control in running:
@@ -112,8 +115,8 @@ def record(child):
 
 
 def test_delivery_diagnostic_reaches_actual_bounded_plugin_log(start):
-    child, _, _, ini = start()
-    path = ini.parent / "sm64_trainer_gfx.log"
+    child, _, _, plugin = start()
+    path = plugin.parent / "sm64_trainer_gfx.log"
     eventual(lambda: path.exists())
     assert command(child, "diagnostic") == "1"
     text = eventual(lambda: path.read_text(encoding="utf-8"),
@@ -182,20 +185,6 @@ def test_failed_original_initialization_does_not_create_control_or_backend(start
     assert control is None and command(child, "stats") == "0 0"
     with pytest.raises(FileNotFoundError):
         C.CaptureControl(name)
-
-
-def test_foreign_renderer_reinitialization_revokes_capability(start):
-    child, control, name, ini = start()
-    with R.GpuRequest.acquire(control, TABLE, LIMITS):
-        eventual(control.status, lambda s: s.state == 4)
-        command(child, "frame 1 1")
-        assert record(child)[0] == 1
-        ini.write_text(f"wrapped=unsupported.dll\nstream={name}\n", encoding="ascii")
-        assert command(child, "reinit") == "1"
-        eventual(control.status, lambda s: not s.capabilities & 2)
-        assert command(child, "stats").split()[1] == "0"
-        assert command(child, "frame 1 1") == "11 2"
-        assert record(child)[0] == 0
 
 
 def test_same_renderer_reinitialization_keeps_one_registration_and_new_epoch(start):

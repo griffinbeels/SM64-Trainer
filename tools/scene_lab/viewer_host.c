@@ -3,11 +3,12 @@
  * REAL GLideN64 without Project64. replay_host.c is the batch oracle; this
  * is the same renderer setup kept alive behind a binary pipe protocol.
  *
- *   viewer_host --renderer <dll> --settings <dir> --header <128 hex digits>
+ *   viewer_host --renderer <the Trainer's sm64_trainer_gfx.dll> --settings <dir> --header <128 hex digits>
  *               [--ghosts 1] [--ghost-consumer 1]
  *
- * --ghost-consumer (M4 multi-runner probe) stands in for the capture wrapper's
- * SourceV3 negotiation before the ROM opens: the Trainer renderer's ghost
+ * --ghost-consumer (M4 multi-runner probe) stands in for the capture layer's
+ * SourceV3 negotiation before the ROM opens (the plugin runs as the renderer
+ * alone here, renderer_load.h, so the capture layer negotiates nothing): the Trainer renderer's ghost
  * overlay draws only for a negotiated clean consumer. Its ghosts then reach
  * the window, so ReadScreen returns the stage with them. The host registers
  * no image callbacks and records nothing; the probe's ghosts are driven over

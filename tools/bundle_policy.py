@@ -26,7 +26,7 @@ ROOT_DATA_FILES = frozenset({
     "video_checks.seed.json.gz", "ukiki.ico", "build-channel.json",
     "error-reporting.json", "release-version.json",
 })
-NATIVE_FILES = ("sm64_trainer_gfx.dll", "GLideN64_SM64Trainer.dll", "SM64GpuEncoderV1.dll")
+NATIVE_FILES = ("sm64_trainer_gfx.dll", "SM64GpuEncoderV1.dll")  # tools/native_identity.py SHIPPED
 COLLECTION_NAME = "griffman1212.sm64ghosts"
 SEED_DESCRIPTOR = "beta-ghost-seed.json"
 VENDOR_HIDDEN = {

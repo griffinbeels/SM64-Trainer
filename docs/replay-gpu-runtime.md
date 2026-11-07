@@ -50,7 +50,7 @@ Component contracts live beside this page:
   route carried the synchronous `ReadScreen` barrier. The desktop grab remains
   only for a machine or moment without the layer, and says so.
 - **The practice ROM is decided natively.** A real run must see plain GLideN64
-  even with no trainer open, so the wrapper reads the cartridge header itself
+  even with no trainer open, so the capture layer reads the cartridge header itself
   (below).
 - **The stride-8 selection sample stays.** It matches the accepted duplicate
   and settling decisions, and picture identity is preserved. A change confined
@@ -129,11 +129,24 @@ comparison (+0.92% AV1/-0.31% H.264) remains preserved as historical evidence.
 
 | File | Role | Built by | Build id suffix |
 |---|---|---|---|
-| `GLideN64_SM64Trainer.dll` (label `LINK v4.2 [SM64 Trainer]`) | the renderer: LINK's GLideN64 v4.2 at the pinned commit plus the SourceV2/ContextV1 overlay from `plugin/gfxwrap/`; installed in Project64 as `sm64_trainer_gfx.renderer` so its picker lists one plugin | `tools/build_renderer.py` (pin, credits and the prebuilt-library recipe in `renderer/`) | `-renderer` |
-| `sm64_trainer_gfx.dll` (label `SM64 Trainer v1.0`) | the capture wrapper Project64 selects; loads the renderer named by `sm64_trainer_gfx.ini` | `tools/build_plugin.py` | `-gpu-runtime` |
+| `sm64_trainer_gfx.dll` (label `SM64 Trainer v1.0`) | THE graphics plugin Project64 selects, one file since 2026-11-07: LINK's GLideN64 v4.2 at the pinned commit (the renderer, label `LINK v4.2 [SM64 Trainer]` in its own GetDllInfo) plus the SourceV2/ContextV1 overlay and the capture layer from `plugin/gfxwrap/`. The capture layer exports the Zilmar functions and forwards each to the renderer's own (`renderer_entries.h`); nothing loads another plugin or reads an ini of its own | `tools/build_renderer.py` (pin, credits and the prebuilt-library recipe in `renderer/`) | `-gpu-runtime` |
 | `SM64GpuEncoderV1.dll` | the 64-bit hardware helper: unchanged NVENC plus shared Windows D3D11/MF encoding | `tools/build_plugin.py` | `-gpu-encoder` |
 
-All three are build outputs in `src/sm64_events/data/plugin/`, which git
+Until 2026-11-07 the plugin was two files: a capture wrapper that loaded the
+renderer (`GLideN64_SM64Trainer.dll`, installed as `sm64_trainer_gfx.renderer`)
+by the path `sm64_trainer_gfx.ini` named. Defender flagged that renderer
+(Trojan:Win32/Bearfoos.A!ml, 2026-11-06), and a proxy DLL forwarding to a
+disguised sibling is the shape malware takes, so the capture layer is now
+linked into the renderer. Each capture-layer unit compiles with the settings
+the wrapper had, outside the renderer's whole-program optimization
+(`tools/build_renderer.py` `_capture_item`). The host tests link the same
+capture layer with a stand-in renderer instead (`tools/build_plugin.py`
+`build_test_plugin`, never bundled). The scene lab's hosts load this file
+too and call `SM64RendererOnlyV1` first: the renderer alone, with no control
+page, capture or plugin log (`gfxwrap.c` states the contract;
+`tools/scene_lab/renderer_load.h`).
+
+Both are build outputs in `src/sm64_events/data/plugin/`, which git
 ignores, and are packaged by `tools/build_exe.py`. Each carries an embedded
 build id naming the exact sources it came from. `tools/build_natives.py`
 rebuilds whichever disagrees with the tree, from a shared cache keyed by that
@@ -142,12 +155,11 @@ id when another checkout already built it; the server launched from a checkout
 `tests/test_bundled_natives.py` fails when a built file and the tree disagree, and the setup screen compares an installed file
 with the bundled one by that id (`core/capturelayer.py::_files_match`), so a
 rebuild of unchanged sources never reads as "differs from this build". The
-setup screen installs the renderer and the wrapper together, writes the ini
-to name the renderer, selects the wrapper, and remembers the plugin it
-replaced (`previous_graphics_dll`) for Remove. The wrapper's About box
+setup screen installs the plugin, selects it, and remembers the plugin it
+replaced (`previous_graphics_dll`) for Remove. The plugin's About box
 credits GLideN64's authors and links the published source (GPL-2.0).
 
-Practice ROM gate: at RomOpen the wrapper reads the cartridge header
+Practice ROM gate: at RomOpen the capture layer reads the cartridge header
 (`plugin/gfxwrap/practice_rom.h`, mirrored by `core/onboarding.py::is_practice_rom`
 and compared in `tests/test_practice_rom.py`). On any other ROM every callback
 forwards straight to the renderer with no stamp adapter or per-call timing,
@@ -161,7 +173,7 @@ threads created at InitiateGFX stay asleep.
 Swapping ROMs needs no restart of either side. Project64 1.6 copies the new
 cartridge's header into the buffer `GFX_INFO.HEADER` points at before every
 RomOpen (`Cpu.cpp` StartEmulation and Machine_LoadState, which also calls
-RomClosed/RomOpen around a state load), so the wrapper classifies each open
+RomClosed/RomOpen around a state load), so the capture layer classifies each open
 afresh. RDRAM is neither cleared nor released between ROMs, so the server
 cannot see a swap in game memory: the poller reads the header before the
 detectors whenever the timer goes back and at least every

@@ -1,6 +1,6 @@
 """A built bundled native is the one built from THESE sources.
 
-The three are build outputs, never tracked (tools/build_natives.py builds them
+The two are build outputs, never tracked (tools/build_natives.py builds them
 at launch, wrap and release). Where a checkout has one, it must match.
 
 The setup screen compares an installed file with the bundled one by embedded
@@ -9,10 +9,11 @@ tells him his freshly installed candidate "differs from this build" and offers
 to put the stale DLL back (his report, 2026-09-15); a bundle newer than the
 tree ships code the tests never saw. Each id names the exact sources:
 
-- the wrapper and the encoder helper share tools/build_plugin.py's digest of
-  plugin/gfxwrap with their own suffixes;
-- the renderer carries tools/build_renderer.py's digest of the pinned upstream
-  tree, the overlay sources, the staging tool and the recipe.
+- the graphics plugin (one file since 2026-11-07) carries
+  tools/build_renderer.py's digest of the pinned upstream tree, the overlay
+  and capture layer sources, the staging tools and the recipe;
+- the encoder helper carries tools/build_plugin.py's digest of plugin/gfxwrap
+  with its own suffix.
 
 No toolchain is needed to check; rebuilding is `tools/build_natives.py`.
 """
@@ -22,7 +23,7 @@ from pathlib import Path
 import pytest
 
 from sm64_events.core.capturelayer import _build_identity
-from sm64_events.core.paths import bundled_encoder_dll, bundled_plugin_dll, bundled_renderer_dll
+from sm64_events.core.paths import bundled_encoder_dll, bundled_plugin_dll
 
 ROOT = Path(__file__).resolve().parents[1]
 NOT_BUILT = "native not built in this checkout (tools/build_natives.py)"
@@ -36,10 +37,9 @@ def _tool(name):
 
 
 @pytest.mark.parametrize("bundled, expected, rebuild", [
-    (bundled_plugin_dll, lambda: _tool("build_plugin").wrapper_build_id() + "-gpu-runtime", "tools/build_natives.py"),
+    (bundled_plugin_dll, lambda: _tool("build_renderer").plugin_build_id(), "tools/build_natives.py"),
     (bundled_encoder_dll, lambda: _tool("build_plugin").helper_build_id(), "tools/build_natives.py"),
-    (bundled_renderer_dll, lambda: _tool("build_renderer").renderer_build_id(), "tools/build_natives.py"),
-], ids=["wrapper", "encoder-helper", "renderer"])
+], ids=["plugin", "encoder-helper"])
 def test_the_bundled_native_was_built_from_these_sources(bundled, expected, rebuild):
     path = bundled()
     if path is None:
@@ -49,14 +49,14 @@ def test_the_bundled_native_was_built_from_these_sources(bundled, expected, rebu
         f"{path.name} was built from other sources (id {actual!r}): run {rebuild}")
 
 
-def test_the_packaged_exe_carries_all_three():
+def test_the_packaged_exe_carries_both():
     """tools/build_exe.py must add every bundled native, or the installed app
-    installs a wrapper with no renderer and spawns a helper with no DLL.
+    installs no plugin or spawns a helper with no DLL.
 
     Asked of the ARGUMENTS PyInstaller is actually given, not of the file's
     text: a comment naming a DLL satisfies a text search and packages nothing.
     The destination matters as much as the name -- core/paths.py finds these
-    three under `sm64_events/data/plugin` inside the frozen app."""
+    under `sm64_events/data/plugin` inside the frozen app."""
     build = _tool("build_exe")
     argv = build.app_args(None)
     packaged = {}
@@ -64,7 +64,7 @@ def test_the_packaged_exe_carries_all_three():
         if flag == "--add-data":
             source, _, destination = value.rpartition(build.SEP)
             packaged[Path(source).name] = destination
-    for name in ("sm64_trainer_gfx.dll", "GLideN64_SM64Trainer.dll", "SM64GpuEncoderV1.dll"):
+    for name in _tool("native_identity").SHIPPED:
         assert packaged.get(name) == "sm64_events/data/plugin", (
             f"tools/build_exe.py does not package {name} into the plugin "
             f"folder (it lands at {packaged.get(name)!r})")

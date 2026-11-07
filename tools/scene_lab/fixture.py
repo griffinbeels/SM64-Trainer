@@ -1,14 +1,15 @@
-"""Swap this checkout's capture pair into Project64 for one scene-tap fixture, then back.
+"""Swap this checkout's graphics plugin into Project64 for one scene-tap fixture, then back.
 
     fixture.py install --plugin-dir <Project64\\Plugin>
     fixture.py restore --plugin-dir <Project64\\Plugin>
 
 Only with Griffin's go-ahead, and only while Project64 is closed: install
-backs up the installed sm64_trainer_gfx.dll and GLideN64_SM64Trainer.dll to
+backs up the installed sm64_trainer_gfx.dll to
 %LOCALAPPDATA%\\SM64Trainer\\scene-lab\\plugin-backup and copies this
-checkout's built pair over them (the ini and the registry are untouched;
-the installed ini already names the trainer renderer). restore puts the
-backed-up pair back byte-for-byte and removes the backup.
+checkout's built plugin over it (the registry and every other file are
+untouched; the plugin is one file since 2026-11-07, and an older install's
+ini and renderer file beside it are ignored by it). restore puts the
+backed-up file back byte-for-byte and removes the backup.
 """
 from __future__ import annotations
 
@@ -25,7 +26,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 from sm64_events.core.childproc import quiet_spawn_kwargs  # noqa: E402
 
-PAIR = ("sm64_trainer_gfx.dll", "GLideN64_SM64Trainer.dll")
+PAIR = ("sm64_trainer_gfx.dll",)   # the files swapped: the plugin alone
 BUILT = ROOT / "src/sm64_events/data/plugin"
 
 
@@ -62,7 +63,7 @@ def install(plugin_dir: Path) -> int:
         shutil.copy2(BUILT / name, plugin_dir / name)
         if digest(plugin_dir / name) != manifest[name]["fixture"]:
             raise SystemExit(f"copy of {name} did not verify; run restore")
-    print("installed fixture pair; backup at", backup)
+    print("installed the fixture plugin; backup at", backup)
     return 0
 
 
@@ -79,7 +80,7 @@ def restore(plugin_dir: Path) -> int:
         if digest(plugin_dir / name) != hashes["installed"]:
             raise SystemExit(f"restore of {name} did not verify")
     shutil.rmtree(backup)
-    print("restored the original pair")
+    print("restored the original plugin")
     return 0
 
 
@@ -88,7 +89,7 @@ def main() -> int:
     parser.add_argument("action", choices=("install", "restore"))
     parser.add_argument("--plugin-dir", type=Path, default=os.environ.get("SM64_PJ64_PLUGIN"))
     args = parser.parse_args()
-    if not args.plugin_dir or not (Path(args.plugin_dir) / "sm64_trainer_gfx.ini").is_file():
+    if not args.plugin_dir or not (Path(args.plugin_dir) / PAIR[0]).is_file():
         raise SystemExit("--plugin-dir must name the Project64 Plugin folder with the trainer installed")
     return (install if args.action == "install" else restore)(Path(args.plugin_dir))
 
