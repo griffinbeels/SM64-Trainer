@@ -11,6 +11,7 @@ from pathlib import Path, PurePosixPath
 import subprocess
 
 from sm64_events.core.childproc import quiet_spawn_kwargs
+from sm64_events.core.update_plan import BUNDLED_NATIVES
 
 DATA_FILES = frozenset({
     "behaviours_jp.tsv", "behaviours_us.tsv", "defaults.seed.json",
@@ -27,7 +28,7 @@ ROOT_DATA_FILES = frozenset({
     "video_checks.seed.json.gz", "ukiki.ico", "build-channel.json",
     "error-reporting.json", "release-version.json",
 })
-NATIVE_FILES = ("sm64_trainer_gfx.dll", "SM64GpuEncoderV1.dll")  # tools/native_identity.py SHIPPED
+NATIVE_FILES = BUNDLED_NATIVES  # owned by core/update_plan.py
 COLLECTION_NAME = "griffman1212.sm64ghosts"
 SEED_DESCRIPTOR = "beta-ghost-seed.json"
 VENDOR_HIDDEN = {
