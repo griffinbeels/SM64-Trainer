@@ -1240,6 +1240,25 @@ settings carry over.
 - **Not** -- the graphics plugin the user had before; that one stays in the
   folder untouched, and "Remove Practice Replay" selects it again
 
+### Renderer-only mode
+
+The graphics plugin running as its [[renderer]] alone, for the [[scene
+viewer]]'s helpers. They call `SM64RendererOnlyV1` before anything else; the
+[[capture layer]] then publishes no control page, captures nothing and writes
+no log, so a helper never answers as a running Project64's plugin.
+
+- **Lives** -- `plugin/gfxwrap/gfxwrap.c` (the contract), loaded by
+  `tools/scene_lab/renderer_load.h`
+- **Not** -- a setting a player can turn on; Project64 never calls it
+
+### Test plugin
+
+A `sm64_trainer_gfx.dll` built for the host tests: the real [[capture layer]]
+linked with a stand-in renderer instead of the [[renderer]].
+
+- **Lives** -- `tools/build_plugin.py` (`build_test_plugin`)
+- **Not** -- shipped; it never enters the bundle
+
 ### Renderer settings folder
 
 The folder where the [[renderer]] reads its settings when the scene lab's
