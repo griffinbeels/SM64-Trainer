@@ -10,7 +10,7 @@ from pathlib import Path
 import re
 import shutil
 
-from sm64_events.core.paths import PLUGIN_DLL_NAME
+from sm64_events.core.paths import WRAPPER_DLL_NAME
 from sm64_events.core.setup_files import restore_on_failure
 
 log = logging.getLogger("sm64.capturelayer")
@@ -19,7 +19,7 @@ log = logging.getLogger("sm64.capturelayer")
 #: the setup screen (core/capturelayer.py) and the UAC helper write there,
 #: under the bundled name, so Project64's `Graphics Dll` choice of it holds
 #: through every update.
-PLUGIN_DLL = PLUGIN_DLL_NAME
+PLUGIN_DLL = WRAPPER_DLL_NAME
 #: What older installs left beside it. Until 2026-11-07 the trainer installed
 #: a wrapper under PLUGIN_DLL that loaded the renderer named by its ini:
 #: `sm64_trainer_gfx.renderer` (from 2026-10-24; not a .dll, so Project64's

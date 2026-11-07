@@ -26,8 +26,8 @@ from sm64_events.core.build_channel import (BETA_APP_DIR, BuildChannel, CONFIG_F
                                            read_metadata)  # noqa: E402
 from sm64_events.core.reporting_setup import CONFIG_FILE as REPORTING_CONFIG, read_config_dsn  # noqa: E402
 from build_exe import (COLLECT, SEP, _source_date_epoch, app_args, needs_reexec, scan_built,  # noqa: E402
-                       stage_reporting, stage_retired_natives)
-from sm64_events.core.update_plan import BUNDLED_NATIVES, RETIRED_NATIVES  # noqa: E402
+                       stage_reporting, write_retired_natives)
+from sm64_events.core.update_plan import BUNDLED_NATIVES, NATIVE_FOLDER, RETIRED_NATIVES  # noqa: E402
 from make_manifest import build_zip  # noqa: E402
 from beta_ghosts import (ApprovedCollection, COLLECTION_NAME, matches, review_collection,
                          candidate_author, seed_descriptor)  # noqa: E402
@@ -35,6 +35,8 @@ from sm64_events.bootstrap.beta_payload import append_payload  # noqa: E402
 from bundle_policy import check_bundle_path, tracked_ui_paths, VENDOR_HIDDEN, SEED_DESCRIPTOR  # noqa: E402
 
 DIST = REPO / "dist" / "private-beta"
+#: the placeholder files (core/update_plan.py RETIRED_NATIVES), checked by digest
+RETIRED_PATHS = frozenset(f"{NATIVE_FOLDER}/{name}" for name in RETIRED_NATIVES)
 WORK = REPO / "build" / "private-beta"
 README = """SM64 Trainer Beta - private test build
 
@@ -87,8 +89,7 @@ def check_prerequisites(ffmpeg: str | None) -> str:
 def beta_args(ffmpeg: str, metadata_path: Path, *, dist: Path = DIST,
               work: Path = WORK) -> list[str]:
     return app_args(ffmpeg, name=BETA_APP_DIR, metadata_path=metadata_path, reporting_path=stage_reporting(work),
-                    distpath=dist, workpath=work / "pyinstaller", specpath=work / "spec",
-                    retired_natives=stage_retired_natives(work))
+                    distpath=dist, workpath=work / "pyinstaller", specpath=work / "spec")
 
 
 def installer_args(*, work: Path = WORK) -> list[str]:
@@ -142,7 +143,8 @@ def validate_artifact(folder: Path, build: BuildChannel, *, ghosts: ApprovedColl
     for path in folder.rglob("*"):
         relative = path.relative_to(folder)
         digest = (hashlib.sha256(path.read_bytes()).hexdigest()
-                  if relative.as_posix() in VENDOR_HIDDEN and path.is_file() and path.stat().st_size <= 4096 else None)
+                  if (relative.as_posix() in VENDOR_HIDDEN or relative.as_posix() in RETIRED_PATHS)
+                  and path.is_file() and path.stat().st_size <= 4096 else None)
         reviewed_ghosts = (ghosts is not None and relative.as_posix() == COLLECTION_NAME
                           and matches(path, ghosts))
         if (path.is_symlink() or path.is_junction() or not path.resolve().is_relative_to(folder.resolve())
@@ -237,6 +239,7 @@ def main(argv: list[str] | None = None) -> int:
         metadata.write_text(json.dumps(build.metadata(), sort_keys=True, indent=2) + "\n", encoding="utf-8")
         import PyInstaller.__main__ as pyi
         pyi.run(beta_args(ffmpeg, metadata))
+        write_retired_natives(DIST / BETA_APP_DIR)
         import third_party_notices    # the same license notices a public build carries
         third_party_notices.stage(DIST / BETA_APP_DIR / "_internal",
                                   third_party_notices.bundled_import_names(DIST / BETA_APP_DIR, BETA_APP_DIR),

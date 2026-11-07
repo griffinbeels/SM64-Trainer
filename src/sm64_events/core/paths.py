@@ -290,7 +290,7 @@ def migrate_capture_layer_settings() -> None:
         pass  # Another checkout's newer record is authoritative.
 
 
-PLUGIN_DLL_NAME, ENCODER_DLL_NAME = BUNDLED_NATIVES
+WRAPPER_DLL_NAME, ENCODER_DLL_NAME = BUNDLED_NATIVES
 
 
 def bundled_plugin_file(name: str) -> Path | None:
@@ -309,7 +309,7 @@ def bundled_plugin_dll() -> Path | None:
     """THE GRAPHICS PLUGIN (`sm64_trainer_gfx.dll`): the renderer and the
     capture layer in one file, which the setup screen installs into Project64
     under the same name and the scene lab's helpers load where it is."""
-    return bundled_plugin_file(PLUGIN_DLL_NAME)
+    return bundled_plugin_file(WRAPPER_DLL_NAME)
 
 
 def bundled_encoder_dll() -> Path | None:

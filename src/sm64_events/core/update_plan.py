@@ -49,15 +49,31 @@ JOURNAL_NAME = "update_journal.json"
 #: The builders, the beta installer and the beta self-check read it from here.
 NATIVE_FOLDER = "_internal/sm64_events/data/plugin"
 BUNDLED_NATIVES = ("sm64_trainer_gfx.dll", "SM64GpuEncoderV1.dll")
-#: Names apps from 1.10.0-beta.22 on require in every offered release: they
-#: refuse an update whose manifest has no non-empty file there, and then offer
-#: nothing. The renderer DLL once shipped under this name; every release now
-#: carries a short text file in its place (tools/build_exe.py writes it), never
-#: a program, so those apps still update. validate_release_manifest requires it
-#: too, so release tooling refuses a package those apps would reject.
+#: THE PLACEHOLDER: native names a release must still carry although no native
+#: ships under them.
+#:
+#: Why it exists. Apps from 1.10.0-beta.22 until the first one-plugin release
+#: (the first one shipping the renderer inside sm64_trainer_gfx.dll) check every
+#: offered release before they update: a manifest without a non-empty file at
+#: _internal/sm64_events/data/plugin/GLideN64_SM64Trainer.dll is rejected, and
+#: the app then offers no update at all (commit d014991a, 2026-10-11). So every
+#: release from the first one-plugin release on carries RETIRED_NATIVE_TEXT
+#: there: plain text, never a program, written into the BUILT app only
+#: (tools/build_exe.py write_retired_natives; tools/build_natives.py deletes the
+#: name from the source bundle). Nothing in the app reads it as a native: no
+#: core/paths.py resolver names it, and the Defender gate, the beta self-check
+#: and BUNDLED_NATIVES leave it out; tools/bundle_policy.py accepts it only with
+#: these exact bytes. validate_release_manifest requires it, so release tooling
+#: refuses a package those apps would reject.
+#:
+#: When it may go. Once no supported app predates the first one-plugin release:
+#: drop the name here, and the placeholder leaves each app folder through the
+#: manifest plan's delete list. tests/test_update_plan.py holds the rule those
+#: apps run.
 RETIRED_NATIVES = ("GLideN64_SM64Trainer.dll",)
-RETIRED_NATIVE_TEXT = (b"SM64 Trainer keeps this file so older versions of the app can still update.\r\n"
-                       b"It is not a program. The graphics plugin is sm64_trainer_gfx.dll.\r\n")
+RETIRED_NATIVE_TEXT = (b"This file holds no program code. SM64 Trainer versions before the first "
+                       b"one-plugin release check that it exists before they update. "
+                       b"The graphics plugin is sm64_trainer_gfx.dll.\r\n")
 
 _RESERVED_FIRST_SEGMENTS = {INSTALLED_MANIFEST, JOURNAL_NAME,
                             BACKUP_DIR, STAGING_DIR}

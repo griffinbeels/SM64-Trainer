@@ -63,7 +63,7 @@ def app_args(ffmpeg: "str | None", *, name: str = "SM64Trainer",
              version_hook: "Path | None" = None,
              version_metadata: "Path | None" = None,
              distpath: "Path | None" = None, workpath: "Path | None" = None,
-             specpath: "Path | None" = None, retired_natives: "tuple[Path, ...]" = ()) -> list[str]:
+             specpath: "Path | None" = None) -> list[str]:
     argv = [
         str(REPO / "gui_entry.py"),
         "--name", name,
@@ -90,13 +90,11 @@ def app_args(ffmpeg: "str | None", *, name: str = "SM64Trainer",
         # core/paths.py::bundled_plugin_file): the graphics plugin the setup
         # screen installs into Project64 and the 64-bit encoder helper the
         # server spawns, under the package path so the frozen lookup mirrors
-        # the source one. Beside them, the retired names' placeholder text
-        # (stage_retired_natives), which older apps need to accept an update.
+        # the source one. The retired names' placeholder text is written into
+        # the built app afterwards (write_retired_natives).
         *(arg for name in BUNDLED_NATIVES
           for arg in ("--add-data",
                       f"{REPO / 'src' / 'sm64_events' / 'data' / 'plugin' / name}{SEP}sm64_events/data/plugin")),
-        *(arg for path in retired_natives
-          for arg in ("--add-data", f"{path}{SEP}sm64_events/data/plugin")),
         # The desktop tray + pywebview window load assets/ukiki.ico at RUNTIME
         # via _asset_path (-> sys._MEIPASS/ukiki.ico when frozen). --icon only
         # embeds it in the PE header (Explorer/taskbar); without bundling it as
@@ -232,17 +230,6 @@ def stage_version(work: Path, version: str) -> tuple[Path, Path]:
     return hook, metadata
 
 
-def stage_retired_natives(work: Path) -> tuple[Path, ...]:
-    """The placeholder text for each retired native name (core/update_plan.py
-    RETIRED_NATIVES): never a program, written fresh for each build."""
-    from sm64_events.core.update_plan import RETIRED_NATIVE_TEXT, RETIRED_NATIVES
-    folder = work / "retired-natives"
-    folder.mkdir(parents=True, exist_ok=True)
-    for name in RETIRED_NATIVES:
-        (folder / name).write_bytes(RETIRED_NATIVE_TEXT)
-    return tuple(folder / name for name in RETIRED_NATIVES)
-
-
 def stage_reporting(work: Path) -> Path:
     """Embed the public destination, with an explicit environment override."""
     from sm64_events.core.reporting_setup import CONFIG_FILE, read_config_dsn, validate_dsn
@@ -270,6 +257,16 @@ def ready_natives() -> None:
 PLUGIN_FOLDER = Path("_internal") / "sm64_events" / "data" / "plugin"
 
 
+def write_retired_natives(app_dir: Path) -> None:
+    """Write the placeholder text (core/update_plan.py RETIRED_NATIVES) into
+    the BUILT app, never the source bundle: older apps refuse an update
+    without a file at each of these names. Plain text, not a native: the
+    Defender gate and the beta self-check leave it out."""
+    from sm64_events.core.update_plan import RETIRED_NATIVE_TEXT, RETIRED_NATIVES
+    for name in RETIRED_NATIVES:
+        (app_dir / PLUGIN_FOLDER / name).write_bytes(RETIRED_NATIVE_TEXT)
+
+
 def our_files(app_dir: Path, exe_name: str) -> list[Path]:
     """The files of a built app that this repository compiled: the app's own
     exe and the natives (core/update_plan.py BUNDLED_NATIVES)."""
@@ -286,8 +283,9 @@ def scan_built(app_dir: Path, exe_name: str) -> None:
 
 
 def stage_notices(distpath: Path | None, ffmpeg: Path) -> Path | None:
-    """Stage `_internal/licenses/` into the app PyInstaller just built and
-    return its folder, or print why the build is refused and return None."""
+    """Stage `_internal/licenses/` and the retired names' placeholder
+    (write_retired_natives) into the app PyInstaller just built and return
+    its folder, or print why the build is refused and return None."""
     import third_party_notices
     # PyInstaller's default distpath is ./dist under the working directory.
     app_dir = (distpath or Path.cwd() / "dist") / "SM64Trainer"
@@ -297,6 +295,7 @@ def stage_notices(distpath: Path | None, ffmpeg: Path) -> Path | None:
     except RuntimeError as failure:
         print(f"Build refused: {failure}", file=sys.stderr)
         return None
+    write_retired_natives(app_dir)
     return app_dir
 
 
@@ -353,8 +352,7 @@ def main() -> int:
         hook, version_metadata = stage_version(work, args.version or __version__)
         pyi.run(app_args(ffmpeg, metadata_path=metadata, reporting_path=stage_reporting(work), version_hook=hook,
                          version_metadata=version_metadata, distpath=args.distpath,
-                         workpath=work / "app", specpath=work / "spec",
-                         retired_natives=stage_retired_natives(work)))
+                         workpath=work / "app", specpath=work / "spec"))
         if (app_dir := stage_notices(args.distpath, Path(ffmpeg))) is None:
             return 2
         try:
