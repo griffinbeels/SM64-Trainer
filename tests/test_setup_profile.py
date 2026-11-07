@@ -219,7 +219,7 @@ def test_the_report_and_the_automatic_schema_carry_the_check_without_folders(tmp
 
 def _status(pj64):
     return LayerStatus(pj64_dir=str(pj64), pj64_running=True, registry_graphics_dll=None,
-                       wrapper_present=False, wrapper_current=False, wrapper_selected=False, wrapped_name=None,
+                       wrapper_present=False, wrapper_current=False, wrapper_selected=False,
                        layer_alive=False, consented_at=None, plugin_dir=str(pj64 / "Plugin"))
 
 

@@ -77,7 +77,7 @@ export const CREDIT_GROUPS = [
         by: "Luna-Project64, from GLideN64 by Sergey Lipskiy with Olivieryuyu, Ryan Rosser and contributors",
         url: "https://github.com/Luna-Project64/GLideN64",
         what: "The graphics plugin the replay capture is built on. GLideN64 credits Orkin (glN64), yongzh (gles2n64), Hiroshi Morii (GlideHQ) and ziggy (z64). GPL-2.0.",
-        covers: ["native:GLideN64_SM64Trainer.dll", "native:sm64_trainer_gfx.dll"],
+        covers: ["native:sm64_trainer_gfx.dll"],
         notices: "licenses/renderer" },
       { name: "Qt", by: "The Qt Company Ltd and other contributors", url: "https://www.qt.io",
         what: "The replay renderer's settings window. LGPL-3.0.",

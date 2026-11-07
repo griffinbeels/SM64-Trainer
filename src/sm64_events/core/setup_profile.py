@@ -43,7 +43,7 @@ from sm64_events.core.capturelayer import (
     REGISTRY_DLL_SUBKEY, REGISTRY_KEY, virtualstore_copy,
 )
 from sm64_events.core.identity_privacy import contains_identity
-from sm64_events.core.plugin_installation import WRAPPER_DLL, WRAPPER_INI
+from sm64_events.core.plugin_installation import PLUGIN_DLL
 from sm64_events.core.renderer_settings import RENDERER_INI
 
 BASELINE_PATH = Path(__file__).resolve().parents[1] / "data" / "setup_baseline.json"
@@ -257,7 +257,7 @@ class SetupProfile:
         if name is None:
             return "differs", "None selected"
         name = str(name)
-        return ("match", self._rows["graphics_plugin"]["tested"]) if name.lower() == WRAPPER_DLL.lower() \
+        return ("match", self._rows["graphics_plugin"]["tested"]) if name.lower() == PLUGIN_DLL.lower() \
             else ("differs", name)
 
     def _frame_buffer(self, plugin):
@@ -373,8 +373,7 @@ class SetupProfile:
         if any(_inside(pj64, folder) for folder in self._program_dirs):
             shadows = [virtualstore_copy(self._local_appdata, pj64, RDB)]
             if plugin is not None:
-                shadows += [virtualstore_copy(self._local_appdata, plugin, name)
-                            for name in (RENDERER_INI, WRAPPER_INI)]
+                shadows.append(virtualstore_copy(self._local_appdata, plugin, RENDERER_INI))
             location = "VirtualStore" if any(shadows) else "Program Files"
         return {"name": folder_name(pj64.name), "location": location, "running": layer.get("pj64_running") is True}
 

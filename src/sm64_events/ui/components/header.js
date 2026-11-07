@@ -52,15 +52,16 @@ function shouldOfferSetup(setup) {
 }
 
 // ...and for a layer this build has outgrown that the trainer cannot update
-// by itself (a source checkout, or a wrapper someone else installed): the
+// by itself (a source checkout, or a plugin someone else installed): the
 // steps to update it are the onboarding. A packaged build updates the
-// installed pair on its own once Project64 is closed, and never reopens
+// installed plugin on its own once Project64 is closed, and never reopens
 // onboarding for that (his rule, 2026-09-16: "No additional onboarding
-// past the original onboarding"). Frame buffer emulation turned on in
-// GLideN64.ini is stale the same way: it hides ghosts (his rule, 2026-10-30).
+// past the original onboarding"). An older install's leftover files and
+// frame buffer emulation turned on in GLideN64.ini are stale the same way;
+// that setting hides ghosts (his rule, 2026-10-30).
 function needsManualUpdate(emu) {
   if (!emu.wrapper_present || emu.automatic_update) return false;
-  return emu.wrapper_current === false || emu.renderer_current === false
+  return emu.wrapper_current === false || (emu.leftovers?.length ?? 0) > 0
     || emu.frame_buffer_emulation_off === false;
 }
 

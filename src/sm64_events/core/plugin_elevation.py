@@ -67,16 +67,15 @@ def _failure(result):
                               reason=result.get("reason", "io_error"))
 
 
-def _active_sources(source, renderer):
-    from sm64_events.core.paths import bundled_plugin_dll, bundled_renderer_dll
-    if (bundled_plugin_dll() is None or bundled_renderer_dll() is None
-            or source.resolve() != bundled_plugin_dll().resolve()
-            or renderer.resolve() != bundled_renderer_dll().resolve()):
-        raise PermissionError("Only this Trainer build's bundled plugins can be installed as administrator")
+def _active_source(source):
+    from sm64_events.core.paths import bundled_plugin_dll
+    bundled = bundled_plugin_dll()
+    if bundled is None or source.resolve() != bundled.resolve():
+        raise PermissionError("Only this Trainer build's bundled plugin can be installed as administrator")
 
 
 @contextmanager
-def elevated_install(pj64_dir: Path, plugin_dir: Path, source: Path, renderer: Path):
+def elevated_install(pj64_dir: Path, plugin_dir: Path, source: Path):
     """Keep privileged rollback alive until the original user's commit succeeds.
 
     Sources are derived by the helper; hashes here bind this attempt to the
@@ -89,9 +88,9 @@ def elevated_install(pj64_dir: Path, plugin_dir: Path, source: Path, renderer: P
         listener.settimeout(0.25)
         secret = secrets.token_bytes(32)
         with file_failure("validate administrator install", plugin_dir):
-            _active_sources(source, renderer)
+            _active_source(source)
             request = {"pj64_dir": str(pj64_dir.absolute()), "plugin_dir": str(plugin_dir.absolute()),
-                       "wrapper_sha256": sha256(source), "renderer_sha256": sha256(renderer)}
+                       "plugin_sha256": sha256(source)}
         process = launch_admin(helper_argv(listener.getsockname()[1], secret))
         try:
             deadline = time.monotonic() + 120
