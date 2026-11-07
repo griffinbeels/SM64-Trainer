@@ -129,16 +129,41 @@ def test_the_probe_says_whether_the_live_recording_runs(lab):
     app, server, cutters = _app(lab)
     with TestClient(app) as client:
         assert client.get("/api/scene-lab").json() == {
-            "lab": "scene-viewer", "live": {"recording": False, "reason": attempt_scenes.STARTING}}
+            "lab": "scene-viewer", "live": {"recording": False, "reason": attempt_scenes.STARTING, "on": True,
+                                            "switch": True}}
         cutters[0].on_event({"live": {"recording": True, "reason": None}})
-        assert client.get("/api/scene-lab").json()["live"] == {"recording": True, "reason": None}
+        live = client.get("/api/scene-lab").json()["live"]
+        assert (live["recording"], live["on"], live["switch"], live["reason"]) == (True, True, True, None)
         assert FakeLease.made[-1].running and FakeLease.made[-1].lab_root == lab["root"]
     assert not FakeLease.made[-1].running and cutters[0].closed
     off, _server, none = _app(lab, live=False)
     with TestClient(off) as client:
-        assert client.get("/api/scene-lab").json()["live"] == {
-            "recording": False, "reason": "This server does not run the live scene recording."}
+        live = client.get("/api/scene-lab").json()["live"]
+        assert (live["recording"], live["switch"], live["reason"]) == (
+            False, False, "This server does not run the live scene recording.")
+        assert client.post("/api/scene-lab/recording", json={"on": True}).status_code == 409
     assert none == []
+
+
+def test_the_switch_stops_and_starts_the_recording_and_the_next_server_keeps_it_off(lab):
+    """The Scene viewer's switch: off deletes the lease (the wrapper stops within a second), on
+    renews it again; the cutter keeps running for the scenes already cut; off survives a restart."""
+    app, server, cutters = _app(lab)
+    with TestClient(app) as client:
+        lease = FakeLease.made[-1]
+        cutters[0].on_event({"live": {"recording": True, "reason": None}})
+        answer = client.post("/api/scene-lab/recording", json={"on": False}).json()["live"]
+        assert (answer["recording"], answer["on"], answer["switch"]) == (False, False, True)
+        assert answer["reason"] == scene_lab_api.RECORDING_OFF and not lease.running and not cutters[0].closed
+        assert json.loads((lab["root"] / scene_lab_api.RECORDING_SWITCH).read_text()) == {"on": False}
+    later, _server, cutters = _app(lab)
+    with TestClient(later) as client:
+        lease = FakeLease.made[-1]
+        assert not lease.running and client.get("/api/scene-lab").json()["live"]["on"] is False
+        answer = client.post("/api/scene-lab/recording", json={"on": True}).json()["live"]
+        assert answer["on"] is True and lease.running
+        assert client.post("/api/scene-lab/recording", json={"on": "maybe"}).status_code == 422
+    assert json.loads((lab["root"] / scene_lab_api.RECORDING_SWITCH).read_text()) == {"on": True}
 
 
 def test_each_completed_attempt_is_cutting_at_once_and_the_replay_still_gets_its_call(lab, recording):
@@ -274,9 +299,34 @@ def test_main_feeds_the_lab_from_its_own_tracker_only(monkeypatch, lab):
     replay_hook = tracker.on_replay_history
     app = main._mount_scene_lab(FastAPI(), tracker=tracker)
     assert app.state.scene_lab.live_on and tracker.on_replay_history is not replay_hook
-    assert len(tracker.broadcaster._observers) == 1
+    refitter = app.state.scene_lab.refitter
+    assert refitter is not None and tracker.broadcaster._observers == {app.state.scene_lab.scenes.observe_event,
+                                                                       refitter.observe}
     fixture_app = main._mount_scene_lab(FastAPI())                   # the UI fixture: the viewer alone
-    assert not fixture_app.state.scene_lab.live_on
+    assert not fixture_app.state.scene_lab.live_on and fixture_app.state.scene_lab.refitter is None
+
+
+def test_a_published_spawn_refits_the_slots_while_the_app_runs_and_the_thread_ends_with_it(lab, tmp_path):
+    """The live server's path: the broadcaster publishes a spawn, the lab's refitter (started with the app) refits
+    the slot on its own thread, and the app's stop ends that thread. Fake memory; slotlibrary/refit.py."""
+    sys.path.insert(0, str(ROOT / "tests"))
+    import test_slot_library as libfakes
+    import test_slot_relocate as world
+    from sm64_events.slotlibrary import refit, usamune
+    game = libfakes.FakeGame()
+    world.live_world(game)
+    game.save(0, world.make_slot())
+    app, server, _cutters = _app(lab)
+    tracker = _tracker()
+    server.follow_spawns(tracker, game=lambda: game, library=None, log_file=tmp_path / refit.LOG_NAME)
+    with TestClient(app):
+        asyncio.run(tracker.broadcaster.publish(Event("spawned", 700, T0, {"level": 9, "area": 1})))
+        deadline = time.monotonic() + 10
+        while server.refitter.passes == 0 and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert server.refitter.passes == 1
+        assert usamune.slot_facts(game.slot(0)) == usamune.live_facts(game)
+    assert not server.refitter._thread.is_alive()
 
 
 def test_end_to_end_the_real_cutter_child_cuts_a_completed_attempt_that_then_opens(lab, recording):

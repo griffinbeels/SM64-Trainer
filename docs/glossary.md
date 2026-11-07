@@ -382,6 +382,17 @@ through is not written.
 - **Lives** -- `src/sm64_events/slotlibrary/relocate.py`; every write runs it
 - **Not** -- changing Usamune's check, which Griffin ruled out (2026-11-05)
 
+### Slot refit
+
+After every spawn (a practice [[reset]], entering a level or an area), the Trainer gives each Usamune save state
+made for that same level and area Mario's new place, using [[mario relocation]]. Then Usamune's own load works
+without a visit to the [[scene viewer]]. States for other places stay as they are, and a state already in place is
+not written again. The pass skips a state he saves over while it works. Before its first refit, his save joins the
+[[slot library]]. Lab only.
+
+- **Lives** -- `src/sm64_events/slotlibrary/refit.py`; each pass writes one line to its own log file
+- **Not** -- something the game did, so it never enters the [[journal]]
+
 ### Share file
 
 One [[kept state]] as a `.sm64state` file you can send to a friend. Opening one
@@ -1216,9 +1227,69 @@ user's existing GLideN64 settings carry over.
   `renderer/build-inputs.json` and the overlay in `plugin/gfxwrap/`
   (`renderer/README.md` has the provenance and credits) into
   the git-ignored bundle folder (its BUNDLE constant in `tools/build_natives.py`), a
-  build output that tool refreshes at launch
+  build output that tool refreshes at launch. The [[scene viewer]]'s helpers load
+  that bundle file where it is, never a copy, and point it at the
+  [[renderer settings folder]]
 - **Not** -- the graphics plugin the user had before; that one stays in the
   folder untouched, and "Remove Practice Replay" selects it again
+
+### Renderer settings folder
+
+The folder where the [[renderer]] reads its settings when the scene lab's
+helpers draw with it outside Project64: a copy of Project64's `GLideN64.ini`
+and `GLideN64.custom.ini` with the shader cache turned off, so the
+[[renderer]] keeps nothing there from one start to the next but its log. There
+is one folder per window size in the scene lab's own folder (`project64` keeps
+Project64's own size, `1600x1200` names another), and a helper reuses the same
+folder every time. A helper names it to the [[renderer]] before its first call,
+and only the Trainer's [[renderer]] accepts one. Inside Project64 nothing names
+one, so the [[renderer]] reads Project64's Plugin folder as GLideN64 always has.
+Before 2026-11-06 each helper copied the [[renderer]] into a new random folder
+under `%TEMP%` and loaded the copy. Defender flagged that copy as a trojan: a
+program loading a DLL it has just written into a temporary folder looks like
+malware.
+
+- **Lives** -- on disk under %LOCALAPPDATA%\SM64Trainer\scene-lab\renderer-settings;
+  made by `tools/scene_lab/replay.py` (its settings_folder function); the
+  renderer's setter `plugin/gfxwrap/renderer_settings_folder.cpp` (staged into
+  GLideN64's folder lookup by `tools/build_renderer.py`); the helpers' loader
+  `tools/scene_lab/renderer_load.h`
+- **Not** -- Project64's Plugin folder, which the scene lab only reads
+
+### Source date
+
+The time of the newest commit that touched a shipped native's inputs: its
+sources, its build recipe and `tools/native_identity.py`. The build writes it
+into the PE header, where a linker would put the time of linking, and names
+the FileVersion after it (year.month.day.hhmm, UTC). Builds are repeatable
+since 2026-11-06, so two builds of one commit carry the same date and the same
+bytes, and a later native commit carries a larger date. The [[setup screen]]'s
+automatic refresh orders the [[capture layer]] and the [[renderer]] by it and
+never installs an older one; a build that names SM64 Trainer in its version
+resource counts as newer than any build from before. Uncommitted edits keep the last
+commit's date while their content still changes the build id.
+
+- **Lives** -- `tools/native_identity.py` finds and writes it;
+  `src/sm64_events/core/plugin_ownership.py` orders installs by it
+- **Not** -- the build id: that digest says which inputs made a file, never
+  which of two files is newer
+
+### Defender gate
+
+The Microsoft Defender scan our own natives pass before they reach the bundle
+or a release. On 2026-11-06 Defender quarantined a [[renderer]] built here as
+Trojan:Win32/Bearfoos.A!ml, a cloud machine-learning verdict on one build.
+`tools/build_natives.py` now scans every native it installs, stops on a
+threat, names the file and removes it from the bundle and the build cache. The
+release and beta builders scan the built app again and also refuse a scan
+that could not finish. Each scan reports without quarantining or deleting
+anything, and nothing here changes Defender's settings. Off Windows or without
+Defender's scanner it says so and the build continues.
+
+- **Lives** -- `tools/defender_scan.py`, called by `tools/build_natives.py`,
+  `tools/build_exe.py` and `tools/build_beta.py`
+- **Not** -- code signing: the natives ship unsigned, his decision on
+  2026-11-06
 
 ### Task closure
 
@@ -1241,10 +1312,10 @@ memory.
 
 An M4 experiment inside the [[capture layer]]'s wrapper that writes
 each graphics task's [[task closure]] and the picture Project64 then shows.
-A one-shot arming file present when a [[practice ROM]] opens records a few
-seconds; while the Trainer's scene lab holds a lease it records continuously
-into the [[live spool]]. Without either it costs one memory read per
-callback. It copies at the instant the game submits the task into a fixed
+It records only while the Trainer's scene lab holds a lease, continuously
+into the [[live spool]]; a file appearing never starts it. (The one-shot
+arming file that records a few seconds works only in the offline test host
+since 2026-11-06.) Without a lease it costs one memory read per callback. It copies at the instant the game submits the task into a fixed
 ring and never makes the game wait; a full ring drops and counts the record.
 `tools/scene_lab/tap.py` arms it, reads what it wrote and turns each task into
 input the [[renderer]] can redraw offline.
@@ -1257,21 +1328,27 @@ input the [[renderer]] can redraw offline.
 ### Live spool
 
 The [[scene tap]]'s continuous recording while the Trainer's scene lab is on:
-every graphics task with its [[scene state]], in rolling files on disk, so you
-can open the scene of an [[attempt]] right after it ends. The lab holds a lease
-by renewing a file every 2 seconds; the wrapper checks it once a second,
-starts recording without reopening the game, and stops 8 seconds after the
-last renewal. The writer thread starts a new file about every 15 seconds with
-the level state whole, so a reader decodes any recent stretch without the
-files before it, and keeps 15 minutes (at most 2 GiB). It leaves out 256-byte
-blocks a file already holds and compresses the rest: about 42 MB a minute of
-play (2026-10-26). An index names each task's [[frame]], level, area and time
-a few dozen milliseconds after the game drew it, and names the tasks a full
-ring left incomplete.
+every graphics task with its [[scene state]], on disk, so you can open the
+scene of an [[attempt]] right after it ends. The [[scene viewer]] shows whether
+it records and has the **recording switch** that stops and starts it (kept for
+the next start). While the switch is on the lab holds a lease by renewing a
+file every 2 seconds; the wrapper checks it once a second, starts recording
+without reopening the game, and stops within a second of the switch going off
+or 8 seconds after the last renewal. The writer thread starts a new stretch of
+the recording about every 15 seconds with the level state whole, so a reader
+decodes any recent stretch without the ones before it. The stretches go into a
+fixed set of 64 **spool files**, each reused in turn and never deleted, so the
+spool keeps about the last 16 minutes in at most 2 GiB. It leaves out 256-byte
+blocks a stretch already holds and compresses the rest with the Windows
+Compression API: about 37 MB a minute of play (2026-11-06). An index names
+each task's [[frame]], level, area and time a few dozen milliseconds after the
+game drew it, and names the tasks a full ring left incomplete.
 
 - **Lives** -- the lease and the reader (`tools/scene_lab/live_spool.py`); the
-  capture and the lease check (`plugin/gfxwrap/scene_tap.cpp`); the segments
-  (`plugin/gfxwrap/scene_spool.cpp`)
+  capture and the lease check (`plugin/gfxwrap/scene_tap.cpp`); the spool
+  files (`plugin/gfxwrap/scene_spool.cpp`); the switch
+  (`src/sm64_events/ui/components/scenerecording.js` and the recording route
+  in `src/sm64_events/server/scene_lab_api.py`)
 - **Not** -- the [[recorder]]'s video, which keeps pictures only; the live
   spool keeps what the [[scene viewer]] needs to redraw from a free camera
 
@@ -1668,8 +1745,8 @@ have it.
 The lab's hidden child process, below normal priority, that makes the [[sound
 stems]] while he plays: it follows the live recording's VIs, splits each audio
 task with the game's own microcode (music, sound effects), and reads at the next
-VI what Project64 played for it. It keeps a row per VI for the recording's
-15-minute window. When the cutter adds an [[attempt scene]]'s sound, the child lines
+VI what Project64 played for it. It keeps a row per VI for about the last 16
+minutes, in 66 fixed files it reuses in turn and never deletes. When the cutter adds an [[attempt scene]]'s sound, the child lines
 the game's output up with that recording and hands the cutter the scene's stems on
 the recording's own samples, or the reason there are none. About 3 ms of one
 core per VI on savestates (2026-10-27).

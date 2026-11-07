@@ -192,6 +192,34 @@ def ui_rows(journal: Path, since: datetime | None) -> list[tuple]:
     return out
 
 
+REFIT_LOG = "slot_refit.jsonl"     # slotlibrary/refit.py's LOG_NAME: one line per slot refit pass
+REFIT_COUNTS = ("refit", "already_fit", "changed", "refused")
+
+
+def render_refit(entry: dict) -> str:
+    """One slot refit pass in words: where, how many of each, why any slot was refused, and how long."""
+    if entry.get("not_ready"):
+        return f"did not run: {entry['not_ready']}"
+    counts = ", ".join(f"{entry.get(key, 0)} {key.replace('_', ' ')}" for key in REFIT_COUNTS)
+    why = "; ".join(f"slot {item.get('slot')} {item.get('why')}" for item in entry.get("refused_why") or [])
+    from sm64_events.tracking.eventlabel import place_name
+    place = place_name(entry.get("level"), entry.get("area"))
+    return f"{place}: {counts}, {entry.get('kept', 0)} kept" + (f" ({why})" if why else "") + f"  {entry.get('ms')} ms"
+
+
+def refit_rows(journal: Path, since: datetime | None) -> list[tuple]:
+    """What the Trainer did to Usamune's slots after each spawn, in the journal's row shape. A refit is the
+    Trainer's action rather than the game's, so it lives in its own log beside the journal, never in it."""
+    out = []
+    for entry in uilog.read(journal.parent / REFIT_LOG):
+        stamp = parse_stamp(entry.get("server_utc"))
+        if since is not None and stamp is not None and stamp < since:
+            continue
+        out.append((entry.get("server_utc"), entry.get("frame") or 0, "TRAINER slot refit",
+                    render_refit(entry), stamp))
+    return out
+
+
 def merged(event_rows, ui, since: datetime | None) -> list[tuple]:
     """Journal events and UI observations on ONE clock, oldest first.
 
@@ -264,15 +292,18 @@ def main() -> int:
     since = now - timedelta(minutes=args.minutes)
     events = timeline(open_readonly(chosen), since, args.session)
     ui = [] if args.no_ui else ui_rows(chosen, None if args.session else since)
-    rows = merged(events, ui, None if args.session else since)
+    refits = refit_rows(chosen, None if args.session else since)
+    rows = merged(events, ui + refits, None if args.session else since)
     if not rows:
         window = "that session" if args.session else f"the last {args.minutes} min"
         print(f"\nNothing in {window}.")
         return 0
 
     scope = "last session" if args.session else f"last {args.minutes} min"
-    drawn = len(rows) - len(events)
-    print(f"\n--- {len(events)} events + {drawn} UI observations, {scope} ---\n")
+    refitted = sum(1 for row in rows if row[2] == "TRAINER slot refit")
+    drawn = len(rows) - len(events) - refitted
+    tail = f" + {refitted} slot refits" if refitted else ""
+    print(f"\n--- {len(events)} events + {drawn} UI observations{tail}, {scope} ---\n")
     if not drawn and not args.no_ui:
         # An empty UI log is itself a FINDING, and the most useful one this
         # tool prints: a page only posts observations if it loaded the module

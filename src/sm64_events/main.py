@@ -712,7 +712,7 @@ def _mount_scene_lab(app, tracker=None, live_audio=None, ghost_sources=None):
     live recording's lease, a cut per completed attempt); a caller without one (the UI fixture)
     gets the viewer alone and never arms the wrapper's tap. `ghost_sources` is what the viewer's
     stage and ghost catalog read ({"tracker", "replay", "ghost", "community"}, server/scene_ghosts.py); it
-    never arms anything."""
+    never arms anything. The same tracker's spawns refit the Usamune slots (slotlibrary/refit.py)."""
     if any(getattr(route, "path", None) == "/api/scene-lab" for route in app.routes):
         return app
     config = os.environ.get("SM64_SCENE_LAB")
@@ -722,6 +722,7 @@ def _mount_scene_lab(app, tracker=None, live_audio=None, ghost_sources=None):
                               ghost_sources=ghost_sources)
         if tracker is not None:
             lab.follow_attempts(tracker)
+            lab.follow_spawns(tracker)
     else:
         app.add_api_route("/api/scene-lab", lambda: {"lab": None}, methods=["GET"], include_in_schema=False)
     return app

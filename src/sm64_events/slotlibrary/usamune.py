@@ -193,7 +193,7 @@ class Project64Game:
         start = address - 0x80000000 - low
         words[start:start + len(data)] = data
         host = self._swap(bytes(words))
-        self.reader._pm.write_bytes(self.reader._rdram_base + low, host, len(host))
+        self.reader.write_rdram(low, host)
 
     def cartridge_header(self) -> bytes | None:
         return self.reader.rom_header()

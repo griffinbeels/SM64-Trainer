@@ -90,6 +90,7 @@ import { SceneSound, SoundBar } from "./sceneaudio.js";
 import { RecordBar } from "./scenerecord.js";
 import { CameraPresets, CameraSlots, placeKey, placeOf, presetCamera } from "./scenepresets.js";
 import { SaveStates } from "./scenemoment.js";
+import { RecordingSwitch } from "./scenerecording.js";
 import { heardInto, pictureAt, playLength, recordedTimes } from "./sceneclock.js";
 import { CinematicBar, orbitFolded, orbitPhase, rigChanged, rigHint, rigName, rigRequest, seenOnScreen,
   startRig } from "./scenerigs.js";
@@ -1738,6 +1739,7 @@ function Hero({ t, link, lab, status, opening, open, close, children }) {
         <button type="button" onclick=${close} title="Close this recording and stop the renderer">Close</button>
       </div>`
       : lab && html`<${Opener} status=${status} opening=${opening} open=${open} />`}
+    <${RecordingSwitch} />
     ${children}
   </header>`;
 }

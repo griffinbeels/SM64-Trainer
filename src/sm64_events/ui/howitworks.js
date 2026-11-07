@@ -91,7 +91,6 @@ export const STOPS = [
       "Then, once per game frame, 30 times a second, it asks Windows for a copy of the values it needs. Nothing in the trainer writes to the game's memory, so it never changes your game.",
     ],
     visual: "live",
-    builtOn: ["pymem"],
   },
   {
     short: "Noticing",

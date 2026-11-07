@@ -130,15 +130,38 @@ def test_the_store_reads_a_span_from_the_files_it_touches_and_ignores_a_row_bein
         flags = sl.TASK | sl.REAL if streams else 0
         store.append(index, flags, 10_000 + 100 * index, index, 0, streams)
     store.close()
-    files = sorted(store.folder.glob("vi-*.stm"))
-    assert len(files) == 4
+    files = sorted(store.folder.glob("*.stm"))
+    assert [path.name for path in files] == ["stems-00.stm", "stems-01.stm", "stems-02.stm", "stems-03.stm"]
     with files[-1].open("ab") as handle:
         handle.write(sl.ROW.pack(10, sl.TASK, 11_000, LENGTH, 5, 0, 0) + b"\x00" * 100)   # torn
     rows = sl.read_rows(store.folder, 10_250, 10_750)
     assert [row["vi"] for row in rows] == [3, 4, 5, 6, 7]
     assert np.array_equal(rows[1]["real"], tone(4)) and np.array_equal(rows[1]["music"], tone(-4))
     assert [row["vi"] for row in sl.read_rows(store.folder, 0, 1 << 40)] == list(range(10))
+    assert sl.read_rows(store.folder, 0, 1 << 40, session="live-other") == []
     assert store.wait_past(10_900, 0.05, lambda: True) and not store.wait_past(20_000, 0.05, lambda: True)
+
+
+def test_the_store_reuses_its_fixed_files_in_turn_and_never_deletes_one(tmp_path, monkeypatch):
+    """STORE_FILES files written in turn and emptied in place: a later session's rows go into the
+    same files, oldest first, and a reader asks for its session's rows by name."""
+    monkeypatch.setattr(sl, "FILE_ROWS", 2)
+    monkeypatch.setattr(sl, "STORE_FILES", 3)
+    store = sl.StemStore(tmp_path, "live-a")
+    seen = set()
+    for index in range(10):                                 # five files' worth into three
+        store.append(index, 0, 1_000 + index, index, 0, [])
+        seen |= {path.name for path in store.folder.iterdir()}
+    store.close()
+    assert sorted(seen) == ["stems-00.stm", "stems-01.stm", "stems-02.stm"]
+    assert [row["vi"] for row in sl.read_rows(store.folder, 0, 1 << 40, session="live-a")] == [4, 5, 6, 7, 8, 9]
+    later = sl.StemStore(tmp_path, "live-b")                # the next session starts at the first file again
+    for index in range(2):
+        later.append(index, 0, 5_000 + index, index, 0, [])
+    later.close()
+    assert sorted(path.name for path in store.folder.iterdir()) == sorted(seen)
+    assert [row["vi"] for row in sl.read_rows(store.folder, 0, 1 << 40, session="live-b")] == [0, 1]
+    assert [row["vi"] for row in sl.read_rows(store.folder, 0, 1 << 40, session="live-a")] == [4, 5, 8, 9]
 
 
 # ---------------------------------------------------------------- the live spool, through the real writer
@@ -148,7 +171,7 @@ needs_toolchain = pytest.mark.skipif(not build_plugin.toolchain_available(),
 
 
 @needs_toolchain
-def test_the_follower_reads_the_spools_vi_records_as_they_come_and_after_a_deleted_segment(tmp_path):
+def test_the_follower_reads_the_spools_vi_records_as_they_come_and_after_a_reused_file(tmp_path):
     spool_tests = _module("test_scene_live_spool")
     frames = spool_tests._frames(tmp_path / "frames", spool_tests._rom())
     lab = spool_tests._lab(tmp_path)
@@ -168,10 +191,11 @@ def test_the_follower_reads_the_spools_vi_records_as_they_come_and_after_a_delet
     finally:
         lease.stop()
         host.close()
-    session = live_spool.open_spool(lab).session
-    numbers = sl.segment_numbers(session)
+    spool = live_spool.open_spool(lab)
+    session = spool.session
+    numbers = sl.segment_numbers(session, spool.id)
     assert len(numbers) == 2
-    follower = sl.ViFollower(session)                                 # live: from the newest segment
+    follower = sl.ViFollower(session, spool.id)                       # live: from the newest segment
     seen = []
     for _ in range(50):
         seen += follower.poll()
@@ -185,9 +209,12 @@ def test_the_follower_reads_the_spools_vi_records_as_they_come_and_after_a_delet
     for record, state in tap.vi_states(iter(seen), spool_tests.RDRAM):
         known = state.known
         assert np.array_equal(state.ram[known], whole[record.fields["vi_index"]][known])
-    behind = sl.ViFollower(session)
+    behind = sl.ViFollower(session, spool.id)
     behind.number = numbers[0]                                        # it was reading the oldest...
-    (session / f"seg-{numbers[0]:06d}.tap").unlink()                  # ...when the writer pruned it
+    table = bytearray((session / live_spool.TABLE).read_bytes())      # ...when the writer reused its file
+    entry = live_spool.TABLE_HEAD.size + live_spool.ENTRY.size * sl.segment_files(session)[numbers[0]]
+    table[entry:entry + live_spool.ENTRY.size] = bytes(live_spool.ENTRY.size)
+    (session / live_spool.TABLE).write_bytes(bytes(table))
     assert behind.poll() == [] and behind.gaps == 1
     again = []
     for _ in range(50):

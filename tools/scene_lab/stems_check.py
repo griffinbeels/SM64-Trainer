@@ -3,9 +3,9 @@
     stems_probe.py from-tap <tap or live spool session> --rom <z64> --map <MappingUS.map> [--lle-src <cxd4>]
         [--capture <audio.cap>] [--report out.json] [--wavs <dir>] [--segment N] [--vis N]
 
-A session armed with the audio spans (tap.py arm: vi_region= and vi_dmem=1) holds, at every VI,
-the audio state the wrapper's UpdateScreen saw: a one-shot tap in its tap.bin, a live spool
-session (live_spool.Lease asks for the spans) in its segments, read from --segment's first
+A session armed with the audio spans (tap.arming_text: vi_region= and vi_dmem=1) holds, at every
+VI, the audio state the wrapper's UpdateScreen saw: a one-shot tap in its tap.bin, the live spool
+(its folder; live_spool.Lease asks for the spans) in its segments, read from --segment's first
 byte (its writer keys rebuild the state) for at most --vis VIs. Four gates, each with a verdict:
 
 G0 capture point. At the VI the audio task the game dispatched waits in gSPTaskMesgQueue (it is
@@ -548,11 +548,11 @@ def write_wavs(out: Path, checker: Checker, game: np.ndarray) -> dict:
 
 
 def vi_source(args):
-    """The session's VI records: a one-shot tap's tap.bin, or a live spool session's segments from
+    """The session's VI records: a one-shot tap's tap.bin, or the live spool's segments from
     --segment on (stems_live.session_vi_records); None when it has neither."""
     if (args.session / "tap.bin").is_file():
         return tap.read_records(args.session / "tap.bin")
-    if any(args.session.glob("seg-*.tap")):
+    if (args.session / "spool-table.bin").is_file():
         import stems_live
         return stems_live.session_vi_records(args.session, first_segment=getattr(args, "segment", None))
     return None

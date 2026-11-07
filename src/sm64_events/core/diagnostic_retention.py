@@ -105,7 +105,7 @@ def prune_debug_logs(log_directory: Path, *, data_directory: Path | None = None,
     if data_root is not None:
         candidates.extend((data_root / name, limit) for name, limit in (
             ("ui_log.jsonl", 2_000_000), ("perf_log.jsonl", PERF_LOG_MAX_BYTES),
-            ("perf_log.jsonl.prev", PERF_LOG_MAX_BYTES)))
+            ("perf_log.jsonl.prev", PERF_LOG_MAX_BYTES), ("slot_refit.jsonl", 1_000_000)))
     for path, limit in candidates:
         metadata = _metadata(path)
         if metadata is not None and (metadata.st_mtime <= cutoff or

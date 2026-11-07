@@ -832,7 +832,8 @@ class Brain:
         cut = seat.cut
         presents = take.absolute_presents(stats["frames"])
         if presents:
-            session = getattr(getattr(take.spool, "session", None), "name", "")
+            # The session's name (live_spool.Spool.name; a recorded double's folder name): the stem rows' tag.
+            session = getattr(take.spool, "name", None) or getattr(getattr(take.spool, "session", None), "name", "")
             self.sounds[seat.attempt_id] = (seat.path, presents, session)
             while len(self.sounds) > SOUNDS_KEPT:
                 self.sounds.pop(next(iter(self.sounds)))

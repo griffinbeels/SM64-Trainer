@@ -259,7 +259,7 @@ def main() -> int:
     parser.add_argument("--exit-after", type=int, default=0)
     parser.add_argument("--ram", action="store_true", help="keep an RDRAM and name it in the picture")
     parser.add_argument("--no-ghosts", action="store_true", help="answer ghost requests as a renderer without them")
-    args, _host_arguments = parser.parse_known_args()   # --renderer, --plugin-dir, --header: unused
+    args, _host_arguments = parser.parse_known_args()   # --renderer, --settings, --header: unused
     return serve(args)
 
 

@@ -108,8 +108,6 @@ export const CREDIT_GROUPS = [
         what: "The trainer's local server. MIT.", covers: ["python:fastapi"] },
       { name: "Uvicorn", by: "Tom Christie / Encode", url: "https://uvicorn.dev/",
         what: "Runs that server. BSD-3-Clause.", covers: ["python:uvicorn"] },
-      { name: "Pymem", by: "Fabien Reboia", url: "https://github.com/srounet/Pymem",
-        what: "Reads Project64's memory. MIT.", covers: ["python:pymem"] },
       { name: "PyAV", by: "the PyAV team", url: "https://github.com/PyAV-Org/PyAV",
         what: "FFmpeg for Python: replay video. BSD-3-Clause; its own FFmpeg build is GPL-3.0.", covers: ["python:av"],
         notices: "licenses/pyav-ffmpeg" },

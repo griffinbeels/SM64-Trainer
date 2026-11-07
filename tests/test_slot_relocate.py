@@ -265,7 +265,8 @@ def test_every_slot_write_names_the_mario_place_it_was_made_for():
 
 
 def test_both_writers_move_mario_through_the_one_relocation():
-    for relative in ("src/sm64_events/slotlibrary/coursesets.py", "tools/scene_lab/handoff_try.py"):
+    for relative in ("src/sm64_events/slotlibrary/coursesets.py", "src/sm64_events/slotlibrary/refit.py",
+                     "tools/scene_lab/handoff_try.py"):
         assert "to_live_place(" in (ROOT / relative).read_text(encoding="utf-8"), relative
     owners = [path.name for path in sources() if re.search(r"^def relocate\(", path.read_text(encoding="utf-8"), re.M)]
     assert owners == ["relocate.py"], owners

@@ -1,12 +1,13 @@
 """E3 lab: deliver REAL-renderer pictures of a recorded scene into a browser page.
 
     uv run python tools/scene_lab/viewer.py serve <tap_session | frame_dir...> --pj64-plugin <dir>
-        [--resolution WxH] [--renderer trainer|link|<dll>] [--port N]
+        [--resolution WxH] [--port N]
     uv run python tools/scene_lab/viewer.py check <tap_session | frame_dir...> --pj64-plugin <dir>
         --against <replay.py render dir> [--resolution WxH]
 
-serve starts ONE viewer_host.c (x86, built and cached like replay_host),
-warms it, and serves viewer.html on a free localhost port; the page asks a
+serve starts ONE viewer_host.c (x86, built and cached like replay_host) over the
+Trainer's renderer where the bundle keeps it (replay.trainer_renderer(), never a
+copy), warms it, and serves viewer.html on a free localhost port; the page asks a
 WebSocket for {frame, camera, encoding} and receives ReadScreen's picture.
 Nothing renders unless the page asks: the host blocks on its pipe, so a
 paused page costs no work. check is the server-side byte proof: every frame
@@ -17,8 +18,9 @@ next` then `replay.py render --warmup <first frame>`).
 A tap session pairs each task with the next presented picture (tap.py's
 --pair next), which is right for offline hosts and savestate-derived
 sessions alike. A frame dir sends its closure.json ranges, or its whole
-rdram.bin when it has none. --resolution rewrites the windowed size in the
-private ini copy only; Project64's Plugin folder is read, never written.
+rdram.bin when it has none. --resolution picks the renderer settings folder
+of that window size (replay.settings_folder); Project64's Plugin folder is
+read, never written.
 Sessions are private RAM images: nothing here writes them anywhere.
 """
 from __future__ import annotations
@@ -33,8 +35,6 @@ import math
 import os
 import queue
 import random
-import re
-import shutil
 import socket
 import struct
 import subprocess
@@ -61,7 +61,7 @@ import tap  # noqa: E402
 from gpu_gate import require_gpu  # noqa: E402
 from sm64_events.core.childproc import quiet_spawn_kwargs  # noqa: E402
 
-SOURCES = (HERE / "viewer_host.c", ROOT / "plugin/gfxwrap/zilmar.h")
+SOURCES = (HERE / "viewer_host.c", HERE / "renderer_load.h", ROOT / "plugin/gfxwrap/zilmar.h")
 REQUEST = struct.Struct("<5I16I14I16d")
 RESPONSE = struct.Struct("<9I")
 REQUEST_MAGIC, RESPONSE_MAGIC = 0x51525756, 0x53525756
@@ -77,7 +77,6 @@ GHOST_FLAGS = {"tint": 1, "shadow": 2, "names": 4, "inputs": 8, "values": 16, "w
 GV_ABSENT = -100                         # viewer_host.c: the renderer has no ghost table
 IDENTITY = (1.0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 1.0)
 ENCODINGS = ("raw", "jpeg")
-_WINDOWED = re.compile(r"^(video\\windowed(?:Width|Height))=\d+$", re.MULTILINE)
 
 
 @dataclass
@@ -214,18 +213,6 @@ def build() -> Path:
     return target
 
 
-def prepare_plugin_dir(plugin_dir: Path, pj64_plugin: Path, resolution: tuple[int, int] | None) -> None:
-    """replay.py's private config, with the windowed size optionally replaced
-    in both files (GLideN64.custom.ini sets it per ROM)."""
-    replay.prepare_plugin_dir(plugin_dir, pj64_plugin)
-    if resolution:
-        for name in replay.CONFIG_FILES:
-            path = plugin_dir / name
-            text = _WINDOWED.sub(lambda match: f"{match[1]}={resolution[match[1].endswith('Height')]}",
-                                 path.read_text(encoding="utf-8"))
-            path.write_text(text, encoding="utf-8")
-
-
 class Host:
     """One viewer_host.exe and its pipe. The host answers requests in the order they were
     written. A reader thread takes each answer off the pipe the moment the host writes it, so
@@ -235,10 +222,10 @@ class Host:
     sees EOF. `command` replaces the built executable (fake_viewer_host.py, a protocol double,
     in tests and dry runs)."""
 
-    def __init__(self, renderer: Path, plugin_dir: Path, header: str, command: list[str] | None = None,
+    def __init__(self, renderer: Path, settings: Path, header: str, command: list[str] | None = None,
                  ghosts: bool = False):
         self.process = subprocess.Popen(
-            [*(command or [str(build())]), "--renderer", str(renderer), "--plugin-dir", str(plugin_dir),
+            [*(command or [str(build())]), "--renderer", str(renderer), "--settings", str(settings),
              "--header", header, *(["--ghosts", "1"] if ghosts else [])],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **quiet_spawn_kwargs())
         self.lock = threading.Lock()                      # writing a request
@@ -401,13 +388,12 @@ class Viewer:
             raise SystemExit("--pj64-plugin (or SM64_PJ64_PLUGIN) must name Project64's Plugin folder")
         self.frames, header = load_sources(args.sources)
         self.resolution = tuple(int(part) for part in args.resolution.lower().split("x")) if args.resolution else None
-        renderer = replay.resolve_renderer(args.renderer, pj64_plugin)
-        self.plugin_dir = Path(tempfile.mkdtemp(prefix="viewer-plugin-"))
-        prepare_plugin_dir(self.plugin_dir, pj64_plugin, self.resolution)
+        renderer = replay.trainer_renderer()
+        settings = replay.settings_folder(pj64_plugin, self.resolution)
         self.source = ", ".join(path.name for path in args.sources)
         self.renderer = renderer.name
         started = time.perf_counter()
-        self.host = Host(renderer, self.plugin_dir, header)
+        self.host = Host(renderer, settings, header)
         warm = self.host.render(self.frames[0], discard=True)   # an instance's first list renders wrong
         self.startup_ms = (time.perf_counter() - started) * 1000
         self.warm_ms = warm.host_ms
@@ -415,7 +401,6 @@ class Viewer:
 
     def close(self) -> None:
         code = self.host.close()
-        shutil.rmtree(self.plugin_dir, ignore_errors=True)
         print(f"viewer_host exited {code}")
 
     def serve_one(self, message: dict) -> bytes:
@@ -594,8 +579,7 @@ def main() -> int:
         command = commands.add_parser(name)
         command.add_argument("sources", type=Path, nargs="+", help="one tap session, or frame dirs")
         command.add_argument("--pj64-plugin", help="Project64's Plugin folder (read only); default SM64_PJ64_PLUGIN")
-        command.add_argument("--renderer", default="trainer", help="trainer, link, or a renderer DLL path")
-        command.add_argument("--resolution", help="windowed WxH for the private ini; default Project64's")
+        command.add_argument("--resolution", help="windowed WxH (its own renderer settings folder); default Project64's")
         command.set_defaults(handler=handler)
     commands.choices["serve"].add_argument("--port", type=int, default=0, help="default: a free port")
     commands.choices["check"].add_argument("--against", type=Path, required=True,

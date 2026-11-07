@@ -4,7 +4,9 @@ None of this exists unless SM64_SCENE_LAB names a lab config: main.py::_mount_sc
 one reader, and without it this module is never imported and no route is added. With it:
 
     GET  /api/scene-lab           the probe the shell waits for before it shows the Lab entry, and
-                                  "live": whether the scene recording runs ({recording, reason})
+                                  "live": whether the scene recording runs ({recording, on, switch, reason})
+    POST /api/scene-lab/recording {on: bool}: the Scene viewer's switch; turns the live recording's
+                                  lease on or off (off: the wrapper stops within a second) -> {live}
     GET  /api/scene-lab/status    the config's readiness, the packages, the open scene, the last end
     GET  /api/scene-lab/attempt-scenes?ids=12,13   each known attempt's scene: ready, cutting, unavailable
     POST /api/scene-lab/open      {package: <a listed name>} or {attempt: <id>} -> the scene (with its
@@ -30,8 +32,10 @@ URL ever comes from the page. Packages stay untrusted: package.py's reader check
 and the evaluator executes code only from the configured ROM. The scene lab's code
 (tools/scene_lab) runs from a source checkout.
 
-Attempt scenes (round 2, "IMMEDIATELY AFTER FINISHING AN ATTEMPT"): while the server runs, the
-lab holds live_spool.Lease (the wrapper's scene tap records into a rolling spool) and
+Attempt scenes (round 2, "IMMEDIATELY AFTER FINISHING AN ATTEMPT"): while the server runs and the
+Scene viewer's recording switch is on (it shows that the recording runs; off is kept for the next
+server in the lab root's RECORDING_SWITCH), the lab holds live_spool.Lease (the wrapper's scene tap
+records into the live spool's fixed files only while it is held) and
 attempt_scenes.AttemptScenes, whose cutter child writes each completed attempt's scene from that
 spool (tools/scene_lab/attempt_cutter.py; the span: attempt_span.py). main.py chains the
 tracker's completion hook and the broadcaster's observer to it (follow_attempts); the replay's
@@ -99,6 +103,7 @@ import logging
 import math
 import struct
 import sys
+import threading
 import time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
@@ -129,6 +134,21 @@ ENDS = {"closed": "Closed.",
         "page": "Closed because no page was showing it.",
         "idle": "Closed after a while without use, to free the renderer.",
         "shutdown": "Closed when the server stopped."}
+RECORDING_SWITCH = "recording-switch.json"   # in the lab root: {"on": false} once he turned the recording off
+RECORDING_OFF = "Scene recording is off. Turn it on to save a scene of each attempt."
+
+
+def _read_switch(lab_root: Path) -> bool:
+    """The Scene viewer's recording switch as he last left it; on unless he turned it off."""
+    try:
+        return json.loads((Path(lab_root) / RECORDING_SWITCH).read_text(encoding="utf-8")).get("on") is not False
+    except (OSError, ValueError, AttributeError):
+        return True
+
+
+def _write_switch(lab_root: Path, on: bool) -> None:
+    Path(lab_root).mkdir(parents=True, exist_ok=True)
+    (Path(lab_root) / RECORDING_SWITCH).write_text(json.dumps({"on": bool(on)}), encoding="utf-8")
 
 
 class ConfigError(ValueError):
@@ -260,6 +280,7 @@ class SceneLab:
     """The one open scene (or none) and the pages showing it."""
 
     ghosts = None                  # scene_ghosts.SceneGhosts: the stage and the ghost catalog (mount_scene_lab)
+    refitter = None                # slotlibrary.refit.SlotRefitter: the live server's slots follow each spawn
     heading = {"title": "Lab recording", "target": None}     # the open scene's, as _heading says it
 
     def __init__(self, config_path: Path, *, session_options: dict | None = None,
@@ -282,6 +303,8 @@ class SceneLab:
         self.pages: set[_PageSocket] = set()               # the sockets a grown scene tells
         self.lease = None
         self.live_problem: str | None = None
+        self.recording_on = True                           # the Scene viewer's switch (RECORDING_SWITCH)
+        self.switch_lock = threading.Lock()
         self.open_path: Path | None = None             # the package the open scene reads (retention spares it)
         self.open_attempt: int | None = None
         try:
@@ -354,6 +377,7 @@ class SceneLab:
             return
         try:
             lab_root = LabConfig.load(self.config_path).lab_root
+            self.recording_on = _read_switch(self._lab_root())
             if self.lease_factory is not None:
                 self.lease = self.lease_factory(lab_root)
             elif (TOOLS / "live_spool.py").is_file():
@@ -361,12 +385,29 @@ class SceneLab:
             else:
                 self.live_problem = "This checkout has no live scene recording (tools/scene_lab/live_spool.py)."
                 return
-            self.lease.start()
+            if self.recording_on:
+                self.lease.start()
         except Exception as error:  # noqa: BLE001 - the lab still opens packages without the live recording
             log.warning("The live scene recording could not start.", exc_info=True)
             self.lease, self.live_problem = None, f"The live scene recording could not start: {error}"
             return
         self.scenes.start()
+
+    def set_recording_blocking(self, on: bool) -> dict:
+        """The Scene viewer's switch: on renews the lease again, off deletes it, so the wrapper stops
+        recording within a second of its next check (live_spool.Lease). The cutter keeps serving the
+        scenes already cut; an attempt finished while it is off has none, and says so. The choice is
+        kept in the lab root (RECORDING_SWITCH) for the next server. Blocking: run it off the loop."""
+        if not self.live_on or self.lease is None:
+            raise SceneRefused(self.live()["reason"])
+        with self.switch_lock:
+            _write_switch(self._lab_root(), on)
+            if on and not self.recording_on:
+                self.lease.start()
+            elif not on and self.recording_on:
+                self.lease.stop()
+            self.recording_on = on
+        return self.live()
 
     def _stop_live_blocking(self) -> None:
         if self.scenes is not None:
@@ -376,16 +417,25 @@ class SceneLab:
             lease.stop()
 
     async def start_live(self) -> None:
-        """At server start: the lease that keeps the scene tap recording, and the attempt scenes."""
+        """At server start: the lease that keeps the scene tap recording, the attempt scenes, and the slot
+        refit's thread."""
         await asyncio.to_thread(self._start_live_blocking)
+        if self.refitter is not None:
+            self.refitter.start()
 
     def live(self) -> dict:
-        """{recording, reason} for the probe; no I/O (the cutter reports the recording's state)."""
+        """{recording, on, switch, reason} for the probe; no I/O (the cutter reports the recording's
+        state). `on`: the Trainer asks for the recording (the Scene viewer's switch); `recording`: the
+        wrapper is writing it now; `switch`: this server can turn it on and off."""
         if not self.live_on:
-            return {"recording": False, "reason": "This server does not run the live scene recording."}
+            return {"recording": False, "on": False, "switch": False,
+                    "reason": "This server does not run the live scene recording."}
         if self.live_problem:
-            return {"recording": False, "reason": self.live_problem}
-        live = self.scenes.live()
+            return {"recording": False, "on": False, "switch": False, "reason": self.live_problem}
+        switch = self.lease is not None                    # none until the server's start made it
+        if not self.recording_on:
+            return {"recording": False, "on": False, "switch": switch, "reason": RECORDING_OFF}
+        live = self.scenes.live() | {"on": True, "switch": switch}
         if self.live_audio is not None:
             health = self.live_audio.health()
             live["sound"] = {"recording": health["recording"], "reason": health["reason"],
@@ -414,6 +464,22 @@ class SceneLab:
         broadcaster = getattr(tracker, "broadcaster", None)
         if broadcaster is not None and hasattr(broadcaster, "observe"):
             broadcaster.observe(scenes.observe_event)
+
+    def follow_spawns(self, tracker, *, game=None, library=None, log_file=None) -> None:
+        """After every spawn the event stream announces, the slots made for that place get Mario's new place
+        (slotlibrary/refit.py). The observer only stamps a deadline; the refitter's own thread and reader do the
+        work, started and stopped with the app. Tests inject the game, the library and the log file."""
+        broadcaster = getattr(tracker, "broadcaster", None)
+        if broadcaster is None or not hasattr(broadcaster, "observe"):
+            return
+        from sm64_events.slotlibrary import refit, usamune
+        if library is None:
+            from sm64_events.core.paths import slot_library_dir
+            from sm64_events.slotlibrary.store import SlotLibrary
+            library = SlotLibrary(slot_library_dir())
+        self.refitter = refit.SlotRefitter(game or (lambda: usamune.attach(None)), library,
+                                           log_file=log_file or refit.log_path())
+        broadcaster.observe(self.refitter.observe)
 
     # ------------------------------------------------------------ status, open, close
 
@@ -516,6 +582,8 @@ class SceneLab:
             self.watch_task.cancel()
         await self.close("shutdown")
         await asyncio.to_thread(self._stop_live_blocking)
+        if self.refitter is not None:
+            await asyncio.to_thread(self.refitter.stop)
 
     def _start_watch(self) -> None:
         loop = asyncio.get_running_loop()
@@ -992,7 +1060,11 @@ class OpenBody(BaseModel):
         return self
 
 
-MAX_IDS = 500                  # attempt ids one attempt-scenes request may name
+class RecordingBody(BaseModel):
+    on: bool
+
+
+MAX_IDS = 500                 # attempt ids one attempt-scenes request may name
 
 
 def _attempt_ids(text: str) -> list[int]:
@@ -1081,6 +1153,21 @@ def _mount_job_routes(router: APIRouter, lab: SceneLab, export_options: dict, mo
     mount_moment_routes(router, lab.moments)
 
 
+def _mount_live_routes(router: APIRouter, lab: SceneLab) -> None:
+    """The probe (with whether the live recording runs) and the Scene viewer's recording switch
+    (SceneLab.set_recording_blocking)."""
+    @router.get("")
+    def probe():
+        return {"lab": "scene-viewer", "live": lab.live()}
+
+    @router.post("/recording")
+    async def recording(body: RecordingBody):
+        try:
+            return {"live": await asyncio.to_thread(lab.set_recording_blocking, body.on)}
+        except SceneRefused as refused:
+            raise HTTPException(409, str(refused)) from None
+
+
 def mount_scene_lab(app, config_path, **options) -> SceneLab:
     """Adds the scene viewer's routes to `app`, starts the live recording's lease and the attempt
     scenes when the app starts, and ends both and the open scene when it stops. `options` are
@@ -1098,9 +1185,7 @@ def mount_scene_lab(app, config_path, **options) -> SceneLab:
     _mount_preset_routes(router, lab)
     _mount_job_routes(router, lab, export_options, moment_options)
 
-    @router.get("")
-    def probe():
-        return {"lab": "scene-viewer", "live": lab.live()}
+    _mount_live_routes(router, lab)
 
     @router.get("/status")
     async def status():

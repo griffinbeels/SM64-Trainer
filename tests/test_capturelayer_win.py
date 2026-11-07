@@ -79,3 +79,33 @@ def test_registry_delete_restores_absence_and_preserves_actual_failures(monkeypa
         win.WinRegistry().delete("PJ64/Dll", "Graphics Dll")
     assert opened == [("original-user", "PJ64/Dll", 0, 2)]
     assert deleted == [(handle, "Graphics Dll")]
+
+
+def test_finding_project64_opens_only_processes_already_named_project64(monkeypatch):
+    """The process table names every process without opening one; only a
+    Project64.exe is opened, with QUERY_LIMITED_INFORMATION (0x1000) alone,
+    to read its full path. The old scan opened every process on the machine."""
+    from sm64_events.memory import winprocess
+    opened, closed = [], []
+
+    def close(handle):
+        closed.append(handle)
+        return 1
+
+    def open_process(access, _inherit, pid):
+        opened.append((pid, access))
+        return 0x500 + pid
+
+    def image_name(handle, _flags, buffer, _size):
+        buffer.value = rf"C:\Games\PJ64-{handle - 0x500}\Project64.exe"
+        return 1
+
+    kernel32 = SimpleNamespace(OpenProcess=open_process, CloseHandle=close,
+                               QueryFullProcessImageNameW=image_name)
+    monkeypatch.setattr(win.ctypes, "WinDLL", lambda name, **_: kernel32)
+    monkeypatch.setattr(winprocess, "pids_named",
+                        lambda exe: [11, 12] if exe.lower() == "project64.exe" else [])
+    assert win.WinProcesses()._images() == [(11, r"C:\Games\PJ64-11\Project64.exe"),
+                                            (12, r"C:\Games\PJ64-12\Project64.exe")]
+    assert opened == [(11, 0x1000), (12, 0x1000)]
+    assert closed == [0x500 + 11, 0x500 + 12]

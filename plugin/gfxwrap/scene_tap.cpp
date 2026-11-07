@@ -1,30 +1,38 @@
 /* The scene tap (M4): records what each graphics task makes the renderer
  * read, and the picture it presents, in one of two modes.
  *
- * One-shot (experiments E0/E1): %LOCALAPPDATA%\SM64Trainer\scene-lab\armed.txt
- * exists when a practice ROM opens. The tap moves it into a new session
- * folder (so one arming records once), records at most `seconds` into tap.bin
- * and its writer thread exits.
+ * Live (the live spool, round 2; the only mode Project64 runs): a tap thread
+ * starts for the ROM run (Project64.exe only) and checks
+ * %LOCALAPPDATA%\SM64Trainer\scene-lab\live\lease.txt at most once a second.
+ * Recording runs only while the Trainer asks for it: while the file's last
+ * write (the Trainer renews it every 2 s while its scene lab's recording is
+ * on and shows that it is, tools/scene_lab/live_spool.py) is younger than its
+ * lease_ms, capture is on, without reopening the ROM; a stale or missing
+ * lease (the Trainer's off switch deletes it, a closed or crashed Trainer
+ * stops renewing it) turns it off within a second of the check, and a fresh
+ * one resumes it (same lines: the same session, a new segment; new lines: a
+ * new session). The lease's lines are an arming (the list below), without
+ * pictures or full copies, plus lease_ms, max_bytes, segment_ms, spool_files
+ * (2..64), ring_mib (8..128), boot_region (copied once when capture starts: a
+ * practice ROM's code in expansion RAM, REC_BOOT {begin, bytes, rdram_size,
+ * 0...} + bytes) and spool_dedupe / spool_compress; its `# identity=` line
+ * names the extras the index reads. The tap thread allocates the ring and
+ * shadows when capture turns on, frees them when it turns off, and drains
+ * the ring into scene_spool.cpp's writer: segments over a fixed set of spool
+ * files in scene-lab\live\, reused session after session and never deleted
+ * (format there). Turning capture off: the tap thread clears `active`, then
+ * waits for the emulation thread's `busy` to clear (it marks itself busy on
+ * entry), so it never changes the ring or the config under the producer.
  *
- * Live (the live spool, round 2): without that file, a tap thread starts for
- * the ROM run (Project64.exe only) and checks scene-lab\live\lease.txt at most
- * once a second. While the file's last write (the Trainer renews it every 2 s,
- * tools/scene_lab/live_spool.py) is younger than its lease_ms, capture is on,
- * without reopening the ROM; a stale or missing lease turns it off within a
- * second of the check, and a fresh one resumes it (same lines: the same
- * session, a new segment; new lines: a new session). The lease's lines are
- * an arming like armed.txt's, without pictures or full copies, plus
- * lease_ms, window_ms, max_bytes, segment_ms, ring_mib (8..128), boot_region
- * (copied once when capture starts: a practice ROM's code in expansion RAM,
- * REC_BOOT {begin, bytes, rdram_size, 0...} + bytes) and spool_dedupe /
- * spool_compress; its `# identity=` line names the extras the index reads.
- * The tap thread allocates the ring and shadows when capture turns on, frees
- * them when it turns off, and drains the ring into scene_spool.cpp's writer:
- * rolling segments under scene-lab\live\live-<time>\ (format there). It
- * deletes earlier runs' live-* folders unless a writer holds their
- * writer.lock. Turning capture off: the tap thread clears `active`, then waits
- * for the emulation thread's `busy` to clear (it marks itself busy on entry),
- * so it never changes the ring or the config under the producer.
+ * One-shot (experiments E0/E1; built only with SCENE_TAP_ONE_SHOT, which the
+ * offline host tools/scene_lab/tap_offline_host.cpp defines and the shipped
+ * wrapper does not): <lab_root>\SM64Trainer\scene-lab\armed.txt exists when
+ * the host opens its ROM; the tap moves it into a new session folder,
+ * records at most `seconds` into tap.bin and its writer thread exits. The
+ * shipped wrapper never starts on a file appearing (2026-11-06: a recording
+ * that starts silently because a file was renamed into place is what
+ * Microsoft's criteria call failing "to clearly indicate when the software
+ * is active"); live play reaches the tap through the lease alone.
  *
  * Arming lines (both modes; live ignores seconds, reference, full_every):
  *   seconds=<n>       recording length from the first task (default 20, max 600)
@@ -125,8 +133,8 @@ struct Config {
     Span vi[kMaxViRegions + 1];   // the RDRAM spans, then DMEM when vi_dmem
     // Live spool (the lease): how long a renewal holds, the writer's bounds,
     // the span copied once when capture starts, and which extras the index names.
-    uint32_t lease_ms = 8000, ring_mib = 128, dedupe = 1, compress = 1;
-    uint64_t window_ms = 15 * 60 * 1000, max_bytes = 2ull << 30, segment_ms = 15 * 1000;
+    uint32_t lease_ms = 8000, ring_mib = 128, dedupe = 1, compress = 1, spool_files = scene_spool::kMaxFiles;
+    uint64_t max_bytes = 2ull << 30, segment_ms = 15 * 1000;
     Span boot = {0, 0}, timer = {0, 0}, level_id = {0, 0}, area_id = {0, 0};
 };
 
@@ -263,6 +271,7 @@ template <typename Take> void drain(Take take) {
     }
 }
 
+#ifdef SCENE_TAP_ONE_SHOT
 DWORD WINAPI writer_main(void *) {
     Tap &t = g_tap;
     wchar_t path[MAX_PATH];
@@ -289,6 +298,7 @@ DWORD WINAPI writer_main(void *) {
     release_buffers();
     return 0;
 }
+#endif
 
 // `# identity=name:addr:bytes,...` (tap.py's comment line): the extras the
 // live spool's index reads global_timer, curr_level and curr_area from.
@@ -313,8 +323,9 @@ void parse_line(const char *line, Config &config) {
     unsigned long long big = 0;
     if (!strncmp(line, "# identity=", 11)) parse_identity(line, config);
     else if (sscanf(line, "lease_ms=%u", &a) == 1) config.lease_ms = a < 1000 ? 1000 : a;
-    else if (sscanf(line, "window_ms=%llu", &big) == 1) config.window_ms = big;
     else if (sscanf(line, "max_bytes=%llu", &big) == 1) config.max_bytes = big;
+    else if (sscanf(line, "spool_files=%u", &a) == 1)
+        config.spool_files = a < 2 ? 2 : a > scene_spool::kMaxFiles ? scene_spool::kMaxFiles : a;
     else if (sscanf(line, "segment_ms=%llu", &big) == 1) config.segment_ms = big;
     else if (sscanf(line, "ring_mib=%u", &a) == 1) config.ring_mib = a < 8 ? 8 : a > 128 ? 128 : a;
     else if (sscanf(line, "spool_dedupe=%u", &a) == 1) config.dedupe = a != 0;
@@ -342,6 +353,7 @@ void parse_line(const char *line, Config &config) {
     else if (sscanf(line, "vi_dmem=%u", &a) == 1) config.vi_dmem = a != 0;
 }
 
+#ifdef SCENE_TAP_ONE_SHOT
 void parse_config(const wchar_t *path, Config &config) {
     FILE *file = _wfopen(path, L"rb");
     if (!file) return;
@@ -349,6 +361,7 @@ void parse_config(const wchar_t *path, Config &config) {
     while (fgets(line, sizeof line, file)) parse_line(line, config);
     fclose(file);
 }
+#endif
 
 // The lease's lines. A live capture never reads back pictures or copies all of
 // RDRAM, and runs until the lease ends rather than for `seconds`.
@@ -667,12 +680,14 @@ void reset_counters() {
 }
 
 // session.txt: the wrapper, the ROM and the spans as kept (whole words inside
-// RDRAM, within budget), so a reader rebuilds what the producer copied.
-void write_session(const char *schema) {
+// RDRAM, within budget), so a reader rebuilds what the producer copied. A
+// live session's first line names it (the spool table's session).
+void write_session(const char *schema, uint64_t live_session) {
     Tap &t = g_tap;
     const Config &c = t.config;
     char session[2048];
-    int at = snprintf(session, sizeof session,
+    int at = live_session ? snprintf(session, sizeof session, "session=%llu\n", (unsigned long long)live_session) : 0;
+    at += snprintf(session + at, sizeof session - at,
                       "schema=%s\nwrapper_build=%s\nqpc_frequency=%lld\nrdram_size=%u\n"
                       "ring_bytes=%llu\nseconds=%u\nreference=%u\nfull_every=%u\n"
                       "level_segments=%x\nlevel_delta=%u\nlevel_block_bytes=%u\nrom_header=",
@@ -694,8 +709,8 @@ void write_session(const char *schema) {
                        : "vi_region=%x:%u\n", c.vi[i].begin, c.vi[i].bytes);
     if (t.live && at < (int)sizeof session - 160)
         snprintf(session + at, sizeof session - at,
-                 "boot_region=%x:%u\nlease_ms=%u\nwindow_ms=%llu\nmax_bytes=%llu\nsegment_ms=%llu\n",
-                 c.boot.begin, c.boot.bytes, c.lease_ms, (unsigned long long)c.window_ms,
+                 "boot_region=%x:%u\nlease_ms=%u\nspool_files=%u\nmax_bytes=%llu\nsegment_ms=%llu\n",
+                 c.boot.begin, c.boot.bytes, c.lease_ms, c.spool_files,
                  (unsigned long long)c.max_bytes, (unsigned long long)c.segment_ms);
     write_text(L"session.txt", session);
 }
@@ -732,8 +747,8 @@ bool g_any_process = false;   // a test host's tap_offline_host runs the produce
 struct Live {
     wchar_t lab[MAX_PATH], spool[MAX_PATH], lease[MAX_PATH];
     char text[kMaxLeaseBytes + 1], seen[kMaxLeaseBytes + 1];   // the armed lease's lines, the last read
-    bool armed, session, cleaned;
-    HANDLE lock;
+    bool armed, session;
+    uint64_t session_id;                                      // its start as a UTC FILETIME
     int64_t next_check, retry_after;
     uint64_t cpu_start;
     scene_spool::Writer writer;
@@ -772,36 +787,6 @@ scene_spool::Layout spool_layout() {
     return layout;
 }
 
-// Earlier runs' live-* sessions, never one a writer still holds (its
-// writer.lock cannot be deleted while open).
-void delete_old_sessions(Live &live) {
-    wchar_t pattern[MAX_PATH], folder[MAX_PATH], path[MAX_PATH];
-    swprintf(pattern, MAX_PATH, L"%ls\\live-*", live.spool);
-    WIN32_FIND_DATAW found;
-    HANDLE search = FindFirstFileW(pattern, &found);
-    if (search == INVALID_HANDLE_VALUE) return;
-    do {
-        if (!(found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) continue;
-        swprintf(folder, MAX_PATH, L"%ls\\%ls", live.spool, found.cFileName);
-        if (!_wcsicmp(folder, g_tap.dir)) continue;
-        swprintf(path, MAX_PATH, L"%ls\\writer.lock", folder);
-        if (!DeleteFileW(path) && GetLastError() != ERROR_FILE_NOT_FOUND) continue;
-        WIN32_FIND_DATAW file;
-        swprintf(path, MAX_PATH, L"%ls\\*", folder);
-        HANDLE files = FindFirstFileW(path, &file);
-        if (files != INVALID_HANDLE_VALUE) {
-            do {
-                if (file.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
-                swprintf(path, MAX_PATH, L"%ls\\%ls", folder, file.cFileName);
-                DeleteFileW(path);
-            } while (FindNextFileW(files, &file));
-            FindClose(files);
-        }
-        RemoveDirectoryW(folder);
-    } while (FindNextFileW(search, &found));
-    FindClose(search);
-}
-
 // Capture off: the producer leaves, the ring drains into the open segment,
 // the segment closes with the reason, and the ring and shadows are freed
 // (Project64 holds none of it while no lease is held).
@@ -826,65 +811,60 @@ const char *end_reason(uint32_t reason) {
     }
 }
 
-// The session's summary.txt (its last file: a reader takes it as the end).
+// The session's summary.txt (its last write: a reader takes it as the end of
+// the session its first line names), and the spool folder let go.
 void end_session(Live &live, uint32_t reason) {
     disarm(live, reason);
     if (!live.session) return;
     const scene_spool::Stats &s = live.writer.stats();
     char summary[3072];
-    int at = format_summary(summary, sizeof summary, s.output_bytes, live.writer.failed());
+    int at = snprintf(summary, sizeof summary, "session=%llu\n", (unsigned long long)live.session_id);
+    at += format_summary(summary + at, sizeof summary - at, s.output_bytes, live.writer.failed());
     snprintf(summary + at, sizeof summary - at,
              "end_reason=%s\nwrite_error=%u\nspool_records=%llu\nspool_input_bytes=%llu\nspool_index_bytes=%llu\n"
              "spool_key_bytes=%llu\nspool_tasks=%u\nspool_lost_records=%u\nspool_holes=%u\nspool_refused=%u\n"
-             "spool_segments=%u\nspool_deleted=%u\nspool_delete_retries=%u\nspool_compressed=%u\n"
+             "spool_segments=%u\nspool_files_created=%u\nspool_files_reused=%u\nspool_compressed=%u\n"
              "writer_cpu_ms=%llu\n",
              end_reason(reason), live.writer.write_error(), (unsigned long long)s.records,
              (unsigned long long)s.input_bytes, (unsigned long long)s.index_bytes,
-             (unsigned long long)s.key_bytes, s.tasks, s.lost, s.holes, s.refused, s.segments, s.deleted,
-             s.delete_retries, s.compressed, (unsigned long long)((thread_cpu_ns() - live.cpu_start) / 1000000));
+             (unsigned long long)s.key_bytes, s.tasks, s.lost, s.holes, s.refused, s.segments, s.files_created,
+             s.files_reused, s.compressed, (unsigned long long)((thread_cpu_ns() - live.cpu_start) / 1000000));
     write_text(L"summary.txt", summary);
-    if (live.lock != INVALID_HANDLE_VALUE) CloseHandle(live.lock);
-    live.lock = INVALID_HANDLE_VALUE;
+    live.writer.release();
     live.session = false;
     live.text[0] = 0;
     release_buffers();
 }
 
-// A new session folder for these lease lines: live-<local time>[-n].
+// A new session for these lease lines, in the one spool folder: the writer
+// claims it (no reader keeps the last session's segments), session.txt and
+// lease-lines.txt are rewritten in place, then the spool table names the session.
 bool begin_session(Live &live, const char *text) {
     Tap &t = g_tap;
     t.config = Config();
     parse_lease(text, t.config);
-    SYSTEMTIME now;
-    GetLocalTime(&now);
-    CreateDirectoryW(live.lab, nullptr);
+    CreateDirectoryW(live.lab, nullptr);     // the first session ever: our folders, once
     CreateDirectoryW(live.spool, nullptr);
-    bool made = false;
-    for (int n = 1; n < 100 && !made; ++n) {
-        swprintf(t.dir, MAX_PATH, n == 1 ? L"%ls\\live-%04u%02u%02u-%02u%02u%02u" : L"%ls\\live-%04u%02u%02u-%02u%02u%02u-%d",
-                 live.spool, now.wYear, now.wMonth, now.wDay, now.wHour, now.wMinute, now.wSecond, n);
-        made = CreateDirectoryW(t.dir, nullptr) != 0;
-    }
-    if (!made) return false;
-    if (!live.cleaned) { delete_old_sessions(live); live.cleaned = true; }
-    wchar_t path[MAX_PATH];
-    swprintf(path, MAX_PATH, L"%ls\\writer.lock", t.dir);
-    live.lock = CreateFileW(path, GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL,
-                            nullptr);
+    wcsncpy(t.dir, live.spool, MAX_PATH - 1);
+    t.dir[MAX_PATH - 1] = 0;
+    if (!live.writer.claim(t.dir)) return false;   // another Project64 records here, or the folder is not ours
+    FILETIME start;
+    GetSystemTimePreciseAsFileTime(&start);
+    live.session_id = (uint64_t)start.dwHighDateTime << 32 | start.dwLowDateTime;
     t.live = true;
     settle_config();
     reset_counters();
     t.capacity = (uint64_t)t.config.ring_mib << 20;   // as asked; allocate() may fall back to less
-    write_text(L"armed.txt", text);   // the lines the session ran with (tap.identity_spec reads them)
-    write_session("scene-lab-live/1");
+    write_text(L"lease-lines.txt", text);   // the lines the session ran with (tap.identity_spec reads them)
+    write_session("scene-lab-live/2", live.session_id);
     scene_spool::Settings settings;
-    settings.window_ms = t.config.window_ms;
     settings.max_bytes = t.config.max_bytes;
     settings.segment_ms = t.config.segment_ms;
+    settings.files = t.config.spool_files;
     settings.dedupe = t.config.dedupe;
     settings.compress = t.config.compress;
-    if (!live.writer.begin(t.dir, spool_layout(), settings)) {
-        write_text(L"summary.txt", "spool_allocation_failed=1\n");
+    if (!live.writer.begin(live.session_id, spool_layout(), settings)) {
+        live.writer.release();
         return false;
     }
     live.session = true;
@@ -902,8 +882,6 @@ void arm(Live &live, const char *text) {
     const bool resumed = live.session;
     if ((!resumed && !begin_session(live, text)) || !allocate((uint64_t)t.config.ring_mib << 20)) {
         end_session(live, scene_spool::CLOSE_NO_MEMORY);
-        if (live.lock != INVALID_HANDLE_VALUE) CloseHandle(live.lock);
-        live.lock = INVALID_HANDLE_VALUE;
         live.retry_after = qpc() + ms_ticks(kRetryMs);
         return;
     }
@@ -960,7 +938,6 @@ DWORD WINAPI live_main(void *argument) {
     }
     Live *live = new (std::nothrow) Live();
     if (!live) return 0;
-    live->lock = INVALID_HANDLE_VALUE;
     wchar_t root[MAX_PATH];
     const DWORD length = GetEnvironmentVariableW(L"LOCALAPPDATA", root, MAX_PATH);
     if (length && length < MAX_PATH - 96) {
@@ -1021,9 +998,16 @@ static void start_live() {
     t.writer = thread;
 }
 
+// Project64 opened a practice ROM: the live tap thread, which records only
+// while the Trainer's lease asks. The one-shot arming file exists in the
+// offline host's build alone (the header comment says why).
 extern "C" void __cdecl st_rom_open(void) {
     Tap &t = g_tap;
     if (!t.have_gfx || t.active.load()) return;
+#ifndef SCENE_TAP_ONE_SHOT
+    start_live();
+}
+#else
     wchar_t root[MAX_PATH], armed[MAX_PATH];
     DWORD length = GetEnvironmentVariableW(L"LOCALAPPDATA", root, MAX_PATH);
     if (!length || length >= MAX_PATH - 64) return;
@@ -1050,7 +1034,7 @@ extern "C" void __cdecl st_rom_open(void) {
     settle_config();
     if (!allocate(kRingBytes)) return;
     reset_counters();
-    write_session("scene-lab-tap/1");
+    write_session("scene-lab-tap/1", 0);
     t.finish = false;
     t.writer = CreateThread(nullptr, 0, writer_main, nullptr, 0, nullptr);
     if (!t.writer) {
@@ -1059,6 +1043,7 @@ extern "C" void __cdecl st_rom_open(void) {
     }
     t.active.store(true, std::memory_order_release);
 }
+#endif
 
 static void process_dlist() {
     Tap &t = g_tap;

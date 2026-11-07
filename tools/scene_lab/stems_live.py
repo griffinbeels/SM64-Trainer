@@ -15,8 +15,9 @@ UpdateScreen while the game's audio task for that VI still waits. At each VI whe
 microcode in cxd4: music (sequence players 0 and 1) and sound effects (player 2, Mario's voice
 included), each with the other side's notes mixing into scratch DMEM and each carrying its own
 reverb ring. At the next VI it reads what Project64's RSP wrote for that task: the game's own
-output. Every VI becomes one row of the stem store (<lab>/stems/<session>/, a file per
-FILE_ROWS VIs, kept KEEP_SECONDS): its QPC, flags and the three streams. One VI in G1_EVERY also
+output. Every VI becomes one row of the stem store (<lab>/stems/, STORE_FILES fixed files of
+FILE_ROWS VIs each, written in turn and reused in place, so about KEEP_SECONDS of rows are kept
+and no file is ever deleted): its QPC, flags and the three streams. One VI in G1_EVERY also
 renders the task as dispatched and compares it with Project64's output (G1, sampled: the largest
 difference and its RMS), so every scene carries its own evidence that the microcode made the sound
 he heard. Bit for bit only when Project64 runs the microcode exactly: its RSP plugin's recompiler
@@ -71,7 +72,9 @@ import tap  # noqa: E402
 ROW = struct.Struct("<IIqIIII")         # vi index, flags, qpc, samples, spool tasks at the VI, G1 max abs, G1 rms x1000
 TASK, REAL, SETTLED, SPLIT_FAILED, AFTER_GAP, MISSED, CHECKED, DIFFERS = 1, 2, 4, 8, 16, 32, 64, 128
 FILE_ROWS = 900                         # a store file per ~15 s of VIs
-KEEP_SECONDS = 960.0                    # rows kept: the spool's 15-minute window and a minute
+KEEP_SECONDS = 960.0                    # rows kept: the spool's 16 minutes of segments
+STORE_FILES = 66                        # stems-00.stm .. stems-65.stm: KEEP_SECONDS of FILE_ROWS files, and one
+STORE_HEAD = struct.Struct("<4sIIq44s")  # b"STM2", 2, first VI, first QPC, the session's name (NUL-padded)
 G1_EVERY = 30                           # one VI in this many also checks the microcode against Project64
 POLL_SECONDS = 0.02                     # a follower at the live edge re-reads this often
 SESSION_SECONDS = 1.0                   # how often an idle child looks for a newer session
@@ -96,8 +99,7 @@ def vi_records(data, position: int, *, torn_ok: bool = True):
                 continue
             if dedupe:
                 raise ValueError(f"VI record {sequence} is packed against the segment's image")
-            payload = bytes(body[32:32 + payload_bytes])
-            stream = tap._xpress(payload, stream_bytes) if codec == tap.CODEC_XPRESS else payload
+            stream = tap.unpack_payload(codec, bytes(body[32:32 + payload_bytes]), stream_bytes)
             if len(stream) != inner_bytes:
                 raise ValueError(f"VI record {sequence} unpacks to the wrong length")
             body, kind = memoryview(stream), inner
@@ -105,34 +107,42 @@ def vi_records(data, position: int, *, torn_ok: bool = True):
             yield at + size, tap._parse_record(kind, sequence, qpc, body)
 
 
-def segment_numbers(session: Path) -> list[int]:
-    numbers = []
-    for path in session.glob("seg-*.tap"):
-        try:
-            numbers.append(int(path.stem.removeprefix("seg-")))
-        except ValueError:
-            continue
-    return sorted(numbers)
+def segment_files(session: Path, session_id: int | None = None) -> dict[int, int]:
+    """segment -> spool file for the session the spool table names now (live_spool.read_table),
+    or for `session_id` alone ({} once another session took the files)."""
+    import live_spool
+    table = live_spool.read_table(session)
+    if table is None or (session_id is not None and table.session != session_id):
+        return {}
+    return table.files
+
+
+def segment_numbers(session: Path, session_id: int | None = None) -> list[int]:
+    return sorted(segment_files(session, session_id))
 
 
 def session_vi_records(session: Path, *, first_segment: int | None = None):
-    """Every VI record of a session's segments at rest (the checker's input), in order: the
-    first segment's keys rebuild the state, later segments' keys are skipped."""
-    numbers = [n for n in segment_numbers(session) if first_segment is None or n >= first_segment]
+    """Every VI record of the session the spool holds, at rest (the checker's input), in order:
+    the first segment's keys rebuild the state, later segments' keys are skipped."""
+    import live_spool
+    files = segment_files(session)
+    numbers = [n for n in sorted(files) if first_segment is None or n >= first_segment]
     for position, number in enumerate(numbers):
-        data = (session / f"seg-{number:06d}.tap").read_bytes()
+        data = live_spool.spool_file(session, files[number], "tap").read_bytes()
         for _end, record in vi_records(data, position):
             yield record
 
 
 class ViFollower:
     """One live session's VI records as the writer flushes them, from the newest segment when
-    it starts. poll() never blocks: the records whole now. A segment the writer deleted before
-    it was read (the follower fell behind the spool's window) restarts it at the oldest one
-    left, and `gaps` counts it; `ended` once the session's summary exists and all is read."""
+    it starts. poll() never blocks: the records whole now. A segment whose spool file the writer
+    reused before it was read (the follower fell a lap behind) restarts it at the oldest one
+    left, and `gaps` counts it; `ended` once the session's summary names it, or another session
+    took the spool, and all is read."""
 
-    def __init__(self, session: Path):
+    def __init__(self, session: Path, session_id: int):
         self.session = Path(session)
+        self.id = session_id
         self.number: int | None = None
         self.offset = 0
         self.pending = b""
@@ -140,19 +150,32 @@ class ViFollower:
         self.gaps = 0
         self.ended = False
 
+    def _ended(self) -> bool:
+        import live_spool
+        table = live_spool.read_table(self.session)
+        return (live_spool._summary(self.session).get("session") == str(self.id)
+                or table is None or table.session != self.id)
+
     def poll(self) -> list:
-        numbers = segment_numbers(self.session)
+        import live_spool
+        files = segment_files(self.session, self.id)
+        numbers = sorted(files)
         if self.number is None:
             if not numbers:
-                self.ended = (self.session / "summary.txt").is_file()
+                self.ended = self._ended()
                 return []
             self.number, self.position = numbers[-1], 0
+        file = files.get(self.number)
         try:
-            with (self.session / f"seg-{self.number:06d}.tap").open("rb") as handle:
+            if file is None:
+                raise FileNotFoundError
+            with live_spool.spool_file(self.session, file, "tap").open("rb") as handle:
                 handle.seek(self.offset)
                 data = handle.read()
         except FileNotFoundError:
             return self._restart(numbers)
+        if segment_files(self.session, self.id).get(self.number) != file:
+            return self._restart(numbers)    # its file's turn came while it was read: those bytes are another's
         if data:
             buffer = self.pending + data if self.pending else data
             whole = 0
@@ -168,7 +191,7 @@ class ViFollower:
                 return self._restart(numbers)
             self.number, self.offset, self.pending, self.position = later[0], 0, b"", self.position + 1
             return self.poll()
-        self.ended = (self.session / "summary.txt").is_file()
+        self.ended = self._ended()
         return []
 
     def _restart(self, numbers: list[int]) -> list:
@@ -182,13 +205,17 @@ class ViFollower:
 # ---------------------------------------------------------------- the stem store
 
 class StemStore:
-    """Rows on disk under <lab>/stems/<session name>/, one file per FILE_ROWS VIs, named by its
-    first row's VI and QPC, so a span reads only the files it touches. Row: ROW, then int16
-    stereo for each stream it carries (the game's output when REAL, music and effects when TASK)."""
+    """Rows on disk in <lab>/stems/: STORE_FILES fixed files of FILE_ROWS VIs each, written in
+    turn (stems-00.stm first) and reused in place, never deleted. A file starts with STORE_HEAD
+    (its first row's VI and QPC and the session's name), so a span reads only the files it
+    touches. Row: ROW, then int16 stereo for each stream it carries (the game's output when
+    REAL, music and effects when TASK)."""
 
     def __init__(self, root: Path, session: str):
-        self.folder = Path(root) / STEMS_DIR / session
+        self.folder = Path(root) / STEMS_DIR
         self.folder.mkdir(parents=True, exist_ok=True)
+        self.session = session
+        self.turn = 0                                  # the next file in turn
         self.handle = None
         self.rows = 0
         self.newest_qpc: int | None = None
@@ -209,17 +236,16 @@ class StemStore:
             self.changed.notify_all()
 
     def _roll(self, vi: int, qpc: int) -> None:
+        """The next file in turn, emptied in place (created only the first time any session
+        reaches it) and headed for these rows."""
         if self.handle is not None:
             self.handle.close()
-        self.handle = (self.folder / f"vi-{vi:08d}-{qpc:020d}.stm").open("ab")
+        path = self.folder / f"stems-{self.turn:02d}.stm"
+        self.turn = (self.turn + 1) % STORE_FILES
+        self.handle = path.open("r+b" if path.is_file() else "w+b")
+        self.handle.truncate(0)
+        self.handle.write(STORE_HEAD.pack(b"STM2", 2, vi, qpc, self.session.encode("ascii")[:44]))
         self.rows = 0
-        cutoff = time.time() - KEEP_SECONDS
-        for path in self.folder.glob("vi-*.stm"):
-            try:
-                if path.stat().st_mtime < cutoff:
-                    path.unlink()
-            except OSError:
-                continue
 
     def close(self) -> None:
         with self.lock:
@@ -241,26 +267,41 @@ class StemStore:
         return True
 
 
-def read_rows(folder: Path, qpc_from: int, qpc_to: int) -> list[dict]:
-    """The stored rows whose QPC lies in [qpc_from, qpc_to], in VI order: {"vi", "flags", "qpc",
-    "tasks", "g1", "g1_rms", "real", "music", "effects"} (arrays or None; g1_rms in thousandths)."""
+def _store_head(path: Path) -> tuple[int, int, str] | None:
+    """(first VI, first QPC, session name) of one store file, or None (empty, being reused, foreign)."""
+    try:
+        with path.open("rb") as handle:
+            head = handle.read(STORE_HEAD.size)
+    except OSError:
+        return None
+    if len(head) < STORE_HEAD.size:
+        return None
+    magic, version, vi, qpc, name = STORE_HEAD.unpack(head)
+    return (vi, qpc, name.rstrip(b"\0").decode("ascii", "replace")) if magic == b"STM2" and version == 2 else None
+
+
+def read_rows(folder: Path, qpc_from: int, qpc_to: int, session: str | None = None) -> list[dict]:
+    """The stored rows of `session` (every session's when None) whose QPC lies in [qpc_from,
+    qpc_to], in VI order: {"vi", "flags", "qpc", "tasks", "g1", "g1_rms", "real", "music",
+    "effects"} (arrays or None; g1_rms in thousandths)."""
     files = []
-    for path in folder.glob("vi-*.stm"):
-        try:
-            _, vi, qpc = path.stem.split("-")
-            files.append((int(vi), int(qpc), path))
-        except ValueError:
-            continue
+    for turn in range(STORE_FILES):
+        path = folder / f"stems-{turn:02d}.stm"
+        head = _store_head(path)
+        if head is not None and (session is None or head[2] == session):
+            files.append((head[0], head[1], path, head))
     files.sort()
-    chosen = [path for i, (_vi, qpc, path) in enumerate(files)
+    chosen = [(path, head) for i, (_vi, qpc, path, head) in enumerate(files)
               if qpc <= qpc_to and (i + 1 == len(files) or files[i + 1][1] >= qpc_from)]
     rows = []
-    for path in chosen:
+    for path, head in chosen:
         try:
             data = path.read_bytes()
         except OSError:
             continue
-        at = 0
+        if data[:STORE_HEAD.size] != STORE_HEAD.pack(b"STM2", 2, head[0], head[1], head[2].encode("ascii")):
+            continue                                    # reused since its head was read: another span's rows
+        at = STORE_HEAD.size
         while at + ROW.size <= len(data):
             vi, flags, qpc, samples, tasks, g1, g1_rms = ROW.unpack_from(data, at)
             count = (bool(flags & REAL) + 2 * bool(flags & TASK)) * samples * 2
@@ -409,7 +450,7 @@ class Child:
         self.sym = sp.load_symbols(self.symbol_map)
         dll, self.problem = build_dll()
         self.lle = sp.Lle(dll, bytes(0x1000), bytes(0x1000)) if dll else None
-        self.session: Path | None = None
+        self.session: str | None = None              # the followed session's name (live_spool.session_name)
         self.follower: ViFollower | None = None
         self.store: StemStore | None = None
         self.renderer: StemRenderer | None = None
@@ -437,7 +478,7 @@ class Child:
                     self.renderer.visit(record, self.state)
                 if time.monotonic() - self.reported > 30:
                     self.reported = time.monotonic()
-                    self.emit({"stems": {"session": self.session.name, **self.renderer.counts,
+                    self.emit({"stems": {"session": self.session, **self.renderer.counts,
                                          **self.renderer.cost()}})
                 if not records:
                     self.stop.wait(POLL_SECONDS)
@@ -448,33 +489,22 @@ class Child:
             self._close()
 
     def _next_session(self) -> bool:
-        """Follows the newest live session when it is not the one followed; True when it did."""
+        """Follows the session the spool holds when it is not the one followed; True when it did."""
         import live_spool
-        sessions = live_spool._sessions(self.root)
-        newest = sessions[-1] if sessions else None
-        if newest is None or newest == self.session:
+        spool = live_spool.open_spool(self.root)
+        if spool is None or spool.name == self.session:
             return False
         self._close()
-        self.session = newest
-        spans = sc.vi_spans(newest)
+        self.session = spool.name
+        spans = sc.vi_spans(spool.session)
         if not spans:                       # recorded without the audio spans: nothing to render
             self.follower = None
             return False
-        header = tap.session_header(newest)
-        self.state = tap.ViState(int(header["rdram_size"]))
-        self.store = StemStore(self.root, newest.name)
+        self.state = tap.ViState(spool.rdram_size)
+        self.store = StemStore(self.root, spool.name)
         self.renderer = StemRenderer(sc.Splitter(self.lle, self.rom, self.symbol_map, spans, self.sym), self.sym,
                                      self.store)
-        self.follower, self.gaps = ViFollower(newest), 0
-        names = {path.name for path in sessions}
-        for folder in (self.root / STEMS_DIR).glob("live-*"):
-            if folder.name not in names:    # its session left the spool: its rows go too
-                for path in folder.glob("*.stm"):
-                    path.unlink(missing_ok=True)
-                try:
-                    folder.rmdir()
-                except OSError:
-                    pass
+        self.follower, self.gaps = ViFollower(spool.session, spool.id), 0
         return True
 
     def _close(self) -> None:
@@ -499,10 +529,11 @@ class Child:
             start = first_qpc + audio.segments[0].anchor - int(stems_layer.DELAY_S[1] * audio.frequency)
             end = first_qpc + audio.segments[-1].end
             store = self.store
-            if store is not None and self.session is not None and self.session.name == session:
+            if store is not None and self.session == session:
                 store.wait_past(end, LAYER_WAIT_SECONDS, lambda: not self.stop.is_set() and self.store is store
                                 and not (self.follower is not None and self.follower.ended))
-            rows = read_rows(self.root / STEMS_DIR / session, start, end - int(stems_layer.DELAY_S[0] * audio.frequency))
+            rows = read_rows(self.root / STEMS_DIR, start, end - int(stems_layer.DELAY_S[0] * audio.frequency),
+                             session=session)
             payload = stems_layer.build(audio, first_qpc, rows)
             Path(note["out"]).write_bytes(payload)
             self.emit({"layer": token, "path": str(note["out"])})

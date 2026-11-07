@@ -27,6 +27,8 @@ def built_offer(tmp_path, monkeypatch, version, *, legacy=False):
     monkeypatch.setattr(third_party_notices, "bundled_import_names", lambda _: set())
     staged = []
     monkeypatch.setattr(third_party_notices, "stage", lambda *args: staged.append(args))
+    scanned = []                  # the Defender gate also runs on PyInstaller's output (test_defender_scan.py)
+    monkeypatch.setattr(build_exe, "scan_built", lambda *args: scanned.append(args))
     captured = []
     monkeypatch.setattr(pyi, "run", lambda args: captured.append(args))
     work = tmp_path / "build"
