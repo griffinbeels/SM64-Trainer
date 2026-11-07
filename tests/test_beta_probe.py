@@ -40,7 +40,7 @@ def runtime(tmp_path, monkeypatch):
     ca.parent.mkdir()
     ca.write_bytes(Path(certifi.where()).read_bytes())
     monkeypatch.setattr(certifi, "where", lambda: str(ca))
-    for name, machine in probe._NATIVES:
+    for name, (machine, _resolver) in probe._NATIVES:
         path = bundle / "sm64_events/data/plugin" / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(pe(machine, dll=True))
@@ -53,7 +53,6 @@ def runtime(tmp_path, monkeypatch):
         capture_layer_settings_path=lambda: local / "SM64Trainer/data/capture_layer.json",
         bundled_ffmpeg=lambda: str(bundle / "ffmpeg.exe"),
         bundled_plugin_dll=lambda: bundle / "sm64_events/data/plugin/sm64_trainer_gfx.dll",
-        bundled_renderer_dll=lambda: bundle / "sm64_events/data/plugin/GLideN64_SM64Trainer.dll",
         bundled_encoder_dll=lambda: bundle / "sm64_events/data/plugin/SM64GpuEncoderV1.dll",
     )
     return probe.ProbeRuntime(build, bundle, tmp_path / (BETA_APP_DIR + ".exe"),

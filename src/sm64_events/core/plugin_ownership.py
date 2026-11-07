@@ -8,8 +8,8 @@ once: within two seconds of Project64 closing, the frozen app copied its OLDER
 bundle over a wrapper he had just installed from a worktree (2026-09-23).
 
 So each install is stamped with its INSTALLER (`installer_identity`: the
-frozen app, or one checkout's folder) and the BUILD it put there (each DLL's
-link time and embedded build id). A trainer refreshes automatically only
+frozen app, or one checkout's folder) and the BUILD it put there (the
+plugin's link time and embedded build id). A trainer refreshes automatically only
 what an installer like it put there -- a frozen app what a frozen app
 installed, a checkout only its own install -- and never replaces a DLL with
 an older build. A build's embedded id is a digest of its sources and says
@@ -63,7 +63,7 @@ _OUR_COMPANY = "SM64 Trainer".encode("utf-16-le")
 def names_itself(path: Path) -> bool:
     """The file's version resource names SM64 Trainer: a build made since
     2026-11-06. Reads only the headers and the .rsrc section (a few KB), so
-    the refresh check stays cheap on the 12 MB renderer."""
+    the refresh check stays cheap on the 12 MB plugin."""
     try:
         with path.open("rb") as file:
             head = file.read(4096)
@@ -114,12 +114,10 @@ def not_older(bundle: Path, installed: Path) -> bool:
     return ours >= theirs
 
 
-def build_stamp(wrapper: Path, renderer: Path, identity) -> dict:
+def build_stamp(plugin: Path, identity) -> dict:
     """What an install put in the Plugin folder, for the overlay."""
-    def one(path: Path) -> dict:
-        try:
-            build = identity(path)
-        except OSError:
-            build = None
-        return {"linked": link_time(path), "build_id": build.decode() if build else None}
-    return {"wrapper": one(wrapper), "renderer": one(renderer)}
+    try:
+        build = identity(plugin)
+    except OSError:
+        build = None
+    return {"plugin": {"linked": link_time(plugin), "build_id": build.decode() if build else None}}

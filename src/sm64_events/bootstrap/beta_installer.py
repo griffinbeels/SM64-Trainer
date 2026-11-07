@@ -17,6 +17,7 @@ from sm64_events.bootstrap.beta_payload import checked_members, extract_payload,
 from sm64_events.bootstrap.installer import ConsoleUI, TkUI, _ps_quote, launch_app
 from sm64_events.core.build_channel import BETA_APP_DIR, CONFIG_FILENAME, read_metadata
 from sm64_events.core.childproc import quiet_spawn_kwargs
+from sm64_events.core.update_plan import BUNDLED_NATIVES, NATIVE_FOLDER
 
 APP_EXE = BETA_APP_DIR + ".exe"
 RECEIPT = "beta-install.json"
@@ -132,9 +133,8 @@ def install(executable: Path, target: Path, ui) -> Path:
             extract_payload(executable, staging, ui.progress)
             build = read_metadata(staging / "_internal" / CONFIG_FILENAME)
             required = (APP_EXE, "_internal/ffmpeg.exe", "_internal/" + CONFIG_FILENAME,
-                        "_internal/sm64_events/ui/index.html", *(
-                            "_internal/sm64_events/data/plugin/" + name for name in
-                            ("sm64_trainer_gfx.dll", "GLideN64_SM64Trainer.dll", "SM64GpuEncoderV1.dll")))
+                        "_internal/sm64_events/ui/index.html",
+                        *(f"{NATIVE_FOLDER}/{name}" for name in BUNDLED_NATIVES))
             if build.channel != "beta" or not all((staging / path).is_file() for path in required):
                 raise ValueError("The installer does not contain a complete beta application.")
             _write_json(staging / RECEIPT, {"schema": 1, "build_id": build.build_id,

@@ -67,20 +67,21 @@ plugin is fine; it is only noted. If ghosts stop showing and your setup differs,
 the practice card says so and opens this check for you. The setup wizard's
 last page lists any differences too, but never stops you from practicing.
 
-Already set up? The trainer compares the installed wrapper's SHA-256 hash with
-this build and checks its selected graphics configuration. A matching installation
+Already set up? The trainer compares the installed graphics plugin's build with
+this build and checks Project64's selected graphics plugin. A matching installation
 skips automatic onboarding, including in a fresh worktree. A stale or incomplete
 installation opens its repair step directly. Only Project64 installation metadata
 is shared across checkouts; your practice data stays in its existing location.
 
-Installing Practice Replay adds a **capture layer** to Project64's plugin
-folder and selects it as the `Graphics Dll`: the trainer's own renderer
-(`sm64_trainer_gfx.renderer`, LINK's GLideN64 v4.2 with the capture hooks,
-GPL-2.0, credits in its About box) and the capture wrapper (`SM64 Trainer
-v1.0`) that loads it and supplies replay pictures stamped with the game's
-frame counter and inputs. Project64's plugin list shows only `SM64 Trainer
-v1.0`; an older install's second entry goes away when the trainer updates
-it. Your existing graphics plugin stays in the folder
+Installing Practice Replay adds one file to Project64's plugin folder,
+`sm64_trainer_gfx.dll`, and selects it as the `Graphics Dll` (`SM64 Trainer
+v1.0` in Project64's list). It is the trainer's own graphics plugin: LINK's
+GLideN64 v4.2 (GPL-2.0, credits in its About box) with the **capture layer**
+built in, which supplies replay pictures stamped with the game's frame counter
+and inputs. An older trainer installed more files (`sm64_trainer_gfx.ini`,
+`sm64_trainer_gfx.renderer` or `GLideN64_SM64Trainer.dll`); the trainer
+removes its own copies of those when it updates the plugin, and your choice in
+Project64 stays as it is. Your existing graphics plugin stays in the folder
 untouched. Install also turns off frame buffer emulation in the folder's
 `GLideN64.ini`, and makes that file if it is missing. With this setting on,
 ghosts do not show and the game lags. If the setting gets turned on again, the

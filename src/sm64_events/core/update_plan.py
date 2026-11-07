@@ -43,6 +43,43 @@ PATCH_NOTES_MARKER = "## What's new"
 BACKUP_DIR = ".update_backup"
 STAGING_DIR = ".update_staging"
 JOURNAL_NAME = "update_journal.json"
+#: THE list of native files every app carries (core/paths.py::bundled_plugin_file
+#: finds them in this folder): the graphics plugin Project64 loads (x86), which
+#: the setup screen installs, then the encoder helper the server loads (x64).
+#: The builders, the beta installer and the beta self-check read it from here.
+NATIVE_FOLDER = "_internal/sm64_events/data/plugin"
+BUNDLED_NATIVES = ("sm64_trainer_gfx.dll", "SM64GpuEncoderV1.dll")
+#: THE PLACEHOLDER: native names a release must still carry although no native
+#: ships under them.
+#:
+#: Why it exists. Apps from 1.10.0-beta.22 until the first one-plugin release
+#: (the first one shipping the renderer inside sm64_trainer_gfx.dll) check every
+#: offered release before they update: a manifest without a non-empty file at
+#: _internal/sm64_events/data/plugin/GLideN64_SM64Trainer.dll is rejected, and
+#: the app then offers no update at all (commit d014991a, 2026-10-11). So every
+#: release from the first one-plugin release on carries RETIRED_NATIVE_TEXT
+#: there: plain text, never a program, written into the BUILT app only
+#: (tools/build_exe.py write_retired_natives; tools/build_natives.py deletes the
+#: name from the source bundle). Nothing in the app reads it as a native: no
+#: core/paths.py resolver names it, and the Defender gate, the beta self-check
+#: and BUNDLED_NATIVES leave it out; tools/bundle_policy.py accepts it only with
+#: these exact bytes. validate_release_manifest requires it, so release tooling
+#: refuses a package those apps would reject.
+#:
+#: When it may go. The placeholder may go once no supported app predates the
+#: first one-plugin release: then drop the name here, and the placeholder leaves
+#: each app folder through the manifest plan's delete list.
+#: tests/test_update_plan.py holds the rule those apps run.
+#:
+#: Never change RETIRED_NATIVE_TEXT's bytes. The stable app v1.9.1 refreshes
+#: Project64's plugin by itself and can copy this text there under a renderer
+#: name between an update's file swap and its restart;
+#: core/plugin_installation.py::our_leftovers claims a file holding exactly
+#: these bytes as ours, so the next refresh deletes it.
+RETIRED_NATIVES = ("GLideN64_SM64Trainer.dll",)
+RETIRED_NATIVE_TEXT = (b"This file holds no program code. SM64 Trainer versions before the first "
+                       b"one-plugin release check that it exists before they update. "
+                       b"The graphics plugin is sm64_trainer_gfx.dll.\r\n")
 
 _RESERVED_FIRST_SEGMENTS = {INSTALLED_MANIFEST, JOURNAL_NAME,
                             BACKUP_DIR, STAGING_DIR}
@@ -140,8 +177,7 @@ def validate_release_manifest(manifest: Manifest, offered_version: str) -> None:
     files = {entry.path for entry in manifest.files if entry.size > 0}
     required = {"SM64Trainer.exe", "_internal/ffmpeg.exe",
                 "_internal/sm64_events/ui/index.html",
-                *(f"_internal/sm64_events/data/plugin/{name}" for name in
-                  ("sm64_trainer_gfx.dll", "GLideN64_SM64Trainer.dll", "SM64GpuEncoderV1.dll"))}
+                *(f"{NATIVE_FOLDER}/{name}" for name in (*BUNDLED_NATIVES, *RETIRED_NATIVES))}
     if not required <= files or not any(re.fullmatch(r"_internal/python[0-9]+\.dll", path) for path in files):
         raise ValueError("manifest is missing essential application files")
 

@@ -32,6 +32,7 @@ sys.path.insert(0, str(REPO / "src"))
 DATA_DIR = REPO / "src" / "sm64_events" / "data"
 SEP = ";" if os.name == "nt" else ":"
 from bundle_policy import data_inputs, ui_inputs  # noqa: E402
+from sm64_events.core.update_plan import BUNDLED_NATIVES  # noqa: E402
 # Native/binary deps whose data files or submodules PyInstaller's auto
 # analysis can miss — collect everything for each.
 # proctap in particular: its backend is chosen by name at runtime and its
@@ -85,12 +86,13 @@ def app_args(ffmpeg: "str | None", *, name: str = "SM64Trainer",
         f"{REPO / 'src' / 'sm64_events' / 'data' / 'symbols_us.tsv'}{SEP}.",
         "--add-data",
         f"{REPO / 'src' / 'sm64_events' / 'data' / 'symbols_jp.tsv'}{SEP}.",
-        # THE CAPTURE LAYER (core/paths.py::bundled_plugin_file): the wrapper
-        # graphics plugin and the renderer it wraps, which the setup screen
-        # installs into Project64, plus the 64-bit encoder helper the server
-        # spawns. Kept under the package path so the frozen lookup mirrors
-        # the source one. tests/test_bundled_natives.py pins all three.
-        *(arg for name in ("sm64_trainer_gfx.dll", "GLideN64_SM64Trainer.dll", "SM64GpuEncoderV1.dll")
+        # The natives (core/update_plan.py::BUNDLED_NATIVES, found through
+        # core/paths.py::bundled_plugin_file): the graphics plugin the setup
+        # screen installs into Project64 and the 64-bit encoder helper the
+        # server spawns, under the package path so the frozen lookup mirrors
+        # the source one. The retired names' placeholder text is written into
+        # the built app afterwards (write_retired_natives).
+        *(arg for name in BUNDLED_NATIVES
           for arg in ("--add-data",
                       f"{REPO / 'src' / 'sm64_events' / 'data' / 'plugin' / name}{SEP}sm64_events/data/plugin")),
         # The desktop tray + pywebview window load assets/ukiki.ico at RUNTIME
@@ -240,10 +242,10 @@ def stage_reporting(work: Path) -> Path:
 
 
 def ready_natives() -> None:
-    """The three natives are build outputs, not tracked files: package only
-    ones built from THESE sources (tools/build_natives.py), or raise. Fresh
-    ones were not scanned by this run, and a Defender verdict can arrive long
-    after a build (2026-11-06), so packaging scans all three again."""
+    """The natives are build outputs, not tracked files: package only ones
+    built from THESE sources (tools/build_natives.py), or raise. Fresh ones
+    were not scanned by this run, and a Defender verdict can arrive long
+    after a build (2026-11-06), so packaging scans them all again."""
     sys.path.insert(0, str(REPO / "tools"))
     import build_natives
     import defender_scan
@@ -255,11 +257,20 @@ def ready_natives() -> None:
 PLUGIN_FOLDER = Path("_internal") / "sm64_events" / "data" / "plugin"
 
 
+def write_retired_natives(app_dir: Path) -> None:
+    """Write the placeholder text (core/update_plan.py RETIRED_NATIVES) into
+    the BUILT app, never the source bundle: older apps refuse an update
+    without a file at each of these names. Plain text, not a native: the
+    Defender gate and the beta self-check leave it out."""
+    from sm64_events.core.update_plan import RETIRED_NATIVE_TEXT, RETIRED_NATIVES
+    for name in RETIRED_NATIVES:
+        (app_dir / PLUGIN_FOLDER / name).write_bytes(RETIRED_NATIVE_TEXT)
+
+
 def our_files(app_dir: Path, exe_name: str) -> list[Path]:
     """The files of a built app that this repository compiled: the app's own
-    exe and the three natives (tools/native_identity.py SHIPPED)."""
-    import native_identity
-    return [app_dir / f"{exe_name}.exe", *(app_dir / PLUGIN_FOLDER / name for name in native_identity.SHIPPED)]
+    exe and the natives (core/update_plan.py BUNDLED_NATIVES)."""
+    return [app_dir / f"{exe_name}.exe", *(app_dir / PLUGIN_FOLDER / name for name in BUNDLED_NATIVES)]
 
 
 def scan_built(app_dir: Path, exe_name: str) -> None:
@@ -272,8 +283,9 @@ def scan_built(app_dir: Path, exe_name: str) -> None:
 
 
 def stage_notices(distpath: Path | None, ffmpeg: Path) -> Path | None:
-    """Stage `_internal/licenses/` into the app PyInstaller just built and
-    return its folder, or print why the build is refused and return None."""
+    """Stage `_internal/licenses/` and the retired names' placeholder
+    (write_retired_natives) into the app PyInstaller just built and return
+    its folder, or print why the build is refused and return None."""
     import third_party_notices
     # PyInstaller's default distpath is ./dist under the working directory.
     app_dir = (distpath or Path.cwd() / "dist") / "SM64Trainer"
@@ -283,6 +295,7 @@ def stage_notices(distpath: Path | None, ffmpeg: Path) -> Path | None:
     except RuntimeError as failure:
         print(f"Build refused: {failure}", file=sys.stderr)
         return None
+    write_retired_natives(app_dir)
     return app_dir
 
 

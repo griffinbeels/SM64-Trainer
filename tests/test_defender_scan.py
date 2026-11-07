@@ -85,22 +85,22 @@ def test_a_release_build_scans_our_own_files_and_refuses_a_flagged_one(tmp_path,
         *(defender_scan.Verdict(Path(p), "clean", "no threat") for p in paths[1:])])
     with pytest.raises(defender_scan.ThreatFound):
         build_exe.scan_built(app, "SM64Trainer")
-    assert scanned == ["SM64Trainer.exe", "sm64_trainer_gfx.dll", "SM64GpuEncoderV1.dll", "GLideN64_SM64Trainer.dll"]
+    assert scanned == ["SM64Trainer.exe", "sm64_trainer_gfx.dll", "SM64GpuEncoderV1.dll"]
 
 
 def test_a_beta_build_refuses_a_flagged_native_before_building(tmp_path, monkeypatch):
     import build_beta
     bundle = tmp_path / "plugin"
     bundle.mkdir()
-    (bundle / "GLideN64_SM64Trainer.dll").write_bytes(b"MZ fixture")
+    (bundle / "sm64_trainer_gfx.dll").write_bytes(b"MZ fixture")
     ffmpeg = tmp_path / "ffmpeg.exe"
     ffmpeg.write_bytes(b"fixture")
     monkeypatch.setattr(build_beta.importlib.util, "find_spec", lambda name: object())
     monkeypatch.setitem(sys.modules, "build_natives", SimpleNamespace(
-        ensure=lambda **kwargs: {}, BUNDLE=bundle, natives=lambda: [SimpleNamespace(name="GLideN64_SM64Trainer.dll")]))
+        ensure=lambda **kwargs: {}, BUNDLE=bundle, natives=lambda: [SimpleNamespace(name="sm64_trainer_gfx.dll")]))
     monkeypatch.setattr(defender_scan, "scan", lambda paths, **kwargs: [
         defender_scan.Verdict(Path(paths[0]), "threat", "Threat : Trojan:Win32/Bearfoos.A!ml")])
-    with pytest.raises(defender_scan.ThreatFound, match="GLideN64_SM64Trainer.dll"):
+    with pytest.raises(defender_scan.ThreatFound, match="sm64_trainer_gfx.dll"):
         build_beta.check_prerequisites(str(ffmpeg))
 
 

@@ -10,22 +10,26 @@ from pathlib import Path
 import re
 import shutil
 
+from sm64_events.core.paths import WRAPPER_DLL_NAME
+from sm64_events.core.update_plan import RETIRED_NATIVE_TEXT
 from sm64_events.core.setup_files import restore_on_failure
 
 log = logging.getLogger("sm64.capturelayer")
 
-# The capture layer's files inside Project64's Plugin folder; the setup
-# screen (core/capturelayer.py) and the UAC helper write the same names.
-WRAPPER_DLL = "sm64_trainer_gfx.dll"
-WRAPPER_INI = "sm64_trainer_gfx.ini"
-#: THE RENDERER as installed. Never a .dll: Project64 lists every *.dll in
-#: Plugin\ as a graphics plugin, and picking the renderer itself skips
-#: capture. The wrapper loads it by full path, so Windows appends nothing.
-#: Its extension must not start with "dll" ("*.dll" also matches 8.3 names).
-RENDERER_FILE = "sm64_trainer_gfx.renderer"
-#: Where installs before 2026-10-24 put the renderer (its bundled name,
-#: core/paths.py::RENDERER_DLL_NAME). Install and refresh move it.
+#: THE GRAPHICS PLUGIN as installed in Project64's Plugin folder: the one file
+#: the setup screen (core/capturelayer.py) and the UAC helper write there,
+#: under the bundled name, so Project64's `Graphics Dll` choice of it holds
+#: through every update.
+PLUGIN_DLL = WRAPPER_DLL_NAME
+#: What older installs left beside it. Until 2026-11-07 the trainer installed
+#: a wrapper under PLUGIN_DLL that loaded the renderer named by its ini:
+#: `sm64_trainer_gfx.renderer` (from 2026-10-24; not a .dll, so Project64's
+#: picker listed one plugin) or, before that, `GLideN64_SM64Trainer.dll`.
+#: Install and refresh delete these (`our_leftovers`), in this order.
+LEGACY_WRAPPER_INI = "sm64_trainer_gfx.ini"
+LEGACY_RENDERER_FILE = "sm64_trainer_gfx.renderer"
 LEGACY_RENDERER_DLL = "GLideN64_SM64Trainer.dll"
+LEFTOVERS = (LEGACY_WRAPPER_INI, LEGACY_RENDERER_FILE, LEGACY_RENDERER_DLL)
 
 
 class PluginInstallError(OSError):
@@ -87,14 +91,92 @@ def in_use(path: Path) -> bool:
         return False
 
 
-# Every shipped native id: wrapper, encoder helper, renderer (core/capturelayer.py
-# compares by the same ids; receipts record them for diagnostics).
+# Every native id, by role: the graphics plugin (-gpu-runtime), the encoder
+# helper (-gpu-encoder) and an older install's renderer (-renderer).
+# core/capturelayer.py compares by the same ids; receipts record them.
 _BUILD = re.compile(rb"(?<![a-f0-9])[a-f0-9]{64}(?:-gpu-runtime|-gpu-encoder|-renderer)\x00")
 
 
 def sha256(path: Path) -> str:
     with path.open("rb") as stream:
         return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def build_id(path: Path) -> bytes | None:
+    """The one build id a native embeds (without its NUL), else None."""
+    ids = {match[:-1] for match in _BUILD.findall(path.read_bytes())}
+    return ids.pop() if len(ids) == 1 else None
+
+
+def _wrapper_config(path: Path) -> bool:
+    """The old wrapper's ini as the trainer wrote it: only `wrapped=` lines."""
+    try:
+        if path.stat().st_size > 4096:
+            return False
+        lines = [line.strip() for line in path.read_text(encoding="utf-8").splitlines()]
+    except (OSError, UnicodeError):
+        return False
+    lines = [line for line in lines if line]
+    return bool(lines) and all(line.startswith("wrapped=") for line in lines)
+
+
+def _placeholder(path: Path, size: int) -> bool:
+    """The app's retired-name placeholder text (core/update_plan.py
+    RETIRED_NATIVE_TEXT), byte for byte. The stable app v1.9.1 refreshes the
+    plugin by itself and copies its bundled renderer without looking at it:
+    if its refresh ticks between an update's file swap and its restart, it
+    copies this text into Project64's Plugin folder under a renderer name."""
+    return size == len(RETIRED_NATIVE_TEXT) and path.read_bytes() == RETIRED_NATIVE_TEXT
+
+
+def our_leftovers(plugin_dir: Path, *, keep: str | None = None, identity=build_id) -> list[Path]:
+    """The older install's files in `plugin_dir` that this trainer wrote: a
+    renderer whose build id carries the -renderer role, the wrapper's ini,
+    and the app's placeholder text under any of these names. A user's own
+    file under one of these names stays, and so do a link and `keep`, the
+    file Project64's `Graphics Dll` names: deleting it would leave Project64
+    selecting a missing plugin."""
+    found = []
+    for name in LEFTOVERS:
+        path = plugin_dir / name
+        if keep is not None and keep.lower() == name.lower():
+            continue
+        try:
+            stat = path.lstat()
+            if (getattr(stat, "st_file_attributes", 0) & 0x400 or stat.st_nlink != 1
+                    or not path.is_file() or path.is_symlink()):
+                continue
+            ours = (_placeholder(path, stat.st_size)
+                    or (_wrapper_config(path) if name == LEGACY_WRAPPER_INI
+                        else (identity(path) or b"").endswith(b"-renderer")))
+        except OSError:
+            continue
+        if ours:
+            found.append(path)
+    return found
+
+
+def remove_files(paths) -> None:
+    """Delete every path or none: a refused delete puts back the ones already
+    gone (never over a file that appeared since) and raises. A file a
+    running Project64 has loaded raises DestinationInUse, the normal "not now"."""
+    removed = []
+    try:
+        for path in paths:
+            if in_use(path):
+                raise DestinationInUse(errno.EACCES, "in use by another process", str(path))
+            data = path.read_bytes()
+            with file_operation("remove an older capture layer file", path):
+                path.unlink()
+            removed.append((path, data))
+    except OSError:
+        for path, data in reversed(removed):
+            try:
+                with path.open("xb") as stream:
+                    stream.write(data)
+            except OSError:
+                log.exception("could not put back %s", path)
+        raise
 
 
 def file_identity(path: Path) -> dict:

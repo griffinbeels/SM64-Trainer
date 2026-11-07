@@ -767,17 +767,21 @@ Runtime fields in `emu`:
   ghost notice shows only when it is non-empty. `rom` in `emu` also carries
   `rdb_key`.
 
-- `installation_verified`: installed wrapper and renderer match this build by
-  embedded build id, the wrapper is
-  selected in Project64, and its physical INI names the renderer. Any existing
-  per-user VirtualStore copy must agree (`configuration_consistent: true`), and
-  the renderer must load frame buffer emulation off (`frame_buffer_emulation_off: true`).
+- `wrapper_present`, `wrapper_current`, `wrapper_selected`: the graphics plugin
+  file `sm64_trainer_gfx.dll` sits in the Plugin folder, matches this build by
+  embedded build id, and is Project64's `Graphics Dll`. The names date from when
+  that file was a wrapper around a separate renderer.
+- `leftovers`: an older install's files of ours still in the Plugin folder
+  (`sm64_trainer_gfx.ini`, `sm64_trainer_gfx.renderer`, `GLideN64_SM64Trainer.dll`),
+  in removal order. Any one reads like an older DLL: automatic refresh removes it,
+  otherwise `problems` says to choose Install. A file `Graphics Dll` names stays
+  until Install selects the plugin; a user's own file under one of these names
+  is never listed.
+- `installation_verified`: the plugin is present, current and selected, no
+  `leftovers` remain, and the renderer loads frame buffer emulation off
+  (`frame_buffer_emulation_off: true`).
   This does not require a local consent timestamp and does not imply live readiness.
   A verified installation in supported Project64 suppresses automatic onboarding.
-- `configuration_consistent`: the physical wrapper INI and any existing per-user
-  VirtualStore copy name the same renderer. A mismatch offers re-installation;
-  install and permitted automatic refresh repair the existing copy with Project64
-  closed. An absent per-user copy is never created.
 - `frame_buffer_emulation_off`: every `GLideN64.ini` Project64 may read in the
   Plugin folder (the physical file and any existing VirtualStore copy) loads
   `frameBufferEmulation\enable=0` in its active profile. With it on, ghosts do

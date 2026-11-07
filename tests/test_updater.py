@@ -19,8 +19,9 @@ if _tools not in _sys.path:
     _sys.path.insert(0, _tools)
 from make_manifest import build_zip, make_manifest  # noqa: E402
 
-from sm64_events.core.update_plan import (INSTALLED_MANIFEST,  # noqa: E402
-                                          MANIFEST_ASSET, ZIP_ASSET)
+from sm64_events.core.update_plan import (BUNDLED_NATIVES,  # noqa: E402
+                                          MANIFEST_ASSET, NATIVE_FOLDER, RETIRED_NATIVE_TEXT,
+                                          RETIRED_NATIVES, ZIP_ASSET)
 from sm64_events.core.updater import UpdateInfo, check_for_update  # noqa: E402
 
 
@@ -78,8 +79,8 @@ def _fake_release(tmp_path, tag: str, files: dict[str, bytes]) -> dict:
     files = {"_internal/python314.dll": b"PYTHON",
              "_internal/ffmpeg.exe": b"FFMPEG",
              "_internal/sm64_events/ui/index.html": b"UI",
-             **{f"_internal/sm64_events/data/plugin/{name}": b"NATIVE" for name in
-                ("sm64_trainer_gfx.dll", "GLideN64_SM64Trainer.dll", "SM64GpuEncoderV1.dll")},
+             **{f"{NATIVE_FOLDER}/{name}": b"NATIVE" for name in BUNDLED_NATIVES},
+             **{f"{NATIVE_FOLDER}/{name}": RETIRED_NATIVE_TEXT for name in RETIRED_NATIVES},
              **files}
     src = tmp_path / f"src-{tag}"
     for rel, content in files.items():

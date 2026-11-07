@@ -247,10 +247,9 @@ def safe_snapshot(value) -> dict:
         *GHOST_HOOK_FIELDS, *GHOST_DRAW_FIELDS, "observed_unix_s"))
     setup = mapping(value.get("setup"))
     result["setup"] = pick(setup, ("state", "pj64_running", "wrapper_present", "wrapper_current", "wrapper_selected",
-        "renderer_present", "renderer_current", "installation_verified", "layer_alive", "pictures_flowing", "observed_unix_s"))
-    for key in ("configuration_consistent", "frame_buffer_emulation_off"):
-        if type(setup.get(key)) is bool:
-            result["setup"][key] = setup[key]
+        "installation_verified", "layer_alive", "pictures_flowing", "observed_unix_s"))
+    if type(setup.get("frame_buffer_emulation_off")) is bool:
+        result["setup"]["frame_buffer_emulation_off"] = setup["frame_buffer_emulation_off"]
     result["setup"]["check"] = _setup_check(setup.get("check"))
     runtime = mapping(setup.get("runtime"))
     result["setup"]["runtime"] = {"checks": pick(runtime.get("checks"), ("plugin", "pictures", "inputs", "game")),

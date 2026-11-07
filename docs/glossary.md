@@ -1170,11 +1170,11 @@ list of contradicted pictures.
 
 ### Capture layer
 
-The graphics plugin pair the trainer installs into Project64 (2026-09-04,
-his ask: "redo our recording system so that the recording [[frame]]s ARE game
-[[frame]]s"): the wrapper Project64 selects (`SM64 Trainer v1.0`,
-`sm64_trainer_gfx.dll`) and the [[renderer]] it wraps. When the [[renderer]]
-finishes a picture the wrapper copies the game's own memory -- the [[frame]]
+The trainer's recording hooks inside its graphics plugin, `sm64_trainer_gfx.dll`
+(`SM64 Trainer v1.0` in Project64's list), which also holds the [[renderer]]
+(2026-09-04, his ask: "redo our recording system so that the recording
+[[frame]]s ARE game [[frame]]s"). When the [[renderer]] finishes a picture the
+capture layer copies the game's own memory -- the [[frame]]
 counter, the pad, Mario, the running IGT -- and the [[renderer]] takes an owned
 GPU copy of the picture with that immutable stamp, then samples it and hands the
 selected ones to the isolated [[encoder helper]], all on its own thread
@@ -1189,20 +1189,26 @@ runtime](replay-gpu-runtime.md) for ownership and limits.
 The [[frame map]] reads captured identity rather than guessing it from cadence.
 Inexact or missing identity stays unknown; the [[oracle reader]] and [[pad reader]]
 independently audit real pixels. The trainer installs under explicit consent on
-the [[setup screen]] (both DLLs into Project64's Plugin folder, an ini pointing
-the wrapper at the [[renderer]], the `Graphics Dll` setting) and undoes it from the
+the [[setup screen]] (one file, `sm64_trainer_gfx.dll`, into Project64's Plugin
+folder, and the `Graphics Dll` setting that selects it) and undoes it from the
 same screen, selecting the plugin you had before; without it the [[recorder]]
 photographs the desktop as before. The [[setup screen]] decides "current" by the
-build id each DLL carries (bytes only for a file without one), so a rebuild
-of unchanged sources never asks for a reinstall. An app update refreshes the installed pair by
+build id the plugin carries (bytes only for a file without one), so a rebuild
+of unchanged sources never asks for a reinstall. An app update refreshes the installed plugin by
 itself once you close Project64, under the consent already given; onboarding
-never reopens for it (his rule, 2026-09-16).
+never reopens for it (his rule, 2026-09-16). An older install put a wrapper
+under the same name that loaded the [[renderer]] from a second file named by
+`sm64_trainer_gfx.ini`. It reads as stale, not broken: the same refresh
+replaces the DLL, then deletes those files of ours, so Project64's choice holds
+and nobody picks a plugin again (2026-11-07).
 
-- **Lives** -- `plugin/gfxwrap/gfxwrap.c` (the wrapper), built by
-  `tools/build_plugin.py` (through `tools/build_natives.py`, never committed)
-  into the git-ignored bundle folder (its BUNDLE constant in `tools/build_natives.py`) beside the
-  [[renderer]] and the [[encoder helper]]; `src/sm64_events/core/capturelayer.py`
-  installs and undoes it; `src/sm64_events/replay/sourcefactory.py` selects
+- **Lives** -- the capture code in `plugin/gfxwrap/`, compiled with the
+  [[renderer]] into one DLL through `tools/build_natives.py` (never committed)
+  into the git-ignored bundle folder (its BUNDLE constant in `tools/build_natives.py`) beside
+  the [[encoder helper]]; `src/sm64_events/core/capturelayer.py`
+  installs and undoes it, and `src/sm64_events/core/plugin_installation.py` names
+  the installed file and an older install's leftovers;
+  `src/sm64_events/replay/sourcefactory.py` selects
   the [[recorder]]'s camera; `src/sm64_events/replay/gpucapture.py` owns the
   capture path
 - **Not** -- the desktop grab (`src/sm64_events/replay/video.py`): that
@@ -1211,25 +1217,26 @@ never reopens for it (his rule, 2026-09-16).
 
 ### Renderer
 
-The trainer's build of LINK's GLideN64 v4.2 (bundled as `GLideN64_SM64Trainer.dll`,
-own label `LINK v4.2 [SM64 Trainer]`): the pinned upstream tree plus the
-capture overlay that adds the SourceV2 export the [[capture layer]] reads.
-Project64 receives it as `sm64_trainer_gfx.renderer`, no `.dll`, so its plugin
-picker lists only the wrapper (a tester saw two plugins, 2026-10-24). A
-stock GLideN64 has no such export, so a wrapper pointed at one captures
-nothing. (His 2026-09-15 "input unavailable" report had a different cause:
-Project64 selected the renderer directly, so the wrapper never loaded.)
-GLideN64 is GPL-2.0; the About box credits its authors and links the
-published source. The renderer keeps GLideN64's own settings identity, so a
-user's existing GLideN64 settings carry over.
+The trainer's build of LINK's GLideN64 v4.2: the pinned upstream tree plus the
+capture overlay that adds the SourceV2 export the [[capture layer]] reads. It
+ships inside the graphics plugin `sm64_trainer_gfx.dll`, together with the
+[[capture layer]]: one file that Project64 loads itself, so the trainer loads
+nothing by name and Project64's picker lists one plugin. Until 2026-11-07 it was a
+second file that a capture wrapper loaded by name (`GLideN64_SM64Trainer.dll`,
+then `sm64_trainer_gfx.renderer`); Defender flagged that file as a trojan on
+2026-11-06, and Griffin chose one file: the easiest setup for players and the
+least likely to look like malware. GLideN64 is
+GPL-2.0; the About box credits its authors and links the published source. The
+renderer keeps GLideN64's own settings identity, so a user's existing GLideN64
+settings carry over.
 
 - **Lives** -- `tools/build_renderer.py` builds it from the pin in
   `renderer/build-inputs.json` and the overlay in `plugin/gfxwrap/`
-  (`renderer/README.md` has the provenance and credits) into
-  the git-ignored bundle folder (its BUNDLE constant in `tools/build_natives.py`), a
-  build output that tool refreshes at launch. The [[scene viewer]]'s helpers load
-  that bundle file where it is, never a copy, and point it at the
-  [[renderer settings folder]]
+  (`renderer/README.md` has the provenance and credits) into the graphics
+  plugin in the git-ignored bundle folder (its BUNDLE constant in
+  `tools/build_natives.py`), a build output that tool refreshes at launch. The
+  [[scene viewer]]'s helpers load that bundle file where it is, never a copy,
+  and point it at the [[renderer settings folder]]
 - **Not** -- the graphics plugin the user had before; that one stays in the
   folder untouched, and "Remove Practice Replay" selects it again
 
@@ -1264,7 +1271,7 @@ into the PE header, where a linker would put the time of linking, and names
 the FileVersion after it (year.month.day.hhmm, UTC). Builds are repeatable
 since 2026-11-06, so two builds of one commit carry the same date and the same
 bytes, and a later native commit carries a larger date. The [[setup screen]]'s
-automatic refresh orders the [[capture layer]] and the [[renderer]] by it and
+automatic refresh orders the installed graphics plugin by it and
 never installs an older one; a build that names SM64 Trainer in its version
 resource counts as newer than any build from before. Uncommitted edits keep the last
 commit's date while their content still changes the build id.
@@ -1310,7 +1317,7 @@ memory.
 
 ### Scene tap
 
-An M4 experiment inside the [[capture layer]]'s wrapper that writes
+An M4 experiment inside the [[capture layer]] that writes
 each graphics task's [[task closure]] and the picture Project64 then shows.
 It records only while the Trainer's scene lab holds a lease, continuously
 into the [[live spool]]; a file appearing never starts it. (The one-shot
@@ -1321,7 +1328,7 @@ ring and never makes the game wait; a full ring drops and counts the record.
 input the [[renderer]] can redraw offline.
 
 - **Lives** -- the tap (`plugin/gfxwrap/scene_tap.cpp`), called from the
-  wrapper (`plugin/gfxwrap/gfxwrap.c`); its tool (`tools/scene_lab/tap.py`)
+  [[capture layer]]'s plugin entry points; its tool (`tools/scene_lab/tap.py`)
 - **Not** -- the [[recorder]], which encodes video of play; the scene tap is
   an M4 probe that writes nothing unless armed or leased
 
@@ -1332,7 +1339,7 @@ every graphics task with its [[scene state]], on disk, so you can open the
 scene of an [[attempt]] right after it ends. The [[scene viewer]] shows whether
 it records and has the **recording switch** that stops and starts it (kept for
 the next start). While the switch is on the lab holds a lease by renewing a
-file every 2 seconds; the wrapper checks it once a second, starts recording
+file every 2 seconds; the [[capture layer]] checks it once a second, starts recording
 without reopening the game, and stops within a second of the switch going off
 or 8 seconds after the last renewal. The writer thread starts a new stretch of
 the recording about every 15 seconds with the level state whole, so a reader
@@ -1890,7 +1897,7 @@ the rule holds with no trainer open.
 The 64-bit NVENC DLL (`SM64GpuEncoderV1.dll`) the server's isolated encoder
 process loads to turn the [[renderer]]'s GPU pictures into AV1 or H.264
 packets without copying pixels through Python. Built by `tools/build_plugin.py`
-beside the wrapper; it carries the same native build id with its own suffix.
+beside the graphics plugin; it carries the same native build id with its own suffix.
 The process is a direct child of the server: the installed app starts itself
 with `--gpu-helper`, and from source the server starts the base interpreter
 on the module, never the venv launcher (which drops the no-busy-pointer flag). The
@@ -1990,7 +1997,7 @@ never after a structural cause.
 
 ### Activation log
 
-`sm64_trainer_gfx.activation.log`, beside the wrapper: this Project64
+`sm64_trainer_gfx.activation.log`, beside the graphics plugin: this Project64
 process's startup lines only -- ROM open, each capture's request and
 preparation steps with their QPCs, and every slow
 callback in the 15 s after a capture request. The main log rotates, so these
