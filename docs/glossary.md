@@ -1281,15 +1281,15 @@ or a release. On 2026-11-06 Defender quarantined a [[renderer]] built here as
 Trojan:Win32/Bearfoos.A!ml, a cloud machine-learning verdict on one build.
 `tools/build_natives.py` now scans every native it installs, stops on a
 threat, names the file and removes it from the bundle and the build cache. The
-release and beta builders scan again, after signing, and also refuse a scan
+release and beta builders scan the built app again and also refuse a scan
 that could not finish. Each scan reports without quarantining or deleting
 anything, and nothing here changes Defender's settings. Off Windows or without
 Defender's scanner it says so and the build continues.
 
 - **Lives** -- `tools/defender_scan.py`, called by `tools/build_natives.py`,
   `tools/build_exe.py` and `tools/build_beta.py`
-- **Not** -- code signing (`tools/code_signing.py`, `docs/code-signing.md`):
-  that names the publisher, while this scan checks the verdict
+- **Not** -- code signing: the natives ship unsigned, his decision on
+  2026-11-06
 
 ### Task closure
 

@@ -262,17 +262,13 @@ def our_files(app_dir: Path, exe_name: str) -> list[Path]:
     return [app_dir / f"{exe_name}.exe", *(app_dir / PLUGIN_FOLDER / name for name in native_identity.SHIPPED)]
 
 
-def sign_and_scan(app_dir: Path, exe_name: str) -> None:
-    """Sign our own files when this machine is set up for Artifact Signing
-    (tools/code_signing.py; otherwise it says they are unsigned), then refuse
-    the build if Microsoft Defender flags one or cannot scan it
-    (tools/defender_scan.py). Runs before the zip and manifest are made, so
-    they and the candidate record carry the signed bytes."""
-    import code_signing
+def scan_built(app_dir: Path, exe_name: str) -> None:
+    """Refuse the build if Microsoft Defender flags one of our own files in the
+    built app or cannot scan it (tools/defender_scan.py). Runs before the zip
+    and manifest are made, so they carry only scanned bytes. The files ship
+    unsigned: Griffin decided against code signing (2026-11-06)."""
     import defender_scan
-    files = our_files(app_dir, exe_name)
-    code_signing.sign(files)
-    defender_scan.require_clean(files, strict=True)
+    defender_scan.require_clean(our_files(app_dir, exe_name), strict=True)
 
 
 def stage_notices(distpath: Path | None, ffmpeg: Path) -> Path | None:
@@ -347,7 +343,7 @@ def main() -> int:
         if (app_dir := stage_notices(args.distpath, Path(ffmpeg))) is None:
             return 2
         try:
-            sign_and_scan(app_dir, "SM64Trainer")
+            scan_built(app_dir, "SM64Trainer")
         except RuntimeError as failure:
             print(f"Build refused: {failure}", file=sys.stderr)
             return 2

@@ -25,7 +25,7 @@ sys.path.insert(0, str(REPO / "src"))
 from sm64_events.core.build_channel import (BETA_APP_DIR, BuildChannel, CONFIG_FILENAME,
                                            read_metadata)  # noqa: E402
 from sm64_events.core.reporting_setup import CONFIG_FILE as REPORTING_CONFIG, read_config_dsn  # noqa: E402
-from build_exe import (COLLECT, SEP, _source_date_epoch, app_args, needs_reexec, sign_and_scan,  # noqa: E402
+from build_exe import (COLLECT, SEP, _source_date_epoch, app_args, needs_reexec, scan_built,  # noqa: E402
                        stage_reporting)
 from make_manifest import build_zip  # noqa: E402
 from beta_ghosts import (ApprovedCollection, COLLECTION_NAME, matches, review_collection,
@@ -239,7 +239,7 @@ def main(argv: list[str] | None = None) -> int:
         third_party_notices.stage(DIST / BETA_APP_DIR / "_internal",
                                   third_party_notices.bundled_import_names(DIST / BETA_APP_DIR, BETA_APP_DIR),
                                   Path(ffmpeg))
-        sign_and_scan(DIST / BETA_APP_DIR, BETA_APP_DIR)  # before the ZIP carries the bytes
+        scan_built(DIST / BETA_APP_DIR, BETA_APP_DIR)  # before the ZIP carries the bytes
         archive = package_beta(DIST / BETA_APP_DIR, build, DIST, ghosts=ghosts, ghost_author=author)
         pyi.run(installer_args())
         executable = package_installer(WORK / "installer" / "SM64TrainerBetaSetup.exe", archive, build, DIST)

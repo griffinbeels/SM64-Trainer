@@ -73,23 +73,19 @@ def test_this_machine_has_a_scanner_to_run():
 
 # -- the release and beta builders refuse a flagged file ----------------------------
 
-def test_a_release_build_signs_our_files_first_and_refuses_a_flagged_one(tmp_path, monkeypatch):
+def test_a_release_build_scans_our_own_files_and_refuses_a_flagged_one(tmp_path, monkeypatch):
     import build_exe
-    import code_signing
     app = tmp_path / "SM64Trainer"
     for path in build_exe.our_files(app, "SM64Trainer"):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(b"MZ fixture")
-    order = []
-    monkeypatch.setattr(code_signing, "sign", lambda files: order.append(("sign", [p.name for p in files])))
-    monkeypatch.setattr(defender_scan, "scan", lambda paths, **kwargs: order.append(("scan", None)) or [
+    scanned = []
+    monkeypatch.setattr(defender_scan, "scan", lambda paths, **kwargs: scanned.extend(Path(p).name for p in paths) or [
         defender_scan.Verdict(Path(paths[0]), "threat", "Threat : Trojan:Win32/Bearfoos.A!ml"),
         *(defender_scan.Verdict(Path(p), "clean", "no threat") for p in paths[1:])])
     with pytest.raises(defender_scan.ThreatFound):
-        build_exe.sign_and_scan(app, "SM64Trainer")
-    assert order[0] == ("sign", ["SM64Trainer.exe", "sm64_trainer_gfx.dll", "SM64GpuEncoderV1.dll",
-                                 "GLideN64_SM64Trainer.dll"])
-    assert order[1][0] == "scan", "the signed bytes are what gets scanned and shipped"
+        build_exe.scan_built(app, "SM64Trainer")
+    assert scanned == ["SM64Trainer.exe", "sm64_trainer_gfx.dll", "SM64GpuEncoderV1.dll", "GLideN64_SM64Trainer.dll"]
 
 
 def test_a_beta_build_refuses_a_flagged_native_before_building(tmp_path, monkeypatch):
