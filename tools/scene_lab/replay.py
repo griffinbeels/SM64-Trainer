@@ -117,8 +117,8 @@ def trainer_renderer() -> Path:
     settings folder, so it would read and write Project64's Plugin folder)."""
     path = paths.bundled_plugin_dll()
     if path is None:
-        raise SystemExit(f"renderer not found: {paths.WRAPPER_DLL_NAME} is not in this build's bundle "
-                         "(uv run python tools/build_natives.py)")
+        raise SystemExit("renderer not found: the graphics plugin (sm64_trainer_gfx.dll) is not in this build's "
+                         "bundle (uv run python tools/build_natives.py)")
     return path.resolve()
 
 

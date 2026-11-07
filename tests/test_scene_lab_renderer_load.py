@@ -174,7 +174,7 @@ def test_the_settings_folder_is_stable_named_and_leaves_project64_alone(tmp_path
 
 
 def test_the_scene_viewer_starts_its_host_on_the_bundle_renderer(tmp_path, monkeypatch):
-    bundle = tmp_path / "bundle" / paths.WRAPPER_DLL_NAME
+    bundle = tmp_path / "bundle" / "sm64_trainer_gfx.dll"
     bundle.parent.mkdir()
     bundle.write_bytes(b"MZ stand-in")
     monkeypatch.setattr(paths, "bundled_plugin_dll", lambda: bundle)
