@@ -29,6 +29,8 @@ def built_offer(tmp_path, monkeypatch, version, *, legacy=False):
     monkeypatch.setattr(third_party_notices, "stage", lambda *args: staged.append(args))
     scanned = []                  # the Defender gate also runs on PyInstaller's output (test_defender_scan.py)
     monkeypatch.setattr(build_exe, "scan_built", lambda *args: scanned.append(args))
+    placeholders = []             # the retired names' placeholder too (test_build_beta.py writes a real one)
+    monkeypatch.setattr(build_exe, "write_retired_natives", lambda app_dir: placeholders.append(app_dir))
     captured = []
     monkeypatch.setattr(pyi, "run", lambda args: captured.append(args))
     work = tmp_path / "build"
@@ -60,6 +62,7 @@ def built_offer(tmp_path, monkeypatch, version, *, legacy=False):
         # The license notices land in the folder PyInstaller just built.
         assert [(args[0].parts[-2:], args[2]) for args in staged] == [
             (("SM64Trainer", "_internal"), tmp_path / "ffmpeg.exe")]
+        assert placeholders == [staged[0][0].parent]
     return path
 
 

@@ -1254,9 +1254,9 @@ no log, so a helper never answers as a running Project64's plugin.
 ### Test plugin
 
 A `sm64_trainer_gfx.dll` built for the host tests: the real [[capture layer]]
-linked with a stand-in renderer instead of the [[renderer]].
+linked with a stand-in for the [[renderer]].
 
-- **Lives** -- `tools/build_plugin.py` (`build_test_plugin`)
+- **Lives** -- `tools/build_plugin.py`, which builds it for the host tests
 - **Not** -- shipped; it never enters the bundle
 
 ### Renderer settings folder
