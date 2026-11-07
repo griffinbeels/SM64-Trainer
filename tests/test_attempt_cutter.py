@@ -317,6 +317,21 @@ def test_a_reset_ends_a_segment_take_nobody_claimed_and_still_gets_a_take_of_its
     assert not list(tmp_path.iterdir())
 
 
+def _open_between_publications(path: Path, seconds: float = 5.0):
+    """Open a publication the way the viewer does. With PUBLISH_SECONDS at zero the take replaces
+    the file constantly, and Windows refuses an open that lands inside a replace (PermissionError):
+    the viewer's next poll simply reads again, so the test does too. A merge check under load hit
+    that instant (2026-11-07); the claim under test is what a HELD read costs, not this race."""
+    deadline = time.monotonic() + seconds
+    while True:
+        try:
+            return path.open("rb")
+        except PermissionError:
+            if time.monotonic() > deadline:
+                raise
+            time.sleep(0.005)
+
+
 def test_a_publication_an_open_scene_is_reading_waits_for_the_next(recording, tmp_path, monkeypatch):
     """Windows refuses to replace a file another process has open: his viewer reading a growing
     scene's publication as the take publishes the next costs that publication, never the scene."""
@@ -326,7 +341,7 @@ def test_a_publication_an_open_scene_is_reading_waits_for_the_next(recording, tm
         run.start(20)
         run.until(lambda: run.brain.takes and run.brain.takes[0].seats[0].grow.is_file())
         take = run.brain.takes[0]
-        with take.seats[0].grow.open("rb"):                     # the viewer's read, held
+        with _open_between_publications(take.seats[0].grow):    # the viewer's read, held
             run.spool.through = 120
             run.until(lambda: take.position >= 119)
         run.complete(8, 20, 100, "reset")
