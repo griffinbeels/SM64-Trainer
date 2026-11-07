@@ -881,3 +881,42 @@ def test_an_older_install_moves_without_reopening_setup_or_offers_install(tmp_pa
         assert sorted(path.name for path in plugin.iterdir()) == sorted([PLUGIN_DLL, RENDERER_INI])
         (tmp_path / f"older-install-{'packaged' if packaged else 'checkout'}.png").write_bytes(page.screenshot())
         assert page.problems() == []
+
+
+@pytest.mark.parametrize("app", ["stable", "beta"])
+def test_what_v191_left_in_an_update_window_opens_on_install_and_one_click_cleans_it(tmp_path, monkeypatch, app):
+    """The stable app v1.9.1 can leave the new plugin, the placeholder text
+    under the old renderer name and an ini naming it, with a record no rule
+    adopts. The new app's setup screen opens by itself on the Install step,
+    never as a broken install, and one click leaves the plugin and its
+    settings with Project64's Graphics Dll choice kept."""
+    import ui_fixture
+    from test_capturelayer import build
+    from test_capturelayer_one_plugin import BETA_APP, STABLE_APP, v191_window
+    from sm64_events.core.capturelayer import GRAPHICS_DLL_VALUE, PLUGIN_DLL, REGISTRY_DLL_SUBKEY
+    from sm64_events.core.renderer_settings import RENDERER_INI
+
+    folder = tmp_path / "PJ64"
+    (folder / "Plugin").mkdir(parents=True)
+    bundled = tmp_path / "bundle" / PLUGIN_DLL
+    bundled.parent.mkdir()
+    bundled.write_bytes(build(b"the one graphics plugin"))
+    layer, registry, plugin = v191_window(folder, bundled, tmp_path / "capture.json", auto_refresh=app == "stable",
+                                          installer=STABLE_APP if app == "stable" else BETA_APP)
+    monkeypatch.setattr(ui_fixture, "_FixtureCaptureLayer", lambda *a, **kw: layer)
+    observed = dict(target=dict(state="ready", pid=None), rom=dict(MISSING_ROM), checks={})
+    with serve_ui(setup_observer=lambda _: observed) as url, get_driver().launch(viewport=(850, 600)) as page:
+        page.goto(url + "/ui/index.html")
+        wait_page(page, "install")
+        wait_step(page, "install")
+        assert "unavailable" not in body(page).lower()
+        button = f"{CURRENT} .setup-install-action button"
+        page.wait_for(button)
+        (tmp_path / f"v191-window-{app}.png").write_bytes(page.screenshot())
+        page.click(button)
+        wait_step(page, "reopen")
+        state = page.evaluate("fetch('/api/setup').then(r=>r.json())")["emu"]
+        assert state["installation_verified"] and state["leftovers"] == []
+        assert sorted(path.name for path in plugin.iterdir()) == sorted([PLUGIN_DLL, RENDERER_INI])
+        assert registry.get(REGISTRY_DLL_SUBKEY, GRAPHICS_DLL_VALUE) == PLUGIN_DLL
+        assert page.problems() == []

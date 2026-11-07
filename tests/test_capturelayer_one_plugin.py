@@ -266,7 +266,13 @@ def test_a_refresh_waits_while_project64_holds_the_old_renderer(pj64_dir, dll_so
 
 # -- the placeholder text an older stable app may have copied ------------------
 
-def v191_window(pj64_dir, dll_source, settings_path):
+#: the frozen apps that may meet that window: the stable one refreshes by
+#: itself (main.py, channel 'stable'); a beta one installs only on a click
+STABLE_APP = {"kind": "frozen", "version": "1.10.0"}
+BETA_APP = {"kind": "frozen", "version": "1.10.0-beta.38", "channel": "beta", "build_id": "beta-38"}
+
+
+def v191_window(pj64_dir, dll_source, settings_path, *, auto_refresh=True, installer=STABLE_APP):
     """What the stable app v1.9.1 leaves when its refresh ticks between an
     update's file swap and its restart: its bundle is then the new plugin and
     the placeholder text, and it copies both (the text as its renderer), names
@@ -286,7 +292,7 @@ def v191_window(pj64_dir, dll_source, settings_path):
         "previous_graphics_dll": ORIGINAL_GRAPHICS_DLL}))
     registry = FakeRegistry({(REGISTRY_DLL_SUBKEY, GRAPHICS_DLL_VALUE): PLUGIN_DLL})
     layer = CaptureLayer(registry, FakeProcesses(None), settings_path, dll_source,
-                         auto_refresh=True, installer=FROZEN_APP)
+                         auto_refresh=auto_refresh, installer=installer)
     return layer, registry, plugin
 
 
@@ -304,18 +310,26 @@ def test_the_placeholder_text_under_an_older_name_is_ours_and_nothing_else_is(
     assert plugin_files(plugin) == sorted([PLUGIN_DLL, RENDERER_INI])
 
 
+@pytest.mark.parametrize("app", ["stable", "beta"])
 def test_what_v191_leaves_in_the_update_window_reads_stale_and_install_cleans_it(
-        pj64_dir, dll_source, settings_path):
-    """No adoption rule exists for a record without installed_by, so the new
-    app does not refresh it by itself; it offers Install, which keeps the
-    player's Graphics Dll choice and leaves only the plugin and its settings."""
-    layer, registry, plugin = v191_window(pj64_dir, dll_source, settings_path)
+        pj64_dir, dll_source, settings_path, app):
+    """No rule adopts a record without installed_by (an open item for the
+    first 1.10 stable release), and a beta app installs only on a click by
+    policy. So both new frozen apps read the window's leftovers as stale, not
+    broken, and open on the Install step; one Install click keeps the player's
+    Graphics Dll choice and leaves only the plugin and its settings."""
+    layer, registry, plugin = v191_window(pj64_dir, dll_source, settings_path, auto_refresh=app == "stable",
+                                          installer=STABLE_APP if app == "stable" else BETA_APP)
     status = layer.status()
-    assert status.wrapper_current and status.leftovers == [LEGACY_WRAPPER_INI, LEGACY_RENDERER_DLL]
+    assert status.state == NEEDS_RESTART and status.wrapper_selected and status.wrapper_current
+    assert status.leftovers == [LEGACY_WRAPPER_INI, LEGACY_RENDERER_DLL]
     assert not status.installation_verified and status.automatic_update is False
-    assert any(step["action"] == "install" for step in status.steps)
+    assert any("differs from this build" in problem for problem in status.problems)
+    assert not any("re-install" in problem or "missing" in problem for problem in status.problems)
+    assert [(step["id"], step["action"]) for step in status.steps] == [
+        ("close", None), ("install", "install"), ("start", None)]
     assert layer.refresh_if_stale() is False
-    layer.install(True)
+    assert layer.install(True).installation_verified
     assert plugin_files(plugin) == sorted([PLUGIN_DLL, RENDERER_INI])
     assert registry.get(REGISTRY_DLL_SUBKEY, GRAPHICS_DLL_VALUE) == PLUGIN_DLL
     assert layer.status().installation_verified
