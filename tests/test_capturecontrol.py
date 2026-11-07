@@ -28,10 +28,10 @@ def native(tmp_path_factory):
     if vcvars is None:
         pytest.skip("MSVC unavailable")
     out = tmp_path_factory.mktemp("control-native")
-    build.build_test_host(out, vcvars)
-    # The shipped wrapper: against the fake (no SourceV2 export) the GPU
-    # runtime refuses to configure and the control worker runs passive.
-    dll = build.build_wrapper(out, vcvars)
+    # A test plugin: the shipped capture layer linked with the stand-in
+    # renderer fake_gfx.c (no SourceV2 export), so the GPU runtime refuses to
+    # configure and the control worker runs passive.
+    dll = build.build_test_plugin(out, vcvars=vcvars)
     host = out / "control_host.exe"
     build._cl(vcvars, build.COMMON_FLAGS + [str(build.SOURCE / "control_host.c"),
               f"/Fe:{host}", f"/Fo{out}\\", "/link", "kernel32.lib"], out)
@@ -74,9 +74,9 @@ def test_eventually_waits_through_the_page_that_is_mapped_but_not_written():
 def running(native, *, terminated=False, name=None):
     out, host, dll, *_ = native
     name = name or "sm64_control_test_" + uuid.uuid4().hex
-    (out / "sm64_trainer_gfx.ini").write_bytes(
-        f"wrapped=fake_gfx.dll\nstream={name}\n".encode())
-    process = subprocess.Popen([str(host), str(dll)], stdin=subprocess.PIPE,
+    # A test plugin's control page name (gfxwrap.c control_name): never the live one.
+    process = subprocess.Popen([str(host), str(dll)], env={**os.environ, "SM64_TEST_CONTROL_NAME": name},
+                               stdin=subprocess.PIPE,
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                text=True, **quiet_spawn_kwargs())
     control = None
@@ -153,7 +153,7 @@ def test_discovery_is_small_and_passive_and_unavailable_is_truthful(native, monk
         status = eventually(control.status, lambda s: s.rom_open)
         assert status.state == C.PASSIVE
         assert status.producer_pid == process.pid
-        assert status.build_id.endswith("-gpu-runtime")
+        assert status.build_id == native[3].test_plugin_build_id()
         assert control._wake is None and control._mutex is None
         opened, kernel = [], C._kernel
 

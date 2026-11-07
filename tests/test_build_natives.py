@@ -128,6 +128,28 @@ def test_a_scan_that_cannot_run_is_reported_and_the_build_continues(natives, mon
     assert target.is_file() and any("could not scan" in line for line in said)
 
 
+def test_the_bundle_is_the_one_plugin_and_the_helper():
+    """One graphics plugin file since 2026-11-07 (tools/build_renderer.py links
+    the capture layer into the renderer): no second renderer DLL is built."""
+    module = load()
+    assert [native.name for native in module.natives()] == ["sm64_trainer_gfx.dll", "SM64GpuEncoderV1.dll"]
+    assert module.RETIRED == ("GLideN64_SM64Trainer.dll",)
+
+
+def test_a_retired_renderer_leaves_the_bundle_so_nothing_installs_it(natives):
+    """A checkout built before 2026-11-07 still holds GLideN64_SM64Trainer.dll in
+    its bundle; a building run removes it (a check-only run leaves the folder be)."""
+    module, _, target = natives
+    retired = target.parent / "GLideN64_SM64Trainer.dll"
+    retired.parent.mkdir(parents=True)
+    retired.write_bytes(b"MZ an older renderer")
+    module.ensure(build=False, log=lambda _: None)
+    assert retired.is_file()
+    said = []
+    assert module.ensure(log=said.append) == {"fake.dll": "built"}
+    assert not retired.exists() and any("removed GLideN64_SM64Trainer.dll" in line for line in said)
+
+
 def test_nothing_under_the_bundle_folder_is_tracked():
     import subprocess
     tracked = subprocess.run(["git", "ls-files", "src/sm64_events/data/plugin"], cwd=ROOT,

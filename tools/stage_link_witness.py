@@ -3,9 +3,10 @@
 The output is confined to this checkout's .iteration directory or a scratch
 folder under the system temp directory (tools/build_renderer.py stages
 there, builds, and removes it). Source remains unchanged. The shipped
-renderer is the --boundary --context-lifetime staging, compiled with the
-overlay defines and modules named in tools/build_renderer.py; the opt-in
-source witnesses read a staging named by SM64_LINK_WITNESS_SOURCE.
+plugin's renderer is the --boundary --context-lifetime --ghost staging,
+compiled with the overlay defines and modules named in tools/build_renderer.py,
+which stages the capture layer beside it; the opt-in source witnesses read a
+staging named by SM64_LINK_WITNESS_SOURCE.
 """
 from __future__ import annotations
 

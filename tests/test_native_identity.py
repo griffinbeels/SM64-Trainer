@@ -70,11 +70,13 @@ def test_each_shipped_native_names_its_maker_and_what_it_is(name):
     assert identity.description.startswith("SM64 Trainer") and "Copyright (C)" in identity.copyright
 
 
-def test_the_renderer_says_it_is_gliden64_under_its_license():
-    identity = native_identity.identity_for("GLideN64_SM64Trainer.dll")
+def test_the_plugin_says_it_is_gliden64_under_its_license():
+    """One file since 2026-11-07: the plugin IS LINK's GLideN64 with the trainer's additions."""
+    identity = native_identity.identity_for("sm64_trainer_gfx.dll")
     assert "GLideN64" in identity.description and "LINK's v4.2" in identity.description
     assert "GNU GPL v2" in identity.description
     assert "Sergey Lipskiy" in identity.copyright and "GNU GPL v2" in identity.copyright
+    assert native_identity.SHIPPED == ("sm64_trainer_gfx.dll", "SM64GpuEncoderV1.dll")
 
 
 def test_an_unnamed_helper_is_still_named_as_ours():
@@ -172,43 +174,49 @@ def test_a_helper_built_through_the_shared_path_carries_its_version_resource(tmp
 # -- repeatable builds -----------------------------------------------------------------
 
 @toolchain
-def test_the_wrapper_and_the_encoder_helper_built_twice_are_the_same_bytes(tmp_path, monkeypatch):
+def test_a_test_plugin_and_the_encoder_helper_built_twice_are_the_same_bytes(tmp_path, monkeypatch):
     """Two clean builds in different folders, without the test compile cache:
-    the same sha256, the source date in the PE header, a readable version."""
+    the same sha256; the shipped helper has the source date in its PE header
+    and a readable version. A test plugin links the capture layer as the
+    shipped plugin's build does; the shipped plugin's own double build needs
+    MSBuild and its prebuilt libraries (opt-in, below)."""
     monkeypatch.setenv("SM64_NATIVE_BUILD_CACHE", "0")
     build = _tool("build_plugin")
     digests = []
     for folder in ("first", "second"):
-        built = (build.build_wrapper(tmp_path / folder), build.build_encoder_helper(tmp_path / folder))
+        built = (build.build_test_plugin(tmp_path / folder), build.build_encoder_helper(tmp_path / folder))
         digests.append(tuple(hashlib.sha256(path.read_bytes()).hexdigest() for path in built))
     assert digests[0] == digests[1]
     date = build._build_term()[1]
-    for name in ("sm64_trainer_gfx.dll", "SM64GpuEncoderV1.dll"):
-        path = tmp_path / "first" / name
-        assert link_time(path) == date, "the PE header orders installs: it must be the source date"
-        found = version_strings(path)
-        assert found["CompanyName"] == "SM64 Trainer" and found["OriginalFilename"] == name
-        assert found["FileVersion"] == native_identity.calendar_version(date).text
+    path = tmp_path / "first" / "SM64GpuEncoderV1.dll"
+    assert link_time(path) == date, "the PE header orders installs: it must be the source date"
+    found = version_strings(path)
+    assert found["CompanyName"] == "SM64 Trainer" and found["OriginalFilename"] == path.name
+    assert found["FileVersion"] == native_identity.calendar_version(date).text
+    found = version_strings(tmp_path / "first" / "sm64_trainer_gfx.dll")
+    assert "test graphics plugin" in found["FileDescription"] and found["FileVersion"].startswith("0.0.0.0")
 
 
-@pytest.mark.skipif(os.environ.get("SM64_TEST_RENDERER_REPRO") != "1",
-                    reason="opt-in: two full renderer builds need its prebuilt libraries (SM64_TEST_RENDERER_REPRO=1)")
-def test_the_renderer_built_twice_is_the_same_bytes(tmp_path):
+@pytest.mark.skipif(os.environ.get("SM64_TEST_PLUGIN_REPRO") != "1",
+                    reason="opt-in: two full plugin builds need the renderer's prebuilt libraries "
+                           "(SM64_TEST_PLUGIN_REPRO=1)")
+def test_the_plugin_built_twice_is_the_same_bytes(tmp_path):
     build = _tool("build_renderer")
-    digests = [hashlib.sha256(build.build_renderer(tmp_path / folder).read_bytes()).hexdigest()
+    digests = [hashlib.sha256(build.build_graphics_plugin(tmp_path / folder).read_bytes()).hexdigest()
                for folder in ("first", "second")]
     assert digests[0] == digests[1]
-    path = tmp_path / "first" / "GLideN64_SM64Trainer.dll"
+    path = tmp_path / "first" / "sm64_trainer_gfx.dll"
     assert link_time(path) == build._build_term()[1]
     found = version_strings(path)
     assert "GLideN64" in found["FileDescription"] and found["CompanyName"] == "SM64 Trainer"
+    assert found["OriginalFilename"] == path.name
 
 
 def test_a_build_id_names_the_toolchain_and_the_source_date(monkeypatch):
     """A toolchain update or a newer source date changes the bytes, so it changes the id."""
     build = _tool("build_plugin")
-    before = build.wrapper_build_id()
+    before = build.sources_digest()
     monkeypatch.setattr(native_identity, "toolchain", lambda vcvars: "msvc 99.0; sdk 99")
-    toolchain_changed = build.wrapper_build_id()
+    toolchain_changed = build.sources_digest()
     monkeypatch.setattr(native_identity, "source_date", lambda paths: 2_000_000_000)
-    assert len({before, toolchain_changed, build.wrapper_build_id()}) == 3
+    assert len({before, toolchain_changed, build.sources_digest()}) == 3

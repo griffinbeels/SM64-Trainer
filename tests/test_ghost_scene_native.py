@@ -37,7 +37,7 @@ def test_ddd_portal_coordinates(tmp_path):
     assert "DDD portal passed: roots=TRS+modelview held=world shadow=once particles=once connector=bounded" in result.stdout
 
 
-def test_scene_header_changes_renderer_identity(tmp_path, monkeypatch):
+def test_scene_header_changes_plugin_identity(tmp_path, monkeypatch):
     spec = importlib.util.spec_from_file_location("scene_renderer_build", ROOT / "tools/build_renderer.py")
     build = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(build)
@@ -53,6 +53,6 @@ def test_scene_header_changes_renderer_identity(tmp_path, monkeypatch):
     monkeypatch.setattr(build, "REPO", tmp_path)
     monkeypatch.setattr(build, "overlay_sources", lambda: ("ghost_scene.h",))
     monkeypatch.setattr(build, "_load", lambda *args: SimpleNamespace(component_hash=lambda: "model"))
-    original = build.renderer_build_id()
+    original = build.plugin_build_id()
     header.write_bytes(header.read_bytes() + b"\nchanged connector\n")
-    assert build.renderer_build_id() != original
+    assert build.plugin_build_id() != original

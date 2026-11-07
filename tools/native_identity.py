@@ -1,6 +1,6 @@
 """Who made each native file and what it is, and the same bytes from the same sources.
 
-Every Windows binary this repository compiles (the three shipped natives, the
+Every Windows binary this repository compiles (the two shipped natives, the
 scene lab's helpers and the test hosts) passes through here on its way out of
 the toolchain. Two things happen to it:
 
@@ -33,8 +33,8 @@ the toolchain. Two things happen to it:
   - not kept: cl `/Brepro` changed nothing once /experimental:deterministic
     was on, and lib's archive is an intermediate the renderer only reads
     objects from.
-  tests/test_native_identity.py builds the wrapper and the encoder helper
-  twice; the renderer's double build is opt-in (SM64_TEST_RENDERER_REPRO=1).
+  tests/test_native_identity.py builds a test plugin and the encoder helper
+  twice; the shipped plugin's double build is opt-in (SM64_TEST_PLUGIN_REPRO=1).
 
 The shipped natives then get one more step. Project64's installed plugin is
 ordered by its PE TimeDateStamp (core/plugin_ownership.py: a trainer never
@@ -89,17 +89,15 @@ class Identity(NamedTuple):
     copyright: str
 
 
-# What each output is. The renderer and the wrapper carry GLideN64's GPL v2,
-# as the wrapper's own About box and renderer/README.md say.
+# What each output is. The graphics plugin is GLideN64 with the trainer's
+# additions linked in, so it carries GLideN64's GPL v2, as its own About box
+# and renderer/README.md say.
 IDENTITIES = {
     "sm64_trainer_gfx.dll": Identity(
-        "SM64 Trainer graphics plugin for Project64: loads the trainer's renderer and records practice replays",
-        "Copyright (C) SM64 Trainer contributors. GNU GPL v2, like the GLideN64 renderer it loads."),
-    "GLideN64_SM64Trainer.dll": Identity(
-        "SM64 Trainer renderer: GLideN64 (LINK's v4.2 build, Luna-Project64) with the trainer's replay "
-        "overlay, under the GNU GPL v2",
-        "GLideN64: Copyright (C) Sergey Lipskiy and the GLideN64 contributors. Overlay: Copyright (C) "
-        "SM64 Trainer contributors. GNU GPL v2."),
+        "SM64 Trainer graphics plugin for Project64: GLideN64 (LINK's v4.2 build, Luna-Project64) with the "
+        "trainer's practice replay capture, under the GNU GPL v2",
+        "GLideN64: Copyright (C) Sergey Lipskiy and the GLideN64 contributors. SM64 Trainer additions: "
+        "Copyright (C) SM64 Trainer contributors. GNU GPL v2."),
     "SM64GpuEncoderV1.dll": Identity(
         "SM64 Trainer hardware video encoder for practice replays (loaded by the trainer's own helper process)",
         "Copyright (C) SM64 Trainer contributors. GNU GPL v3 or later. Includes NVIDIA's nvEncodeAPI.h (MIT)."),
@@ -110,13 +108,12 @@ IDENTITIES = {
     "ghost_sound_host.exe": Identity("SM64 Trainer scene lab ghost sound helper (developer tool)", OURS_GPL3),
     "tap_offline_host.exe": Identity("SM64 Trainer scene tap test host (developer tool)", OURS_GPL3),
     "gfxwrap_host.exe": Identity("SM64 Trainer graphics plugin test host (developer tool)", OURS_GPL3),
-    "fake_gfx.dll": Identity("SM64 Trainer stand-in renderer for tests (developer tool)", OURS_GPL3),
     "eos-transport.exe": Identity("SM64 Trainer online transport helper (EOS)",
                                   "Copyright (C) SM64 Trainer contributors. MIT License."),
     "eos-core-test.exe": Identity("SM64 Trainer online transport tests (developer tool)",
                                   "Copyright (C) SM64 Trainer contributors. MIT License."),
 }
-SHIPPED = ("sm64_trainer_gfx.dll", "SM64GpuEncoderV1.dll", "GLideN64_SM64Trainer.dll")
+SHIPPED = ("sm64_trainer_gfx.dll", "SM64GpuEncoderV1.dll")
 
 
 def identity_for(filename: str) -> Identity:

@@ -1,18 +1,21 @@
-"""Make this checkout's three bundled natives match its sources.
+"""Make this checkout's two bundled natives match its sources.
 
     uv run python tools/build_natives.py            # build what is out of date
     uv run python tools/build_natives.py --strict   # and fail if any cannot be (wrap, release)
     uv run python tools/build_natives.py --check    # only say what is out of date
 
-The capture wrapper, the NVENC encoder helper and the renderer are BUILD
-OUTPUTS: git ignores src/sm64_events/data/plugin/ (since 2026-09-23; before
-that every native edit committed a 12.5 MB renderer, and parallel branches
-conflicted on it). Each file carries an embedded build id that names its
-sources (tools/build_plugin.py, tools/build_renderer.py). A file whose id
-matches is left alone; otherwise the build for that id comes from a
-content-keyed cache shared by every checkout
+The graphics plugin (sm64_trainer_gfx.dll: LINK's GLideN64 v4.2, the overlay
+and the capture layer in one file since 2026-11-07) and the 64-bit encoder
+helper are BUILD OUTPUTS: git ignores src/sm64_events/data/plugin/ (since
+2026-09-23; before that every native edit committed a 12.5 MB renderer, and
+parallel branches conflicted on it). Each file carries an embedded build id
+that names its sources (tools/build_renderer.py, tools/build_plugin.py). A
+file whose id matches is left alone; otherwise the build for that id comes
+from a content-keyed cache shared by every checkout
 (%LOCALAPPDATA%/SM64Trainer/build-cache/natives/<id>), and only a cache miss
-compiles: about 20 s for the renderer, 3-7 s for each of the other two.
+compiles: about 20 s for the plugin, 3-7 s for the helper. A native this
+repository no longer builds (RETIRED: the renderer that was a second DLL) is
+removed from the bundle, so nothing installs it from there.
 
 Who runs it: `python -m sm64_events.main` from a checkout (so
 run-test-server.bat) before serving, the full verification lane (so wrap),
@@ -84,13 +87,16 @@ class Native(NamedTuple):
 def natives() -> tuple[Native, ...]:
     plugin, renderer = _load("build_plugin"), _load("build_renderer")
     return (
-        Native("sm64_trainer_gfx.dll", lambda: plugin.wrapper_build_id() + "-gpu-runtime",
-               plugin.build_wrapper, "the x86 MSVC toolchain (VS Build Tools)"),
+        Native("sm64_trainer_gfx.dll", renderer.plugin_build_id, renderer.build_graphics_plugin,
+               "the MSVC toolchain and the renderer's prebuilt libraries (renderer/README.md)"),
         Native("SM64GpuEncoderV1.dll", plugin.helper_build_id, plugin.build_encoder_helper,
                "the x64 MSVC toolchain (VS Build Tools)"),
-        Native("GLideN64_SM64Trainer.dll", renderer.renderer_build_id, renderer.build_renderer,
-               "the MSVC toolchain and the renderer's prebuilt libraries (renderer/README.md)"),
     )
+
+
+# Files earlier builds put in the bundle and this one never makes: until
+# 2026-11-07 the renderer was a second DLL beside the capture wrapper.
+RETIRED = ("GLideN64_SM64Trainer.dll",)
 
 
 def _entry(native: Native, expected: str) -> Path:
@@ -173,6 +179,14 @@ def ensure(*, build: bool = True, strict: bool = False, log=print) -> dict[str, 
     whatever `strict` says. `strict` raises instead of returning when any
     native is not fresh afterwards."""
     states, problems, installed = {}, [], []
+    if build:
+        for name in RETIRED:
+            if (BUNDLE / name).is_file():
+                try:
+                    (BUNDLE / name).unlink()
+                    log(f"  removed {name}: this repository no longer builds it")
+                except PermissionError as failure:
+                    problems.append(f"{name} is retired but in use, so it stayed ({failure})")
     for native in natives():
         target = BUNDLE / native.name
         expected = native.identity()

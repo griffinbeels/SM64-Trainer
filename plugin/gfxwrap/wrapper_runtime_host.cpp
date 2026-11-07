@@ -1,4 +1,4 @@
-/* Drives actual wrapper exports and control watchdog; CPU-only child fixture. */
+/* Drives a test plugin's actual exports and control watchdog; CPU-only child fixture. */
 #include "zilmar.h"
 #include "renderer_boundary.h"
 #include "practice_rom_fixture.h"
@@ -20,8 +20,8 @@ int main(int argc,char**argv){if(argc!=2)return 2;
   unsigned n=0,d=0;
   if(!strncmp(line,"quit",4))break;
   if(sscanf_s(line,"frame %u %u",&n,&d)==2){
-   HMODULE original=GetModuleHandleW(L"original.dll");if(!original)original=GetModuleHandleW(L"unsupported.dll");
-   auto delta=reinterpret_cast<void(__cdecl*)(unsigned)>(GetProcAddress(original,"TestDelta"));delta(d);
+   // The stand-in renderer is linked into the same test plugin.
+   auto delta=reinterpret_cast<void(__cdecl*)(unsigned)>(GetProcAddress(module,"TestDelta"));delta(d);
    for(unsigned i=0;i<n;i++)api.ProcessDList();api.UpdateScreen();printf("%u %u\n",unsigned(info.RDRAM[0]),vi);
   }else if(!strncmp(line,"record",6)){rb_record r{};int result=take(&r);
    printf("%d %llu %u %u %u %u %u %u\n",result,r.occurrence,r.stamp.lists_since,
