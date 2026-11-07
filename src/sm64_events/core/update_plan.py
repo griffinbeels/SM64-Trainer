@@ -66,10 +66,16 @@ BUNDLED_NATIVES = ("sm64_trainer_gfx.dll", "SM64GpuEncoderV1.dll")
 #: these exact bytes. validate_release_manifest requires it, so release tooling
 #: refuses a package those apps would reject.
 #:
-#: When it may go. Once no supported app predates the first one-plugin release:
-#: drop the name here, and the placeholder leaves each app folder through the
-#: manifest plan's delete list. tests/test_update_plan.py holds the rule those
-#: apps run.
+#: When it may go. The placeholder may go once no supported app predates the
+#: first one-plugin release: then drop the name here, and the placeholder leaves
+#: each app folder through the manifest plan's delete list.
+#: tests/test_update_plan.py holds the rule those apps run.
+#:
+#: Never change RETIRED_NATIVE_TEXT's bytes. The stable app v1.9.1 refreshes
+#: Project64's plugin by itself and can copy this text there under a renderer
+#: name between an update's file swap and its restart;
+#: core/plugin_installation.py::our_leftovers claims a file holding exactly
+#: these bytes as ours, so the next refresh deletes it.
 RETIRED_NATIVES = ("GLideN64_SM64Trainer.dll",)
 RETIRED_NATIVE_TEXT = (b"This file holds no program code. SM64 Trainer versions before the first "
                        b"one-plugin release check that it exists before they update. "

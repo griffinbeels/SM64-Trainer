@@ -25,11 +25,14 @@ from sm64_events.core.capturelayer import (
     GRAPHICS_DLL_VALUE, LEFTOVERS, LEGACY_RENDERER_DLL, LEGACY_RENDERER_FILE, LEGACY_WRAPPER_INI,
     NEEDS_RESTART, PLUGIN_DLL, REGISTRY_DLL_SUBKEY, REGRESSED,
 )
+from sm64_events.core.capturelayer import CaptureLayer
 from sm64_events.core.plugin_installation import PluginInstallError
 from sm64_events.core.renderer_settings import RENDERER_INI
+from sm64_events.core.update_plan import RETIRED_NATIVE_TEXT
 from test_capturelayer import (
-    CHECKOUT_A, FROZEN_APP, ORIGINAL_GRAPHICS_DLL, _as, build, dll_source as dll_source,
-    held_like_a_loaded_plugin, make_layer, pj64_dir as pj64_dir, settings_path as settings_path,
+    CHECKOUT_A, FROZEN_APP, ORIGINAL_GRAPHICS_DLL, FakeProcesses, FakeRegistry, _as, build,
+    dll_source as dll_source, held_like_a_loaded_plugin, make_layer, pj64_dir as pj64_dir,
+    settings_path as settings_path,
 )
 from test_plugin_elevation import (
     deny_first_copy, install as install, privileged_request as privileged_request,
@@ -259,6 +262,65 @@ def test_a_refresh_waits_while_project64_holds_the_old_renderer(pj64_dir, dll_so
     assert len([r for r in caplog.records if "refresh waits" in r.getMessage()]) == 1
     assert layer.refresh_if_stale() is True
     assert plugin_files(plugin) == sorted([PLUGIN_DLL, RENDERER_INI])
+
+
+# -- the placeholder text an older stable app may have copied ------------------
+
+def v191_window(pj64_dir, dll_source, settings_path):
+    """What the stable app v1.9.1 leaves when its refresh ticks between an
+    update's file swap and its restart: its bundle is then the new plugin and
+    the placeholder text, and it copies both (the text as its renderer), names
+    that in the ini and records the new plugin's hash. Its record carries only
+    v1.9.1's keys: no owned_sha256, no installed_by."""
+    plugin = pj64_dir / "Plugin"
+    (plugin / PLUGIN_DLL).write_bytes(dll_source.read_bytes())
+    (plugin / LEGACY_RENDERER_DLL).write_bytes(RETIRED_NATIVE_TEXT)
+    (plugin / LEGACY_WRAPPER_INI).write_text(f"wrapped={LEGACY_RENDERER_DLL}\n")
+    settings_path.write_text(json.dumps({
+        "consented_at": "2026-09-19T12:00:00+00:00", "pj64_dir": str(pj64_dir),
+        "wrapped": LEGACY_RENDERER_DLL, "uninstalled_at": None,
+        "installed_sha256": hashlib.sha256(dll_source.read_bytes()).hexdigest(),
+        "installation_receipt": {"reason": "automatic_refresh"},
+        "installed_renderer_sha256": hashlib.sha256(RETIRED_NATIVE_TEXT).hexdigest(),
+        "renderer_receipt": {"reason": "automatic_refresh"},
+        "previous_graphics_dll": ORIGINAL_GRAPHICS_DLL}))
+    registry = FakeRegistry({(REGISTRY_DLL_SUBKEY, GRAPHICS_DLL_VALUE): PLUGIN_DLL})
+    layer = CaptureLayer(registry, FakeProcesses(None), settings_path, dll_source,
+                         auto_refresh=True, installer=FROZEN_APP)
+    return layer, registry, plugin
+
+
+@pytest.mark.parametrize("name", LEFTOVERS)
+def test_the_placeholder_text_under_an_older_name_is_ours_and_nothing_else_is(
+        pj64_dir, dll_source, settings_path, name):
+    layer, _, _ = make_layer(pj64_dir, dll_source, settings_path)
+    layer.install(True)
+    plugin = pj64_dir / "Plugin"
+    (plugin / name).write_bytes(RETIRED_NATIVE_TEXT + b" ")      # not the text: the user's
+    assert layer.status().leftovers == []
+    (plugin / name).write_bytes(RETIRED_NATIVE_TEXT)
+    assert layer.status().leftovers == [name]
+    assert layer.refresh_if_stale() is True
+    assert plugin_files(plugin) == sorted([PLUGIN_DLL, RENDERER_INI])
+
+
+def test_what_v191_leaves_in_the_update_window_reads_stale_and_install_cleans_it(
+        pj64_dir, dll_source, settings_path):
+    """No adoption rule exists for a record without installed_by, so the new
+    app does not refresh it by itself; it offers Install, which keeps the
+    player's Graphics Dll choice and leaves only the plugin and its settings."""
+    layer, registry, plugin = v191_window(pj64_dir, dll_source, settings_path)
+    status = layer.status()
+    assert status.wrapper_current and status.leftovers == [LEGACY_WRAPPER_INI, LEGACY_RENDERER_DLL]
+    assert not status.installation_verified and status.automatic_update is False
+    assert any(step["action"] == "install" for step in status.steps)
+    assert layer.refresh_if_stale() is False
+    layer.install(True)
+    assert plugin_files(plugin) == sorted([PLUGIN_DLL, RENDERER_INI])
+    assert registry.get(REGISTRY_DLL_SUBKEY, GRAPHICS_DLL_VALUE) == PLUGIN_DLL
+    assert layer.status().installation_verified
+    layer.uninstall()
+    assert registry.get(REGISTRY_DLL_SUBKEY, GRAPHICS_DLL_VALUE) == ORIGINAL_GRAPHICS_DLL
 
 
 # -- the UAC helper reaches the same end state ---------------------------------

@@ -35,9 +35,11 @@ paths:
   older install's `sm64_trainer_gfx.ini`, `sm64_trainer_gfx.renderer` and
   `GLideN64_SM64Trainer.dll` read as `leftovers` (stale, not broken); install
   and permitted refresh delete them last, all or none, only ours (a `-renderer`
-  build id, an ini of `wrapped=` lines), never a link and never the file
-  `Graphics Dll` names (that waits for Install). A VirtualStore copy of the old
-  ini decides nothing and is never written.
+  build id, an ini of `wrapped=` lines, or the app's retired-name placeholder
+  text, which the stable v1.9.1 can copy there between an update's swap and its
+  restart), never a link and never the file `Graphics Dll` names (that waits
+  for Install). A VirtualStore copy of the old ini decides nothing and is never
+  written.
 - **The renderer's settings:** every `GLideN64.ini` Project64 may read (the
   physical file, created when missing; an existing VirtualStore copy, never
   created) loads frame buffer emulation off (`frame_buffer_emulation_off`).

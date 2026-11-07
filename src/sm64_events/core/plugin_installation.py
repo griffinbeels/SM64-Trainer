@@ -11,6 +11,7 @@ import re
 import shutil
 
 from sm64_events.core.paths import WRAPPER_DLL_NAME
+from sm64_events.core.update_plan import RETIRED_NATIVE_TEXT
 from sm64_events.core.setup_files import restore_on_failure
 
 log = logging.getLogger("sm64.capturelayer")
@@ -119,12 +120,22 @@ def _wrapper_config(path: Path) -> bool:
     return bool(lines) and all(line.startswith("wrapped=") for line in lines)
 
 
+def _placeholder(path: Path, size: int) -> bool:
+    """The app's retired-name placeholder text (core/update_plan.py
+    RETIRED_NATIVE_TEXT), byte for byte. The stable app v1.9.1 refreshes the
+    plugin by itself and copies its bundled renderer without looking at it:
+    if its refresh ticks between an update's file swap and its restart, it
+    copies this text into Project64's Plugin folder under a renderer name."""
+    return size == len(RETIRED_NATIVE_TEXT) and path.read_bytes() == RETIRED_NATIVE_TEXT
+
+
 def our_leftovers(plugin_dir: Path, *, keep: str | None = None, identity=build_id) -> list[Path]:
     """The older install's files in `plugin_dir` that this trainer wrote: a
-    renderer whose build id carries the -renderer role, and the wrapper's ini.
-    A user's own file under one of these names stays, and so do a link and
-    `keep`, the file Project64's `Graphics Dll` names: deleting it would leave
-    Project64 selecting a missing plugin."""
+    renderer whose build id carries the -renderer role, the wrapper's ini,
+    and the app's placeholder text under any of these names. A user's own
+    file under one of these names stays, and so do a link and `keep`, the
+    file Project64's `Graphics Dll` names: deleting it would leave Project64
+    selecting a missing plugin."""
     found = []
     for name in LEFTOVERS:
         path = plugin_dir / name
@@ -135,8 +146,9 @@ def our_leftovers(plugin_dir: Path, *, keep: str | None = None, identity=build_i
             if (getattr(stat, "st_file_attributes", 0) & 0x400 or stat.st_nlink != 1
                     or not path.is_file() or path.is_symlink()):
                 continue
-            ours = (_wrapper_config(path) if name == LEGACY_WRAPPER_INI
-                    else (identity(path) or b"").endswith(b"-renderer"))
+            ours = (_placeholder(path, stat.st_size)
+                    or (_wrapper_config(path) if name == LEGACY_WRAPPER_INI
+                        else (identity(path) or b"").endswith(b"-renderer")))
         except OSError:
             continue
         if ours:
