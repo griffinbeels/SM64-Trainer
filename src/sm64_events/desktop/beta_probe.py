@@ -15,6 +15,7 @@ from sm64_events.core.build_channel import (
     BETA_APP_DIR, CONFIG_FILENAME, STABLE_APP_DIR, BuildChannel, read_metadata,
 )
 from sm64_events.core.reporting_setup import CONFIG_FILE as REPORTING_CONFIG, read_config_dsn
+from sm64_events.core.update_plan import BUNDLED_NATIVES
 
 FLAG = "--beta-self-check"
 _UI = "sm64_events/ui/"
@@ -36,10 +37,10 @@ _ASSETS = (
         "assets/community/google-sans.ttf", "assets/community/google-sans-OFL.txt",
     )),
 )
-_NATIVES = (
-    ("sm64_trainer_gfx.dll", 0x14C), ("GLideN64_SM64Trainer.dll", 0x14C),
-    ("SM64GpuEncoderV1.dll", 0x8664),
-)
+#: Each bundled native (core/update_plan.py::BUNDLED_NATIVES, in that order):
+#: its PE machine and the core/paths.py resolver that must find it.
+_NATIVES = tuple(zip(BUNDLED_NATIVES, ((0x14C, "bundled_plugin_dll"), (0x8664, "bundled_encoder_dll")),
+                     strict=True))
 _IMPORTS = (
     ("sm64_events.ghost.bundled_beta", ("BundledPopulation", "with_bundled_beta")),
     ("sm64_events.desktop.beta_runtime", ("run_if_needed",)),
@@ -215,8 +216,7 @@ def collect_report(*, fixture: ProbeRuntime | None = None, importer=None):
     for relative in _ASSETS:
         check("asset:" + relative, lambda relative=relative: _file(bundle, relative))
     check("reporting_configuration", lambda: _reporting_configuration(bundle))
-    resolvers = ("bundled_plugin_dll", "bundled_renderer_dll", "bundled_encoder_dll")
-    for (name, machine), resolver in zip(_NATIVES, resolvers, strict=True):
+    for name, (machine, resolver) in _NATIVES:
         path = bundle / "sm64_events/data/plugin" / name
         def native(path=path, machine=machine, resolver=resolver):
             resolved = getattr(paths, resolver)()

@@ -12,7 +12,8 @@ from sm64_events.bootstrap.installer import (APP_EXE, create_desktop_shortcut,
                                              default_install_dir, download,
                                              install_tree, latest_release,
                                              launch_app, run_install)
-from sm64_events.core.update_plan import INSTALLED_MANIFEST, ZIP_ASSET
+from sm64_events.core.update_plan import (BUNDLED_NATIVES, INSTALLED_MANIFEST, NATIVE_FOLDER,
+                                          RETIRED_NATIVE_TEXT, RETIRED_NATIVES, ZIP_ASSET)
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from make_manifest import make_manifest  # noqa: E402
 
@@ -100,8 +101,8 @@ def _zip_bytes(files):
 def _app_files(exe):
     return {APP_EXE: exe, "_internal/python313.dll": b"PYTHON", "_internal/ffmpeg.exe": b"FFMPEG",
             "_internal/sm64_events/ui/index.html": b"UI", **{
-                "_internal/sm64_events/data/plugin/" + name: b"NATIVE" for name in
-                ("sm64_trainer_gfx.dll", "GLideN64_SM64Trainer.dll", "SM64GpuEncoderV1.dll")}}
+                f"{NATIVE_FOLDER}/{name}": b"NATIVE" for name in BUNDLED_NATIVES},
+            **{f"{NATIVE_FOLDER}/{name}": RETIRED_NATIVE_TEXT for name in RETIRED_NATIVES}}
 
 
 def test_install_tree_fresh_and_overwrite(tmp_path):

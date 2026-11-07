@@ -43,6 +43,21 @@ PATCH_NOTES_MARKER = "## What's new"
 BACKUP_DIR = ".update_backup"
 STAGING_DIR = ".update_staging"
 JOURNAL_NAME = "update_journal.json"
+#: THE list of native files every app carries (core/paths.py::bundled_plugin_file
+#: finds them in this folder): the graphics plugin Project64 loads (x86), which
+#: the setup screen installs, then the encoder helper the server loads (x64).
+#: The builders, the beta installer and the beta self-check read it from here.
+NATIVE_FOLDER = "_internal/sm64_events/data/plugin"
+BUNDLED_NATIVES = ("sm64_trainer_gfx.dll", "SM64GpuEncoderV1.dll")
+#: Names apps from 1.10.0-beta.22 on require in every offered release: they
+#: refuse an update whose manifest has no non-empty file there, and then offer
+#: nothing. The renderer DLL once shipped under this name; every release now
+#: carries a short text file in its place (tools/build_exe.py writes it), never
+#: a program, so those apps still update. validate_release_manifest requires it
+#: too, so release tooling refuses a package those apps would reject.
+RETIRED_NATIVES = ("GLideN64_SM64Trainer.dll",)
+RETIRED_NATIVE_TEXT = (b"SM64 Trainer keeps this file so older versions of the app can still update.\r\n"
+                       b"It is not a program. The graphics plugin is sm64_trainer_gfx.dll.\r\n")
 
 _RESERVED_FIRST_SEGMENTS = {INSTALLED_MANIFEST, JOURNAL_NAME,
                             BACKUP_DIR, STAGING_DIR}
@@ -140,8 +155,7 @@ def validate_release_manifest(manifest: Manifest, offered_version: str) -> None:
     files = {entry.path for entry in manifest.files if entry.size > 0}
     required = {"SM64Trainer.exe", "_internal/ffmpeg.exe",
                 "_internal/sm64_events/ui/index.html",
-                *(f"_internal/sm64_events/data/plugin/{name}" for name in
-                  ("sm64_trainer_gfx.dll", "GLideN64_SM64Trainer.dll", "SM64GpuEncoderV1.dll"))}
+                *(f"{NATIVE_FOLDER}/{name}" for name in (*BUNDLED_NATIVES, *RETIRED_NATIVES))}
     if not required <= files or not any(re.fullmatch(r"_internal/python[0-9]+\.dll", path) for path in files):
         raise ValueError("manifest is missing essential application files")
 

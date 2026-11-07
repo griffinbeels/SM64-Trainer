@@ -12,6 +12,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import build_beta
 from sm64_events.core.build_channel import parse_metadata
+from sm64_events.core.update_plan import BUNDLED_NATIVES, RETIRED_NATIVE_TEXT, RETIRED_NATIVES
 from test_beta_channel import metadata
 from beta_ghosts import COLLECTION_NAME, review_collection
 
@@ -21,8 +22,7 @@ def artifact(tmp_path):
     build = parse_metadata(metadata())
     folder = tmp_path / "SM64TrainerBeta"
     names = ["SM64TrainerBeta.exe", "_internal/ffmpeg.exe", "_internal/sm64_events/ui/index.html",
-             *["_internal/sm64_events/data/plugin/" + name for name in
-               ("sm64_trainer_gfx.dll", "GLideN64_SM64Trainer.dll", "SM64GpuEncoderV1.dll")],
+             *["_internal/sm64_events/data/plugin/" + name for name in (*BUNDLED_NATIVES, *RETIRED_NATIVES)],
              *["_internal/" + name for name in
                ("ukiki.ico", "behaviours_us.tsv", "behaviours_jp.tsv", "symbols_us.tsv", "symbols_jp.tsv",
                 "rank_standards.seed.json", "defaults.seed.json", "sheet_ladders.seed.json",
@@ -47,8 +47,14 @@ def test_beta_args_share_app_assets_but_isolate_every_build_output(tmp_path):
                         ("--specpath", tmp_path / "work" / "spec")):
         assert args[args.index(flag) + 1] == str(value)
     assert any(str(config) in arg for arg in args)
-    for expected in ("ffmpeg.exe", "sm64_trainer_gfx.dll", "GLideN64_SM64Trainer.dll", "SM64GpuEncoderV1.dll"):
+    for expected in ("ffmpeg.exe", *BUNDLED_NATIVES):
         assert any(expected in arg for arg in args)
+    # Older apps refuse an update without a file at each retired name: the
+    # build carries the placeholder text there, never a program.
+    for name in RETIRED_NATIVES:
+        placeholder = tmp_path / "work" / "retired-natives" / name
+        assert placeholder.read_bytes() == RETIRED_NATIVE_TEXT and not placeholder.read_bytes().startswith(b"MZ")
+        assert f"{placeholder};sm64_events/data/plugin" in args or f"{placeholder}:sm64_events/data/plugin" in args
 
 
 def test_friend_zip_contains_complete_folder_and_matches_sha_receipt(artifact, tmp_path):

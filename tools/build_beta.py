@@ -26,7 +26,8 @@ from sm64_events.core.build_channel import (BETA_APP_DIR, BuildChannel, CONFIG_F
                                            read_metadata)  # noqa: E402
 from sm64_events.core.reporting_setup import CONFIG_FILE as REPORTING_CONFIG, read_config_dsn  # noqa: E402
 from build_exe import (COLLECT, SEP, _source_date_epoch, app_args, needs_reexec, scan_built,  # noqa: E402
-                       stage_reporting)
+                       stage_reporting, stage_retired_natives)
+from sm64_events.core.update_plan import BUNDLED_NATIVES, RETIRED_NATIVES  # noqa: E402
 from make_manifest import build_zip  # noqa: E402
 from beta_ghosts import (ApprovedCollection, COLLECTION_NAME, matches, review_collection,
                          candidate_author, seed_descriptor)  # noqa: E402
@@ -86,7 +87,8 @@ def check_prerequisites(ffmpeg: str | None) -> str:
 def beta_args(ffmpeg: str, metadata_path: Path, *, dist: Path = DIST,
               work: Path = WORK) -> list[str]:
     return app_args(ffmpeg, name=BETA_APP_DIR, metadata_path=metadata_path, reporting_path=stage_reporting(work),
-                    distpath=dist, workpath=work / "pyinstaller", specpath=work / "spec")
+                    distpath=dist, workpath=work / "pyinstaller", specpath=work / "spec",
+                    retired_natives=stage_retired_natives(work))
 
 
 def installer_args(*, work: Path = WORK) -> list[str]:
@@ -108,7 +110,7 @@ def validate_artifact(folder: Path, build: BuildChannel, *, ghosts: ApprovedColl
                 internal / CONFIG_FILENAME, internal / REPORTING_CONFIG,
                 internal / "sm64_events" / "ui" / "index.html",
                 *[internal / "sm64_events" / "data" / "plugin" / name
-                  for name in ("sm64_trainer_gfx.dll", "GLideN64_SM64Trainer.dll", "SM64GpuEncoderV1.dll")],
+                  for name in (*BUNDLED_NATIVES, *RETIRED_NATIVES)],
                 *[internal / name for name in ("ukiki.ico", "behaviours_us.tsv", "behaviours_jp.tsv",
                     "symbols_us.tsv", "symbols_jp.tsv", "rank_standards.seed.json", "defaults.seed.json",
                     "sheet_ladders.seed.json", "sheet_library.seed.json.gz", "library_overrides.json",

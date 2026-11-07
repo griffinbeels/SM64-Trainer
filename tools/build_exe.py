@@ -32,6 +32,7 @@ sys.path.insert(0, str(REPO / "src"))
 DATA_DIR = REPO / "src" / "sm64_events" / "data"
 SEP = ";" if os.name == "nt" else ":"
 from bundle_policy import data_inputs, ui_inputs  # noqa: E402
+from sm64_events.core.update_plan import BUNDLED_NATIVES  # noqa: E402
 # Native/binary deps whose data files or submodules PyInstaller's auto
 # analysis can miss — collect everything for each.
 # proctap in particular: its backend is chosen by name at runtime and its
@@ -62,7 +63,7 @@ def app_args(ffmpeg: "str | None", *, name: str = "SM64Trainer",
              version_hook: "Path | None" = None,
              version_metadata: "Path | None" = None,
              distpath: "Path | None" = None, workpath: "Path | None" = None,
-             specpath: "Path | None" = None) -> list[str]:
+             specpath: "Path | None" = None, retired_natives: "tuple[Path, ...]" = ()) -> list[str]:
     argv = [
         str(REPO / "gui_entry.py"),
         "--name", name,
@@ -85,14 +86,17 @@ def app_args(ffmpeg: "str | None", *, name: str = "SM64Trainer",
         f"{REPO / 'src' / 'sm64_events' / 'data' / 'symbols_us.tsv'}{SEP}.",
         "--add-data",
         f"{REPO / 'src' / 'sm64_events' / 'data' / 'symbols_jp.tsv'}{SEP}.",
-        # THE CAPTURE LAYER (core/paths.py::bundled_plugin_file): the wrapper
-        # graphics plugin and the renderer it wraps, which the setup screen
-        # installs into Project64, plus the 64-bit encoder helper the server
-        # spawns. Kept under the package path so the frozen lookup mirrors
-        # the source one. tests/test_bundled_natives.py pins all three.
-        *(arg for name in ("sm64_trainer_gfx.dll", "GLideN64_SM64Trainer.dll", "SM64GpuEncoderV1.dll")
+        # The natives (core/update_plan.py::BUNDLED_NATIVES, found through
+        # core/paths.py::bundled_plugin_file): the graphics plugin the setup
+        # screen installs into Project64 and the 64-bit encoder helper the
+        # server spawns, under the package path so the frozen lookup mirrors
+        # the source one. Beside them, the retired names' placeholder text
+        # (stage_retired_natives), which older apps need to accept an update.
+        *(arg for name in BUNDLED_NATIVES
           for arg in ("--add-data",
                       f"{REPO / 'src' / 'sm64_events' / 'data' / 'plugin' / name}{SEP}sm64_events/data/plugin")),
+        *(arg for path in retired_natives
+          for arg in ("--add-data", f"{path}{SEP}sm64_events/data/plugin")),
         # The desktop tray + pywebview window load assets/ukiki.ico at RUNTIME
         # via _asset_path (-> sys._MEIPASS/ukiki.ico when frozen). --icon only
         # embeds it in the PE header (Explorer/taskbar); without bundling it as
@@ -228,6 +232,17 @@ def stage_version(work: Path, version: str) -> tuple[Path, Path]:
     return hook, metadata
 
 
+def stage_retired_natives(work: Path) -> tuple[Path, ...]:
+    """The placeholder text for each retired native name (core/update_plan.py
+    RETIRED_NATIVES): never a program, written fresh for each build."""
+    from sm64_events.core.update_plan import RETIRED_NATIVE_TEXT, RETIRED_NATIVES
+    folder = work / "retired-natives"
+    folder.mkdir(parents=True, exist_ok=True)
+    for name in RETIRED_NATIVES:
+        (folder / name).write_bytes(RETIRED_NATIVE_TEXT)
+    return tuple(folder / name for name in RETIRED_NATIVES)
+
+
 def stage_reporting(work: Path) -> Path:
     """Embed the public destination, with an explicit environment override."""
     from sm64_events.core.reporting_setup import CONFIG_FILE, read_config_dsn, validate_dsn
@@ -240,10 +255,10 @@ def stage_reporting(work: Path) -> Path:
 
 
 def ready_natives() -> None:
-    """The three natives are build outputs, not tracked files: package only
-    ones built from THESE sources (tools/build_natives.py), or raise. Fresh
-    ones were not scanned by this run, and a Defender verdict can arrive long
-    after a build (2026-11-06), so packaging scans all three again."""
+    """The natives are build outputs, not tracked files: package only ones
+    built from THESE sources (tools/build_natives.py), or raise. Fresh ones
+    were not scanned by this run, and a Defender verdict can arrive long
+    after a build (2026-11-06), so packaging scans them all again."""
     sys.path.insert(0, str(REPO / "tools"))
     import build_natives
     import defender_scan
@@ -257,9 +272,8 @@ PLUGIN_FOLDER = Path("_internal") / "sm64_events" / "data" / "plugin"
 
 def our_files(app_dir: Path, exe_name: str) -> list[Path]:
     """The files of a built app that this repository compiled: the app's own
-    exe and the three natives (tools/native_identity.py SHIPPED)."""
-    import native_identity
-    return [app_dir / f"{exe_name}.exe", *(app_dir / PLUGIN_FOLDER / name for name in native_identity.SHIPPED)]
+    exe and the natives (core/update_plan.py BUNDLED_NATIVES)."""
+    return [app_dir / f"{exe_name}.exe", *(app_dir / PLUGIN_FOLDER / name for name in BUNDLED_NATIVES)]
 
 
 def scan_built(app_dir: Path, exe_name: str) -> None:
@@ -339,7 +353,8 @@ def main() -> int:
         hook, version_metadata = stage_version(work, args.version or __version__)
         pyi.run(app_args(ffmpeg, metadata_path=metadata, reporting_path=stage_reporting(work), version_hook=hook,
                          version_metadata=version_metadata, distpath=args.distpath,
-                         workpath=work / "app", specpath=work / "spec"))
+                         workpath=work / "app", specpath=work / "spec",
+                         retired_natives=stage_retired_natives(work)))
         if (app_dir := stage_notices(args.distpath, Path(ffmpeg))) is None:
             return 2
         try:
