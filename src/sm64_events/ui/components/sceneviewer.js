@@ -75,12 +75,11 @@ import { h } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { Icon } from "./icons.js";
-import { RegionFlag } from "./regionflag.js";
 import { SteadyText } from "./steadytext.js";
 import { getJSON, send } from "../api.js";
 import { displayName } from "../entitysection.js";
-import { GhostPanel, viewName } from "./sceneghosts.js";
-import { StagePicker, attemptIn, stageDefault, targetKey, targetQuery, useStrategies } from "./scenestage.js";
+import { GhostFlag, GhostPanel, sceneGhost, viewName } from "./sceneghosts.js";
+import { StagePicker, attemptIn, entityTarget, stageDefault, targetKey, targetQuery, useStrategies } from "./scenestage.js";
 import { ControlGroups } from "../tunecontrols.js";
 import { postObservation } from "../uilog.js";
 import { SCENE_CAMERA_DEFAULTS, SCENE_CAMERA_GROUPS, SCENE_CAMERA_TUNABLES, sceneCameraTuning,
@@ -331,7 +330,7 @@ export class SceneLink {
       finding: false, glide: null, serial: 0, noticeTimer: null, moving: null, shared: new Map(), playback: null,
       readies: [], coldId: 0, autoplay: false, loop: savedLoop(), hud: savedHud(), ghosts: [], refusedGhosts: new Map(),
       view: null, rig: null, lastRig: null, follow: "stage", rigPath: null, orbitSince: null,
-      asked: null, ghostPages: new Map(), ghostNote: null, ghostSerial: 0,
+      asked: null, ghostPages: new Map(), ghostNote: null, ghostSerial: 0, waiting: [],
       sound: new SceneSound({ changed: () => this.changed(), observe: (note) => this.observe(note) }),
       presets: new CameraPresets({ changed: () => this.changed() }) });
     this.timings = new MovingTimings((summary) => { this.moving = summary; this.changed(); });
@@ -358,7 +357,11 @@ export class SceneLink {
       ? this.onText(JSON.parse(event.data)) : this.onPicture(event.data));
     ws.onopen = () => {
       this.want("input");
-      if (this.ghosts.length) this.setGhosts(this.ghosts);    // the same scene again: its ghosts again
+      // The same scene again: its ghosts again; and a ghost added before the socket opened (a
+      // Library row's Ghost button), after them.
+      const list = [...this.ghosts, ...this.waiting.filter((ghost) => !this.ghosts.some((had) => had.ref === ghost.ref))];
+      this.waiting = [];
+      if (list.length) this.setGhosts(list);
     };
     ws.onclose = () => { if (this.ws === ws) this.end("The connection to the scene viewer closed."); };
     // A scene's first picture carries the session's cold start (a seek from nothing), so it never
@@ -367,7 +370,7 @@ export class SceneLink {
     Object.assign(this, { ws, scene, frame: 0, free: false, orbit: null, entry: null, inFlight: new Map(),
       wanted: null, notice: null, error: null, speed: 1, moving: null, readies: [], coldId: this.sequence + 1,
       ghosts: keptFor(scene).ghosts, asked: null, refusedGhosts: new Map(), ghostNote: null, view: null, rig: null,
-      follow: "stage", orbitSince: null });
+      follow: "stage", orbitSince: null, waiting: [] });
     keep(scene, {});
     this.ghostPages = kept.pages;
     this.presets.forget();
@@ -641,6 +644,20 @@ export class SceneLink {
     this.sound.setGhosts(this.ghosts.map((ghost) => ghost.ref));    // each plays its own sound effects
     keep(this.scene, { ghosts: this.ghosts });
     this.want("input");
+    this.changed();
+  }
+
+  // One more ghost (a Library row's Ghost button): added to the list now, or, while the scene's
+  // socket is still opening, the moment it opens.
+  addGhost(entry) {
+    if (this.wantedGhosts.some((ghost) => ghost.ref === entry.ref)) return;
+    if (this.ws?.readyState === WebSocket.OPEN) this.setGhosts([...this.wantedGhosts, entry]);
+    else this.waiting = [...this.waiting, entry];
+  }
+
+  // Why a ghost could not be added, on the ghost panel.
+  noteGhost(reason) {
+    this.ghostNote = reason || null;
     this.changed();
   }
 
@@ -1579,7 +1596,6 @@ function SpeedControl({ link }) {
 }
 
 const FOCUS_WORDS = ["Set focus", "Finding..."];
-const KNOWN_REGION = new Set(["us", "jp"]);
 
 // A ghost's view button wears its game's flag when its region is known, and none when it is not.
 function CameraBar({ link, tuning, setTuning }) {
@@ -1591,7 +1607,7 @@ function CameraBar({ link, tuning, setTuning }) {
         aria-pressed=${!link.free && link.view === ghost.ref} disabled=${!available}
         title=${available ? "See the stage from this ghost's own camera, following it as the scene plays" : reason}
         onclick=${(event) => link.theirView(ghost.ref, event.timeStamp)}>
-      ${KNOWN_REGION.has(ghost.version) && html`<${RegionFlag} version=${ghost.version} size=${16} />`}
+      <${GhostFlag} version=${ghost.version} />${" "}
       ${viewName(link.ghosts, ghost.ref)}</button>`)}
     <button type="button" aria-pressed=${link.free} disabled=${!available}
         title=${available ? "Move the camera yourself, starting from the picture on screen" : reason}
@@ -1701,6 +1717,19 @@ export function TunePanel({ link = null } = {}) {
   </section>`;
 }
 
+// What the picture wears over it: whose camera it is, Drawing..., and the notice and cue.
+function StageOverlays({ link }) {
+  const cue = cueFor(link);
+  return html`<span class=${`scene-lab-tag ${link.free ? "is-free" : link.view || link.rig ? "is-view" : ""}`}>${link.free
+      ? "Free camera" : link.rig ? rigName(link.rig, link.ghosts) : link.view ? viewName(link.ghosts, link.view)
+      : "Recorded camera"}</span>
+    ${link.drawing && html`<span class="scene-lab-busy">Drawing...</span>`}
+    ${(link.notice || cue) && html`<div class="scene-lab-overlay">
+      ${link.notice && html`<p class="scene-lab-reason scene-lab-notice" role="status">${link.notice}</p>`}
+      ${cue && html`<p class="scene-lab-cue" aria-hidden="true">${cue}</p>`}
+    </div>`}`;
+}
+
 // `ghosts`: the ghost panel, right under the player card.
 function Player({ link, canvas, surface, ghosts }) {
   const [tuning, setTuning] = useState(false);
@@ -1709,14 +1738,7 @@ function Player({ link, canvas, surface, ghosts }) {
     <div class="scene-lab-stage">
       <canvas ref=${canvas} width="640" height="480" class=${classes.filter(Boolean).join(" ")}
         aria-label="The recording's picture" ...${pointerHandlers(link, surface)}></canvas>
-      <span class=${`scene-lab-tag ${link.free ? "is-free" : link.view || link.rig ? "is-view" : ""}`}>${link.free
-        ? "Free camera" : link.rig ? rigName(link.rig, link.ghosts) : link.view ? viewName(link.ghosts, link.view)
-        : "Recorded camera"}</span>
-      ${link.drawing && html`<span class="scene-lab-busy">Drawing...</span>`}
-      ${(link.notice || cueFor(link)) && html`<div class="scene-lab-overlay">
-        ${link.notice && html`<p class="scene-lab-reason scene-lab-notice" role="status">${link.notice}</p>`}
-        ${cueFor(link) && html`<p class="scene-lab-cue" aria-hidden="true">${cueFor(link)}</p>`}
-      </div>`}
+      <${StageOverlays} link=${link} />
     </div>
     <${Transport} link=${link} />
     <${SoundBar} sound=${link.sound} frame=${link.frame} />
@@ -1775,6 +1797,9 @@ export const STAGE_WORDS = {
   prompt: "Choose a course and star to watch one of your attempts.",
   finding: "Finding your fastest attempt with a saved scene...",
   none: "None of your attempts at this has a saved scene.",
+  // A Library ghost with no stage to play in (round 9, item 8): one short sentence, why.
+  noStageForGhost: (target) => `This ghost can't be shown yet: you have no saved scene of this ${
+    target && targetKey(target)?.startsWith("segment:") ? "segment" : "star"}.`,
 };
 
 // The page's heading: the open scene's title and Close, else (`lab`: nothing chosen) the lab
@@ -1842,8 +1867,85 @@ function useMovingObservations(link, surface) {
   }, [link.moving]);
 }
 
+// The lab's stage for `next`; with `anyStrategy` and none of its strategy, his fastest scene of any.
+async function stageFor(next, anyStrategy) {
+  const answer = await getJSON(`${ROOT}/stage?${targetQuery(next)}`);
+  if (answer.attempt != null || !anyStrategy) return answer;
+  return getJSON(`${ROOT}/stage?${targetQuery({ ...next, strat: null })}&strategies=all`);
+}
+
+// A Library ghost as a row of `target`'s list, from the lab: {item}, or {item: null, reason}.
+async function libraryGhostRow(ghost, target) {
+  try {
+    return await getJSON(`${ROOT}/ghost?recording=${encodeURIComponent(ghost.recording)}&${
+      targetQuery({ ...target, strat: null })}`);
+  } catch (problem) {
+    return { item: null, reason: problem.message };
+  }
+}
+
+// What the stage picker shows (`target`), what it says (`stageNote`: "Finding...", or why a target
+// has no stage), and how a choice becomes the stage. `asked` counts choices: an older answer is dropped.
+function useStageChoice(link, open, close) {
+  const [target, setTarget] = useState(null);
+  const [stageNote, setStageNote] = useState(null);
+  const asked = useRef(0);
+  // A target from the stage picker (or the Practice log's, on arriving): the lab's stage for it opens,
+  // or the lab's reason shows and the scene of another target closes. `anyStrategy`: with no stage
+  // of `next`'s strategy, his fastest scene of any strategy; `none` replaces the lab's reason. The
+  // opened scene, or null (none, a failure, or a newer choice).
+  async function choose(next, { anyStrategy = false, none = null } = {}) {
+    const serial = ++asked.current;
+    setTarget(next);
+    setStageNote(STAGE_WORDS.finding);
+    let answer;
+    try {
+      answer = await stageFor(next, anyStrategy);
+    } catch (problem) {
+      if (serial === asked.current) setStageNote(problem.message);
+      return null;
+    }
+    if (serial !== asked.current) return null;
+    const staged = { ...next, ...answer.target };
+    setTarget(staged);
+    if (answer.attempt == null) {
+      setStageNote(none || answer.reason || STAGE_WORDS.none);
+      if (link.scene) await close();
+      return null;
+    }
+    setStageNote(null);
+    const scene = link.scene?.attempt === answer.attempt ? link.scene : await open({ attempt: answer.attempt });
+    if (!scene || serial !== asked.current) return null;
+    keep(scene, { target: staged });
+    return scene;
+  }
+  // A Library row's Ghost button: its stage (above), then that one ghost from the lab, added to the
+  // scene (sent once the scene's socket is open). Why it cannot be shows where the stage note or the
+  // ghost panel's note would.
+  async function showGhost(ghost) {
+    const wanted = entityTarget(ghost.entity, ghost.strat ?? null);
+    if (!wanted) {
+      setStageNote(STAGE_WORDS.noStageForGhost(null));
+      return;
+    }
+    const serial = asked.current + 1;
+    const scene = await choose(wanted, { anyStrategy: true, none: STAGE_WORDS.noStageForGhost(wanted) });
+    if (!scene || serial !== asked.current) return;
+    const answer = await libraryGhostRow(ghost, wanted);
+    if (serial !== asked.current || link.scene !== scene) return;
+    if (answer.item) link.addGhost(sceneGhost(answer.item));
+    else link.noteGhost(answer.reason);
+  }
+  return { target, setTarget, stageNote, setStageNote, asked, choose, showGhost };
+}
+
 // `t.sceneLab.intent` (app.js): the Practice log's Ghost button names an
 // attempt; the viewer opens that attempt's scene and plays it, once per click.
+// A Library row's Ghost button names a ghost ({recording, entity, strat}): the
+// viewer chooses that star or segment as the stage picker would (on the ghost's
+// strategy, else any of his with a scene), then asks the lab for that one ghost
+// and adds it. Where no stage comes back it says why, in one sentence; a later
+// stage source only changes what /stage answers, never the buttons.
 // The stage picker (scenestage.js) starts on the target of the scene on screen,
 // else, with none open, on what the Practice log has selected, whose stage
 // it then opens; a choice there opens that target's stage.
@@ -1851,11 +1953,9 @@ export function SceneViewer({ t }) {
   const lab = t?.sceneLab, intent = lab?.intent;
   const [status, setStatus] = useState(null);
   const [opening, setOpening] = useState(false);
-  const [target, setTarget] = useState(null);         // what the stage picker shows
-  const [stageNote, setStageNote] = useState(null);   // "Finding...", or why a target has no stage
   const canvas = useRef(null), surface = useRef(null), refresh = useRef(null);
-  const asked = useRef(0);                            // the newest choice; older answers are dropped
   const link = useSceneLink(canvas, refresh);
+  const { target, setTarget, stageNote, setStageNote, asked, choose, showGhost } = useStageChoice(link, open, close);
   const strategies = useStrategies(targetKey(target));
   refresh.current = async () => {
     try {
@@ -1879,6 +1979,10 @@ export function SceneViewer({ t }) {
   useEffect(() => {
     if (!intent) return;
     lab.clearIntent();
+    if (intent.ghost) {
+      showGhost(intent.ghost);
+      return;
+    }
     asked.current += 1;              // a stage still being found is no longer wanted
     setStageNote(null);
     const named = stageDefault({ attempt: intent.attempt }, t?.view);
@@ -1889,31 +1993,6 @@ export function SceneViewer({ t }) {
       keep(scene, { target: scene.target || named });
     });
   }, [intent]);
-  // A target from the stage picker (or the Practice log's, on arriving): the lab's stage for it opens,
-  // or the lab's reason shows and the scene of another target closes.
-  async function choose(next) {
-    const serial = ++asked.current;
-    setTarget(next);
-    setStageNote(STAGE_WORDS.finding);
-    let answer;
-    try {
-      answer = await getJSON(`${ROOT}/stage?${targetQuery(next)}`);
-    } catch (problem) {
-      if (serial === asked.current) setStageNote(problem.message);
-      return;
-    }
-    if (serial !== asked.current) return;
-    const staged = { ...next, ...answer.target };
-    setTarget(staged);
-    if (answer.attempt == null) {
-      setStageNote(answer.reason || STAGE_WORDS.none);
-      if (link.scene) await close();
-      return;
-    }
-    setStageNote(null);
-    const scene = link.scene?.attempt === answer.attempt ? link.scene : await open({ attempt: answer.attempt });
-    if (scene && serial === asked.current) keep(scene, { target: staged });
-  }
   const owner = useKeyboardOwner(link, surface, canvas);
   useMovingObservations(link, surface);
   // `body`: {package} from the lab's list, or {attempt} from the Ghost button or the stage picker. A

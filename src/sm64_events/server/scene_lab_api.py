@@ -1096,8 +1096,9 @@ def _mount_ghost_routes(router: APIRouter, lab: SceneLab) -> None:
 
     @router.get("/stage")
     def stage(course: int | None = None, star: int | None = None, segment: int | None = None,
-              strat: str | None = Query(default=None, max_length=256)):
-        return lab.ghosts.stage(target_of(course, star, segment), strat or None)
+              strat: str | None = Query(default=None, max_length=256),
+              strategies: str = Query(default="one", pattern="^(one|all)$")):
+        return lab.ghosts.stage(target_of(course, star, segment), strat or None, every=strategies == "all")
 
     @router.get("/ghosts")
     async def ghosts(section: str = "yours", course: int | None = None, star: int | None = None,

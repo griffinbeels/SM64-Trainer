@@ -17,7 +17,7 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON } from "../api.js";
 import { displayName } from "../entitysection.js";
-import { parseSegmentId, parseStarId } from "../entities.js";
+import { parseEntityKey, parseSegmentId, parseStarId } from "../entities.js";
 import { PickerDialog } from "./entitymodal.js";
 import { entityIconSrc, fallbackToGenericStar, optionIconSrc } from "./entityicons.js";
 import { Icon } from "./icons.js";
@@ -71,6 +71,16 @@ export function targetKey(target) {
   if (cell == null) return null;
   const segment = parseSegmentId(cell);
   return segment != null ? `segment:${segment}` : `star:${target.course_id}:${target.star_id}`;
+}
+
+// The target an entity key names ("star:8:1", "segment:12"; a Library ghost's), on `strat`, or null.
+export function entityTarget(entity, strat = null) {
+  const segment = parseSegmentId(entity);
+  if (segment != null) return Number.isInteger(segment) ? { segment_id: segment, strat } : null;
+  const { kind, id } = parseEntityKey(entity);
+  const star = kind === "star" ? parseStarId(id) : null;
+  return star && Number.isInteger(star.course) && Number.isInteger(star.star)
+    ? { course_id: star.course, star_id: star.star, strat } : null;
 }
 
 // The lab's query for a target: course and star, or segment, and the strategy when one is chosen.

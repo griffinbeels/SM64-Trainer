@@ -271,11 +271,12 @@ class SceneGhosts:
 
     # ------------------------------------------------------------ the stage
 
-    def stage(self, target: Target, strat: str | None = None) -> dict:
+    def stage(self, target: Target, strat: str | None = None, *, every: bool = False) -> dict:
         """The stage for this target and strategy and every attempt of it that has a scene,
-        fastest finished first, then the newest of the rest."""
+        fastest finished first, then the newest of the rest. `every`: of any strategy (a Library
+        ghost of a strategy he has no scene of still has a stage), named by the chosen one's."""
         from sm64_events.ghost.library_bests import _eligible
-        strat = strat or self.active_strategy(target)
+        strat = None if every else strat or self.active_strategy(target)
         clock = self._clock(target)
         scenes, db, attempts = self.scenes_of(), self.db, []
         if scenes is not None and db is not None:
@@ -290,6 +291,8 @@ class SceneGhosts:
                                            -_instant(attempt.ended_utc)))
         rows = [{"attempt": attempt.id, "time": bare_time(timed(attempt)), "recorded_utc": attempt.started_utc}
                 for attempt in attempts]
+        if every and attempts:
+            strat = attempts[0].strat_tag
         if strat:
             self._warm(target, strat)
         chosen = rows[0] if rows else {"attempt": None, "time": None}

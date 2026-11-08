@@ -113,11 +113,14 @@ const LAB_GROUP = ["Lab", [["Scene viewer", "ghost"]]];
 // row reads one copy with no prop threaded through the log. `open(attempt)` is
 // the Ghost button: the Scene viewer opens that attempt's scene and plays it
 // (`intent`, the libraryIntent shape: go to that tab and open that thing).
+// `openGhost(ghost)` is a Library row's Ghost button: the viewer opens that
+// ghost's star or segment and adds the ghost ({recording, entity, strat}).
 // Null with the lab off, and then no row draws the button.
 function sceneDoor(viewer, intent, setIntent, setTab) {
   if (!viewer) return null;
   return { intent, clearIntent: () => setIntent(null),
-    open: (attempt) => { setIntent({ attempt }); setTab("Scene viewer"); } };
+    open: (attempt) => { setIntent({ attempt }); setTab("Scene viewer"); },
+    openGhost: (ghost) => { setIntent({ ghost }); setTab("Scene viewer"); } };
 }
 
 function NavItem({ name, icon, tab, setTab, onSessions, compact = false }) {

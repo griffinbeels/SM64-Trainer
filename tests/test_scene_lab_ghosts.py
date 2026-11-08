@@ -279,6 +279,10 @@ def test_the_stage_is_his_fastest_finished_attempt_of_the_strategy_with_a_scene(
         assert stage["scenes"][0]["recorded_utc"] == fast.started_utc
         picked = client.get("/api/scene-lab/stage", params={"course": 2, "star": 2, "strat": "Single Jump"}).json()
         assert (picked["attempt"], picked["target"]["strat_name"]) == (14, "Single Jump")
+        # A Library ghost's stage of any strategy (round 9, item 8): his fastest scene, named by its strategy.
+        anyone = client.get("/api/scene-lab/stage", params={"course": 2, "star": 2, "strat": "Nope",
+                                                            "strategies": "all"}).json()
+        assert (anyone["attempt"], anyone["target"]["strat"], len(anyone["scenes"])) == (14, "Single Jump", 4)
         nothing = client.get("/api/scene-lab/stage", params={"course": 2, "star": 3}).json()
         assert (nothing["attempt"], nothing["time"], nothing["scenes"]) == (None, None, [])
         assert nothing["reason"] == "No saved scene for this strategy yet: play it with the scene lab on."

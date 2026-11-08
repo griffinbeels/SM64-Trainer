@@ -491,6 +491,8 @@
   .community-library-time { font-variant-numeric: tabular-nums; font-size: 1.15rem; color: var(--green); }
   .community-library-actions { display: grid; gap: .3rem; margin-left: auto; }
   .community-library-actions button { justify-content: center; gap: .4rem; }
+  /* The Scene viewer's Ghost button (lab only) sits left of Add ghost, on its line. */
+  .community-library-buttons { display: flex; align-items: center; justify-content: flex-end; gap: .4rem; }
   .community-library-unavailable { flex-basis: 100%; grid-column: 1 / -1; margin: 0; }
   .community-library-target, .community-library-method, .community-library-player strong,
   .community-library-unavailable, .community-library-success, .community-library-seat-title {
