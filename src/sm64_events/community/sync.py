@@ -793,6 +793,16 @@ class CommunitySync:
         task.add_done_callback(self._local_jobs.discard)
         return await asyncio.shield(task)
 
+    async def catalog_lists(self, identity) -> bool:
+        """Whether the catalog lists this identity (read as the race reads it: at most once an
+        hour). The service refuses a recordings page for an identity it omits, so a reader that
+        asks only what this says spends no ticket on a strategy no one can share."""
+        await self._catalog_ready()
+        try:
+            return self.population.identity_key(identity) in self._catalog
+        except (CommunityError, ValueError, TypeError):
+            return False
+
     async def library_summary(self, cursor=None, *, target=None, game_version=None):
         scope, query = library.summary_query(cursor, target, game_version)
         return await self._library_page("/v1/library", query, summary=True, summary_scope=scope)

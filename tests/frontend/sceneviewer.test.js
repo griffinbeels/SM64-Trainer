@@ -1681,18 +1681,68 @@ test("from the Ghost button the selector names that attempt's target at once, th
   expect(queries("/api/scene-lab/stage")).toEqual([]);                              // the Ghost button's attempt is the stage
 });
 
-// The lab's lists: 23 of yours (the first is the stage's own run), 12 top ghosts per strategy, one
-// player found, and that player's three.
+// Round 9, item 8, his words: "We also need ghost buttons next to all library entries that have a ghost,
+// so that it loads directly into the scene viewer." A Library row's Ghost button hands the viewer
+// {recording, entity, strat}; `stage(query)` answers /stage, `ghost` answers /ghost.
+const KIM = { ref: "lib-kim", player: "Kim", time: "10\"66", strat: "TJ Owlless", version: "jp", rank: 1, more: 0 };
+function libraryGhost(ghost, stage, answer = { item: KIM }) {
+  routes.set("/api/scene-lab/stage", (url) => respond(stage(new URL(url, "http://page").searchParams)));
+  routes.set("/api/target/strategies", () => respond({ strategies: [{ name: "Single Jump" }, { name: "TJ Owlless" }] }));
+  routes.set("/api/scene-lab/open", (url, options) => respond({ ...opened, session: ++sessionSerial,
+    attempt: JSON.parse(options.body).attempt }));
+  routes.set("/api/scene-lab/ghost", () => respond(answer));
+  return render(h(SceneViewer, { t: { view: VIEW, sceneLab: { intent: { ghost }, clearIntent: () => {} } } }));
+}
+const LIBRARY_KIM = { recording: "a".repeat(64), entity: "star:2:1", strat: "Nothing saved" };
+
+test("a Library ghost opens its star's stage on its own strategy, else any of his, and joins the scene", async () => {
+  const page = libraryGhost(LIBRARY_KIM, (query) => (query.get("strategies") === "all" ? stageOf("TJ Owlless", 44)
+    : stageOf(query.get("strat"), STAGES[query.get("strat")])));
+  const socket = await sceneUp(1);
+  expect(queries("/api/scene-lab/stage")).toEqual([{ course: "2", star: "1", strat: "Nothing saved" },
+    { course: "2", star: "1", strategies: "all" }]);
+  expect(opens()).toEqual([{ attempt: 44 }]);
+  await until(() => expect(ghostsSent(socket).length).toBe(1));
+  expect(queries("/api/scene-lab/ghost?")).toEqual([{ recording: "a".repeat(64), course: "2", star: "1" }]);
+  expect(ghostsSent(socket)[0].set).toEqual([{ ref: "lib-kim", label: "Kim" }]);
+  socket.text({ id: ghostsSent(socket)[0].id, kind: "ghosts", shown: ["lib-kim"], refused: [] });
+  const view = await until(() => within(page.container.querySelector('[aria-label="Camera"]'))
+    .getByRole("button", { name: /Kim's view$/ }));
+  expect(view.querySelector(".region-flag").alt).toBe("JP");
+  expect(selectorWords(page)).toMatchObject({ strat: "TJ Owlless", note: null });
+});
+
+test("a Library ghost with no stage of his says why in one sentence, and one the lab cannot find says why on the panel", async () => {
+  const none = libraryGhost(LIBRARY_KIM, (query) => stageOf(query.get("strat") || "Single Jump", null));
+  await until(() => expect(selectorWords(none).note).toBe("This ghost can't be shown yet: you have no saved scene of this star."));
+  await settled();
+  expect([queries("/api/scene-lab/ghost?"), opens()]).toEqual([[], []]);
+  expect(none.container.querySelector(".scene-lab-player")).toBeNull();
+  cleanup();
+  fetches.length = 0;
+  const lost = libraryGhost({ ...LIBRARY_KIM, strat: "Single Jump" }, (query) => stageOf("Single Jump", 40),
+    { item: null, reason: "That ghost could not be found. Open it from the Library again." });
+  const socket = await sceneUp(sockets.length + 1);
+  await until(() => expect(lost.container.querySelector(".scene-lab-ghosts").textContent)
+    .toContain("That ghost could not be found. Open it from the Library again."));
+  expect(ghostsSent(socket)).toEqual([]);
+});
+
+// The lab's lists: 23 of yours (the first is the stage's own run), 12 top ghosts per strategy (All
+// strategies: the fastest twelve happen to be Single Jump's), one player found, and that player's
+// three. Top ghosts carry their strategy and, in turn, a US, a JP and no ROM.
+const TOP_ROMS = ["us", "jp", null];
 function ghostRoutes() {
   const yours = Array.from({ length: 23 }, (_, i) => ({ ref: `yours-${i}`, player: "You", time: `${11 + i}"03`,
     frames: 330 + i, rank: null, recorded_utc: `2026-10-${String(1 + i).padStart(2, "0")}T12:00:00Z`, more: 0,
     yours: true, attempt: i === 0 ? 40 : 900 + i }));
   routes.set("/api/scene-lab/ghosts", (url) => {
     const query = new URL(url, "http://page").searchParams, page = Number(query.get("page"));
+    const strat = query.get("strategies") === "all" ? "Single Jump" : query.get("strat");
     const rows = {
       yours: () => (query.get("sort") === "newest" ? [...yours].reverse() : yours),
-      top: () => Array.from({ length: 12 }, (_, i) => ({ ref: `top-${query.get("strat")}-${i}`, player: `Player ${i + 1}`,
-        time: `10"${String(i).padStart(2, "0")}`, rank: i + 1, more: 0, yours: false })),
+      top: () => Array.from({ length: 12 }, (_, i) => ({ ref: `top-${strat}-${i}`, player: `Player ${i + 1}`,
+        time: `10"${String(i).padStart(2, "0")}`, rank: i + 1, more: 0, yours: false, strat, version: TOP_ROMS[i % 3] })),
       search: () => [{ ref: "best-sully", player: "SullyLikesBigChungus", time: "10\"50", rank: null, more: 2 }],
       player: () => [0, 1, 2].map((i) => ({ ref: `${query.get("player")}-${i}`, player: query.get("player"),
         time: `10"5${i}`, rank: null, more: 0 })),
@@ -1705,7 +1755,7 @@ const ghostRow = (page, ref) => page.container.querySelector(`li[data-ref="${ref
 const ghostsSent = (socket) => socket.sent.filter((message) => message.kind === "ghosts");
 const asked = (section) => queries("/api/scene-lab/ghosts").filter((query) => query.section === section);
 
-test("the ghost panel pages and sorts your ghosts, the stage's own run is the stage, and Top ghosts has its own strategy", async () => {
+test("the ghost panel pages and sorts your ghosts, the stage's own run is the stage, and Top ghosts starts on All strategies", async () => {
   ghostRoutes();
   const page = arrive();
   await sceneUp(1);
@@ -1722,12 +1772,23 @@ test("the ghost panel pages and sorts your ghosts, the stage's own run is the st
   await until(() => expect(yours.querySelector("li").dataset.ref).toBe("yours-22"));
   expect(asked("yours").at(-1)).toMatchObject({ page: "1", sort: "newest" });
 
+  // Round 9, item 7: Top ghosts first lists every strategy at once, each row naming its strategy, and
+  // each row (item 11) wears the flag of the ROM its recording names, none where it names none.
   const top = page.getByRole("region", { name: "Top ghosts" });
   await until(() => expect(top.querySelectorAll("li").length).toBe(10));
+  expect(asked("top")).toEqual([{ section: "top", strategies: "all", course: "2", star: "1", page: "1" }]);
+  const picker = within(top).getByRole("combobox", { name: "Strategy for top ghosts" });
+  expect([picker.value, picker.options[0].textContent]).toEqual(["", "All strategies"]);
   expect([...top.querySelectorAll(".scene-lab-ghost-rank")].map((rank) => rank.textContent).slice(0, 3)).toEqual(["#1", "#2", "#3"]);
-  fireEvent.change(within(top).getByRole("combobox", { name: "Strategy for top ghosts" }), { target: { value: "TJ Owlless" } });
+  expect([...top.querySelectorAll(".scene-lab-ghost-strat")].map((line) => line.textContent)).toEqual(
+    Array(10).fill("Single Jump"));
+  expect([...top.querySelectorAll("li")].slice(0, 3).map((row) => row.querySelector(".region-flag")?.alt ?? null))
+    .toEqual(["US", "JP", null]);
+  fireEvent.change(picker, { target: { value: "TJ Owlless" } });
   await until(() => expect(top.querySelector("li").dataset.ref).toBe("top-TJ Owlless-0"));
   expect(asked("top").at(-1)).toMatchObject({ strat: "TJ Owlless", page: "1" });
+  expect(asked("top").at(-1).strategies).toBeUndefined();
+  expect(top.querySelector(".scene-lab-ghost-strat")).toBeNull();                       // one strategy: no strategy line
   expect(selectorWords(page).strat).toBe("Single Jump");                              // the stage keeps its strategy
   expect(queries("/api/scene-lab/stage").length).toBe(1);
 });
@@ -1753,10 +1814,10 @@ test("each page is asked once in a scene's life: paging back, sorting back, anot
   const top = first.getByRole("region", { name: "Top ghosts" }), strategy = within(top).getByRole("combobox");
   fireEvent.change(strategy, { target: { value: "TJ Owlless" } });
   await until(() => expect(top.querySelector("li").dataset.ref).toBe("top-TJ Owlless-0"));
-  fireEvent.change(within(top).getByRole("combobox"), { target: { value: "Single Jump" } });
+  fireEvent.change(within(top).getByRole("combobox"), { target: { value: "" } });          // All strategies again
   await until(() => expect(top.querySelector("li").dataset.ref).toBe("top-Single Jump-0"));
   expect(asked("yours").map((query) => [query.sort, query.page])).toEqual([["fastest", "1"], ["fastest", "2"], ["newest", "1"]]);
-  expect(asked("top").map((query) => query.strat)).toEqual(["Single Jump", "TJ Owlless"]);
+  expect(asked("top").map((query) => query.strategies ?? query.strat)).toEqual(["all", "TJ Owlless"]);
   const before = asked("yours").length + asked("top").length;
   await tick(clock.now + 60000);                                                     // nothing asks on a timer
   await settled();
@@ -1915,8 +1976,11 @@ test("each ghost in the scene has a view button: the stage from its own camera, 
   const socket = await sceneUp(1);
   await twoGhostsIn(page, socket);
   const bar = within(page.container.querySelector('[aria-label="Camera"]'));
-  const theirs = bar.getByRole("button", { name: "Player 2's view" });
-  expect(bar.getByRole("button", { name: "Player 1's view" })).toBeTruthy();
+  const theirs = bar.getByRole("button", { name: /^(US |JP )?Player 2's view$/ });
+  expect(bar.getByRole("button", { name: /^(US |JP )?Player 1's view$/ })).toBeTruthy();
+  // Each view button wears its ghost's ROM flag (round 9, item 11): Player 1's US, Player 2's JP.
+  expect([1, 2].map((n) => bar.getByRole("button", { name: new RegExp(`Player ${n}'s view$`) })
+    .querySelector(".region-flag")?.alt)).toEqual(["US", "JP"]);
   expect(pressed(bar.getByRole("button", { name: "Recorded camera" }))).toBe("true");
 
   fireEvent.click(theirs);
@@ -1964,15 +2028,15 @@ test("removing the ghost whose view is on screen goes back to the recorded camer
   const socket = await sceneUp(1);
   await twoGhostsIn(page, socket);
   const bar = within(page.container.querySelector('[aria-label="Camera"]'));
-  fireEvent.click(bar.getByRole("button", { name: "Player 1's view" }));
+  fireEvent.click(bar.getByRole("button", { name: /^(US |JP )?Player 1's view$/ }));
   await until(() => expect(socket.pictures().at(-1).camera).toEqual({ ghost: "top-Single Jump-0" }));
   await socket.picture(socket.pictures().at(-1), { camera: "free", view: { ghost: "top-Single Jump-0", camera: GHOST_CAMERA } });
   fireEvent.click(within(ghostRow(page, "top-Single Jump-0")).getByRole("button", { name: /^Remove/ }));
   await until(() => expect(socket.pictures().at(-1).camera).toBeNull());
   expect(tag(page)).toBe("Recorded camera");
   socket.text({ id: ghostsSent(socket).at(-1).id, kind: "ghosts", shown: ["top-Single Jump-1"], refused: [] });
-  await until(() => expect(bar.queryByRole("button", { name: "Player 1's view" })).toBeNull());
-  expect(bar.getByRole("button", { name: "Player 2's view" })).toBeTruthy();
+  await until(() => expect(bar.queryByRole("button", { name: /^(US |JP )?Player 1's view$/ })).toBeNull());
+  expect(bar.getByRole("button", { name: /^(US |JP )?Player 2's view$/ })).toBeTruthy();
 });
 
 test("view buttons name whose camera it is, with the time for yours and where two ghosts share a name", () => {
@@ -1988,7 +2052,7 @@ test("without the free camera the view buttons stay, disabled, with the reason",
   const page = arrive();
   const socket = await sceneUp(1);
   await twoGhostsIn(page, socket);
-  const view = within(page.container.querySelector('[aria-label="Camera"]')).getByRole("button", { name: "Player 1's view" });
+  const view = within(page.container.querySelector('[aria-label="Camera"]')).getByRole("button", { name: /^(US |JP )?Player 1's view$/ });
   expect([view.disabled, view.title]).toEqual([true, "The lab config names no symbol map."]);
   const sent = socket.pictures().length;
   fireEvent.click(view);

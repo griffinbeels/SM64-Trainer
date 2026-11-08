@@ -222,7 +222,8 @@ export function CameraSlots({ link }) {
   return html`<div class="scene-lab-cameras" role="group" aria-label="Cameras">
     <div class="scene-lab-cameras-head">
       <h3>Cameras</h3>
-      <p class=${`scene-lab-hint${note.bad ? " is-bad" : ""}`} role=${note.bad ? "status" : null}>${note.text}</p>
+      <p class=${`scene-lab-hint${note.bad ? " is-bad" : ""}`} role=${note.bad ? "status" : null}
+        title=${note.text}>${note.text}</p>
       ${undone && html`<span class="scene-lab-cameras-undo">Deleted "${undone.name}" from slot ${undone.slot}.${" "}
         <button type="button" onclick=${() => presets.restore()}>Undo</button></span>`}
     </div>

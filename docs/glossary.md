@@ -1549,10 +1549,17 @@ never a file. The **stage picker** (Practice's own course grid and [[strategy]] 
 **stage**: your fastest [[attempt]] of that course, [[star]] and [[strategy]] with a saved scene,
 which opens, or the lab's reason why there is none. It starts on the scene you opened, else on
 Practice's [[target]]. Below the player, the [[ghost]] panel lists **Your [[ghost]]s** (fastest or newest
-first), **Top [[ghost]]s** (each player's best for a [[strategy]], with its place) and **Find a player**
+first), **Top [[ghost]]s** (each player's best, with its place: first across **All strategies**, each
+row naming its [[strategy]], or one [[strategy]] picked in its dropdown) and **Find a player**
 (each player's best; "more" opens their slower ones), a page at a time, each page asked once in a
 scene's life and a name only once typing stops or on Enter; Add draws that [[ghost]] into the stage
-from the next picture, and a [[ghost]] the lab cannot draw shows its reason. **HUD** (kept per
+from the next picture, and a [[ghost]] the lab cannot draw shows its reason. Every row, and each
+[[ghost's view]] button, wears the US or JP flag of the ROM its recording names, and no flag where
+its record names none. A Library community [[ghost]]'s [[ghost button]] opens the viewer on that
+[[ghost]]'s [[star]] or [[segment]] with it added. No control moves another when its words or state
+change (Play and Pause, Record and Stop, the [[frame]] numbers): each changing label or readout keeps the
+size of its widest form, and notices and the [[cinematic camera]] on screen's settings show on the
+picture's foot. **HUD** (kept per
 viewer) leaves the game's on-screen counters and timer out of every picture, the one on screen at
 once. Every picture the lab draws again shows Mario's most detailed model however far the camera
 is (the game itself picks a plainer one from about 600 units and a blocky one from about 1600).
@@ -1837,12 +1844,16 @@ scene and plays it from its first [[frame]] as soon as the viewer draws that
 picture. A row the lab knows nothing about has none; a scene the lab is still
 cutting shows it disabled ("Scene finishing…") until it is ready, and a scene
 that cannot exist shows the lab's reason. [[star]] and [[segment]] rows both
-have it.
+have it. The same button sits on each community [[ghost]] in the Library whose
+[[star]] or [[segment]] this Trainer knows: one click opens the viewer on that
+[[star]] or [[segment]] (its [[viewer stage]]) and adds that [[ghost]]; with no
+stage of his, the viewer says so in one sentence.
 
 - **Lives** -- `src/sm64_events/ui/components/attemptscene.js` (the button and
   each table's ask of the lab), drawn by
-  `src/sm64_events/ui/components/attemptlog.js`; `src/sm64_events/ui/app.js`
-  hands the [[attempt]] to the viewer
+  `src/sm64_events/ui/components/attemptlog.js` and
+  `src/sm64_events/ui/components/community-library.js`; `src/sm64_events/ui/app.js`
+  hands the [[attempt]] or the [[ghost]] to the viewer
 - **Not** -- the [[ghost toggle]], which races a recorded [[ghost]] in the game;
   this button only opens the [[attempt]]'s scene, and wears the same mark as
   the [[scene viewer]]'s sidebar entry
@@ -1950,7 +1961,8 @@ that [[ghost]]'s own recording, starting on the stage's first [[frame]]. It is t
 scene he opened; for a [[star]] or [[segment]] and [[strategy]] he picks, it is his
 fastest finished [[attempt]] that still has a scene (a [[reset]] only when nothing
 finished has one), else one sentence saying there is none yet. The [[strategy]] starts as the one he
-last chose for that [[target]].
+last chose for that [[target]]. For a Library [[ghost]] it is his fastest scene of that [[ghost]]'s
+[[strategy]], else of any [[strategy]].
 
 - **Lives** -- the stage choice (`src/sm64_events/server/scene_ghosts.py`), served
   to the page by the lab's routes (`src/sm64_events/server/scene_lab_api.py`)
@@ -1960,10 +1972,12 @@ last chose for that [[target]].
 ### Scene ghosts
 
 The [[ghost]]s the [[scene viewer]] can add to its [[viewer stage]], in four lists: yours
-(fastest or newest first), top (each player's best, fastest first), a search by
-player name (each match's best) and one player's (fastest first), ten to a page.
-Each shows its time, its place among every player's best (ties share a place)
-and its [[rank]] on the [[strategy]]'s [[ladder]]. The lists hold a recording only
+(fastest or newest first), top (each player's best, fastest first: across every
+[[strategy]] at once, or one), a search by player name (each match's best) and one
+player's (fastest first), ten to a page. Each shows its time, its place among every
+player's best (ties share a place), its [[rank]] on its [[strategy]]'s [[ladder]],
+and the ROM its own recording names (US or JP; none where the record names none,
+never a guess). The lists hold a recording only
 when the in-game race would play it, judged by the race's own checks; they leave
 anything else out and count it, never showing it with a warning.
 

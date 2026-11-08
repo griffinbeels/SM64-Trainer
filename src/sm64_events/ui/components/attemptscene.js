@@ -62,7 +62,13 @@ export const AttemptScenes = createContext({});
 export function SceneButton({ attempt, open }) {
   const shown = sceneButton(useContext(AttemptScenes)[attempt]);
   if (!shown) return null;
-  return html`<button type="button" class="icon-button attempt-scene" disabled=${shown.disabled}
-      title=${shown.title} aria-label=${OPEN_IN_VIEWER} onclick=${shown.disabled ? null : open}>
+  return html`<${GhostButton} disabled=${shown.disabled} title=${shown.title} open=${open} />`;
+}
+
+// The one Ghost button: the Practice log's rows (above) and the Library's community ghosts
+// (community-library.js), which open that ghost in the Scene viewer. `label` names it for a reader.
+export function GhostButton({ open, disabled = false, title = OPEN_IN_VIEWER, label = OPEN_IN_VIEWER }) {
+  return html`<button type="button" class="icon-button attempt-scene" disabled=${disabled}
+      title=${title} aria-label=${label} onclick=${disabled ? null : open}>
     <${Icon} name="ghost" size=${16} /></button>`;
 }

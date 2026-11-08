@@ -491,6 +491,8 @@
   .community-library-time { font-variant-numeric: tabular-nums; font-size: 1.15rem; color: var(--green); }
   .community-library-actions { display: grid; gap: .3rem; margin-left: auto; }
   .community-library-actions button { justify-content: center; gap: .4rem; }
+  /* The Scene viewer's Ghost button (lab only) sits left of Add ghost, on its line. */
+  .community-library-buttons { display: flex; align-items: center; justify-content: flex-end; gap: .4rem; }
   .community-library-unavailable { flex-basis: 100%; grid-column: 1 / -1; margin: 0; }
   .community-library-target, .community-library-method, .community-library-player strong,
   .community-library-unavailable, .community-library-success, .community-library-seat-title {
@@ -1736,6 +1738,18 @@
     position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
     overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0;
   }
+  /* SteadyText (components/steadytext.js): the box is as big as its biggest listed size, never the
+     words shown, so a label or readout that changes never moves what is around it (his round 9
+     report, 2026-11-08: "the play bar is getting longer and shorter"). The sizes share the shown
+     text's grid cell, invisible, their words drawn from data-text. */
+  .steady-text { display: inline-grid; }
+  .steady-text.is-block { display: grid; }
+  .steady-text > * { grid-area: 1 / 1; }
+  .steady-text-size { visibility: hidden; white-space: nowrap; }
+  .steady-text-size::before { content: attr(data-text); }
+  .steady-text-shown { min-width: 0; contain: inline-size; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .steady-text.is-block > * { white-space: normal; }
+  .steady-text.is-block > .steady-text-shown { contain: none; overflow: visible; }
   .eyebrow, .field-label, .context-label {
     color: var(--muted); font-size: .69rem; font-weight: 650;
     letter-spacing: .075em; text-transform: uppercase;

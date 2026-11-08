@@ -23,6 +23,7 @@ import htm from "htm";
 import { Icon } from "./icons.js";
 import { getJSON, send } from "../api.js";
 import { pictureAt } from "./sceneclock.js";
+import { SteadyText } from "./steadytext.js";
 
 const html = htm.bind(h);
 const ROOT = "/api/scene-lab";
@@ -180,19 +181,29 @@ export function RecordBar({ link, recorder: given = null }) {
     try { await send("POST", "/api/replay/reveal", { path: status.path }); } catch (error) { setProblem(error.message); }
   }
   const note = problem || STOPPED[own.stoppedBy] || null;
+  // One button that says Record or Stop at one width, then a place of its own for what it is doing
+  // (round 9, item 3: pressing it never moves anything): every line there is one line, cut short with
+  // the whole sentence on hover.
   return html`<div class="scene-lab-bar scene-lab-record" aria-label="Record">
     ${own.on
       ? html`<button type="button" class="is-recording" onclick=${() => finish(own.stop(performance.now(), "stop"))}
             title="Stop recording and make the video">
-          <${Icon} name="stop" size=${15} /> Stop</button>
-        <span class="scene-lab-record-time" role="status">Recording ${clock(own.elapsedMs)}</span>`
+          <${Icon} name="stop" size=${15} /><${SteadyText} text="Stop" sizes=${RECORD_WORDS} /></button>`
       : html`<button type="button" disabled=${running} onclick=${() => { setProblem(null); own.start(link); }}
             title=${running ? "A video is still being made" : "Record what the viewer shows, with its sound, and save it as a video"}>
-          <${Icon} name="record" size=${15} className="scene-lab-record-dot" /> Record</button>`}
-    ${!own.on && status && html`<${ExportLine} status=${status} cancel=${cancel} reveal=${reveal} />`}
-    ${note && html`<span class="scene-lab-record-note is-bad" role="status">${note}</span>`}
+          <${Icon} name="record" size=${15} className="scene-lab-record-dot" /><${SteadyText} text="Record"
+            sizes=${RECORD_WORDS} /></button>`}
+    <span class="scene-lab-record-status">
+      ${own.on && html`<span class="scene-lab-record-time" role="status"><${SteadyText}
+        text=${`Recording ${clock(own.elapsedMs)}`} sizes=${RECORDING_SIZE} /></span>`}
+      ${!own.on && status && html`<${ExportLine} status=${status} cancel=${cancel} reveal=${reveal} />`}
+      ${note && html`<span class="scene-lab-record-note is-bad" role="status" title=${note}>${note}</span>`}
+    </span>
   </div>`;
 }
+
+const RECORD_WORDS = ["Record", "Stop"];
+const RECORDING_SIZE = ["Recording 00:00"];        // the longest recording is 30:00
 
 // Why a recording stopped by itself.
 const STOPPED = { closed: "Recording stopped: the scene closed.",
@@ -203,14 +214,14 @@ const STOPPED = { closed: "Recording stopped: the scene closed.",
 function ExportLine({ status, cancel, reveal }) {
   if (status.state === "running") {
     return html`<progress max="1" value=${status.progress || 0} aria-label="Making the video"></progress>
-      <span class="scene-lab-record-note" role="status">${status.message}</span>
+      <span class="scene-lab-record-note" role="status" title=${status.message}>${status.message}</span>
       <button type="button" onclick=${cancel} title="Stop making this video">Cancel</button>`;
   }
   if (status.state === "done") {
-    return html`<span class="scene-lab-record-note" role="status">
-      ${status.message || `Saved ${fileName(status.path)}.`}${" "}<a href="#" class="scene-lab-record-link"
-        onclick=${reveal} title=${status.path}>Show in folder</a></span>`;
+    const said = status.message || `Saved ${fileName(status.path)}.`;
+    return html`<span class="scene-lab-record-note" role="status" title=${said}>${said}</span>${" "}<a href="#"
+        class="scene-lab-record-link" onclick=${reveal} title=${status.path}>Show in folder</a>`;
   }
-  return html`<span class=${`scene-lab-record-note ${status.state === "error" ? "is-bad" : ""}`} role="status">
-    ${status.message}</span>`;
+  return html`<span class=${`scene-lab-record-note ${status.state === "error" ? "is-bad" : ""}`} role="status"
+    title=${status.message}>${status.message}</span>`;
 }

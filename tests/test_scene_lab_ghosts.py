@@ -141,7 +141,7 @@ def ranks(tmp_path_factory):
 
 
 def publish(population: LocalPopulation, *, player_id, player_name, frames, strat="Standard", minutes=0,
-            source=None, records=40) -> str:
+            source=None, records=40, version="us") -> str:
     """A recording in the population's own index and clip folder (what admission leaves behind)."""
     staging = population.root / "staging" / f"{player_id}-{frames}-{minutes}.ghost"
     write_clip(staging, [frame(n, elapsed=n - 1) for n in range(1, records + 1)], producer(), clock_kind=STAR_CLOCK)
@@ -151,25 +151,25 @@ def publish(population: LocalPopulation, *, player_id, player_name, frames, stra
     (population.root / "clips" / f"{digest}.ghost").write_bytes(data)
     target = describe("star", "2-2", strat, ())
     document = {"player_id": player_id, "player_name": player_name, "target": target, "frames": frames,
-                "clock": "igt", "game_version": "us", "sha256": digest,
+                "clock": "igt", "game_version": version, "sha256": digest,
                 "recorded_utc": _iso(T0 + timedelta(minutes=minutes)), "source": source,
                 "certified": True, "valid": True, "full_start": True}
     document["id"] = hashlib.sha256(canonical(document)).hexdigest()
     with sqlite3.connect(population.root / "population.sqlite3") as index:
         index.execute("INSERT INTO recordings VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                      (document["id"], player_id, player_name.casefold(), "star:2-2", "star", "igt", "us", frames,
+                      (document["id"], player_id, player_name.casefold(), "star:2-2", "star", "igt", version, frames,
                        digest, len(data), canonical(document).decode()))
     return document["id"]
 
 
-def import_ghost(save_root: Path, *, author, frames, strat="Standard", pads=True) -> dict:
+def import_ghost(save_root: Path, *, author, frames, strat="Standard", pads=True, version=None) -> dict:
     """One imported ghost in the collection index GhostSharing reads."""
     folder = save_root / "shared-ghosts"
     staging = save_root / "staging" / f"{author}-{frames}.ghost"
     write_clip(staging, [frame(n, elapsed=n - 1, pad=(0, 0, 0) if pads else None) for n in range(1, 41)],
                producer(), clock_kind=STAR_CLOCK)
     entry = make_entry(staging, author=author, target=describe("star", "2-2", strat, ()), frames=frames,
-                       clock="igt", recorded_utc=_iso(T0), practice=False, outcome="success")
+                       clock="igt", recorded_utc=_iso(T0), practice=False, outcome="success", game_version=version)
     folder.mkdir(parents=True, exist_ok=True)
     (folder / f"{entry['sha256']}.ghost").write_bytes(staging.read_bytes())
     index = folder / "collection.json"
@@ -279,6 +279,10 @@ def test_the_stage_is_his_fastest_finished_attempt_of_the_strategy_with_a_scene(
         assert stage["scenes"][0]["recorded_utc"] == fast.started_utc
         picked = client.get("/api/scene-lab/stage", params={"course": 2, "star": 2, "strat": "Single Jump"}).json()
         assert (picked["attempt"], picked["target"]["strat_name"]) == (14, "Single Jump")
+        # A Library ghost's stage of any strategy (round 9, item 8): his fastest scene, named by its strategy.
+        anyone = client.get("/api/scene-lab/stage", params={"course": 2, "star": 2, "strat": "Nope",
+                                                            "strategies": "all"}).json()
+        assert (anyone["attempt"], anyone["target"]["strat"], len(anyone["scenes"])) == (14, "Single Jump", 4)
         nothing = client.get("/api/scene-lab/stage", params={"course": 2, "star": 3}).json()
         assert (nothing["attempt"], nothing["time"], nothing["scenes"]) == (None, None, [])
         assert nothing["reason"] == "No saved scene for this strategy yet: play it with the scene lab on."
@@ -440,6 +444,96 @@ def test_every_section_says_why_it_is_empty(lab, world):
     app, _server, _cutters = _app(lab, world)
     with TestClient(app) as client:
         assert _ghosts(client, section="top", strat="Standard")["reason"] == scene_ghosts.NO_RECORDINGS
+
+
+# ---------------------------------------------------------------- round 9 (2026-11-08)
+
+
+def test_every_ghost_names_the_rom_its_own_record_names_and_none_where_it_names_none(lab, world):
+    """Item 11, his words: "we should make sure that the ghosts are clearly marked as either coming
+    from US or JP". Each row's "version" is its own record's ROM; a record that names none stays
+    None (no flag), never the running ROM."""
+    world.journal.rows.update({90: run(90, igt=331), 91: run(91, igt=335, minutes=1, game_version="jp"),
+                               92: run(92, igt=338, minutes=2, game_version=None)})
+    for attempt_id in (90, 91, 92):
+        world.replay.commit(attempt_id)
+    publish(world.population, player_id="kim", player_name="Kim", frames=320)
+    import_ghost(world.replay.cfg.save_root, author="Visitor", frames=300, version="jp")
+    import_ghost(world.replay.cfg.save_root, author="Older", frames=310)
+    app, server, _cutters = _app(lab, world)
+    with TestClient(app) as client:
+        mine = {row["frames"]: row["version"] for row in _ghosts(client, section="yours")["items"]}
+        top = {row["player"]: row["version"] for row in _ghosts(client, section="top")["items"]}
+    assert mine == {331: "us", 335: "jp", 338: None}
+    assert top == {"Visitor": "jp", "Older": None, "Kim": "us", "You": "us"}
+    # A bundled row's own ROM is "recorded_game_version"; its "game_version" is only the query's.
+    context = SimpleNamespace(population=object(), identity=object(), owned=frozenset(), you="You")
+    bundled = {"id": "b" * 64, "frames": 333, "player_id": "author", "player_name": "Author",
+               "recorded_game_version": "jp", "game_version": "us"}
+    server.ghosts._population_rows = lambda population, identity, strat: (bundled,)
+    offered = list(server.ghosts._population_offers("Standard", context, {"lineages": set(), "clips": set()}))
+    assert [offer[-1] for offer in offered] == ["jp"] and scene_ghosts.region("JP") is None
+
+
+def test_all_strategies_lists_each_players_one_best_across_strategies_with_its_strategy(lab, world):
+    """Item 7, his words: "we should be able to see a list of all of the top ghosts for that star (across
+    all strategies), and then be able to load ANY ghost into the scene viewer immediately." Each player
+    once, at their fastest whatever its strategy, ranked among those bests; the per-strategy list is
+    unchanged; and a ghost listed only here plays."""
+    world.journal.rows.update({100: run(100, igt=331), 101: run(101, igt=300, strat="Single Jump", minutes=1)})
+    world.replay.commit(100)
+    world.replay.commit(101)
+    publish(world.population, player_id="kim", player_name="Kim", frames=320)
+    publish(world.population, player_id="kim", player_name="Kim", frames=310, strat="Single Jump", minutes=1)
+    publish(world.population, player_id="ana", player_name="Ana", frames=305, strat="Single Jump", minutes=2)
+    publish(world.population, player_id="bo", player_name="Bo", frames=400, minutes=3)
+    import_ghost(world.replay.cfg.save_root, author="Visitor", frames=315, strat="Single Jump")
+    app, server, _cutters = _app(lab, world)
+    with TestClient(app) as client:
+        every = _ghosts(client, section="top", strategies="all")
+        assert [(row["player"], row["frames"], row["strat"], row["rank"]) for row in every["items"]] == [
+            ("You", 300, "Single Jump", 1), ("Ana", 305, "Single Jump", 2), ("Kim", 310, "Single Jump", 3),
+            ("Visitor", 315, "Single Jump", 4), ("Bo", 400, "Standard", 5)]
+        assert every["reason"] is None and every["pages"] == 1
+        assert all(row["tier"] is not None for row in every["items"] if row["strat"] == "Standard")
+        # The stage's strategy does not narrow it, and the per-strategy list is what it was.
+        assert _ghosts(client, section="top", strategies="all", strat="Standard")["items"] == every["items"]
+        standard = _ghosts(client, section="top", strat="Standard")
+        assert [(row["player"], row["frames"]) for row in standard["items"]] == [("Kim", 320), ("You", 331),
+                                                                                  ("Bo", 400)]
+        assert {row["strat"] for row in standard["items"]} == {"Standard"}
+        assert client.get("/api/scene-lab/ghosts", params={"course": 2, "star": 2, "section": "yours",
+                                                           "strategies": "all"}).status_code == 422
+        assert client.get("/api/scene-lab/ghosts", params={"course": 2, "star": 2, "section": "top",
+                                                           "strategies": "every"}).status_code == 422
+        empty = _ghosts(client, section="top", strategies="all", star=3)
+        assert (empty["items"], empty["reason"]) == ([], scene_ghosts.NO_GHOSTS_ANY)
+    ana = next(row for row in every["items"] if row["player"] == "Ana")
+    assert server.ghosts.load_ghost(ana["ref"])["player"] == "Ana"
+
+
+def test_the_library_ghost_button_finds_one_recording_by_its_id_and_it_plays(lab, world):
+    """Item 8: the Library names a recording by its id; the lab answers it as a row of the target's list
+    (its strategy, ROM and rank among that strategy's ghosts), and the ref it hands out loads."""
+    world.journal.rows[110] = run(110, igt=331)
+    world.replay.commit(110)
+    kim = publish(world.population, player_id="kim", player_name="Kim", frames=320, strat="Single Jump")
+    app, server, _cutters = _app(lab, world)
+    with TestClient(app) as client:
+        def ask(recording, **params):
+            answer = client.get("/api/scene-lab/ghost", params={"recording": recording, "course": 2, "star": 2,
+                                                                **params})
+            assert answer.status_code == 200, answer.text
+            return answer.json()
+        item = ask(kim)["item"]
+        assert (item["player"], item["strat"], item["version"], item["time"], item["rank"]) == (
+            "Kim", "Single Jump", "us", '10"66', 1)
+        assert ask(kim)["item"]["ref"] == item["ref"]
+        assert ask(kim, star=3) == {"item": None, "reason": scene_ghosts.OTHER_TARGET}
+        assert ask("0" * 64) == {"item": None, "reason": scene_ghosts.NOT_HELD}
+        assert ask("not-an-id") == {"item": None, "reason": scene_ghosts.NOT_HELD}
+        assert client.get("/api/scene-lab/ghost", params={"recording": kim, "course": 2}).status_code == 422
+    assert server.ghosts.load_ghost(item["ref"])["player"] == "Kim"
 
 
 # ---------------------------------------------------------------- the renderer's recordings
