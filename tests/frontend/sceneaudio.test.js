@@ -294,7 +294,7 @@ beforeEach(() => {
       ended: null, packages: [{ name: "sound.sm64scene", bytes: 1 << 20 }] });
     if (url === "/api/scene-lab/open") return respond(opened);
     if (url.startsWith("/api/scene-lab/audio/")) return respond({});
-    if (url === "/api/scene-lab/slots") return respond(SLOTS);
+    if (url === "/api/scene-lab/slot-sets") return respond(SLOTS);
     return respond({}, 404);
   });
   HTMLCanvasElement.prototype.getContext = () => ({
@@ -305,9 +305,8 @@ beforeEach(() => {
 afterEach(cleanup);
 
 // The Ghost Lab's nine save-state slots, all empty (scenestrip.js asks for them while the page shows).
-const SLOTS = { game: "us", reason: null, loaded: null, stamp: "s", slots: [1, 2, 3, 4, 5, 6, 7, 8, 9].map((slot) =>
-  ({ slot, state: "empty", level: null, area: null, place: null, version: null, translated: false, picture: null,
-    frame: null, mine: false })) };
+const SLOTS = { context: null, game: { build: "us" }, slots: [1, 2, 3, 4, 5, 6, 7, 8, 9].map((slot) =>
+  ({ slot, set: null, state: null, translated: null, under: null, picture: null, loaded_last: false })) };
 
 // The lab folder's recording, opened from the bar's More menu.
 async function openScene() {

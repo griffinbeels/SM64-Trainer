@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // One frame of the Ghost Lab's scene into a Usamune slot (ui/components/scenemoment.js) against a scripted lab:
 // the build names the scene the way the lab finds it, each step's refusal shows as the lab said it, the write
-// carries the frame's picture when there is one, and whyNot says why no press can run before anyone presses.
+// carries the watched run's star when there is one, and whyNot says why no press can run before anyone presses.
 // The strip that presses it is scenestrip.test.js.
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { OLDER, momentSource, saveMoment, whyNot } from "../../src/sm64_events/ui/components/scenemoment.js";
@@ -30,9 +30,9 @@ test("the package's own frame goes to the lab, not the frame's place in the list
   expect(said).toEqual({ bad: false, text: "Frame 2 is in slot 3." });
 });
 
-test("the write carries the frame's picture when there is one", async () => {
-  await saveMoment(scene(), scene().frames[1], 2, 3, "data:image/jpeg;base64,AAAA");
-  expect(asked[1]).toEqual(["/api/scene-lab/moment/abc/write", { slot: 3, picture: "data:image/jpeg;base64,AAAA" }]);
+test("the write carries the watched run's star when there is one, and no picture: the lab draws it", async () => {
+  await saveMoment(scene(), scene().frames[1], 2, 3, { course_id: 2, star_id: 1 });
+  expect(asked[1]).toEqual(["/api/scene-lab/moment/abc/write", { slot: 3, course_id: 2, star_id: 1 }]);
 });
 
 test("the lab finds the scene by the watched ghost, the attempt, or the listed package, in that order", async () => {

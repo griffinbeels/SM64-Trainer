@@ -353,7 +353,7 @@ export class SceneLink {
       sound: new SceneSound({ changed: () => this.changed(), observe: (note) => this.observe(note) }),
       presets: new CameraPresets({ changed: () => this.changed() }),
       paths: new CameraPaths({ changed: () => this.changed() }), pathOn: false, pathHeld: null,
-      slots: new SaveSlots({ changed: () => this.changed() }), canvas: () => null });
+      slots: new SaveSlots({ changed: () => this.changed() }) });
     this.timings = new MovingTimings((summary) => { this.moving = summary; this.changed(); });
     this.onShared = (event) => this.sharedArrived(event);
   }
@@ -2194,7 +2194,6 @@ export function SceneViewer({ t }) {
   }
   const owner = useKeyboardOwner(link, surface, canvas);
   useMovingObservations(link, surface);
-  useEffect(() => { link.canvas = () => canvas.current; }, []);
   async function close() {
     endLook(link, canvas.current, "closed", true);
     link.disconnect();

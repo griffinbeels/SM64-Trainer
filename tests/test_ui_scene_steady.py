@@ -48,19 +48,26 @@ JPEG = base64.b64decode(
 
 
 def _slot(n: int, **fields) -> dict:
-    empty = {"slot": n, "state": "empty", "level": None, "area": None, "place": None, "version": None, "translated": False,
-             "picture": None, "frame": None, "mine": False}
-    return {**empty, **fields}
+    return {"slot": n, "set": None, "state": None, "translated": None, "under": None, "picture": None,
+            "loaded_last": False, **fields}
 
 
-# The nine slots as Usamune holds them: pictures of the Lab's, a place for one saved in the game, one
-# changed to work in the other version, the one loaded last, and empties.
-SLOTS = {"game": "us", "reason": None, "loaded": 2, "stamp": "planted", "slots": [
-    _slot(1, state="saved", level=9, area=1, place="Bob-omb Battlefield", version="us", picture="/api/scene-lab/slots/picture/a1"),
-    _slot(2, state="saved", level=9, area=1, place="Bob-omb Battlefield", version="us", picture="/api/scene-lab/slots/picture/a2"),
-    _slot(3, state="saved", level=24, area=1, place="Whomp's Fortress", version="us"),
-    _slot(4, state="saved", level=9, area=1, place="Bob-omb Battlefield", version="jp", translated=True,
-          picture="/api/scene-lab/slots/picture/a4"),
+def _kept(identifier: str, level: int, place: str, build: str = "us") -> dict:
+    return {"id": identifier, "name": f"{place} {identifier}", "level": level, "area": 1, "place": place, "build": build,
+            "source": "lab", "first_seen_utc": "2026-11-08T12:00:00Z"}
+
+
+# The nine slots as GET /slot-sets names them: the star's own save and the course's with pictures of the Lab's, a
+# place for one saved in the game, one changed to work in the other version, the one loaded last, and empties.
+SLOTS = {"context": {"course_id": 1, "course": "Bob-omb Battlefield", "star_id": 1, "star": "Big Bob-omb on the Summit",
+                     "entity_key": "star:1:1"}, "game": {"build": "us"}, "slots": [
+    _slot(1, set="star", state=_kept("a1", 9, "Bob-omb Battlefield"), translated=False,
+          picture="/api/scene-lab/slot-sets/pictures/a1"),
+    _slot(2, set="course", state=_kept("a2", 9, "Bob-omb Battlefield"), translated=False,
+          picture="/api/scene-lab/slot-sets/pictures/a2", loaded_last=True),
+    _slot(3, set="course", state=_kept("a3", 24, "Whomp's Fortress"), translated=False),
+    _slot(4, set="course", state=_kept("a4", 9, "Bob-omb Battlefield", "jp"), translated=True,
+          picture="/api/scene-lab/slot-sets/pictures/a4"),
     *(_slot(n) for n in range(5, 10))]}
 
 # Every box the page keeps still, by a stable key: the bar and its parts, the player card's rows and every
@@ -187,11 +194,11 @@ def _stubs(tmp_path: Path):
         seen.update(saved=[], building=False, release=False)
         router = APIRouter()
 
-        @router.get("/api/scene-lab/slots")
+        @router.get("/api/scene-lab/slot-sets")
         def slots():
             return SLOTS
 
-        @router.get("/api/scene-lab/slots/picture/{name}")
+        @router.get("/api/scene-lab/slot-sets/pictures/{name}")
         def picture(name: str):
             return Response(JPEG, media_type="image/jpeg")
 

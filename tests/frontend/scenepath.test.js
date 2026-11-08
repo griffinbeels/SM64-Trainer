@@ -222,9 +222,8 @@ class FakeSocket {
 
 const respond = (body, status = 200) => Promise.resolve({ ok: status < 300, status, json: () => Promise.resolve(body) });
 // The Ghost Lab's nine save-state slots, all empty (scenestrip.js asks for them while the page shows).
-const SLOTS = { game: "us", reason: null, loaded: null, stamp: "s", slots: [1, 2, 3, 4, 5, 6, 7, 8, 9].map((slot) =>
-  ({ slot, state: "empty", level: null, area: null, place: null, version: null, translated: false, picture: null,
-    frame: null, mine: false })) };
+const SLOTS = { context: null, game: { build: "us" }, slots: [1, 2, 3, 4, 5, 6, 7, 8, 9].map((slot) =>
+  ({ slot, set: null, state: null, translated: null, under: null, picture: null, loaded_last: false })) };
 const puts = () => fetches.filter(([url, method]) => url.startsWith(ROUTE) && method === "PUT")
   .map(([, , body]) => JSON.parse(body).keys);
 
@@ -250,7 +249,7 @@ beforeEach(() => {
     }
     if (url.startsWith(ROUTE)) return respond({ keys: saved.get("9:1") || [], problem: null });
     if (url.startsWith("/api/scene-lab/camera-presets")) return respond({ slots: [], problem: null });
-    if (url === "/api/scene-lab/slots") return respond(SLOTS);
+    if (url === "/api/scene-lab/slot-sets") return respond(SLOTS);
     if (url.startsWith("/api/scene-lab/actions?")) {
       const target = new URL(url, "http://lab").searchParams.get("target");
       return respond({ target, reason: null, names: NAMES, actions: target === "stage" ? ACTIONS : ACTIONS.map(() => JUMP) });

@@ -27,11 +27,10 @@ const REFERENCE = { orbitPerPixel: 0.01, steepestDegrees: 80, levelPerPixel: 0.1
 const FRAMES = Array.from({ length: 5 }, (_, i) => ({ level: 9, area: 1, game_frame: 1000 + i }));
 const POSE = { focus: [10, 200, -30], position: [10, 500, 1170], roll: 0, fov: 45, mario: [40, 80, -60] };
 const PER_DEGREE = 65536 / 360;
-// The running game's nine Usamune slots as GET /api/scene-lab/slots answers with all of them empty: the
-// save-state strip asks for it while it shows.
-const SLOTS_EMPTY = { game: "us", reason: null, loaded: null, stamp: "s", slots: Array.from({ length: 9 }, (_, i) => ({
-  slot: i + 1, state: "empty", level: null, area: null, place: null, version: null, translated: false, picture: null,
-  frame: null, mine: false })) };
+// The running game's nine Usamune slots as GET /api/scene-lab/slot-sets answers outside a course, all of them
+// empty: the save-state strip asks for it while it shows.
+const SLOTS_EMPTY = { context: null, game: { build: "us" }, slots: Array.from({ length: 9 }, (_, i) => ({
+  slot: i + 1, set: null, state: null, translated: null, under: null, picture: null, loaded_last: false })) };
 let sockets, opened, fetches, frames, locked, lockRequests;
 // A test's own answers by URL prefix, asked before the scripted server's (the selector and ghost tests).
 let routes;
@@ -88,7 +87,7 @@ beforeEach(() => {
       ended: null, packages: [{ name: "bob-minute.sm64scene", bytes: 11 << 20 }] });
     if (url === "/api/scene-lab/open") return respond(opened);
     if (url === "/api/scene-lab/close") return respond({ closed: true });
-    if (url === "/api/scene-lab/slots") return respond(SLOTS_EMPTY);
+    if (url === "/api/scene-lab/slot-sets") return respond(SLOTS_EMPTY);
     if (url === "/api/tuning/scenecamera") return respond({ written: Object.keys(JSON.parse(options.body).values).length });
     return respond({}, 404);
   });
@@ -2511,7 +2510,6 @@ test("1 to 9 save the frame on screen into that Usamune slot, as a tile's click 
   momentRoutes((body) => new Promise((resolve) => {
     writes.push((answer = { written: true, slot: body.slot, build: "us" }) => resolve(late(answer)));
   }));
-  vi.spyOn(HTMLCanvasElement.prototype, "toDataURL").mockReturnValue("data:image/jpeg;base64,AAAA");
   const { page, socket, root } = await openScene({ tab: "ghosts" });
   await socket.picture(socket.sent[0]);
   const strip = within(page.getByRole("group", { name: "Save states" }));
@@ -2530,18 +2528,18 @@ test("1 to 9 save the frame on screen into that Usamune slot, as a tile's click 
   fireEvent.keyDown(root, { key: "3", code: "Digit3" });                             // the key: slot 3
   await until(() => expect(writes.length).toBe(1));
   expect(moments()).toEqual([["/api/scene-lab/moment", { package: "bob-minute.sm64scene", frame: 1 }],
-    ["/api/scene-lab/moment/m1/write", { slot: 3, picture: "data:image/jpeg;base64,AAAA" }]]);
+    ["/api/scene-lab/moment/m1/write", { slot: 3 }]]);                        // the lab draws its picture
   expect(stripWords(page)).toBe("Saving frame 2 in slot 3...");                     // on its way: every tile waits
   expect([page.container.querySelector('[data-slot="3"]').classList.contains("is-busy"), tile(7).disabled]).toEqual([true, true]);
-  const slotsRead = fetches.filter(([url]) => url === "/api/scene-lab/slots").length;
+  const slotsRead = fetches.filter(([url]) => url === "/api/scene-lab/slot-sets").length;
   writes[0]();
   await until(() => expect(stripWords(page)).toBe("Frame 2 is in slot 3."));
   expect(page.container.querySelector(".ghost-lab-strip-line .region-flag").alt).toBe("US");   // the build it came from
-  await until(() => expect(fetches.filter(([url]) => url === "/api/scene-lab/slots").length).toBeGreaterThan(slotsRead));
+  await until(() => expect(fetches.filter(([url]) => url === "/api/scene-lab/slot-sets").length).toBeGreaterThan(slotsRead));
 
   fireEvent.click(tile(7));                                                         // a tile: the same press
   await until(() => expect(writes.length).toBe(2));
-  expect(moments().at(-1)).toEqual(["/api/scene-lab/moment/m1/write", { slot: 7, picture: "data:image/jpeg;base64,AAAA" }]);
+  expect(moments().at(-1)).toEqual(["/api/scene-lab/moment/m1/write", { slot: 7 }]);
   writes[1]({ refused: "place", reason: "The game is in Whomp's Fortress. Go to Bob-omb Battlefield, then press again." });
   await until(() => expect(stripWords(page)).toBe("The game is in Whomp's Fortress. Go to Bob-omb Battlefield, then press again."));
   expect(page.container.querySelector(".ghost-lab-strip-line").classList.contains("is-bad")).toBe(true);

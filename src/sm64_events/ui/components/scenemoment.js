@@ -26,14 +26,14 @@ export function momentSource(scene) {
   return scene.attempt != null ? { attempt: scene.attempt } : { package: scene.name };
 }
 
-// One press: the build, then the write (with `picture`, a small JPEG of the frame on screen, which the strip
-// shows on that slot, and `extra`, more of the write's body: the watched run's {course_id, star_id}, so the
-// save joins that star's set). Each step's refusal is the answer. A written answer names the build (US or JP)
-// the save state came from, for its flag; one written into the other build's game says so in words.
-export async function saveMoment(scene, row, shown, slot, picture = null, extra = {}) {
+// One press: the build, then the write (with `star`, the watched run's {course_id, star_id}, so the save joins
+// that star's set; the lab draws the frame's picture for the strip itself). Each step's refusal is the answer.
+// A written answer names the build (US or JP) the save state came from, for its flag; one written into the
+// other build's game says so in words.
+export async function saveMoment(scene, row, shown, slot, star = {}) {
   const built = await send("POST", ROOT, { ...momentSource(scene), frame: row.package_frame });
   if (built.refused) return { bad: true, text: built.reason };
-  const written = await send("POST", `${ROOT}/${built.id}/write`, { slot, ...(picture ? { picture } : {}), ...extra });
+  const written = await send("POST", `${ROOT}/${built.id}/write`, { slot, ...star });
   if (written.refused) return { bad: true, text: written.reason };
   const crossed = written.translated ? ` ${written.translated.words}` : "";
   const said = { bad: false, text: `Frame ${shown} is in slot ${slot}.${crossed}${built.exact ? "" : ` ${OLDER}`}` };

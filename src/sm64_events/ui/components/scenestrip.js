@@ -21,9 +21,8 @@
 // names the course save a star's save covers (`under`). A saved tile's small menu moves it to "Only this
 // star" or "All stars in this course", or takes it out of its set (the game keeps the slot). A press sends
 // the watched run's star with the write, so the save joins that star's set. A slot_sets_changed event in the
-// store's feed (link.feed) redraws at once; the poll catches anything else. Until the lab answers slot-sets
-// (a 404), the strip reads GET /api/scene-lab/slots instead, and shows no sets: both answers become ONE shape
-// (fromSlotSets, fromSlots), so no tile asks where its slot came from.
+// store's feed (link.feed) redraws at once; the poll catches anything else. The lab draws each save's picture
+// itself (the recorded camera's, server/scene_moments.py) and serves it at the slot's "picture" URL.
 import { h } from "preact";
 import { useEffect } from "preact/hooks";
 import htm from "htm";
@@ -34,29 +33,11 @@ import { usePop } from "./scenepop.js";
 
 const html = htm.bind(h);
 const SETS = "/api/scene-lab/slot-sets";
-const SLOTS = "/api/scene-lab/slots";
 export const SLOTS_POLL = { ms: 2000 };
 export const SLOT_NUMBERS = [1, 2, 3, 4, 5, 6, 7, 8, 9];
 export const SLOT_SETS_CHANGED = "slot_sets_changed";
 export const NO_GAME = "No game is running, so the slots are unknown.";
 export const SET_WORDS = { star: "Only this star", course: "All stars in this course" };
-const THUMB_WIDTH = 160;
-
-// A small JPEG of the picture on screen (THUMB_WIDTH wide), for the slot it goes into; null without one.
-export function thumbnail(canvas) {
-  if (!canvas?.width || !canvas.height || typeof document === "undefined") return null;
-  const small = document.createElement("canvas");
-  small.width = THUMB_WIDTH;
-  small.height = Math.round(THUMB_WIDTH * canvas.height / canvas.width);
-  const context = small.getContext?.("2d");
-  if (!context) return null;
-  try {
-    context.drawImage(canvas, 0, 0, small.width, small.height);
-    return small.toDataURL("image/jpeg", 0.72);
-  } catch {
-    return null;
-  }
-}
 
 // One slot as every tile reads it: state "empty" | "saved" | "unknown", the set it came from ("star",
 // "course" or null), where and which version, ⇄, its picture, loaded last, the course save under it.
@@ -75,20 +56,8 @@ export function fromSlotSets(body) {
       picture: one.picture || null, loaded: !!one.loaded_last, under: one.under ? placeOf(one.under) : null,
       id: one.state.id ?? null };
   });
-  return { sets: true, game: body?.game?.build ?? null, reason: known ? null : NO_GAME, context: body?.context ?? null,
+  return { game: body?.game?.build ?? null, reason: known ? null : NO_GAME, context: body?.context ?? null,
     stamp: JSON.stringify(body), slots };
-}
-
-// GET /slots's answer (before star sets) as the same shape, with no sets.
-export function fromSlots(body) {
-  const slots = SLOT_NUMBERS.map((number) => {
-    const one = body?.slots?.find((entry) => entry.slot === number);
-    if (!one) return blank(number, "unknown");
-    return { ...blank(number, one.state || "unknown"), place: one.place ?? null, version: one.version ?? null,
-      translated: !!one.translated, picture: one.picture ?? null, loaded: body.loaded === number };
-  });
-  return { sets: false, game: body?.game ?? null, reason: body?.reason ?? null, context: null,
-    stamp: body?.stamp ?? JSON.stringify(body), slots };
 }
 
 // The newest slot_sets_changed event in the store's feed (newest first), or null. The same object stays
@@ -108,10 +77,10 @@ function starOf(link) {
 
 // The nine slots as the lab last answered (`answer`, the one shape above), the press on its way (`busy`:
 // {slot, shown}) and the last press's answer (`said`: {bad, text, build, at}). One per page (SceneLink.slots):
-// the strip and the keys share it. `source` is "slots" once the lab said it has no slot sets.
+// the strip and the keys share it.
 export class SaveSlots {
   constructor({ changed }) {
-    Object.assign(this, { changed, answer: null, busy: null, said: null, timer: null, polling: 0, source: "sets" });
+    Object.assign(this, { changed, answer: null, busy: null, said: null, timer: null, polling: 0 });
   }
 
   // Asks now, then every SLOTS_POLL.ms until stop(); a new stamp redraws, the same one does not.
@@ -132,20 +101,8 @@ export class SaveSlots {
 
   async read() {
     try {
-      this.take(await this.ask());
+      this.take(fromSlotSets(await getJSON(SETS)));
     } catch { /* the next ask tries again; the tiles keep what they showed */ }
-  }
-
-  async ask() {
-    if (this.source === "sets") {
-      try {
-        return fromSlotSets(await getJSON(SETS));
-      } catch (error) {
-        if (error.status !== 404) throw error;
-        this.source = "slots";                 // a lab without slot sets: its slots alone, from now on
-      }
-    }
-    return fromSlots(await getJSON(SLOTS));
   }
 
   // A new answer (one shape) draws; one with the stamp on screen does not.
@@ -157,19 +114,18 @@ export class SaveSlots {
 
   // A slot_sets_changed event's body, pushed by the server.
   pushed(body) {
-    this.source = "sets";
     this.take(fromSlotSets(body));
   }
 
-  // A press of slot `slot` (a tile or its key): the frame on screen into that slot, its picture with it,
-  // and the watched run's star, so the save joins that star's set.
+  // A press of slot `slot` (a tile or its key): the frame on screen into that slot, with the watched run's
+  // star, so the save joins that star's set.
   async press(link, slot) {
     if (this.busy || !link.scene || whyNot(link)) return;
     const at = link.frame, shown = at + 1, scene = link.scene, row = scene.frames[at];
     Object.assign(this, { busy: { slot, shown }, said: null });
     this.changed();
     try {
-      this.said = { ...await saveMoment(scene, row, shown, slot, thumbnail(link.canvas?.()), starOf(link)), at, slot };
+      this.said = { ...await saveMoment(scene, row, shown, slot, starOf(link)), at, slot };
     } catch (error) {
       this.said = { bad: true, text: error.message, at, slot };
     }
@@ -269,9 +225,9 @@ function SavedMarks({ entry }) {
       entry.translated && html`<span class="ghost-lab-slot-crossed" aria-hidden="true">⇄</span>`}</span>`;
 }
 
-// One slot: its picture, number and the loaded mark, then SavedMarks; a saved slot of a lab with sets has its
-// menu beside the button (never inside it).
-function Tile({ link, entry, number, context, sets, busy, disabled, press }) {
+// One slot: its picture, number and the loaded mark, then SavedMarks; a saved slot has its menu beside the
+// button (never inside it).
+function Tile({ link, entry, number, context, busy, disabled, press }) {
   const state = entry?.state || "unknown", saved = state === "saved";
   const classes = ["ghost-lab-slot", `is-${state}`, entry?.loaded && "is-loaded", busy && "is-busy",
     entry?.set && `is-set-${entry.set}`].filter(Boolean);
@@ -283,7 +239,7 @@ function Tile({ link, entry, number, context, sets, busy, disabled, press }) {
         && html`<span class="ghost-lab-slot-loaded" aria-hidden="true">▶</span>`}</span>
       ${saved && html`<${SavedMarks} entry=${entry} />`}
     </button>
-    ${sets && saved && html`<${SlotMenu} link=${link} entry=${entry} context=${context} />`}
+    ${saved && html`<${SlotMenu} link=${link} entry=${entry} context=${context} />`}
   </li>`;
 }
 
@@ -299,7 +255,7 @@ export function SaveStrip({ link }) {
   return html`<div class="ghost-lab-strip" role="group" aria-label="Save states">
     <ol class="ghost-lab-slots">
       ${SLOT_NUMBERS.map((number) => html`<${Tile} key=${number} link=${link} number=${number}
-        entry=${answer?.slots?.find((entry) => entry.slot === number)} context=${context} sets=${!!answer?.sets}
+        entry=${answer?.slots?.find((entry) => entry.slot === number)} context=${context}
         busy=${slots.busy?.slot === number} disabled=${!!slots.busy || !!why}
         press=${() => slots.press(link, number)} />`)}
     </ol>

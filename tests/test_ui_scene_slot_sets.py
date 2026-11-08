@@ -1,57 +1,37 @@
-"""Star save-state sets on the save-state strip, on the real page (round 9, item 12). His words: "for every single
-star, we should be able to have custom save states that override the default stage-level save states (if there's a
-slot set) ... when the user grabs a star or selects a star ... load their star-specific save states".
+"""Star save-state sets on the save-state strip, on the real page and the lab's real routes (round 9, item 12). His
+words: "for every single star, we should be able to have custom save states that override the default stage-level
+save states (if there's a slot set) ... when the user grabs a star or selects a star ... load their star-specific
+save states".
 
-The fixture's Ghost Lab with a stand-in GET /api/scene-lab/slot-sets (the lead's frozen shape; the server lives on
-claude/star-sets) and its move and remove routes. At each supported width: a ★ marks the star's own saves and the
-course's stay plain; the course and star sit at the right end of the line under the tiles without making it a
-second line; every tile keeps one size; a saved tile's menu button shows on hover, opens upward over the player,
-inside the window, on top; a choice moves the slot and the ★ goes. A lab without slot sets keeps today's strip: the
-other strip tests (test_ui_scene_moment.py) run against the real /slots route.
+The fixture's Ghost Lab with a real star sets keeper (slotlibrary/keeper.py) over the game-memory stand-in
+(test_slot_library.FakeGame, standing in Bob-omb Battlefield): a scratch Slot Library holds the course default's
+slots 1, 2 and 8 and the star's own slots 1 and 3 (slot 1 over the course's). GET /api/scene-lab/slot-sets, its
+pictures and its move and remove routes are the lab's own. At each supported width: a ★ marks the star's own saves
+and the course's stay plain; hover names the course save under one; an empty slot is its number; the course and
+star sit at the right end of the line under the tiles without making it a second line; every tile keeps one size; a
+saved tile's menu button shows on hover, opens upward over the player, inside the window, on top; a choice moves the
+slot and the ★ goes, or takes it out of its set.
 """
-import copy
+import io
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
-from fastapi import APIRouter, Query
+from PIL import Image
 from playwright.sync_api import sync_playwright
 
+import test_slot_library as libfakes
 import test_ui_attempt_scene as attempt_scene
 from frontend_runner import run_frontend
+from sm64_events.slotlibrary.coursesets import CourseSets
+from sm64_events.slotlibrary.keeper import SetKeeper
+from sm64_events.slotlibrary.store import SlotLibrary
 from test_ui_scene_presets import _open, _placed
 from test_ui_scene_viewer import CAMERAS
 
 ROW = ".ghost-lab-strip"
-WHOMP = {"course_id": 2, "course": "Whomp's Fortress", "star_id": 1, "star": "Shoot into the Wild Blue",
-         "entity_key": "star:2:1"}
-
-
-def _kept(identifier: str, place: str, build: str = "us") -> dict:
-    return {"id": identifier, "name": f"{place} {identifier}", "level": 24, "area": 1, "place": place, "build": build,
-            "source": "lab", "first_seen_utc": "2026-11-08T12:00:00Z"}
-
-
-def _slot(slot: int, **fields) -> dict:
-    return {"slot": slot, "set": None, "state": None, "translated": None, "under": None, "picture": None,
-            "loaded_last": False, **fields}
-
-
-# A flat sky-blue JPEG: a written slot's picture.
-PICTURE = ("data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP///////////////////////////////////////////"
-           "///////////////////////////////////////////2wBDAf///////////////////////////////////////////////////"
-           "///////////////////////////////////wAARCAAQABADASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAf/xAAUEAEAA"
-           "AAAAAAAAAAAAAAAAAAA/8QAFAEBAAAAAAAAAAAAAAAAAAAAAP/EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhEDEQA/AKpgA"
-           "//Z")
-ANSWER = {"context": WHOMP, "game": {"build": "us"}, "slots": [
-    _slot(1, set="star", state=_kept("s1", "Whomp's Fortress"), translated=False, under=_kept("c1", "Whomp's Fortress"),
-          loaded_last=True),
-    _slot(2, set="course", state=_kept("c2", "Whomp's Fortress"), translated=False),
-    _slot(3, set="star", state=_kept("s3", "Whomp's Fortress", "jp"), translated=True, picture=PICTURE),
-    _slot(4, state=_kept("g4", "Bob-omb Battlefield"), translated=False),
-    _slot(5), _slot(6), _slot(7),
-    _slot(8, set="course", state=_kept("c8", "Whomp's Fortress"), translated=False),
-    _slot(9)]}
+BOB, STAR = 1, 3                                  # the stand-in game stands in Bob-omb Battlefield (course 1)
 
 
 def test_the_strip_in_jsdom():
@@ -59,31 +39,38 @@ def test_the_strip_in_jsdom():
 
 
 def _rig(state: dict):
+    """The placed scene (test_ui_scene_presets.py) and a real keeper in the lab, as follow_spawns makes it."""
     def rig(app, lab, seen):
         _placed(app, lab, seen)
-        router = APIRouter()
-
-        @router.get("/api/scene-lab/slot-sets")
-        def read():
-            return state["answer"]
-
-        @router.post("/api/scene-lab/slot-sets/{slot}/move")
-        def move(slot: int, body: dict):
-            state["asked"].append(("move", slot, body))
-            entry = state["answer"]["slots"][slot - 1]
-            entry["set"], entry["under"] = body["to"], None
-            return state["answer"]
-
-        @router.delete("/api/scene-lab/slot-sets/{slot}")
-        def remove(slot: int, which: str = Query(alias="set")):
-            state["asked"].append(("remove", slot, which))
-            state["answer"]["slots"][slot - 1]["set"] = None
-            return state["answer"]
-
-        app.include_router(router)
-        for _ in router.routes:
-            app.router.routes.insert(0, app.router.routes.pop())
+        folder = Path(lab.config_path).parent / "slot-library"
+        library, game = SlotLibrary(folder), libfakes.FakeGame()
+        sets = CourseSets(folder / "course-sets.json")
+        kept = {name: libfakes.keep(library, game, libfakes.make_slot(fill))
+                for name, fill in (("course 1", 0xA1), ("course 2", 0xA2), ("course 8", 0xA8),
+                                   ("star 1", 0xB1), ("star 3", 0xB3))}
+        for slot in (1, 2, 8):
+            sets.put(library, BOB, None, slot, kept[f"course {slot}"].id)
+        for slot in (1, 3):
+            sets.put(library, BOB, STAR, slot, kept[f"star {slot}"].id)
+        library.put_picture(kept["star 3"].id, _frame_picture())
+        keeper = SetKeeper(library, sets, None, target=lambda: ("star", BOB, STAR))
+        keeper.watch(game)
+        keeper.apply(game)
+        lab.refitter = SimpleNamespace(keeper=keeper, poke=lambda *args: None, start=lambda: None, stop=lambda: None)
+        state.update(keeper=keeper, sets=sets, kept=kept)
     return rig
+
+
+def _frame_picture() -> bytes:
+    """A frame picture as a Ghost Lab save keeps one: a small JPEG, here colored stripes like the fake renderer's."""
+    picture = Image.new("RGB", (160, 120))
+    for x in range(160):
+        shade = (x * 37) % 256
+        for y in range(120):
+            picture.putpixel((x, y), (shade, 255 - shade, (x * 11) % 256))
+    out = io.BytesIO()
+    picture.save(out, "JPEG", quality=80)
+    return out.getvalue()
 
 
 def _tile(slot: int) -> str:
@@ -102,15 +89,20 @@ def _keep_folder():
     return Path(named) if named else None
 
 
-def _marks(page) -> None:
-    """The star's own saves wear a star, the course's stay plain; hover names the save under one; the line names
-    the course and star."""
+def _marks(page, state) -> None:
+    """The star's own saves wear a star, the course's stay plain, an empty slot is its number; hover names the save
+    under one; the line names the course and star; slot 3's picture comes from the lab's picture route."""
     stars = [page.locator(f"{_tile(slot)} .ghost-lab-slot-star").count() for slot in range(1, 10)]
     assert stars == [1, 0, 1, 0, 0, 0, 0, 0, 0]
-    assert page.locator(f"{_tile(3)} .ghost-lab-slot-crossed").count() == 1
-    assert page.locator(f"{ROW} .ghost-lab-slot-more").count() == 5      # one per saved tile
-    assert "Under it is the course save from Whomp's Fortress." in page.locator(f"{_tile(1)} > button").get_attribute("title")
-    assert page.locator(f"{ROW} .ghost-lab-strip-context").text_content() == "Whomp's Fortress \u00b7 \u2605 Shoot into the Wild Blue"
+    assert [page.locator(_tile(slot)).get_attribute("class").split()[1] for slot in range(1, 10)] == [
+        "is-saved", "is-saved", "is-saved", "is-empty", "is-empty", "is-empty", "is-empty", "is-saved", "is-empty"]
+    assert page.locator(f"{ROW} .ghost-lab-slot-more").count() == 4      # one per saved tile
+    assert "Under it is the course save from Bob-omb Battlefield." in page.locator(f"{_tile(1)} > button").get_attribute("title")
+    star = state["keeper"].view()["context"]["star"]
+    assert page.locator(f"{ROW} .ghost-lab-strip-context").text_content() == f"Bob-omb Battlefield · ★ {star}"
+    picture = page.locator(f"{_tile(3)} img.ghost-lab-slot-picture")
+    assert picture.get_attribute("src") == f"/api/scene-lab/slot-sets/pictures/{state['kept']['star 3'].id}"
+    assert page.evaluate("(s) => document.querySelector(s).naturalWidth", f"{_tile(3)} img.ghost-lab-slot-picture") > 0
 
 
 def _layout(page) -> None:
@@ -123,7 +115,7 @@ def _layout(page) -> None:
     tiles = [_box(page, f"{_tile(slot)} > button") for slot in range(1, 10)]
     widths, heights = [one["width"] for one in tiles], {one["height"] for one in tiles}
     assert max(widths) - min(widths) <= 0.5 and len(heights) == 1, (widths, heights)   # marks change no size
-    for slot in (1, 2, 4, 8):
+    for slot in (1, 2, 8):
         top, place, marks = (_box(page, f"{_tile(slot)} {part}") for part in
                              (".ghost-lab-slot-top", ".ghost-lab-slot-place", ".ghost-lab-slot-marks"))
         assert top["bottom"] <= place["top"] + 0.5 and place["bottom"] <= marks["top"] + 0.5, (slot, top, place, marks)
@@ -134,12 +126,12 @@ def _layout(page) -> None:
 
 def _menus(page, state, width, keep) -> None:
     """The menu button shows on hover; the menu opens upward from the tile's own edge, inside the window, on top; a
-    choice moves the slot (the star goes) or takes it out of its set."""
+    choice moves the slot (the star goes) or takes it out of its set, in the lab's own sets."""
     assert page.evaluate("(s) => getComputedStyle(document.querySelector(s)).opacity", f"{_tile(1)} .ghost-lab-slot-more") == "0"
     page.hover(f"{_tile(1)} > button")
     page.wait_for_function(f"getComputedStyle(document.querySelector(\"{_tile(1)} .ghost-lab-slot-more\")).opacity === '1'")
     if keep:
-        page.locator(".ghost-lab-player").screenshot(path=str(keep / f"ghost-lab-starsets-{width}.png"))
+        page.locator(".ghost-lab-player").screenshot(path=str(keep / f"ghost-lab-starsets-real-{width}.png"))
     page.locator(f"{_tile(1)} .ghost-lab-slot-more").click()
     menu = page.locator(f"{_tile(1)} [role=menu]")
     menu.wait_for(timeout=5000)
@@ -150,10 +142,11 @@ def _menus(page, state, width, keep) -> None:
                          f"{_tile(1)} [role=menu]")                   # on top of the player, not under it
     assert menu.get_by_role("menuitemradio", name="Only this star").get_attribute("aria-checked") == "true"
     if keep:
-        page.locator(".ghost-lab-player").screenshot(path=str(keep / f"ghost-lab-starsets-menu-{width}.png"))
+        page.locator(".ghost-lab-player").screenshot(path=str(keep / f"ghost-lab-starsets-real-menu-{width}.png"))
     menu.get_by_role("menuitemradio", name="All stars in this course").click()
     page.wait_for_function(f"!document.querySelector(\"{_tile(1)} .ghost-lab-slot-star\")", timeout=5000)
-    assert state["asked"] == [("move", 1, {"to": "course"})]
+    assert state["sets"].slots(BOB, STAR).get(1) is None
+    assert state["sets"].slots(BOB, None)[1] == state["kept"]["star 1"].id      # the star's save is the course's now
     page.hover(f"{_tile(8)} > button")                         # the far end: its menu opens toward the middle
     page.locator(f"{_tile(8)} .ghost-lab-slot-more").click()
     page.locator(f"{_tile(8)} [role=menu]").wait_for(timeout=5000)
@@ -161,12 +154,12 @@ def _menus(page, state, width, keep) -> None:
     assert abs(box["right"] - tile["right"]) <= 0.5 and box["left"] >= 0, (box, tile)
     page.locator(f"{_tile(8)} [role=menu]").get_by_role("menuitem", name="Remove from set").click()
     page.wait_for_function(f"!document.querySelector(\"{_tile(8)}\").classList.contains('is-set-course')", timeout=5000)
-    assert state["asked"][-1] == ("remove", 8, "course")
+    assert 8 not in state["sets"].slots(BOB, None)
 
 
 @pytest.mark.parametrize("width", [850, 1280, 1600])
 def test_star_sets_on_the_strip_at_each_width(width, tmp_path, monkeypatch):
-    state = {"answer": copy.deepcopy(ANSWER), "asked": []}
+    state = {}
     with attempt_scene._served(tmp_path, monkeypatch, lab_on=True, extra=_rig(state)) as (base, _seen), \
             sync_playwright() as play:
         browser = play.chromium.launch(headless=True, args=["--disable-gpu"])
@@ -175,12 +168,13 @@ def test_star_sets_on_the_strip_at_each_width(width, tmp_path, monkeypatch):
             page.add_init_script(CAMERAS)
             errors = []
             page.on("pageerror", lambda error: errors.append(str(error)))
+            page.on("console", lambda message: errors.append(message.text) if message.type == "error" else None)
             _open(page, base)
             page.keyboard.press("ArrowRight")
             page.locator(f"{_tile(1)} .ghost-lab-slot-star").wait_for(timeout=20000)
-            _marks(page)
+            _marks(page, state)
             _layout(page)
             _menus(page, state, width, _keep_folder())
-            assert errors == []
+            assert errors == []                                  # nothing logged: no 404 for a route the page asks
         finally:
             browser.close()
