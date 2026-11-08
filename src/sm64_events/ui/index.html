@@ -6499,6 +6499,14 @@
   .session-pick span:last-child { color: var(--muted); font-size: .72rem; }
   .danger-icon, .danger-button { color: var(--coral); border-color: #65404a; }
   .danger-zone { margin-top: .35rem; }
+  /* Settings -> Ghost files (ghoststorage.js). One button per row: side by
+     side, "Delete ghosts, keep PBs" wrapped onto two lines in the 480px drawer. */
+  .ghost-storage .settings-actions { grid-template-columns: 1fr; }
+  .ghost-storage .settings-actions + .settings-note { margin-top: .5rem; }
+  .ghost-storage-ask { display: grid; gap: .4rem; }
+  .ghost-storage-ask p { margin: 0; }
+  .ghost-storage-question { color: var(--text); font-size: 1rem; font-weight: 650; }
+  .ghost-storage-detail { color: var(--muted); font-size: .85rem; line-height: 1.45; }
   .mobile-more-backdrop {
     position: fixed; inset: 0; z-index: 70; align-items: flex-end;
     background: rgba(0,5,12,.65);

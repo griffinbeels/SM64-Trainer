@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 import string
 import threading
 
@@ -153,6 +154,12 @@ class NativeGhost:
         self._asset_hues = {}
         self._last_full_start = None
         self._preparation_canceled = False
+
+    def asset_paths(self) -> set:
+        """The clip files of the roster resolved, prepared and racing now: Settings' ghost files
+        never delete one (`ghost/storage.py`). Paths only; the renderer keeps the bytes it read."""
+        return {Path(asset[0]) for assets in (self._asset, self._selected_asset, self._pending_asset)
+                for asset in (assets or ()) if asset}
 
     @property
     def _supported(self) -> bool:

@@ -165,6 +165,48 @@ class GhostSharing:
             value = cached[1]
         return path, {**value, "author": row["author"], "target": dict(row["target"])}
 
+    def holdings(self):
+        """Every imported ghost, for Settings' ghost files (`ghost/storage.py`): {"id", "sha256",
+        "bytes", "path"}. Imports sharing bytes share one file, so a caller counts a digest once."""
+        with self._lock:
+            self._load()
+            rows = list(self._rows.values())
+        found = []
+        for row in rows:
+            path = self.root / f"{row['sha256']}.ghost"
+            try:
+                size = path.stat().st_size
+            except OSError:
+                size = 0
+            found.append({"id": row["id"], "sha256": row["sha256"], "bytes": size, "path": path})
+        return found
+
+    def remove(self, numbers):
+        """Deletes these imports and every file no remaining import shares: {"deleted", "bytes",
+        "skipped"}. An import whose file Windows will not let go of (the renderer reading it)
+        stays in the library."""
+        wanted = {checked_hash(number) for number in numbers}
+        with self._lock:
+            self._load()
+            doomed = {key: row for key, row in self._rows.items() if key in wanted}
+            staying = {row["sha256"] for key, row in self._rows.items() if key not in wanted}
+            held, freed = set(), 0
+            for digest in {row["sha256"] for row in doomed.values()} - staying:
+                path = self.root / f"{digest}.ghost"
+                try:
+                    size = path.stat().st_size if path.is_file() else 0
+                    path.unlink(missing_ok=True)
+                    freed += size
+                except OSError:
+                    held.add(digest)
+            gone = {key for key, row in doomed.items() if row["sha256"] not in held}
+            if gone:
+                atomic_json(self._index, {"version": 1, "ghosts": [row for key, row in self._rows.items()
+                                                                   if key not in gone]})
+                self._stamp = None
+                self._load()
+        return {"deleted": sorted(gone), "bytes": freed, "skipped": sorted(wanted - gone)}
+
     def portable_entry(self, number):
         with self._lock:
             self._load()

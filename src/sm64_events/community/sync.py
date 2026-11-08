@@ -365,6 +365,11 @@ class CommunitySync:
             return "offline"
         return failure
 
+    def pending_uploads(self):
+        """(paths, raw digests) his unsent contributions name, any account: Settings' ghost
+        purge leaves those files for the upload (`ghost/storage.py`)."""
+        return self._outbox.named()
+
     def refused_assets(self):
         """Recordings that cannot download now; automatic seats pass them over."""
         owner, now = self.account.snapshot().get("uid"), time.monotonic()

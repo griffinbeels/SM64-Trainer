@@ -21,6 +21,7 @@ import { EMU, N64 } from "../platform.js";
 import { CommunityAccountModal } from "./communityaccount.js";
 import { useCommunityAccount } from "../community.js";
 import { ReportingSettings } from "./reporting.js";
+import { GhostStorageSection } from "./ghoststorage.js";
 
 const html = htm.bind(h);
 
@@ -443,6 +444,8 @@ export function Header({ t, settingsOpen, closeSettings, setTab, onOpenPlayer })
             }}><${Icon} name="shield" />${community.account.authenticated ? 'Account' : 'Sign in'}</button>
           </div>
         </section>
+
+        <${GhostStorageSection} feed=${t.feed} />
 
         <section class="settings-section">
           <h3>Display</h3>

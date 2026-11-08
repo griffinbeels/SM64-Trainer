@@ -1788,6 +1788,8 @@ have it. The same button sits on each community [[ghost]] in the Library whose
 [[star]] or [[segment]] this Trainer knows: one click opens the viewer on that
 [[star]] or [[segment]] (its [[viewer stage]]) and adds that [[ghost]]; with no
 stage of his, the viewer says so in one sentence.
+A finished scene's button stays after a restart, and goes when
+[[ghost files]] deletes that scene.
 
 - **Lives** -- `src/sm64_events/ui/components/attemptscene.js` (the button and
   each table's ask of the lab), drawn by
@@ -1878,11 +1880,13 @@ the [[segment]] that goes on to the pipe, both from one [[reset]]) share that wr
 each gets its own package, so the one that ends later is just as quick. Only an [[attempt]] no package was
 following when it began (one started before the lab) is "cutting" for a few
 seconds; one the recording does not fully hold has no scene, and says why in one
-sentence. The server keeps the scenes of his last 20 [[attempt]]s while it is up.
+sentence. A finished scene stays, across restarts, until [[ghost files]] deletes
+it. Each [[journal]] has its own folder, and a restarted server shows a scene again
+only when the [[journal]] still holds that [[attempt]] with the same start and end.
 
 - **Lives** -- the span (`tools/scene_lab/attempt_span.py`); the child that
   writes them (`tools/scene_lab/attempt_cutter.py`); which attempts have one,
-  retention, the folder and the finished scene's sound
+  the journal's folder and its index, deleting them, and the finished scene's sound
   (`tools/scene_lab/attempt_scenes.py`); a scene read while it grows
   (`tools/scene_lab/scene_session.py` Growth, `tools/scene_lab/package.py`
   grown_package) and its sound while it grows (`tools/scene_lab/scene_audio.py`
@@ -2767,6 +2771,31 @@ in the [[ghost set]]. Its native recording can carry exact pad evidence for
 the in-game input display; saving it never changes the input comparison.
 
 - **Lives** — `src/sm64_events/ghost/saved.py`
+
+### Ghost files
+
+The Settings section that shows how much space [[ghost]] files use on this
+computer and frees it. One button deletes every [[ghost]] except [[PB ghost]]s
+(each [[personal best]]'s latest save, per [[strategy]] and ROM), [[saved
+ghost]]s, [[template track]] [[run]]s and [[imported ghost]]s; the other deletes
+those too. A [[ghost]] counts once however many files it has: an [[attempt scene]],
+the committed recording and its [[playback copy]], the local population's row,
+a downloaded [[community ghost]], an imported one. Neither button deletes a
+file a pending upload names, a [[run]] still owed its admission, or the recording
+that keeps a [[run]] with no [[strategy]] through the startup prune; the purge
+skips and counts a [[ghost]] in use right now (racing, open in the [[scene viewer]]).
+Neither touches saved replays and their videos, [[scene clip]]s, [[Slot Library]]
+save states, the [[journal]] or the community server. After a purge the server
+broadcasts `ghost_files_changed`, and the [[ghost button]]s and the [[lineup]] re-read.
+
+- **Lives** — the purges and what each keeps (`src/sm64_events/ghost/storage.py`);
+  each kind's holdings and delete in its owner (`tools/scene_lab/attempt_scenes.py`,
+  `src/sm64_events/replay/service.py`, `src/sm64_events/ghost/population.py`,
+  `src/sm64_events/community/cache.py`, `src/sm64_events/ghost/sharing.py`); the
+  routes (`src/sm64_events/server/ghost_api.py`); the section
+  (`src/sm64_events/ui/components/ghoststorage.js`)
+- **Not** — the [[recorder]]'s rolling pose archive, which a PB save reads and
+  which empties itself; nor a saved replay's own poses beside its video
 
 ### Playback copy
 

@@ -67,6 +67,8 @@ def run(attempt_id, *, igt=331, strat="Standard", outcome="success", minutes=0, 
 class Journal:
     """The tracker database's reads the catalog makes."""
 
+    path = Path("journal-double.db")       # names the lab's folder of attempt scenes; never opened
+
     def __init__(self, attempts=(), definitions=(), state=None):
         self.rows = {attempt.id: attempt for attempt in attempts}
         self.definitions = list(definitions)
