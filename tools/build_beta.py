@@ -25,8 +25,8 @@ sys.path.insert(0, str(REPO / "src"))
 from sm64_events.core.build_channel import (BETA_APP_DIR, BuildChannel, CONFIG_FILENAME,
                                            read_metadata)  # noqa: E402
 from sm64_events.core.reporting_setup import CONFIG_FILE as REPORTING_CONFIG, read_config_dsn  # noqa: E402
-from build_exe import (COLLECT, SEP, _source_date_epoch, app_args, needs_reexec, scan_built,  # noqa: E402
-                       stage_reporting, write_retired_natives)
+from build_exe import (COLLECT, SEP, _source_date_epoch, app_args, needs_reexec, pinned_ffmpeg,  # noqa: E402
+                       scan_built, stage_reporting, write_retired_natives)
 from sm64_events.core.update_plan import BUNDLED_NATIVES, NATIVE_FOLDER, RETIRED_NATIVES  # noqa: E402
 from make_manifest import build_zip  # noqa: E402
 from beta_ghosts import (ApprovedCollection, COLLECTION_NAME, matches, review_collection,
@@ -61,8 +61,12 @@ Never replace the _internal folder while this beta is running.
 
 def check_prerequisites(ffmpeg: str | None) -> str:
     """Read-only prerequisite check. No compiler, installation or data changes."""
-    resolved = ffmpeg or shutil.which("ffmpeg")
-    if not resolved or not Path(resolved).is_file() or Path(resolved).name.lower() != "ffmpeg.exe":
+    try:
+        # The pinned build, already built (tools/build_ffmpeg.py): this check compiles nothing.
+        resolved = ffmpeg or str(pinned_ffmpeg(build_missing=False))
+    except RuntimeError as missing:
+        raise RuntimeError(f"FFmpeg is required: {missing}") from None
+    if not Path(resolved).is_file() or Path(resolved).name.lower() != "ffmpeg.exe":
         raise RuntimeError("FFmpeg is required: supply the existing ffmpeg.exe with --ffmpeg")
     missing = [name for name in ["PyInstaller", *COLLECT, "httpx", "authlib"]
                if importlib.util.find_spec(name) is None]
@@ -201,7 +205,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, required=True,
                         help="explicit packaged beta settings (not an environment file)")
-    parser.add_argument("--ffmpeg", help="existing ffmpeg.exe; defaults to PATH")
+    parser.add_argument("--ffmpeg", help="existing ffmpeg.exe; defaults to tools/build_ffmpeg.py's build")
     parser.add_argument("--ghosts", type=Path, help="explicit curated griffman1212 collection to include")
     parser.add_argument("--ghost-author", type=Path, help="reviewed author Auth issuer/subject binding JSON")
     parser.add_argument("--check", action="store_true", help="check prerequisites without building")

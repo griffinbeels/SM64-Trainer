@@ -13,8 +13,10 @@ make every .pyc/PYZ hash differently per build and bloat update deltas.
 main() re-execs itself with PYTHONHASHSEED=1 + SOURCE_DATE_EPOCH=<HEAD
 commit time> so unchanged sources produce identical bytes across releases.
 
-ffmpeg is bundled automatically: --ffmpeg PATH wins, else the ffmpeg on
-PATH. Releases MUST bundle ffmpeg.
+ffmpeg is bundled automatically: the one tools/build_ffmpeg.py builds from
+the inputs ffmpeg/build-inputs.json pins (cached; built on first use).
+--ffmpeg PATH names that same binary elsewhere; third_party_notices refuses
+any other, since each release attaches the source of that build only.
 
 After PyInstaller, tools/third_party_notices.py stages _internal/licenses/
 and refuses the build when a bundled component's license is missing or
@@ -22,7 +24,6 @@ describes another version (licenses/README.md)."""
 import argparse
 import json
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -282,6 +283,26 @@ def scan_built(app_dir: Path, exe_name: str) -> None:
     defender_scan.require_clean(our_files(app_dir, exe_name), strict=True)
 
 
+def pinned_ffmpeg(*, build_missing: bool = True) -> Path:
+    """The ffmpeg.exe every app bundles: tools/build_ffmpeg.py's build of the
+    pinned inputs, built hidden at below-normal priority when not cached."""
+    import build_ffmpeg
+    return build_ffmpeg.ensure(build_missing=build_missing)
+
+
+def ffmpeg_to_bundle(explicit: str | None) -> str | None:
+    """--ffmpeg, else the pinned build; or None after printing why there is none."""
+    try:
+        ffmpeg = explicit or str(pinned_ffmpeg())
+    except (RuntimeError, ValueError, OSError) as failure:
+        print(f"Build refused: ffmpeg.exe is required for a complete application: {failure}", file=sys.stderr)
+        return None
+    if not Path(ffmpeg).exists():
+        print(f"ffmpeg not found: {ffmpeg}", file=sys.stderr)
+        return None
+    return ffmpeg
+
+
 def stage_notices(distpath: Path | None, ffmpeg: Path) -> Path | None:
     """Stage `_internal/licenses/` and the retired names' placeholder
     (write_retired_natives) into the app PyInstaller just built and return
@@ -304,7 +325,7 @@ def main() -> int:
     ap.add_argument("--mode", choices=["app", "bootstrap", "all"],
                     default="all")
     ap.add_argument("--ffmpeg",
-                    help="ffmpeg.exe to bundle (default: the one on PATH)")
+                    help="ffmpeg.exe to bundle (default: tools/build_ffmpeg.py's build)")
     ap.add_argument("--version", help="exact embedded runtime version; source remains unchanged")
     ap.add_argument("--config", type=Path, help="validated schema2 normal build configuration")
     ap.add_argument("--distpath", type=Path)
@@ -327,12 +348,7 @@ def main() -> int:
     import PyInstaller.__main__ as pyi
 
     if args.mode in ("app", "all"):
-        ffmpeg = args.ffmpeg or shutil.which("ffmpeg")
-        if ffmpeg and not Path(ffmpeg).exists():
-            print(f"ffmpeg not found: {ffmpeg}", file=sys.stderr)
-            return 2
-        if not ffmpeg:
-            print("Build refused: ffmpeg.exe is required for a complete application.", file=sys.stderr)
+        if (ffmpeg := ffmpeg_to_bundle(args.ffmpeg)) is None:
             return 2
         print(f"bundling ffmpeg: {ffmpeg}")
         try:

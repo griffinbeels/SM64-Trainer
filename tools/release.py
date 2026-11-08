@@ -11,7 +11,7 @@ merge check passes, and the commit's full run on GitHub passed (it waits
 for one still running). The verification lane and tools/build_exe.py build
 the three natives from this commit and refuse a stale one
 (tools/build_natives.py). Builds the onedir app + bootstrap installer via
-tools/build_exe.py (ffmpeg must be on PATH so it gets bundled), zips the
+tools/build_exe.py (which bundles tools/build_ffmpeg.py's pinned ffmpeg.exe), zips the
 onedir tree, emits the per-file update manifest, and publishes SIX assets
 the incremental updater + bootstrap consume:
 

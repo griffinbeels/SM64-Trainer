@@ -293,7 +293,7 @@ def build_dependencies(work: Path, cache: Path, vcvars32: Path) -> dict[str, Pat
     _run_hidden_low(script, deps / "build_deps.log")
     built = {"zlib.lib": zlib / "zlib.lib", "libpng.lib": png / "libpng.lib",
              "freetype253MT.lib": freetype / "objs" / "win32" / "vc2010" / "freetype253MT.lib"}
-    for name, path in built.items():
+    for path in built.values():
         if not path.is_file():
             raise RuntimeError(f"the dependency build reported success but {path} is missing")
     return built

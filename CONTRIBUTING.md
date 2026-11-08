@@ -70,17 +70,20 @@ uv run python tools/build_exe.py            # --mode app|bootstrap|all
 
 Produces `dist\SM64Trainer\` (the onedir app) and `dist\SM64TrainerSetup.exe`
 (the tiny bootstrap installer, published as the `SM64Trainer.exe` release
-asset). ffmpeg is picked up from PATH and bundled automatically; pass
-`--ffmpeg PATH` to point at a specific binary. The build re-execs itself with a
+asset). The ffmpeg it bundles is `tools/build_ffmpeg.py`'s build, made on
+first use (a few minutes) and cached; the build refuses any other binary.
+The build re-execs itself with a
 fixed `PYTHONHASHSEED` and `SOURCE_DATE_EPOCH` so unchanged files hash
 identically between releases, which is what keeps update downloads small.
 `build.bat` is the double-click version.
 
 The released exe bundles **ffmpeg** (https://ffmpeg.org) for replay encoding:
-gyan.dev's full build, which is GPL-3.0, shipped unmodified as a separate
-program. Every bundled component's license, and where the GPL parts' source
-is, ships in the app's `_internal\licenses` folder; the index is
-[licenses/README.md](licenses/README.md).
+FFmpeg 8.1.1, built by `tools/build_ffmpeg.py` from pinned sources
+([ffmpeg/README.md](ffmpeg/README.md)), GPL-3.0-or-later, shipped as a
+separate program. Every bundled component's license ships in the app's
+`_internal\licenses` folder (the index is
+[licenses/README.md](licenses/README.md)), and each release attaches the
+complete source of every third-party GPL part.
 
 ## Release (maintainer)
 

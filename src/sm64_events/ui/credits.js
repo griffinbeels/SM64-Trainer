@@ -89,7 +89,7 @@ export const CREDIT_GROUPS = [
         url: "https://github.com/FFmpeg/nv-codec-headers",
         what: "Hardware video encoding on NVIDIA cards. MIT.",
         covers: ["native:SM64GpuEncoderV1.dll"], notices: "licenses/nvidia-video-codec-headers" },
-      { name: "FFmpeg", by: "the FFmpeg developers; the bundled build is gyan.dev's", url: "https://ffmpeg.org",
+      { name: "FFmpeg", by: "the FFmpeg developers; the trainer builds its own copy from FFmpeg 8.1.1", url: "https://ffmpeg.org",
         what: "Compresses and decodes replay video through PyAV, and converts comparison videos. GPL-3.0.",
         notices: "licenses/ffmpeg" },
       { name: "cxd4", by: "Iconoclast, kept by the mupen64plus team", url: "https://github.com/mupen64plus/mupen64plus-rsp-cxd4",

@@ -29,14 +29,29 @@ license of everything the app carries that someone else made, and, for the
 GPL and LGPL parts, where their complete source is. The Credits list in
 About (`src/sm64_events/ui/credits.js`) says who made each one.
 
+The complete source of every third-party GPL and LGPL part is attached to
+each release, on its page on GitHub, beside the installer:
+
+- `SM64Trainer-third-party-source-plugin.tar`: the sources the graphics
+  plugin is built from (the pinned GLideN64 tree, Qt, FreeType, libpng,
+  zlib);
+- `SM64Trainer-third-party-source-ffmpeg.tar`: the sources of `ffmpeg.exe`
+  and of PyAV's FFmpeg libraries, with the MinGW runtime sources that end up
+  inside them.
+
+Each has a `.sha256` file beside it. `tools/corresponding_source.py` writes
+them from `third-party-sources.json`, which pins every archive by URL and
+SHA-256, and `tools/release.py` attaches them to every release. The build
+scripts are in this repository at the release's tag.
+
 | Component | In the app | License | Texts | Source |
 | --- | --- | --- | --- | --- |
-| FFmpeg (gyan.dev build) | `ffmpeg.exe`: records and converts replay video | GPL-3.0 (built with `--enable-gpl --enable-version3`) | `ffmpeg/` | FFmpeg at commit [469aad3897](https://github.com/FFmpeg/FFmpeg/commit/469aad3897); the libraries and their configuration are listed in `ffmpeg/BUILD-README.txt` (the build's own README, from <https://www.gyan.dev/ffmpeg/builds/>) |
-| FFmpeg inside PyAV | `av.libs/`: decodes and compresses replay video | GPL-3.0 as built, plus each library's license | `pyav-ffmpeg/` | <https://github.com/PyAV-Org/pyav-ffmpeg/tree/8.1.1-2>; `pyav-ffmpeg/README.md` lists every library |
-| LINK's GLideN64 v4.2, modified | `sm64_trainer_gfx.dll`: the graphics plugin, the renderer with its replay capture in one file | GPL-2.0 (the trainer's additions: GPL-2.0-or-later) | `renderer/GPL-2.0.txt`, `renderer/GLideN64/` (with the licenses of the code it includes: GLSL-FXAA, Glow, gles2n64, GlideHQ; upstream's xBRZ, GPL-3.0 only, is left out of this build) | This repository: `renderer/README.md` ("Credit") lists the pinned upstream tree, the overlay and the build steps |
-| Qt 5.12.12 (qtbase), static | Inside the renderer: its settings window | LGPL-3.0, GPL-2.0 or GPL-3.0, as each file's own header offers; the plugin takes it under the GPL v2. Qt's own third-party parts are under the permissive licenses `THIRD-PARTY.txt` lists, and QtCore carries freedesktop.org's MIME database (GPL) | `renderer/Qt/` (`LICENSE.GPL2`, the LGPL and GPL v3 texts, and `THIRD-PARTY.txt`, every qtbase attribution; the settings window links only part of Qt) | <https://download.qt.io/archive/qt/5.12/5.12.12/submodules/qtbase-everywhere-src-5.12.12.tar.xz>; `tools/build_renderer_libs.py` builds it and the settings window from it |
-| FreeType 2.5.3 | Inside the renderer: on-screen text (Qt is built without FreeType) | FreeType License or GPL-2.0-or-later; the plugin takes it under the GPL v2 | `renderer/FreeType/` (`LICENSE.TXT` offers the choice) | <https://download.savannah.gnu.org/releases/freetype/freetype-old/freetype-2.5.3.tar.bz2> |
-| libpng 1.6.32, zlib 1.2.8 and 1.2.11 | Inside the renderer (GlideHQ; Qt's own zlib copy is 1.2.11, and its PNG reader was compiled against libpng 1.6.37's header) | libpng, zlib | `renderer/libpng/`, `renderer/zlib/` | <https://downloads.sourceforge.net/project/libpng/libpng16/older-releases/1.6.32/libpng-1.6.32.tar.xz>, <https://zlib.net/fossils/zlib-1.2.8.tar.gz>; zlib 1.2.11 is in the Qt source |
+| FFmpeg 8.1.1, built for the trainer | `ffmpeg.exe`: records and converts replay video | GPL-3.0-or-later as built (`--enable-gpl --enable-version3`), plus the licenses of the libraries inside it: x264 (GPL-2.0-or-later), dav1d, libvpl, NVIDIA's and AMD's headers, zlib, the MinGW-w64 runtime and the GCC runtime | `ffmpeg/` (`BUILD-README.txt` names every part and the configure line) | The source archives on this release's page: `SM64Trainer-third-party-source-ffmpeg.tar`. `tools/build_ffmpeg.py` builds it from the inputs `ffmpeg/build-inputs.json` pins |
+| FFmpeg inside PyAV | `av.libs/`: decodes and compresses replay video | GPL-3.0 as built, plus each library's license | `pyav-ffmpeg/` | The source archives on this release's page: `SM64Trainer-third-party-source-ffmpeg.tar` (PyAV's recipe is <https://github.com/PyAV-Org/pyav-ffmpeg/tree/8.1.1-2>; `pyav-ffmpeg/README.md` lists every library) |
+| LINK's GLideN64 v4.2, modified | `sm64_trainer_gfx.dll`: the graphics plugin, the renderer with its replay capture in one file | GPL-2.0 (the trainer's additions: GPL-2.0-or-later) | `renderer/GPL-2.0.txt`, `renderer/GLideN64/` (with the licenses of the code it includes: GLSL-FXAA, Glow, gles2n64, GlideHQ; upstream's xBRZ, GPL-3.0 only, is left out of this build) | The source archives on this release's page: `SM64Trainer-third-party-source-plugin.tar`, with the overlay and the build steps in this repository (`renderer/README.md`, "Credit", lists them) |
+| Qt 5.12.12 (qtbase), static | Inside the renderer: its settings window | LGPL-3.0, GPL-2.0 or GPL-3.0, as each file's own header offers; the plugin takes it under the GPL v2. Qt's own third-party parts are under the permissive licenses `THIRD-PARTY.txt` lists, and QtCore carries freedesktop.org's MIME database (GPL) | `renderer/Qt/` (`LICENSE.GPL2`, the LGPL and GPL v3 texts, and `THIRD-PARTY.txt`, every qtbase attribution; the settings window links only part of Qt) | The source archives on this release's page: `SM64Trainer-third-party-source-plugin.tar` (from <https://download.qt.io/archive/qt/5.12/5.12.12/submodules/>); `tools/build_renderer_libs.py` builds it and the settings window from it |
+| FreeType 2.5.3 | Inside the renderer: on-screen text (Qt is built without FreeType) | FreeType License or GPL-2.0-or-later; the plugin takes it under the GPL v2 | `renderer/FreeType/` (`LICENSE.TXT` offers the choice) | The source archives on this release's page: `SM64Trainer-third-party-source-plugin.tar`; `tools/build_renderer_libs.py` builds it |
+| libpng 1.6.32, zlib 1.2.8 and 1.2.11 | Inside the renderer (GlideHQ; Qt's own zlib copy is 1.2.11, and its PNG reader was compiled against libpng 1.6.37's header) | libpng, zlib | `renderer/libpng/`, `renderer/zlib/` | The source archives on this release's page: `SM64Trainer-third-party-source-plugin.tar`; `tools/build_renderer_libs.py` builds libpng 1.6.32 and zlib 1.2.8; zlib 1.2.11 and libpng's 1.6.37 header are in the Qt source |
 | xxHash | Inside the renderer | BSD-2-Clause | `renderer/xxHash/` | The renderer's upstream tree, `src/xxHash/` |
 | cxd4 (mupen64plus-rsp-cxd4) | Not in the installed app: the scene lab, from source, runs the game's own audio microcode in it to split music from sound effects | CC0-1.0 | `cxd4/` | `tools/scene_lab/cxd4/` in this repository (its README names the pinned upstream commit) |
 | NVIDIA Video Codec SDK header | `SM64GpuEncoderV1.dll`: hardware encoding on NVIDIA cards | MIT | `nvidia-video-codec-headers/` | `plugin/gfxwrap/vendor/nvEncodeAPI.h` in this repository |
