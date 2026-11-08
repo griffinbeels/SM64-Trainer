@@ -178,8 +178,14 @@ class SceneMoments:
         api = importlib.import_module("sm64_events.server.scene_lab_api")   # the module in sys.modules, as the routes catch
         resim = getattr(self.lab, "resim", None)
         if body.ghost is not None and resim is not None and resim.is_building(body.ghost):
-            from sm64_events.server.scene_resim import BUILDING   # its parting frame is not known yet
-            return {"refused": "building", "reason": BUILDING}
+            config = await asyncio.to_thread(api.LabConfig.load, self.lab.config_path)
+            if config.map is None:
+                raise api.ConfigError(NO_MAP)
+            async with self.turn:
+                done = await asyncio.to_thread(self._built_part_blocking, body, config, resim, api)
+            if done is not None:
+                answer, data = done
+                return answer if data is None else self._keep(answer, data, f"Ghost frame {body.frame}", None)
         path, title = await self._source(body)
         config = await asyncio.to_thread(api.LabConfig.load, self.lab.config_path)
         if config.map is None:
@@ -199,15 +205,41 @@ class SceneMoments:
                 if not verdict["ok"]:
                     return {"refused": "check", "reason": verdict["reason"]}
                 answer = {**answer, "checked": {"frames": verdict["frames"], "compared": verdict["compared"]}}
-            token = uuid.uuid4().hex
-            answer = {**answer, "id": token, "exact": not answer.get("worked_out", False),
-                      "build": answer.get("build", "us")}
-            self.built[token] = {"answer": answer, "data": data, "source": f"{title} frame {body.frame}"}
+            return self._keep(answer, data, f"{title} frame {body.frame}", key)
+
+    def _keep(self, answer: dict, data: bytes, source: str, key) -> dict:
+        token = uuid.uuid4().hex
+        answer = {**answer, "id": token, "exact": not answer.get("worked_out", False),
+                  "build": answer.get("build", "us")}
+        self.built[token] = {"answer": answer, "data": data, "source": source}
+        if key is not None:
             self.by_frame[key] = token
-            while len(self.built) > KEEP_BUILT:
-                gone, _ = self.built.popitem(last=False)
-                self.by_frame = {k: v for k, v in self.by_frame.items() if v != gone}
-            return answer
+        while len(self.built) > KEEP_BUILT:
+            gone, _ = self.built.popitem(last=False)
+            self.by_frame = {k: v for k, v in self.by_frame.items() if v != gone}
+        return answer
+
+    def _built_part_blocking(self, body: MomentBody, config, resim, api) -> tuple[dict, bytes | None] | None:
+        """A save state of a ghost's scene still being built (the lead's ruling, 2026-11-08): a frame the build has
+        written, before any parting it found so far, is built from the part written so far and load-checked with the
+        ghost's own pads, exactly as from the whole scene; a frame past it is refused {"refused": "building"}.
+        None when the build ended meanwhile (the whole scene answers then)."""
+        with resim.built_part(body.ghost) as part:
+            if part is None:
+                return None
+            path, info = part
+            allowed = resim.allows(info, body.frame)
+            if allowed.get("building"):
+                return {"refused": "building", "reason": allowed["reason"]}, None
+            if not allowed["allowed"]:
+                raise api.SceneRefused(allowed["reason"])
+            answer, data = self.builder(config, path, body.frame, self._note_child)
+            if data is None or allowed.get("check") != "load":
+                return answer, data
+            verdict = resim.check_slot_blocking(body.ghost, path, body.frame, data, first_record=info.get("first_record", 1))
+            if not verdict["ok"]:
+                return {"refused": "check", "reason": verdict["reason"]}, None
+            return {**answer, "checked": {"frames": verdict["frames"], "compared": verdict["compared"]}}, data
 
     def _write_blocking(self, entry: dict, slot: int) -> dict:
         from sm64_events.core.paths import slot_library_dir

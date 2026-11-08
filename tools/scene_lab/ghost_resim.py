@@ -419,13 +419,18 @@ class GhostScenes:
         machine = self.stages.machine(started.ram.copy())
         total = len(clip.frames) - 1
         sidecar = out.with_suffix(".grow")
-        simulated = [0]
+        state = {"simulated": 0, "parting": None}       # the main thread's, read by the packer's publications
 
         def published(frames: int) -> None:
-            """The scene so far can be opened (scene_session.Growth): the server opens it at the first one."""
+            """The scene so far can be opened (scene_session.Growth): the server opens it at the first one. Its
+            frames 0..frames-1 are records 1..frames, each compared before it was packed, so "built_to" (the
+            newest record shown) lies before any parting found so far, and the save state rule already holds
+            for it."""
+            parting = state["parting"]
             if progress is not None:
-                progress("re-simulating", simulated[0], total, package=str(out), sidecar=str(sidecar),
-                         published=frames, start=started.kind)
+                progress("re-simulating", state["simulated"], total, package=str(out), sidecar=str(sidecar),
+                         published=frames, start=started.kind, built_to=frames, parting=parting,
+                         save_states=save_states(started.kind, parting=parting))
         writer = sim_scene.SimScene(out, self.cache / f"work-{time.monotonic_ns()}", self.rom_path, self.symbols,
                                     self.stages.vi(), sidecar=sidecar, on_publish=published,
                                     seeds=getattr(self.stages, "cache", None))
@@ -441,9 +446,9 @@ class GhostScenes:
                     apart = float(np.linalg.norm(position - pose[0]))
                     farthest = apart if farthest is None or apart > farthest else farthest
                     if parting is None and (action != pose[1] or not np.array_equal(position, pose[0])):
-                        parting = index
+                        parting = state["parting"] = index
                 writer.add(machine.ram)
-                simulated[0] = index
+                state["simulated"] = index
                 if progress is not None:
                     progress("re-simulating", index, total)
             if progress is not None:
