@@ -14,6 +14,7 @@ paths:
   - "tests/test_slot_builds.py"
   - "tests/test_slot_translate.py"
   - "tests/test_star_sets.py"
+  - "tests/test_slot_clocks.py"
   - "tools/scene_lab/slot_atlas.py"
   - "tools/scene_lab/handoff_relocate.py"
 ---
@@ -68,6 +69,11 @@ Contracts the tests pin:
   one `data/slot_refit.jsonl` line per pass (counts and kinds, no addresses; `tools/what_happened.py` shows it).
   It is the Trainer's action, so it is never a journal event.
 - **Capture before the first write.** A capture that fails writes nothing.
+- **His session clocks stay his.** Usamune's save copies its state block's +0x90 and +0x94 (60 a second since power
+  on) and +0xEC (the game time on the pause screen) into the trailer at +0x100, +0x104 and +0x120; its load puts
+  them back. Every Trainer write (`place_states`, the refit, `handoff_try.install` and `restore`) runs
+  `usamune.with_live_clocks` last, so a state from another session never sets his timer (Griffin, 2026-11-08: "we
+  shouldn't copy over the "overall session timer" clock"). The kept state keeps its own clocks.
 - **Translation is exact or nothing.** `for_build` refuses unless the game stands in the state's level and area and
   its main pool starts as the atlas says; a pointer it cannot map is reported (`Translation.unmapped`) and both
   writers refuse the state. Segmented addresses are read only at object rawData and gPlayerSpawnInfos. An object

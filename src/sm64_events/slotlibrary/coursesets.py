@@ -41,6 +41,7 @@ from sm64_events.slotlibrary.usamune import (
     same_segments,
     slot_facts,
     slot_range,
+    with_live_clocks,
     write_slot_bytes,
 )
 from sm64_events.slotlibrary.watcher import capture_all, read_slot
@@ -112,7 +113,7 @@ def _checked_states(memory: GameMemory, library: SlotLibrary, placements: Mappin
             data = translation.data
         if transform is not None:
             data = transform(state, data)
-        data = to_live_place(memory, data, build)
+        data = with_live_clocks(memory, build, to_live_place(memory, data, build))
         loaded.append((slot, state, data, slot_facts(data), translation))
     return loaded
 

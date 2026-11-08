@@ -73,15 +73,19 @@ def make_image(game: FakeGame, **overrides) -> tool.SlotImage:
     data = bytearray(b"\xAB" * slots.SLOT_BYTES)
     struct.pack_into(">I", data, slots.TRAILER_MARIO, MARIO)
     struct.pack_into(">hh", data, slots.TRAILER_LEVEL, LEVEL, AREA)
+    for at in (0x26420, 0x26424, 0x26440):     # the session clocks (trailer +0x100, +0x104, +0x120): the game's
+        data[at:at + 4] = bytes(4)
     fields = {"data": bytes(data), "index": INDEX, "seed": 0x1234, "segments": SEGMENTS, "current_area": CURRENT_AREA,
               "fingerprint": tool.routine_fingerprint(game.read, usamune.US), "source": "test"}
     return tool.SlotImage(**(fields | overrides))
 
 
 def old_slot(game: FakeGame) -> bytes:
-    data = bytes(i & 0xFF for i in range(slots.SLOT_BYTES))
-    game.poke(slots.slot_address(INDEX), data)
-    return data
+    data = bytearray(i & 0xFF for i in range(slots.SLOT_BYTES))
+    for at in (0x26420, 0x26424, 0x26440):     # the session clocks (trailer +0x100, +0x104, +0x120): the game's
+        data[at:at + 4] = bytes(4)
+    game.poke(slots.slot_address(INDEX), bytes(data))
+    return bytes(data)
 
 
 def run(game, image, folder, **flags):
