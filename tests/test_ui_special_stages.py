@@ -166,7 +166,22 @@ def _idle(page):
         page.wait_ms(100)
 
 
+def _keep_every_resource_timing(page):
+    """Chromium keeps 250 resource-timing entries per page and drops the rest.
+
+    Once PSS has attempts, the app loads about 260 resources at startup
+    (measured 2026-11-08). `/api/marelo` finishes late, so its entry was
+    dropped although the server answered it, and `_open` waited forever.
+    The buffer must grow before any page script runs; uilab's page has no
+    init-script call of its own, so this reaches its Playwright page.
+    """
+    if not getattr(page, "_keeps_every_resource_timing", False):
+        page._page.add_init_script("performance.setResourceTimingBufferSize(100000)")
+        page._keeps_every_resource_timing = True
+
+
 def _open(page, base):
+    _keep_every_resource_timing(page)
     page.goto(base)
     page.evaluate("""(() => {
       window.specialStagePending = 0;
