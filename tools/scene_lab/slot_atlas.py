@@ -74,6 +74,7 @@ def warp_into_area(game: cold_boot.ColdGame, level: int, area: int, node: int, l
             raise SystemExit(f"{game.version}: {game.cpu.violations[:3]}")
         left = left or not game.mario_place()
         if left and game.in_level(level) and game.u16("gCurrAreaIndex") == area:
+            cold_boot.arrived(game)
             return frames
     raise SystemExit(f"{game.version}: the warp to level {level} area {area} never arrived")
 

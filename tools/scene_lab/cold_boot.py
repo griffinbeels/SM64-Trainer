@@ -356,8 +356,15 @@ def warp_to(game: ColdGame, level: int, area: int = 1, node: int = 0x0A, limit: 
         if not game.step(buttons):
             raise SystemExit(f"{game.version}: {game.cpu.violations[:3]}")
         if game.in_level(level) and frames > 2:
+            arrived(game)
             return frames
     raise SystemExit(f"{game.version}: the warp to level {level} never arrived")
+
+
+def arrived(game: ColdGame) -> None:
+    """What a real course entry leaves behind that this warp does not: sTransitionTimer back at 0. Left at -1,
+    Usamune's L practice reset never fires (handoff-boundary's bisection against a game where L works, 2026-11-08)."""
+    struct.pack_into(">h", game.cpu.ram, sim.phys(game.cpu.symbols["sTransitionTimer"]), 0)
 
 
 def settle(game: ColdGame, limit: int = 600) -> int:
