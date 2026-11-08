@@ -329,6 +329,23 @@ def test_the_tuning_page_is_reachable_from_the_app_and_from_the_launcher():
         "run-test-server.bat must print the selector exchange page too"
 
 
+def test_the_test_server_launcher_turns_the_lab_on_where_a_lab_config_exists():
+    """The Practice log's ghost buttons, the Scene viewer and its recording switch
+    exist only when SM64_SCENE_LAB names a lab config. Handed run-test-server.bat,
+    the launcher he clicks, the server came up without them, repeatedly ("this build
+    doesn't have any ghosts and such set up so i can't test that. this has happened a
+    few times", 2026-11-07). So the launcher names the machine's lab config itself,
+    and never overrides one already given."""
+    launcher = (UI.parent.parent.parent / "run-test-server.bat").read_text(encoding="utf-8")
+    config = r"%LOCALAPPDATA%\SM64Trainer\scene-lab\lab.json"
+    line = (f'if not defined SM64_SCENE_LAB if exist "{config}" '
+            f'set "SM64_SCENE_LAB={config}"')
+    assert line in launcher, "run-test-server.bat no longer turns the lab on from this machine's lab config"
+    assert launcher.index(line) < launcher.index("SM64_UV_WITH="), \
+        "the lab must be named before the launcher picks the lab's Unicorn pin"
+    assert launcher.index(line) < launcher.index("python -m sm64_events.main")
+
+
 def test_the_card_label_is_derived_from_the_rated_scope_not_the_client_slot():
     """The label and the rating beneath it must answer to ONE source.
 

@@ -1090,8 +1090,8 @@ completed attempt, stars and segments alike, into an [attempt scene](glossary.md
 under `<lab_root>\attempts\` (the newest 20 attempts' scenes are kept; a restarted
 server starts the folder empty).
 Run the server with `uv run --with unicorn==2.1.4` for the free camera;
-`run-scene-lab.bat` does both, reading `%LOCALAPPDATA%\SM64Trainer\scene-lab\lab.json`
-and starting the test server. One scene is open
+`run-test-server.bat` does both whenever `%LOCALAPPDATA%\SM64Trainer\scene-lab\lab.json`
+exists (`run-scene-lab.bat` does the same, and stops with an error when it does not). One scene is open
 at a time; its renderer helper, evaluator, picture encoder (a child process that
 makes the JPEGs) and two state resolvers (below-normal child processes that work out the
 free camera's next frames during Play, `tools/scene_lab/state_resolver.py`) stop on
