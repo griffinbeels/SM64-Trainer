@@ -176,7 +176,6 @@ export function CinematicBar({ link, tuning }) {
   const available = link.freeAvailable, reason = link.scene.free_camera.reason, rig = link.rig;
   const runners = [["stage", "Mario"], ...link.ghosts.map((ghost) => [ghost.ref, ghostName(link.ghosts, ghost.ref)])];
   return html`<div class="scene-lab-bar scene-lab-rigs" aria-label="Cinematic cameras">
-    <span class="scene-lab-rigs-name">Cinematic</span>
     ${RIG_KINDS.map(([kind, words, what]) => html`<button type="button" key=${kind} disabled=${!available}
         aria-pressed=${rig?.kind === kind} title=${available ? what : reason}
         onclick=${(event) => link.useRig(kind, event.timeStamp)}>${words}</button>`)}

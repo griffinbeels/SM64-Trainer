@@ -6,7 +6,7 @@
 
 A scene recording (the glossary's) is the timeline the page kept while Record was on: one entry
 per display frame, {t_ms, scene_frame, camera, camera_used, hud, ghosts, sound, play_ms}
-(docs/api.md "Scene viewer"). POST checks it against the open scene, writes a job folder (the lab
+(docs/api.md "Ghost Lab"). POST checks it against the open scene, writes a job folder (the lab
 config's paths, the package, the timeline, every ghost's clip as the catalog loads it, the
 ghosts' look) and starts tools/scene_lab/scene_export.py as a below-normal, hidden child: the
 pictures are drawn by a renderer host of its own and encoded by FFmpeg, so the server's event loop

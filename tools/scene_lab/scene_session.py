@@ -305,7 +305,7 @@ def renderer_host(config):
             raise Refused("The lab config does not name Project64's Plugin folder, which holds the "
                           "renderer settings the pictures are drawn with.")
         if config.renderer != "trainer":
-            raise Refused('The lab config names another renderer. The scene viewer draws only with the '
+            raise Refused('The lab config names another renderer. The Ghost Lab draws only with the '
                           'Trainer\'s own renderer, so remove "renderer" from the lab config.')
         try:
             renderer = replay.trainer_renderer()

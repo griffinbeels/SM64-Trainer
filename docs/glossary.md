@@ -326,7 +326,7 @@ it, and an [[attempt]] with a load in it is not a [[valid attempt]].
 
 ### Save this moment
 
-The [[scene viewer]]'s **Save states** row: one press of 1 to 9 makes a Usamune save state of the [[frame]] on screen
+The [[Ghost Lab]]'s **Save states** row: one press of 1 to 9 makes a Usamune save state of the [[frame]] on screen
 and writes it to that slot of the running game. Usamune's menu shows the same numbers. The lab plays SM64's own code for
 that one [[frame]] from what the recording kept of the [[frame]] before, then lets Usamune's own save routine make the
 slot, and checks the rest of the [[frame]] against the recording. A [[frame]] Usamune could not save on makes no state, and
@@ -413,7 +413,7 @@ in its simulator, about 10 seconds. It keeps the atlas beside the [[slot library
 
 After every spawn (a practice [[reset]], entering a level or an area), the Trainer gives each Usamune save state
 made for that same level and area Mario's new place, using [[mario relocation]]. Then Usamune's own load works
-without a visit to the [[scene viewer]]. States for other places stay as they are, and a state already in place is
+without a visit to the [[Ghost Lab]]. States for other places stay as they are, and a state already in place is
 not written again. The pass skips a state he saves over while it works. Before its first refit, his save joins the
 [[slot library]]. Lab only.
 
@@ -1264,15 +1264,15 @@ settings carry over.
   (`renderer/README.md` has the provenance and credits) into the graphics
   plugin in the git-ignored bundle folder (its BUNDLE constant in
   `tools/build_natives.py`), a build output that tool refreshes at launch. The
-  [[scene viewer]]'s helpers load that bundle file where it is, never a copy,
+  [[Ghost Lab]]'s helpers load that bundle file where it is, never a copy,
   and point it at the [[renderer settings folder]]
 - **Not** -- the graphics plugin the user had before; that one stays in the
   folder untouched, and "Remove Practice Replay" selects it again
 
 ### Renderer-only mode
 
-The graphics plugin running as its [[renderer]] alone, for the [[scene
-viewer]]'s helpers. They call `SM64RendererOnlyV1` before anything else; the
+The graphics plugin running as its [[renderer]] alone, for the [[Ghost
+Lab]]'s helpers. They call `SM64RendererOnlyV1` before anything else; the
 [[capture layer]] then publishes no control page, captures nothing and writes
 no log, so a helper never answers as a running Project64's plugin.
 
@@ -1405,7 +1405,7 @@ input the [[renderer]] can redraw offline.
 
 The [[scene tap]]'s continuous recording while the Trainer's scene lab is on:
 every graphics task with its [[scene state]], on disk, so you can open the
-scene of an [[attempt]] right after it ends. The [[scene viewer]] shows whether
+scene of an [[attempt]] right after it ends. The [[Ghost Lab]] shows whether
 it records and has the **recording switch** that stops and starts it (kept for
 the next start). While the switch is on the lab holds a lease by renewing a
 file every 2 seconds; the [[capture layer]] checks it once a second, starts recording
@@ -1426,7 +1426,7 @@ game drew it, and names the tasks a full ring left incomplete.
   (`src/sm64_events/ui/components/scenerecording.js` and the recording route
   in `src/sm64_events/server/scene_lab_api.py`)
 - **Not** -- the [[recorder]]'s video, which keeps pictures only; the live
-  spool keeps what the [[scene viewer]] needs to redraw from a free camera
+  spool keeps what the [[Ghost Lab]] needs to redraw from a free camera
 
 ### Scene state
 
@@ -1477,7 +1477,7 @@ to within that rounding (24 to 44 dB below the sound, 2026-10-27), not bit
 for bit; its interpreter setting matches exactly.
 While the lab is on, the [[stem renderer]] makes them for every VI of live
 play, and an [[attempt scene]] carries them on its own sound's samples (its
-source-stems layer), so the [[scene viewer]] can play either one alone.
+source-stems layer), so the [[Ghost Lab]] can play either one alone.
 
 - **Lives** -- the audio spans (the audio and SP-task rows in
   `src/sm64_events/memory/layout.py`); the per-VI copy
@@ -1585,101 +1585,110 @@ the next tasks while it draws this one (a second thread until they are ready).
 - **Not** -- the [[renderer]], which draws a list; the evaluator makes the
   list the [[renderer]] then draws
 
-### Scene viewer
+### Ghost Lab
 
-An M4 experiment's page inside the Trainer that plays one [[scene package]]
-in its reconstructed stage: the game's own pictures from the **Recorded
-camera**, stepping forward and back, seeking, and playback at the recording's
-own pace (each picture stays up as long as the recording showed it, so a level
-load's held picture holds and its sound plays through), and a **Free
-camera** the [[scene evaluator]] redraws. Free camera starts from the picture
-on screen (the recorded camera's place, screen tilt and field of view) and owns
-all four after that, so steps and seeks never move or zoom it. Controls: W A S D
-fly whenever the page has the keyboard, Q and E down and up, Shift faster, Alt
-slower (the first press in the recorded camera enters Free camera from the
-picture on screen); hold the right button to look around with the mouse, the
-wheel or the flight speed control then setting the speed; drag to turn around
-the focus point, Shift-drag or a middle-button drag to slide, the wheel to move
-closer; **double-click** a surface to fly to just in front of it and look at
-Mario (an eased flight any input stops); F (**Look at Mario**) turns the camera to face Mario
-where it stands, its place, tilt and field of view kept; **Set focus** then a
-click puts the focus point where the picture drew that pixel; one button puts
-the view back where Free camera began, [[tilt and lens]] too; R returns to the recorded camera. A
-recorded tilt (a shake) levels as you turn or fly, never on entry; a tilt you set stays.
-Moving the camera never pauses Play; only Pause, Space, a step or the slider do. **Restart** goes to the
-first [[frame]] and keeps playing or stays paused; **Loop** (kept per viewer) plays on from the first
-[[frame]] after the last, and a scene the lab is still writing loops once it is whole; , and . step
-like the arrows. The heading names the scene's [[attempt]] (course, [[star]], [[strategy]], time),
-never a file. The **stage picker** (Practice's own course grid and [[strategy]] dropdown) chooses the
-**stage**: your fastest [[attempt]] of that course, [[star]] and [[strategy]] with a saved scene,
-which opens, or the lab's reason why there is none. It starts on the scene you opened, else on
-Practice's [[target]]. Below the player, the [[ghost]] panel lists **Your [[ghost]]s** (fastest or newest
-first), **Top [[ghost]]s** (each player's best, with its place: first across **All strategies**, each
-row naming its [[strategy]], or one [[strategy]] picked in its dropdown) and **Find a player**
-(each player's best; "more" opens their slower ones), a page at a time, each page asked once in a
-scene's life and a name only once typing stops or on Enter; Add draws that [[ghost]] into the stage
-from the next picture, and a [[ghost]] the lab cannot draw shows its reason. Every row, and each
-[[ghost's view]] button, wears the US or JP flag of the ROM its recording names, and no flag where
-its record names none. A Library community [[ghost]]'s [[ghost button]] opens the viewer on that
-[[ghost]]'s [[star]] or [[segment]] with it added. No control moves another when its words or state
-change (Play and Pause, Record and Stop, the [[frame]] numbers): each changing label or readout keeps the
-size of its widest form, and notices and the [[cinematic camera]] on screen's settings show on the
-picture's foot. **HUD** (kept per
-viewer) leaves the game's on-screen counters and timer out of every picture, the one on screen at
-once. Every picture the lab draws again shows Mario's most detailed model however far the camera
-is (the game itself picks a plainer one from about 600 units and a blocky one from about 1600).
-**Mario** beside HUD (for this visit only) leaves the stage's Mario out of every picture the
-lab draws again, his shadow and what he holds too, so only the [[stage ghost]]s show; the lab then
-draws the recorded camera's picture again from that camera, the same picture without him, and a
-level load or a menu, which it cannot draw again, keeps him and says so. The **Cinematic** row's [[cinematic camera]]s (Front, Side, Orbit, Chase, Overhead, Tripod)
-follow Mario or a [[stage ghost]] along his path. The [[tilt and lens]] row turns and zooms whichever
-camera is on screen. Under the camera controls, the **Cameras** strip keeps [[camera preset]]s in
-slots 1-9, and the block under it holds the [[Play speed]], the **Action** row and the [[camera path]]
-of the course and area on screen. The Action row names, in plain words, what Mario (or the
-[[stage ghost]] Follow names) is doing on the [[frame]] on screen ("Mario: Dive"); its two buttons,
-or [ and ], pause on the
-[[frame]] where that action began (or the one before) and on the [[frame]] where the next one begins.
-The page takes the keyboard when you arrive (the sidebar or the [[ghost button]])
-and after a mouse click on its controls; a field that types keeps its keys, and
-Esc, leaving the window or the page lets go of every key.
-**Tune controls** opens the camera's tuning panel, whose SAVE writes the numbers
-as the shipped defaults. It is
-lab-only and off by default: it exists only when `SM64_SCENE_LAB` names a lab
-config (the ROM, the package folder, Project64's Plugin folder, the symbol
-map). Nothing starts until someone opens a package or, with the
-[[ghost button]], an [[attempt]]'s scene; the hidden [[renderer]]
-helper and the evaluator start then and stop on Close, after a while unused,
-when no page shows the scene, and when the server stops. The page keeps two
-pictures in flight, asks for the next as soon as one arrives, and a newer step or
-camera move replaces the one waiting behind them; the game's code works out the
-next camera's picture while the [[renderer]] draws and the [[picture encoder]]
-compresses the one before. Play asks for each picture ahead of its recorded
-time and shows it at the screen refresh it is due. In the desktop app's window the pictures skip the
-JPEG: the server hands the page the [[renderer]]'s exact pixels through WebView2
-shared memory. While the camera moves, the page sums up its own
-numbers every 2 s (pictures a second, input to picture, decode, the server's
-stages): the readout shows them and the UI observation log records them.
-A package with a source-audio layer plays Project64's own sound during Play,
-following the pictures. Where the [[sound stems]] measured Project64's audio
-delay, each sound plays on the picture of its [[frame]]; elsewhere it plays as
-heard, that delay after its picture. Stepping, seeking and Pause are silent, and Play after Pause on
-the same picture goes on from where it paused, so a held picture never plays its sound twice; Mute (or M) and the
-volume persist per viewer; a stretch the capture lost plays silent and says
-so. A package without one says it has no sound. **Music** and **Sound effects**
-switch the scene's [[sound stems]] on and off apart, remembered like Mute:
-both on plays the recording itself, one on plays that stem, both off is
-silence, and a switch keeps every sound where it was. A scene without the split
-shows them disabled and says in one plain sentence that the lab cannot separate
-its music and sound effects (why, with its numbers, goes to the logs). Each
-[[stage ghost]] adds its own sound effects, under the same volume and Mute.
-**Record** keeps a [[scene recording]] of everything the viewer shows until
-**Stop**, which makes it into a [[scene clip]]; "Show in folder" opens Explorer at it.
+The Trainer's lab page (the Scene viewer until Griffin renamed it on 2026-11-08) that plays one
+[[scene package]] in its reconstructed stage: the
+game's own pictures from the **Recorded camera**, stepping forward and back, seeking, and playback at
+the recording's own pace (each picture stays up as long as the recording showed it, so a level
+load's held picture holds and its sound plays through), and a **Free camera** the [[scene evaluator]]
+redraws. Top to bottom it is one bar, the picture, the play bar, the save-state strip and a panel with
+two tabs, one for [[ghost]]s (open first) and one for the camera; no control moves another when its words or state
+change (Play and Pause, Record and Stop, the [[frame]] numbers): each changing label or readout keeps
+the size of its widest form, and notices and the [[cinematic camera]] on screen's settings show on
+the picture's foot.
+
+- **The bar**: the **stage picker** (Practice's own course grid and [[strategy]] dropdown), the one
+  you watch (a ★, its US or JP flag, whose it is and its time; the scene's whole title on hover),
+  one line for what went wrong or why there is no stage, the [[scene recording]]'s sign with Stop or
+  Start, **More** (the picture's quality, the numbers, **Tune controls**, every key, and the lab
+  folder's recordings) and **Close**. The stage picker chooses the **stage**: your fastest
+  [[attempt]] of that course, [[star]] and [[strategy]] with a saved scene, which opens, or the lab's
+  reason why there is none. It starts on the scene you opened, else on Practice's [[target]].
+- **The play bar**: **Restart**, back to the last change of move, one [[frame]] back, Play or Pause,
+  one [[frame]] on, on to the next change of move; the slider and which [[frame]] is on screen, with what Mario (or
+  the [[stage ghost]] Follow names) is doing ("Mario: Dive"); the [[Play speed]] (1x, ½x, ¼x),
+  **Loop** (kept per viewer) and **Sound** (Mute, the volume, **Music** and **Sound effects**). Moving
+  the camera never pauses Play; only Pause, Space, a step or the slider do.
+- **The save-state strip**: Usamune's nine slots as `slotlibrary/keeper.py` names them for the course and
+  [[star]] the game is in: each
+  shows its number, a picture of the [[frame]] a save from this page came from (the lab draws it with
+  the recorded camera; a state saved in the game itself shows its place's name), the flag of the
+  version that made it, ⇄ when [[Save state translation]] changed it for this game, and a gold edge
+  with ▶ on the slot Usamune loaded last. A click on slot N, or the key N, saves the
+  [[frame]] on screen there, over what was there, as Usamune's own save does; the line under the
+  slots says what happened or why the page cannot save that [[frame]]. Each [[star]] may keep its own
+  slots over the course's: a ★ marks a slot from that [[star]]'s own set, and a plain slot comes from
+  the course's set; hover names the course save under it, and the line's right end names the course
+  and the [[star]]. A saved slot's small menu gives it to that [[star]] alone or to the whole course,
+  or takes it out of its set (the game keeps the slot). A save from the page joins the set of the
+  [[star]] you watch.
+- **The [[ghost]]s tab**: "In the scene" (the one you watch, then each [[stage ghost]] shown beside it with its
+  [[ghost's view]], its Mute and its eye) beside one list: **Top** (each player's best, with its
+  place: first across **All strategies**, each row naming its [[strategy]], or one [[strategy]]
+  picked in its dropdown), **Yours** (fastest or newest first) or what **Find a player** found (each
+  player's best; "more" opens their slower ones), a page at a time, each page asked once in a
+  scene's life. A row is the layers pattern: the row itself **watches** that recording (it becomes the
+  scene, its world, its camera and its save states: his [[attempt]]'s scene, or a [[Re-simulated
+  scene]] made from the [[ghost]]), and its eye **shows** it beside the one you watch. A
+  [[Re-simulated scene]] opens once its first [[frame]]s exist (the old scene plays on until then) and
+  grows while the lab makes the rest: its row and the picture's foot show how far, with a Stop that keeps
+  the [[frame]]s made so far, and the slider shows the part not made yet as an empty striped stretch
+  that a drag cannot reach. Watching another row while the lab still makes one ends the older one. Every row wears the US or JP
+  flag of the ROM its recording names, and no flag where its record names none.
+- **Camera**: one labeled row each: Camera (Recorded camera, each [[ghost's view]], Free camera,
+  **Look at Mario**, **Set focus**, back to where Free camera began), Cinematic (the [[cinematic camera]]s Front, Side,
+  Orbit, Chase, Overhead, Tripod and Follow), Look (**HUD**, **Mario**, the [[tilt and lens]]),
+  Views (the [[camera preset]]s 1-9, which Shift with 1-9 cut to), Path (the [[camera path]] of the
+  course and area on screen), Fly (the flight speed) and Film (**Record** keeps a [[scene recording]]
+  until **Stop**, which makes it into a [[scene clip]]; "Show in folder" opens Explorer at it).
+
+Free camera starts from the picture on screen (the recorded camera's place, screen tilt and field of
+view) and owns all four after that, so steps and seeks never move or zoom it. Keys: W A S D fly
+whenever the page has the keyboard, Q and E down and up, Shift faster, Alt slower; hold the right
+button to look around; drag to turn around the focus point, Shift-drag or a middle-button drag to
+slide, the wheel to move closer; **double-click** a surface to fly to just in front of it and look at
+Mario; F looks at Mario; R returns to the recorded camera; Z and C tilt, X levels, - and = change the
+lens; , and . step like the arrows; [ and ] step to a change of move; 1-9 save the [[frame]] on screen
+into that slot (his words: "prioritize 1-9 for save states, and then Shift 1-9 for camera views,
+since save stating is more likely as an action"). A recorded tilt (a shake) levels as you turn or
+fly, never on entry; a tilt you set stays. **HUD** (kept per viewer) leaves the game's on-screen
+counters and timer out of every picture. Every picture the lab draws again shows Mario's most
+detailed model however far the camera is. **Mario** (for this visit only) leaves the stage's Mario
+out of every picture the lab draws again, so only the [[stage ghost]]s show; a level load or a menu,
+which it cannot draw again, keeps him and says so. The page takes the keyboard when you arrive (the
+sidebar or a [[ghost button]]) and after a mouse click on its controls; a field that types keeps its
+keys, and Esc, leaving the window or the page lets go of every key.
+
+It is lab-only and off by default: it exists only when `SM64_SCENE_LAB` names a lab config (the ROM,
+the package folder, Project64's Plugin folder, the symbol map). Nothing starts until someone opens a
+scene; the hidden [[renderer]] helper and the evaluator start then and stop on Close, after a while
+unused, when no page shows the scene, and when the server stops. The page keeps two pictures in
+flight, asks for the next as soon as one arrives, and a newer step or camera move replaces the one
+waiting behind them; the game's code works out the next camera's picture while the [[renderer]]
+draws and the [[picture encoder]] compresses the one before. Play asks for each picture ahead of its
+recorded time and shows it at the screen refresh it is due. In the desktop app's window the pictures
+skip the JPEG: the server hands the page the [[renderer]]'s exact pixels through WebView2 shared
+memory. While the camera moves, the page sums up its own numbers every 2 s (pictures a second, input
+to picture, decode, the server's stages): More shows them and the UI observation log records them.
+A package with a source-audio layer plays Project64's own sound during Play, following the pictures.
+Where the [[sound stems]] measured Project64's audio delay, each sound plays on the picture of its
+[[frame]]; elsewhere it plays as heard, that delay after its picture. Stepping, seeking and Pause are
+silent, and Play after Pause on the same picture goes on from where it paused; Mute (or M) and the
+volume persist per viewer; a stretch the capture lost plays silent and says so. **Music** and
+**Sound effects** switch the scene's [[sound stems]] on and off apart, remembered like Mute; a scene
+without the split shows them disabled and says why in one plain sentence. Each [[stage ghost]] adds
+its own sound effects, under the same volume and Mute.
 
 - **Lives** -- the routes and lifetime (`src/sm64_events/server/scene_lab_api.py`,
   mounted by `src/sm64_events/main.py`); one open scene
   (`tools/scene_lab/scene_session.py`) and its sound (`tools/scene_lab/scene_audio.py`);
-  the page (`src/sm64_events/ui/components/sceneviewer.js`), its stage picker
-  (`src/sm64_events/ui/components/scenestage.js`) and [[ghost]] panel
+  the page (`src/sm64_events/ui/components/sceneviewer.js`), its play bar
+  (`src/sm64_events/ui/components/sceneplaybar.js`), save-state strip
+  (`src/sm64_events/ui/components/scenestrip.js`, read through the star sets'
+  `src/sm64_events/slotlibrary/keeper.py`), build progress
+  (`src/sm64_events/ui/components/scenebuild.js`), stage picker
+  (`src/sm64_events/ui/components/scenestage.js`) and [[ghost]]s tab
   (`src/sm64_events/ui/components/sceneghosts.js`), the recording's
   own clock its Play keeps (`src/sm64_events/ui/components/sceneclock.js`) and its sound
   (`src/sm64_events/ui/components/sceneaudio.js`, rendered by
@@ -1691,12 +1700,12 @@ its music and sound effects (why, with its numbers, goes to the logs). Each
   (`tools/scene_lab/pick.py`, which walks the picture's display list because
   the renderer's own thread holds its depth); its delivery numbers
   (`tools/scene_lab/e3_measure.py`)
-- **Not** -- the replay player, which plays recorded video; the scene viewer
+- **Not** -- the replay player, which plays recorded video; this page
   redraws the game's graphics from a [[scene package]]
 
 ### Scene recording
 
-What the [[scene viewer]] showed while **Record** was on, kept by the page as
+What the [[Ghost Lab]] showed while **Record** was on, kept by the page as
 one entry per screen refresh: the [[frame]] Play's clock was at (or the one on
 screen while paused), the camera asked for and the camera the server drew
 (recorded, free, a [[ghost's view]], a rig), the HUD and Mario switches, the [[stage ghost]]s
@@ -1733,7 +1742,7 @@ puts it in the saved replays' folder under "scene clips", named for the course,
 
 ### Stage ghost
 
-A [[saved ghost]] the [[scene viewer]] draws into the scene it plays (its
+A [[saved ghost]] the [[Ghost Lab]] draws into the scene it plays (its
 stage), from that [[ghost]]'s own recording. One you add appears in the next
 picture, from the recorded or the free camera, while playing, stepping or
 seeking either way. It looks as it does in the game: its own [[ghost
@@ -1762,7 +1771,7 @@ Each one in the scene has a [[ghost's view]].
 
 ### Ghost's view
 
-The [[scene viewer]]'s stage seen from a [[stage ghost]]'s own camera: the
+The [[Ghost Lab]]'s stage seen from a [[stage ghost]]'s own camera: the
 camera that [[ghost]]'s game drew with where its figure stands in that
 picture, from its recording, so it follows that [[ghost]] through Play, steps
 and seeks. One button per [[stage ghost]] ("Sully's view", beside Recorded
@@ -1781,7 +1790,7 @@ another area), the view holds its nearest one and says why.
 
 ### Cinematic camera
 
-A [[scene viewer]] camera that follows Mario (the stage's, or a [[stage ghost]]
+A [[Ghost Lab]] camera that follows Mario (the stage's, or a [[stage ghost]]
 chosen in Follow) along his path: **Front** rides in front of him, aimed at
 him, in a Close, Medium or Wide shot; **Side** tracks his profile on the side
 the stage's walls leave clear, cutting across only for a wall that would block
@@ -1806,7 +1815,7 @@ controls' Cinematic rows.
 
 ### Tilt and lens
 
-How a [[scene viewer]] camera turns and zooms its picture. **Tilt** turns the
+How a [[Ghost Lab]] camera turns and zooms its picture. **Tilt** turns the
 picture about its middle, in degrees, positive clockwise: the game's own screen
 roll with its sign changed, so the world and the [[stage ghost]]s turn while the
 HUD stays upright. **Lens** is the focal length a 35 mm camera would need to see
@@ -1830,7 +1839,7 @@ levels, - and = change the lens while held, and so does Ctrl with the wheel. A
 
 ### Camera preset
 
-A camera you saved in the [[scene viewer]]'s **Cameras** strip: a name and
+A camera you saved in the [[Ghost Lab]]'s **Cameras** strip: a name and
 the camera's place, aim, screen roll and field of view, in one of nine slots.
 Each course and area keeps its own nine (a level's areas are separate worlds,
 so their coordinates differ), and the strip shows the set of the area the
@@ -1852,7 +1861,7 @@ restarts; a file it cannot read shows an empty strip and says so.
 
 ### Camera path
 
-A [[scene viewer]] camera that moves through **keys** you set: each key is a
+A [[Ghost Lab]] camera that moves through **keys** you set: each key is a
 camera on a [[frame]] of the scene (its place, aim, [[tilt and lens]]), or the
 **recorded camera** itself. **+ Key** keeps the [[frame]] on screen and the
 camera on screen; from the Recorded camera it keeps the recorded camera, which
@@ -1891,7 +1900,7 @@ SM64Scripts camera tools (credited in the app).
 
 ### Play speed
 
-How fast the [[scene viewer]]'s Play goes: 1x (the recording's own pace), ½x
+How fast the [[Ghost Lab]]'s Play goes: 1x (the recording's own pace), ½x
 or ¼x. Slower, each recorded picture stays on screen two or four times as
 long; Mario still moves in the game's own steps, but the free camera and a
 [[camera path]] move every screen refresh, so Record makes slow motion of
@@ -1908,15 +1917,15 @@ A [[cinematic camera]] still moves once a recorded picture.
 ### Ghost button
 
 The button left of ▷ on a [[practice log]] row, shown only while the scene lab
-is on: one click switches to the [[scene viewer]], opens that [[attempt]]'s
+is on: one click switches to the [[Ghost Lab]], opens that [[attempt]]'s
 scene and plays it from its first [[frame]] as soon as the viewer draws that
 picture. A row the lab knows nothing about has none; a scene the lab is still
 cutting shows it disabled ("Scene finishing…") until it is ready, and a scene
 that cannot exist shows the lab's reason. [[star]] and [[segment]] rows both
 have it. The same button sits on each community [[ghost]] in the Library whose
-[[star]] or [[segment]] this Trainer knows: one click opens the viewer on that
-[[star]] or [[segment]] (its [[viewer stage]]) and adds that [[ghost]]; with no
-stage of his, the viewer says so in one sentence.
+[[star]] or [[segment]] this Trainer knows: one click turns the
+[[Ghost Lab]] to that [[star]] or [[segment]] and watches that [[ghost]], which becomes
+the scene (a [[Re-simulated scene]] when he has none of it).
 A finished scene's button stays after a restart, and goes when
 [[ghost files]] deletes that scene.
 
@@ -1927,7 +1936,7 @@ A finished scene's button stays after a restart, and goes when
   hands the [[attempt]] or the [[ghost]] to the viewer
 - **Not** -- the [[ghost toggle]], which races a recorded [[ghost]] in the game;
   this button only opens the [[attempt]]'s scene, and wears the same mark as
-  the [[scene viewer]]'s sidebar entry
+  the [[Ghost Lab]]'s sidebar entry
 
 ### Stem renderer
 
@@ -1949,7 +1958,7 @@ core per VI on savestates (2026-10-27).
 
 ### Picture encoder
 
-The [[scene viewer]]'s child process that turns each picture the hidden
+The [[Ghost Lab]]'s child process that turns each picture the hidden
 [[renderer]] helper drew into the JPEG the page shows. The helper's pictures
 come back through shared memory, and the encoder reads them there, so the
 server never copies the pixels and the game's code for the next camera never
@@ -1966,7 +1975,7 @@ the server encodes the picture itself.
 
 ### State resolver
 
-One of the [[scene viewer]]'s two child processes that work out the
+One of the [[Ghost Lab]]'s two child processes that work out the
 [[scene evaluator]]'s state of the [[frame]]s Play needs next, so the free
 camera keeps 30 fps. One [[frame]]'s state costs about 20 ms, and 40-55 ms where
 the evaluator must search. Worked out on a thread of the server, it shared
@@ -1989,7 +1998,7 @@ they cannot do, the server works out as before.
 
 ### Attempt scene
 
-The [[scene package]] of one [[attempt]] he just played, which the [[scene viewer]]
+The [[scene package]] of one [[attempt]] he just played, which the [[Ghost Lab]]
 opens by the [[attempt]]'s id. It starts on the [[frame]] the [[attempt]]'s clock
 started. An [[attempt]] that ends on a [[star]] grab ends on the [[star]] dance's last
 [[frame]]: the last one before the game stops moving Mario (the exit fade's last
@@ -2028,14 +2037,15 @@ only when the [[journal]] still holds that [[attempt]] with the same start and e
 
 ### Viewer stage
 
-The [[attempt scene]] the [[scene viewer]] shows as the world: its level, its
+The [[attempt scene]] the [[Ghost Lab]] shows as the world: its level, its
 sound and its recorded camera. The viewer draws each added [[ghost]] into it from
 that [[ghost]]'s own recording, starting on the stage's first [[frame]]. It is the
 scene he opened; for a [[star]] or [[segment]] and [[strategy]] he picks, it is his
 fastest finished [[attempt]] that still has a scene (a [[reset]] only when nothing
 finished has one), else one sentence saying there is none yet. The [[strategy]] starts as the one he
-last chose for that [[target]]. For a Library [[ghost]] it is his fastest scene of that [[ghost]]'s
-[[strategy]], else of any [[strategy]].
+last chose for that [[target]]. Watching another recording from the [[Ghost Lab]]'s lists (or a
+Library [[ghost]]) makes that recording the stage: his [[attempt]]'s own scene, else a
+[[Re-simulated scene]] made from the [[ghost]].
 
 - **Lives** -- the stage choice (`src/sm64_events/server/scene_ghosts.py`), served
   to the page by the lab's routes (`src/sm64_events/server/scene_lab_api.py`)
@@ -2044,7 +2054,7 @@ last chose for that [[target]]. For a Library [[ghost]] it is his fastest scene 
 
 ### Scene ghosts
 
-The [[ghost]]s the [[scene viewer]] can add to its [[viewer stage]], in four lists: yours
+The [[ghost]]s the [[Ghost Lab]] can add to its [[viewer stage]], in four lists: yours
 (fastest or newest first), top (each player's best, fastest first: across every
 [[strategy]] at once, or one), a search by player name (each match's best) and one
 player's (fastest first), ten to a page. Each shows its time, its place among every
@@ -2941,7 +2951,7 @@ the committed recording and its [[playback copy]], the local population's row,
 a downloaded [[community ghost]], an imported one. Neither button deletes a
 file a pending upload names, a [[run]] still owed its admission, or the recording
 that keeps a [[run]] with no [[strategy]] through the startup prune; the purge
-skips and counts a [[ghost]] in use right now (racing, open in the [[scene viewer]]).
+skips and counts a [[ghost]] in use right now (racing, open in the [[Ghost Lab]]).
 Neither touches saved replays and their videos, [[scene clip]]s, [[Slot Library]]
 save states, the [[journal]] or the community server. After a purge the server
 broadcasts `ghost_files_changed`, and the [[ghost button]]s and the [[lineup]] re-read.

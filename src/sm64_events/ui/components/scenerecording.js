@@ -1,4 +1,4 @@
-// The Scene viewer's sign and switch for the live scene recording (clean-behavior, 2026-11-06).
+// The Ghost Lab's sign and switch for the live scene recording (clean-behavior, 2026-11-06), in its bar.
 //
 // The scene lab asks the game's graphics plugin to record every frame of recent play, so each
 // attempt gets a scene. Recording that runs where nobody can see it, or that nobody can stop, is
@@ -13,6 +13,7 @@ import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
 import { send } from "../api.js";
 import { pollJSON } from "../pollstate.js";
+import { SteadyText } from "./steadytext.js";
 
 const html = htm.bind(h);
 const ROOT = "/api/scene-lab";
@@ -24,6 +25,10 @@ export const RECORDING_WORDS = {
   off: "Scene recording is off. Attempts you play now get no scene.",
 };
 
+// The Ghost Lab's bar has room for a few words: these, with the whole sentence on hover.
+export const RECORDING_SHORT = { running: "Recording your play", waiting: "Recording is on", off: "Recording is off" };
+const BUTTON_WORDS = ["Stop", "Start", "Switching..."];
+
 // What the row shows for one "live" answer, or null for none (pure: tests read it directly).
 export function recordingView(live) {
   if (!live || !live.switch) return null;
@@ -32,6 +37,8 @@ export function recordingView(live) {
   return { state: "waiting", words: RECORDING_WORDS.waiting, detail: live.reason || null, action: "Stop recording" };
 }
 
+// In the Ghost Lab's bar: the light, a few words (the sentence on hover) and Stop or Start, each as wide as
+// its widest form, so a change of state moves nothing.
 export function RecordingSwitch() {
   const [live, setLive] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -48,10 +55,14 @@ export function RecordingSwitch() {
     } catch (error) { setProblem(error.message); }
     setBusy(false);
   }
-  return html`<div class="scene-recording is-${view.state}" role="status" aria-live="polite">
+  const said = problem || [view.words, view.detail].filter(Boolean).join(" ");
+  return html`<div class=${`scene-recording is-${view.state}${problem ? " is-bad" : ""}`} role="status" aria-live="polite"
+      title=${said}>
     <span class="scene-recording-light" aria-hidden="true"></span>
-    <span class="scene-recording-words" title=${view.detail || view.words}>${view.words}</span>
-    <button type="button" disabled=${busy} onclick=${flip}>${busy ? "Switching..." : view.action}</button>
-    ${problem && html`<p class="scene-lab-reason">${problem}</p>`}
+    <span class="scene-recording-words"><${SteadyText} text=${problem ? "Could not switch" : RECORDING_SHORT[view.state]}
+      sizes=${[...Object.values(RECORDING_SHORT), "Could not switch"]} /></span>
+    <span class="sr-only">${said}</span>
+    <button type="button" disabled=${busy} aria-label=${view.action} title=${view.action} onclick=${flip}>
+      <${SteadyText} text=${busy ? "Switching..." : view.action.split(" ")[0]} sizes=${BUTTON_WORDS} /></button>
   </div>`;
 }

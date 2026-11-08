@@ -1,4 +1,15 @@
-// src/sm64_events/ui/components/sceneviewer.js -- the Scene viewer (M4 E3, lab only).
+// src/sm64_events/ui/components/sceneviewer.js -- the Ghost Lab (the Scene viewer until round 9; M4 E3, lab only).
+//
+// His words (round 9, item 5): "It needs to be organized so that similar things are grouped aesthetically, so
+// that there's no AI slop overexplanations, and so that users understand by just seeing the patterns + symbols
+// + groupings"; his pick: "the Three Tabs approach ... maybe we dont have a tab for Save States, and instead
+// it's just a thin strip that shows the screenshot previews, under the video player? Ghosts tab selected by
+// default"; and "instead of "Scene viewer" it should be called "Ghost Lab"". The page, top to bottom: one bar
+// (the stage picker, the run you watch, the scene recording's sign, a menu of rarely used things, Close);
+// the picture; the play bar (sceneplaybar.js); the save-state strip (scenestrip.js: keys 1-9 save the frame
+// on screen into that slot); and a tray of fixed height with two tabs, Ghosts (sceneghosts.js: watch a run,
+// show others beside it) and Camera (every camera, the saved views on Shift+1-9, the path, Film). Nothing
+// on it moves when a control changes state (SteadyText; round 9, item 3).
 //
 // One recording in its reconstructed stage: the game's own pictures from the
 // recorded camera, and a free camera the server redraws by running the game's
@@ -42,10 +53,10 @@
 // The recording's sound (sceneaudio.js) follows the picture clock: SceneLink
 // tells it when Play starts, each picture it draws, and every stop.
 //
-// Above the player, the stage picker (scenestage.js) chooses which recording
-// is the stage; below it, the ghost panel (sceneghosts.js) adds ghosts into it.
-// Each ghost in the scene gets a view button beside Recorded camera (and Their
-// view on its row): the stage seen from that ghost's own recorded camera, which
+// In the bar, the stage picker (scenestage.js) chooses which recording is the
+// stage; the Ghosts tab (sceneghosts.js) watches another one or shows ghosts in it.
+// Each ghost in the scene gets a view button in the Camera tab (and Their view
+// on its row): the stage seen from that ghost's own recorded camera, which
 // the lab finds for every picture, so it follows the ghost through Play, steps
 // and seeks. Free camera from a ghost's view starts at that camera. The
 // Cinematic row (scenerigs.js) adds Front, Side, Orbit, Chase, Overhead and
@@ -59,16 +70,15 @@
 // tilt while held, X levels, - and = change the lens while held, and Ctrl with
 // the wheel changes it too; Reset view puts the free camera's back as well.
 //
-// Under the camera controls, the Cameras strip (scenepresets.js) keeps named cameras in slots 1-9
-// for the course and area on screen: keys 1-9 or a click cut to one as a free camera (cutTo), and
-// Play keeps playing.
+// The Camera tab's Views row (scenepresets.js) keeps named cameras in slots 1-9 for the course and
+// area on screen: Shift with 1-9 or a click cut to one as a free camera (cutTo), and Play keeps
+// playing. Its Path row (scenepathbar.js, its math scenepath.js) keeps keys the camera moves
+// through; with Path on screen, Play keeps the path's own clock and every display frame asks the
+// picture from the path's camera then.
 //
-// Under the Cameras strip, the camera path block (scenepathbar.js, its math scenepath.js) keeps keys
-// the camera moves through; with Path on screen, Play keeps the path's own clock and every display
-// frame asks the picture from the path's camera then.
-//
-// Under those, the Save states row (scenemoment.js) puts the frame on screen in a Usamune slot of the
-// running game, one press, numbered as Usamune's menu numbers them.
+// The save-state strip under the play bar (scenestrip.js, its press scenemoment.js) puts the frame
+// on screen in a Usamune slot of the running game, one press or the key 1-9, numbered as Usamune's
+// menu numbers them.
 //
 // Play stops only when the person pauses (Pause, Space, a step, the slider):
 // moving the camera, by any of the ways above, keeps it playing. Restart goes
@@ -84,6 +94,10 @@ import { getJSON, send } from "../api.js";
 import { displayName } from "../entitysection.js";
 import { GhostFlag, GhostPanel, sceneGhost, viewName } from "./sceneghosts.js";
 import { StagePicker, attemptIn, entityTarget, stageDefault, targetKey, targetQuery, useStrategies } from "./scenestage.js";
+import { BuildProgress, buildOf, stopBuild, useBuildProgress } from "./scenebuild.js";
+import { PlayBar } from "./sceneplaybar.js";
+import { SaveSlots, SaveStrip } from "./scenestrip.js";
+import { usePop } from "./scenepop.js";
 import { ControlGroups } from "../tunecontrols.js";
 import { postObservation } from "../uilog.js";
 import { SCENE_CAMERA_DEFAULTS, SCENE_CAMERA_GROUPS, SCENE_CAMERA_TUNABLES, sceneCameraTuning,
@@ -91,15 +105,14 @@ import { SCENE_CAMERA_DEFAULTS, SCENE_CAMERA_GROUPS, SCENE_CAMERA_TUNABLES, scen
 import { cameraOf, dollied, flightSpeed, flown, flyToTarget, focusedOn, glideAt, lensed, lookingAt, looked,
   orbitFromPose, slid, speedStepped, tiltAndLens, tilted, turned, wheelLens, worldPoint } from "./scenecamera.js";
 import { LensBar } from "./scenelens.js";
-import { SceneSound, SoundBar, syncWords } from "./sceneaudio.js";
+import { SceneSound, syncWords } from "./sceneaudio.js";
 import { RecordBar } from "./scenerecord.js";
 import { CameraPresets, CameraSlots, placeKey, placeOf, presetCamera } from "./scenepresets.js";
-import { SaveStates } from "./scenemoment.js";
 import { RecordingSwitch } from "./scenerecording.js";
 import { heardInto, pictureAt, recordedTimes } from "./sceneclock.js";
-import { CinematicBar, CinematicSettings, RIG_KINDS, orbitFolded, orbitPhase, rigChanged, rigHint, rigName, rigRequest, seenOnScreen,
+import { CinematicBar, CinematicSettings, orbitFolded, orbitPhase, rigChanged, rigHint, rigName, rigRequest, seenOnScreen,
   startRig } from "./scenerigs.js";
-import { CameraPaths, PathPanel, pathCameraNow, pathPlayTick, pathStopped, playSound, playTiming } from "./scenepathbar.js";
+import { CameraPaths, PathBar, pathCameraNow, pathPlayTick, pathStopped, playSound, playTiming, playedKeys } from "./scenepathbar.js";
 import { stepAction } from "./sceneactions.js";
 
 const html = htm.bind(h);
@@ -339,7 +352,8 @@ export class SceneLink {
       asked: null, ghostPages: new Map(), ghostNote: null, ghostSerial: 0, waiting: [],
       sound: new SceneSound({ changed: () => this.changed(), observe: (note) => this.observe(note) }),
       presets: new CameraPresets({ changed: () => this.changed() }),
-      paths: new CameraPaths({ changed: () => this.changed() }), pathOn: false, pathHeld: null });
+      paths: new CameraPaths({ changed: () => this.changed() }), pathOn: false, pathHeld: null,
+      slots: new SaveSlots({ changed: () => this.changed() }) });
     this.timings = new MovingTimings((summary) => { this.moving = summary; this.changed(); });
     this.onShared = (event) => this.sharedArrived(event);
   }
@@ -370,7 +384,7 @@ export class SceneLink {
       this.waiting = [];
       if (list.length) this.setGhosts(list);
     };
-    ws.onclose = () => { if (this.ws === ws) this.end("The connection to the scene viewer closed."); };
+    ws.onclose = () => { if (this.ws === ws) this.end("The connection to the Ghost Lab closed."); };
     // A scene's first picture carries the session's cold start (a seek from nothing), so it never
     // counts towards how far ahead a play asks: a Play started on it would skip the opening frames.
     // A new scene starts with no ghosts.
@@ -382,6 +396,7 @@ export class SceneLink {
     this.ghostPages = kept.pages;
     this.presets.forget();
     this.paths.forget();
+    this.slots.forget();
     if (this.sharedAvailable) {
       webview().addEventListener("sharedbufferreceived", this.onShared);
       this.encoding = "shared";
@@ -598,14 +613,16 @@ export class SceneLink {
   }
 
   // The open scene is still being written (an attempt scene whose fade-out has not reached the
-  // recording yet): the server's frames replace this scene's from `from` on, the slider grows
-  // with them, and a Play waiting at the newest picture goes on. `growing` false: it is whole.
+  // recording yet, or a watched run still being built, whose newest "resim" table comes along): the
+  // server's frames replace this scene's from `from` on, the slider grows with them, and a Play
+  // waiting at the newest picture goes on. `growing` false: it is whole.
   grown(message) {
     const scene = this.scene;
     if (!scene || message.session !== scene.session) return;
     scene.frames.splice(message.from, Infinity, ...message.frames);
     scene.growing = !!message.growing;
     if (message.audio) scene.audio = message.audio;
+    if (message.resim) scene.resim = message.resim;       // a watched run still being built (scenebuild.js)
     this.frame = clamp(this.frame, 0, Math.max(0, scene.frames.length - 1));
     this.sound.grew(scene);
     if (this.playback) this.playback.grew(scene);
@@ -899,7 +916,7 @@ export class SceneLink {
     this.changed();
   }
 
-  // Keys 1-9: the saved camera in that slot for the place on screen.
+  // Shift with 1-9 (and a click on a view): the saved camera in that slot for the place on screen.
   recallSlot(number, time) {
     if (!this.freeAvailable) return;
     const saved = this.presets.slot(this.presetKey, number);
@@ -1367,9 +1384,22 @@ const KEYS = {
   x: (link, event) => link.level(event.timeStamp),
   "[": (link, event) => stepAction(link, -1, event.timeStamp),
   "]": (link, event) => stepAction(link, 1, event.timeStamp),
-  ...Object.fromEntries([1, 2, 3, 4, 5, 6, 7, 8, 9].map((slot) =>
-    [String(slot), (link, event) => link.recallSlot(slot, event.timeStamp)])),
 };
+
+// The number keys, by where they sit on the keyboard (event.code, so Shift does not change them): 1-9 save
+// the frame on screen into that Usamune slot, Shift with 1-9 cuts to that saved view. His words: "I think we
+// should prioritize 1-9 for save states, and then Shift 1-9 for camera views, since save stating is more likely
+// as an action."
+const DIGIT = /^Digit([1-9])$/;
+function onDigit(link, event) {
+  const digit = DIGIT.exec(event.code || "");
+  if (!digit || event.altKey || !link.scene) return false;
+  event.preventDefault();
+  const number = Number(digit[1]);
+  if (event.shiftKey) link.recallSlot(number, event.timeStamp);
+  else link.slots.press(link, number);
+  return true;
+}
 
 // A control that is clicked rather than typed into, and the keys it acts on
 // itself while it has focus: Space and Enter press it, a slider's arrows move it.
@@ -1377,6 +1407,7 @@ const PRESSED = new Set(["button", "submit", "reset", "checkbox", "radio"]);
 const SLIDER_KEYS = new Set(["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown"]);
 function ownKey(target, key) {
   const type = target?.tagName === "INPUT" ? target.type : null;
+  if (target?.getAttribute?.("role") === "tab") return key === " " || key === "Enter" || key === "ArrowLeft" || key === "ArrowRight";
   if (target?.tagName === "BUTTON" || PRESSED.has(type)) return key === " " || key === "Enter";
   return type === "range" && SLIDER_KEYS.has(key);
 }
@@ -1402,6 +1433,7 @@ function onKey(link, event, canvas) {
   if (event.ctrlKey || event.metaKey || typesInto(event.target) || inDialog(event.target)) return;
   const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
   if (key === "Escape") return endLook(link, canvas, "Esc", true);
+  if (onDigit(link, event)) return undefined;
   if (link.moveKey(event)) return event.preventDefault();
   if (key === "Alt" && link.freeAvailable) return event.preventDefault();   // Alt alone would open the window menu
   const action = KEYS[key];
@@ -1527,47 +1559,9 @@ function Opener({ status, opening, open }) {
   </div>`;
 }
 
-function frameWords(frame) {
-  if (!frame) return "";
-  return [frame.level != null && `level ${frame.level}`, frame.area != null && `area ${frame.area}`,
-    frame.game_frame != null && `game frame ${frame.game_frame}`].filter(Boolean).join(", ");
-}
-
-// Round 9, item 3 (his words: "the play bar is getting longer and shorter ... The UI should not be
-// bouncing around like that when we go between playing / paused"): every word in the Playback row
-// that changes sits in a SteadyText as wide as its widest form, so nothing in the row, and no row
-// under it, moves. The readout's widest form is five-digit frame counts and an eight-digit game frame.
-const PLAY_WORDS = ["Play", "Pause"];
-const FRAME_SIZE = ["Frame 00000 of 00000 so far"];
-const WHERE_SIZE = ["level 00, area 0, game frame 00000000"];
-
-function Transport({ link }) {
-  const frames = link.scene.frames;
-  return html`<div class="scene-lab-bar" aria-label="Playback">
-    <button type="button" onclick=${(event) => link.restart(event.timeStamp)}
-        title=${link.playing ? "Play again from the first frame" : "Go to the first frame"}>
-      <${Icon} name="restart" size=${15} /> Restart</button>
-    <button type="button" onclick=${(event) => link.step(-1, event.timeStamp)} title="Back one frame (Left arrow or ,)">
-      <${Icon} name="stepBack" size=${15} /> Back 1</button>
-    <button type="button" class="primary" onclick=${() => link.toggle()} title="Play or pause (Space)">
-      <${Icon} name=${link.playing ? "pause" : "play"} size=${16} />
-      <${SteadyText} text=${link.playing ? "Pause" : "Play"} sizes=${PLAY_WORDS} /></button>
-    <button type="button" onclick=${(event) => link.step(1, event.timeStamp)} title="Forward one frame (Right arrow or .)">
-      <${Icon} name="stepForward" size=${15} /> Forward 1</button>
-    <button type="button" aria-pressed=${link.loop} onclick=${() => link.setLoop(!link.loop)}
-        title="When on, Play goes on from the first frame after the last">
-      <${Icon} name="loop" size=${15} /> Loop</button>
-    <div class="scene-lab-scrub">
-      <input type="range" min="0" max=${Math.max(0, frames.length - 1)} value=${link.frame} aria-label="Frame"
-        oninput=${(event) => { link.pause(); link.seek(Number(event.currentTarget.value), "input", event.timeStamp); }} />
-      <span class="scene-lab-frame">
-        <${SteadyText} text=${`Frame ${link.frame + 1} of ${frames.length}${link.scene.growing ? " so far" : ""}`}
-          sizes=${FRAME_SIZE} />
-        <small><${SteadyText} text=${frameWords(frames[link.frame])} sizes=${WHERE_SIZE} /></small></span>
-    </div>
-  </div>`;
-}
-
+// What each camera does with the keyboard and the mouse: hintFor says it for the camera on screen (the
+// Camera tab's note while the free camera is unavailable; tests read the rest), and the keys list in the
+// bar's More menu says it all at once.
 const HINTS = {
   picking: "Click a surface in the picture to turn around it. Esc cancels.",
   looking: "Move the mouse to look around. W A S D move, Q and E go down and up, Shift is faster, Alt slower, the wheel sets the speed. Let go of the right button to stop looking.",
@@ -1587,15 +1581,6 @@ export function hintFor(link) {
   if (link.rig) return rigHint(link.rig, link.ghosts);
   if (link.view) return HINTS.view;
   return HINTS.recorded;
-}
-
-// Every hint this scene can show with its ghosts: the hint is as tall as the tallest of them at its
-// width, so changing the camera never moves the rows under it.
-function hintSizes(link) {
-  if (!link.freeAvailable) return [hintFor(link)];
-  const runners = ["stage", ...link.ghosts.map((ghost) => ghost.ref)];
-  return [...Object.values(HINTS),
-    ...RIG_KINDS.flatMap(([kind]) => runners.map((target) => rigHint({ kind, target }, link.ghosts)))];
 }
 
 // The same lesson on the picture itself while it is what you are acting on:
@@ -1632,8 +1617,16 @@ function MarioSwitch({ link }) {
 
 const FOCUS_WORDS = ["Set focus", "Finding..."];
 
-// A ghost's view button wears its game's flag when its region is known, and none when it is not.
-function CameraBar({ link, tuning, setTuning }) {
+// One labeled row of the Camera tab: its name in the first column, its controls after it.
+function CameraRow({ name, children, className = "" }) {
+  return html`<div class=${`ghost-lab-row ${className}`.trim()} role="group" aria-label=${name}>
+    <span class="ghost-lab-row-name">${name}</span>
+    <div class="ghost-lab-row-body">${children}</div>
+  </div>`;
+}
+
+// The cameras: the recorded one, each runner's own (with its flag), Free camera and what it can do.
+function CameraChoices({ link }) {
   const available = link.freeAvailable, reason = link.scene.free_camera.reason;
   return html`<div class="scene-lab-bar" aria-label="Camera">
     <button type="button" aria-pressed=${!link.free && !link.view && !link.rig && !link.pathOn} onclick=${(event) => link.recorded(event.timeStamp)}
@@ -1645,7 +1638,7 @@ function CameraBar({ link, tuning, setTuning }) {
       <${GhostFlag} version=${ghost.version} />${" "}
       ${viewName(link.ghosts, ghost.ref)}</button>`)}
     <button type="button" aria-pressed=${link.free} disabled=${!available}
-        title=${available ? "Move the camera yourself, starting from the picture on screen" : reason}
+        title=${available ? "Move the camera yourself, starting from the picture on screen (W A S D)" : reason}
         onclick=${() => link.enterFree()}>Free camera</button>
     <button type="button" disabled=${!available} onclick=${(event) => link.lookAtMario(event.timeStamp)}
         title=${available ? "Point the free camera at Mario (F)" : reason}>Look at Mario</button>
@@ -1656,25 +1649,48 @@ function CameraBar({ link, tuning, setTuning }) {
     <button type="button" disabled=${!link.moved} onclick=${(event) => link.resetView(event.timeStamp)}
         title=${link.free ? "Back to where Free camera began" : "Available once you move the free camera"}>
       Reset view</button>
-    <button type="button" aria-pressed=${link.hud} onclick=${() => link.setHud(!link.hud)}
-        title=${link.hud ? "Hide the lives, coins, stars and timer drawn over the picture"
-          : "Show the lives, coins, stars and timer over the picture"}>HUD</button>
-    <${MarioSwitch} link=${link} />
-  </div>
-  <${CinematicBar} link=${link} tuning=${sceneCameraTuning()} />
-  ${available && html`<${LensBar} link=${link} tuning=${sceneCameraTuning()} />`}
-  <div class="scene-lab-bar" aria-label="Flight and pictures">
-    ${available && html`<${SpeedControl} link=${link} />`}
-    <label class="scene-lab-quality">Pictures
-      <select value=${link.encoding} onchange=${(event) => { link.encoding = event.currentTarget.value; link.want("input"); }}>
-        ${link.sharedAvailable && html`<option value="shared">Exact pixels, fastest (shared memory)</option>`}
-        <option value="jpeg">Faster (JPEG)</option>
-        <option value="raw">Exact pixels (slower)</option>
-      </select></label>
-    ${available && html`<button type="button" aria-pressed=${tuning} onclick=${() => setTuning(!tuning)}
-        title="Adjust how the free camera feels, and save the numbers as the defaults">Tune controls</button>`}
-  </div>
-  <p class="scene-lab-hint"><${SteadyText} block text=${hintFor(link)} sizes=${hintSizes(link)} /></p>`;
+  </div>`;
+}
+
+// What the picture shows besides the world: the HUD and the stage's Mario, kept together, then the tilt and lens.
+function LookChoices({ link }) {
+  return html`<span class="ghost-lab-pair">
+      <button type="button" aria-pressed=${link.hud} onclick=${() => link.setHud(!link.hud)}
+          title=${link.hud ? "Hide the lives, coins, stars and timer drawn over the picture"
+            : "Show the lives, coins, stars and timer over the picture"}>HUD</button>
+      <${MarioSwitch} link=${link} /></span>
+    ${link.freeAvailable && html`<${LensBar} link=${link} tuning=${sceneCameraTuning()} />`}`;
+}
+
+// The Camera tab: every way to choose and shape the camera, one labeled row each. Saved views cut on
+// Shift+1-9; Film makes a video of what the Ghost Lab shows.
+function CameraTab({ link }) {
+  const available = link.freeAvailable;
+  return html`<div class="ghost-lab-camera">
+    ${!available && html`<p class="scene-lab-hint ghost-lab-camera-note" title=${hintFor(link)}>${hintFor(link)}</p>`}
+    <${CameraRow} name="Camera"><${CameraChoices} link=${link} /><//>
+    <${CameraRow} name="Cinematic"><${CinematicBar} link=${link} tuning=${sceneCameraTuning()} /><//>
+    <${CameraRow} name="Look" className="ghost-lab-look"><${LookChoices} link=${link} /><//>
+    <${CameraRow} name="Views"><${CameraSlots} link=${link} /><//>
+    <${CameraRow} name="Path"><${PathBar} link=${link} /><//>
+    ${available && html`<${CameraRow} name="Fly"><${SpeedControl} link=${link} /><//>`}
+    <${CameraRow} name="Film"><${RecordBar} link=${link} /><//>
+  </div>`;
+}
+
+// Every key the Ghost Lab knows, for the More menu: what you press, then what it does.
+const KEY_LIST = [
+  ["Space", "Play or pause"], [", .  or  ← →", "One frame back or on"], ["[  ]", "Back or on to a change of move"],
+  ["Home  End", "First or last frame"], ["1 to 9", "Save this frame in that slot"], ["Shift 1 to 9", "Cut to that saved view"],
+  ["W A S D  Q E", "Fly (Shift faster, Alt slower)"], ["Right button", "Look around while held"],
+  ["Drag, wheel", "Turn around the focus, move closer"], ["Double-click", "Fly to a surface"],
+  ["Z C  X", "Tilt, level"], ["-  =", "Lens"], ["F", "Look at Mario"], ["R", "Recorded camera"], ["M", "Mute"],
+];
+
+function KeysList() {
+  return html`<dl class="ghost-lab-keys">
+    ${KEY_LIST.map(([keys, does]) => html`<div key=${keys}><dt><kbd>${keys}</kbd></dt><dd>${does}</dd></div>`)}
+  </dl>`;
 }
 
 const ENCODING_WORDS = { jpeg: "JPEG", raw: "exact pixels", shared: "exact pixels through shared memory" };
@@ -1776,27 +1792,54 @@ function StageOverlays({ link }) {
     </div>`}`;
 }
 
-// `ghosts`: the ghost panel, right under the player card.
-function Player({ link, canvas, surface, ghosts }) {
-  const [tuning, setTuning] = useState(false);
+// The picture, the play bar and the save-state strip: what you watch and the frame you save.
+function Player({ link, canvas, surface, building, stop }) {
   const classes = [link.freeAvailable && "is-movable", link.picking && "is-picking", link.looking && "is-flying"];
-  return html`<section class="practice-card scene-lab-player">
+  return html`<section class="practice-card scene-lab-player ghost-lab-player">
     <div class="scene-lab-stage">
       <canvas ref=${canvas} width="640" height="480" class=${classes.filter(Boolean).join(" ")}
         aria-label="The recording's picture" ...${pointerHandlers(link, surface)}></canvas>
       <${StageOverlays} link=${link} />
     </div>
-    <${Transport} link=${link} />
-    <${SoundBar} sound=${link.sound} frame=${link.frame} />
-    <${RecordBar} link=${link} />
-    <${CameraBar} link=${link} tuning=${tuning} setTuning=${setTuning} />
-    <${CameraSlots} link=${link} />
-    <${PathPanel} link=${link} />
-    <${SaveStates} link=${link} />
-    <${Readout} link=${link} />
-  </section>
-  ${ghosts}
-  ${tuning && html`<${TunePanel} link=${link} />`}`;
+    <${PlayBar} link=${link} building=${building} stop=${stop} />
+    <${SaveStrip} link=${link} />
+  </section>`;
+}
+
+// The tray's two tabs, Ghosts first (his words: "Ghosts tab selected by default"); each names its job and
+// a one-line summary of what it holds now. Left and Right move between them.
+const TABS = [["ghosts", "Ghosts", "ghost"], ["camera", "Camera", "camera"]];
+
+function tabSummary(link, key, watching) {
+  if (key === "ghosts") {
+    const shown = link.ghosts.length, who = watching?.player || "you";
+    return shown ? `${shown} beside ${who === "You" ? "you" : who}` : `Watching ${who === "You" ? "you" : who}`;
+  }
+  const keys = link.freeAvailable ? playedKeys(link).length : 0;
+  return keys ? `${cameraTag(link)} · path of ${keys} keys` : cameraTag(link);
+}
+
+function Tray({ link, tab, setTab, watching, panels }) {
+  const move = (event) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    const at = TABS.findIndex(([key]) => key === tab), next = TABS[(at + (event.key === "ArrowRight" ? 1 : TABS.length - 1)) % TABS.length];
+    setTab(next[0]);
+    event.currentTarget.querySelector(`#ghost-lab-tab-${next[0]}`)?.focus();
+  };
+  return html`<section class="practice-card ghost-lab-tray">
+    <div class="ghost-lab-tabs" role="tablist" aria-label="Ghost Lab" onkeydown=${move}>
+      ${TABS.map(([key, name, icon]) => html`<button type="button" role="tab" key=${key} id=${`ghost-lab-tab-${key}`}
+          aria-selected=${tab === key} aria-controls=${`ghost-lab-panel-${key}`} tabindex=${tab === key ? 0 : -1}
+          onclick=${() => setTab(key)}>
+        <${Icon} name=${icon} size=${18} />
+        <span class="ghost-lab-tab-words"><strong>${name}</strong>
+          <small title=${tabSummary(link, key, watching)}>${tabSummary(link, key, watching)}</small></span>
+      </button>`)}
+    </div>
+    ${TABS.map(([key]) => html`<div role="tabpanel" key=${key} id=${`ghost-lab-panel-${key}`}
+        aria-labelledby=${`ghost-lab-tab-${key}`} class="ghost-lab-panel" hidden=${tab !== key}>${panels[key]}</div>`)}
+  </section>`;
 }
 
 function useSceneLink(canvas, refresh) {
@@ -1844,27 +1887,77 @@ export const STAGE_WORDS = {
   prompt: "Choose a course and star to watch one of your attempts.",
   finding: "Finding your fastest attempt with a saved scene...",
   none: "None of your attempts at this has a saved scene.",
-  // A Library ghost with no stage to play in (round 9, item 8): one short sentence, why.
-  noStageForGhost: (target) => `This ghost can't be shown yet: you have no saved scene of this ${
-    target && targetKey(target)?.startsWith("segment:") ? "segment" : "star"}.`,
+  // A Library ghost whose star this Trainer cannot place (round 9, item 8): one short sentence, why.
+  unplaced: "This ghost's star or segment is not one this Trainer knows.",
 };
 
-// The page's heading: the open scene's title and Close, else (`lab`: nothing chosen) the lab
-// folder's recordings; `children` (the stage picker) take their own row under it.
-function Hero({ t, link, lab, status, opening, open, close, children }) {
-  const title = link.scene ? sceneTitle(link.scene, t?.view) : null;
-  return html`<header class="practice-card workshop-hero">
-    <div class="workshop-title">
-      <span class="workshop-title-icon"><${Icon} name="ghost" size=${22} /></span>
-      <div><span class="eyebrow">Lab</span><h2>Scene viewer</h2></div>
+// The run on screen, for the bar and "In the scene": the row it was watched from, else his attempt's
+// (its time and version from the Practice log's row), else the scene's own words.
+function watchingOf(link, view) {
+  const scene = link.scene;
+  if (!scene) return null;
+  if (scene.watching) return scene.watching;
+  const found = scene.attempt != null ? attemptIn(view, scene.attempt) : null;
+  const attempt = found?.attempt;
+  const time = attempt ? (attempt.segment_id != null ? attempt.rta : attempt.igt ?? attempt.rta) : null;
+  return { ref: null, player: scene.attempt != null ? "You" : scene.title || "Lab recording", time: time || null,
+    version: attempt?.game_version ?? null, attempt: scene.attempt ?? null };
+}
+
+// The bar's "which run": a star, its flag, whose it is and its time, the scene's whole title on hover.
+function Watching({ link, view, watching }) {
+  if (!watching) return null;
+  return html`<span class="ghost-lab-watching" title=${sceneTitle(link.scene, view)}>
+    <span class="ghost-lab-star" aria-hidden="true">★</span><${GhostFlag} version=${watching.version} />
+    <strong>${watching.player}</strong>${watching.time ? html`<span class="ghost-lab-watching-time">${watching.time}</span>` : null}
+  </span>`;
+}
+
+// The bar's More menu: what is used rarely. The picture's quality, the numbers (the readout, always on the
+// page so the observation log can read it), Tune controls, every key, and the lab folder's recordings.
+function MoreMenu({ link, status, opening, open, tuning, setTuning }) {
+  const { open: shown, setOpen, place } = usePop();
+  return html`<span class="ghost-lab-more" ref=${place}>
+    <button type="button" class="icon-button" aria-expanded=${shown} aria-label="More"
+        title="Picture quality, numbers, keys and tuning" onclick=${() => setOpen(!shown)}>
+      <${Icon} name="menu" size=${18} /></button>
+    <div class="ghost-lab-pop ghost-lab-more-pop" hidden=${!shown}>
+      ${link.scene && html`<label class="scene-lab-quality">Pictures
+        <select value=${link.encoding} onchange=${(event) => { link.encoding = event.currentTarget.value; link.want("input"); }}>
+          ${link.sharedAvailable && html`<option value="shared">Exact pixels, fastest (shared memory)</option>`}
+          <option value="jpeg">Faster (JPEG)</option>
+          <option value="raw">Exact pixels (slower)</option>
+        </select></label>`}
+      ${link.scene && link.freeAvailable && html`<button type="button" aria-pressed=${tuning} onclick=${() => setTuning(!tuning)}
+          title="Adjust how the free camera feels, and save the numbers as the defaults">Tune controls</button>`}
+      ${link.scene && html`<div class="ghost-lab-numbers"><${Readout} link=${link} /></div>`}
+      <${KeysList} />
+      ${status?.packages?.length ? html`<${Opener} status=${status} opening=${opening} open=${open} />` : null}
     </div>
-    ${link.scene ? html`<div class="scene-lab-open">
-        <span class="scene-lab-title" title=${title}>${title}</span>
-        <button type="button" onclick=${close} title="Close this recording and stop the renderer">Close</button>
-      </div>`
-      : lab && html`<${Opener} status=${status} opening=${opening} open=${open} />`}
-    <${RecordingSwitch} />
-    ${children}
+  </span>`;
+}
+
+// What the bar says on its one line: an error, why the stage is missing, or how the last scene ended.
+function barNote(link, status, stageNote) {
+  if (link.error) return { text: link.error, bad: true };
+  if (stageNote) return { text: stageNote, bad: false };
+  if (!link.scene && status?.ended) return { text: status.ended.message, bad: false };
+  return null;
+}
+
+// The Ghost Lab's one bar: the stage picker, the run you watch, a note, the scene recording's sign, More and
+// Close. Where it wraps (narrow panes: the note and the right side take the second line) depends on the
+// pane's width alone.
+function StageBar({ t, link, watching, note, status, opening, open, close, tuning, setTuning, children }) {
+  return html`<header class="practice-card ghost-lab-top">
+    <div class="ghost-lab-top-left">${children}<${Watching} link=${link} view=${t?.view} watching=${watching} /></div>
+    <p class=${`ghost-lab-top-note${note?.bad ? " is-bad scene-lab-error" : ""}`} role="status" title=${note?.text || ""}>${note?.text || ""}</p>
+    <div class="ghost-lab-top-right">
+      <${RecordingSwitch} />
+      <${MoreMenu} link=${link} status=${status} opening=${opening} open=${open} tuning=${tuning} setTuning=${setTuning} />
+      ${link.scene && html`<button type="button" class="icon-button" aria-label="Close" onclick=${close}
+          title="Close this scene and stop the renderer"><${Icon} name="close" size=${18} /></button>`}
+    </div>
   </header>`;
 }
 
@@ -1966,44 +2059,91 @@ function useStageChoice(link, open, close) {
     keep(scene, { target: staged });
     return scene;
   }
-  // A Library row's Ghost button: its stage (above), then that one ghost from the lab, added to the
-  // scene (sent once the scene's socket is open). Why it cannot be shows where the stage note or the
-  // ghost panel's note would.
-  async function showGhost(ghost) {
-    const wanted = entityTarget(ghost.entity, ghost.strat ?? null);
-    if (!wanted) {
-      setStageNote(STAGE_WORDS.noStageForGhost(null));
-      return;
-    }
-    const serial = asked.current + 1;
-    const scene = await choose(wanted, { anyStrategy: true, none: STAGE_WORDS.noStageForGhost(wanted) });
-    if (!scene || serial !== asked.current) return;
-    const answer = await libraryGhostRow(ghost, wanted);
-    if (serial !== asked.current || link.scene !== scene) return;
-    if (answer.item) link.addGhost(sceneGhost(answer.item));
-    else link.noteGhost(answer.reason);
-  }
-  return { target, setTarget, stageNote, setStageNote, asked, choose, showGhost };
+  return { target, setTarget, stageNote, setStageNote, asked, choose };
 }
 
-// `t.sceneLab.intent` (app.js): the Practice log's Ghost button names an
-// attempt; the viewer opens that attempt's scene and plays it, once per click.
-// A Library row's Ghost button names a ghost ({recording, entity, strat}): the
-// viewer chooses that star or segment as the stage picker would (on the ghost's
-// strategy, else any of his with a scene), then asks the lab for that one ghost
-// and adds it. Where no stage comes back it says why, in one sentence; a later
-// stage source only changes what /stage answers, never the buttons.
-// The stage picker (scenestage.js) starts on the target of the scene on screen,
-// else, with none open, on what the Practice log has selected, whose stage
-// it then opens; a choice there opens that target's stage.
+// Watching a run (a ghost row, or a Library ghost): it becomes the scene. One of his attempts with a scene
+// opens that scene; any other run is made into a scene from its ghost (POST /open {ghost}, scenebuild.js:
+// it answers once the first frames are built, the old scene playing on until then, and the scene grows
+// while the rest is built). `building` says how far, `stop` ends it (the scene keeps what it has). A newer
+// watch, or any other open, takes over from an older one (the lab cancels the older build). The opened
+// scene carries the run it shows (`watching`) and, made from a ghost, that ghost's ref, which its save
+// states are made from.
+function useWatch(link, open) {
+  const [pending, setPending] = useState(null);           // {ref, name, serial}: its /open has not answered
+  const progress = useBuildProgress(!!pending), stopped = useRef(0), serial = useRef(0);
+  async function watch(item, target) {
+    const mine = ++serial.current, hush = () => stopped.current === mine;
+    setPending({ ref: item.ref, name: item.player, serial: mine });
+    const watching = sceneGhost(item);
+    let scene = item.attempt != null
+      ? await open({ attempt: item.attempt }, { quiet: true, adopt: { watching, ghost: null } }) : null;
+    const made = !scene && !hush() && mine === serial.current;
+    if (made) scene = await open({ ghost: item.ref }, { quiet: hush, adopt: { watching, ghost: item.ref } });
+    if (scene) keep(scene, { target, watching: scene.watching, ghost: scene.ghost });
+    setPending((now) => (now?.serial === mine ? null : now));
+    return scene;
+  }
+  async function stop() {
+    stopped.current = pending?.serial ?? stopped.current;
+    setPending(null);
+    try { await stopBuild(); } catch (problem) { link.fail(problem.message); }
+  }
+  return { watch, stop, building: buildOf(link.scene, pending, progress) };
+}
+
+// Opening a scene: `open(body)` with {package} from the lab's list, {attempt} from the Ghost button or the
+// stage picker, or {ghost} for a run watched from a row. A refusal shows the server's own sentence
+// (`quiet`, true or a function asked when the answer comes: none). `adopt`: fields the scene carries from
+// its first picture on (the run it shows). An open that a newer one took over from neither connects nor
+// speaks (the lab ended it for the newer). The opened scene, or null; `opening` while one is on its way.
+function useOpen(link, surface, refresh) {
+  const [opening, setOpening] = useState(false);
+  const newest = useRef(0);
+  async function open(body, { play = false, quiet = false, adopt = null } = {}) {
+    const mine = ++newest.current, hush = () => (typeof quiet === "function" ? quiet() : quiet);
+    setOpening(true);
+    if (!hush()) link.fail(null);
+    let scene = null;
+    try {
+      scene = await send("POST", `${ROOT}/open`, body);
+    } catch (problem) { if (!hush() && mine === newest.current) link.fail(problem.message); }
+    if (scene && mine === newest.current) {
+      link.connect(Object.assign(scene, adopt), { play });
+      surface.current?.focus();
+    } else scene = null;
+    if (mine === newest.current) setOpening(false);
+    refresh.current();
+    return scene;
+  }
+  return { open, opening };
+}
+
+// What the page hands its parts each render: the watched run's star ({course_id, star_id}: a save joins
+// that star's set, scenestrip.js) and the store's event feed (its slot_sets_changed redraws the strip).
+function shareWithParts(link, target, t) {
+  link.stageTarget = target;
+  link.feed = t?.feed;
+}
+
+// `t.sceneLab.intent` (app.js): the Practice log's Ghost button names an attempt; the Ghost Lab opens
+// that attempt's scene and plays it, once per click. A Library row's Ghost button names a ghost
+// ({recording, entity, strat}): the Ghost Lab turns to that star or segment and watches that ghost (it
+// becomes the scene, made from the ghost when he has no scene of it). The stage picker (scenestage.js)
+// starts on the target of the scene on screen, else, with none open, on what the Practice log has
+// selected, whose stage it then opens; a choice there opens that target's stage.
 export function SceneViewer({ t }) {
   const lab = t?.sceneLab, intent = lab?.intent;
   const [status, setStatus] = useState(null);
-  const [opening, setOpening] = useState(false);
+  const [tab, setTab] = useState("ghosts");
+  const [tuning, setTuning] = useState(false);
   const canvas = useRef(null), surface = useRef(null), refresh = useRef(null);
   const link = useSceneLink(canvas, refresh);
-  const { target, setTarget, stageNote, setStageNote, asked, choose, showGhost } = useStageChoice(link, open, close);
+  const { open, opening } = useOpen(link, surface, refresh);
+  const { target, setTarget, stageNote, setStageNote, asked, choose } = useStageChoice(link, open, close);
+  const { watch, stop, building } = useWatch(link, open);
   const strategies = useStrategies(targetKey(target));
+  shareWithParts(link, target, t);
   refresh.current = async () => {
     try {
       const next = await getJSON(`${ROOT}/status`);
@@ -2015,8 +2155,9 @@ export function SceneViewer({ t }) {
     if (intent) return;              // the attempt below replaces whatever scene was open
     refresh.current().then((next) => {
       if (next?.session) {
-        link.connect(next.session);
-        setTarget(keptFor(next.session).target || stageDefault(next.session, t?.view));
+        const kept = keptFor(next.session);
+        link.connect(Object.assign(next.session, { watching: kept.watching ?? null, ghost: kept.ghost ?? null }));
+        setTarget(kept.target || stageDefault(next.session, t?.view));
       } else {
         const practiced = stageDefault(null, t?.view);
         if (practiced) choose(practiced);
@@ -2040,23 +2181,19 @@ export function SceneViewer({ t }) {
       keep(scene, { target: scene.target || named });
     });
   }, [intent]);
+  // A Library row's Ghost button: its star or segment in the picker, then that ghost watched.
+  async function showGhost(ghost) {
+    const wanted = entityTarget(ghost.entity, ghost.strat ?? null);
+    if (!wanted) return setStageNote(STAGE_WORDS.unplaced);
+    asked.current += 1;
+    setTarget(wanted);
+    setStageNote(null);
+    const answer = await libraryGhostRow(ghost, wanted);
+    if (!answer.item) return setStageNote(answer.reason);
+    return watch(answer.item, wanted);
+  }
   const owner = useKeyboardOwner(link, surface, canvas);
   useMovingObservations(link, surface);
-  // `body`: {package} from the lab's list, or {attempt} from the Ghost button or the stage picker. A
-  // refusal shows the server's own sentence either way. The opened scene, or null.
-  async function open(body, { play = false } = {}) {
-    setOpening(true);
-    link.fail(null);
-    let scene = null;
-    try {
-      scene = await send("POST", `${ROOT}/open`, body);
-      link.connect(scene, { play });
-      surface.current?.focus();
-    } catch (problem) { link.fail(problem.message); }
-    setOpening(false);
-    refresh.current();
-    return scene;
-  }
   async function close() {
     endLook(link, canvas.current, "closed", true);
     link.disconnect();
@@ -2065,15 +2202,21 @@ export function SceneViewer({ t }) {
     try { await send("POST", `${ROOT}/close`); } catch (problem) { link.fail(problem.message); }
     refresh.current();
   }
-  return html`<div class="workshop-page scene-lab" ref=${surface} tabindex="-1" ...${owner}>
-    <${Hero} t=${t} link=${link} lab=${!target} status=${status} opening=${opening} open=${open} close=${close}>
-      <${StagePicker} t=${t} target=${target} strategies=${strategies} onChoose=${choose}
-        note=${stageNote || (!target && !link.scene ? STAGE_WORDS.prompt : null)} />
+  const watching = watchingOf(link, t?.view);
+  const note = barNote(link, status, stageNote) ?? (!target && !link.scene ? { text: STAGE_WORDS.prompt, bad: false } : null);
+  return html`<div class="workshop-page scene-lab ghost-lab" ref=${surface} tabindex="-1" ...${owner}>
+    <${StageBar} t=${t} link=${link} watching=${watching} note=${note} status=${status} opening=${opening} open=${open}
+        close=${close} tuning=${tuning} setTuning=${setTuning}>
+      <${StagePicker} t=${t} target=${target} strategies=${strategies} onChoose=${choose} note=${null} />
     <//>
-    ${link.error && html`<p class="scene-lab-error" role="status">${link.error}</p>`}
-    ${!link.scene && status?.ended && !link.error && !stageNote
-      && html`<p class="scene-lab-reason">${status.ended.message}</p>`}
-    ${link.scene && html`<${Player} link=${link} canvas=${canvas} surface=${surface}
-      ghosts=${html`<${GhostPanel} link=${link} target=${target} strategies=${strategies} />`} />`}
+    ${link.scene ? html`<${Player} link=${link} canvas=${canvas} surface=${surface} building=${building} stop=${stop} />
+      <${Tray} link=${link} tab=${tab} setTab=${setTab} watching=${watching} panels=${{
+        ghosts: html`<${GhostPanel} link=${link} target=${target} strategies=${strategies} watching=${watching}
+          building=${building} watch=${(item) => watch(item, target)} />`,
+        camera: html`<${CameraTab} link=${link} />` }} />
+      ${tuning && html`<${TunePanel} link=${link} />`}`
+      : html`<section class="practice-card ghost-lab-empty">
+        ${building ? html`<${BuildProgress} build=${building} stop=${stop} />` : html`<${Icon} name="ghost" size=${28} />`}
+      </section>`}
   </div>`;
 }

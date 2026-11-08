@@ -2242,7 +2242,7 @@ checked against that same statement.
 
 ### Ghosts in the scene viewer
 
-The [scene viewer](glossary.md#scene-viewer) (M4 lab) draws
+The [scene viewer](glossary.md#ghost-lab) (M4 lab) draws
 [stage ghosts](glossary.md#stage-ghost) into a recorded scene with the code
 the game's ghost uses: `ghost_viewer.cpp` is a third contributor to
 `ghost_draw.cpp`'s seal beside saved playback and the live race, and each row

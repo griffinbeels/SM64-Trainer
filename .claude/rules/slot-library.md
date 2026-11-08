@@ -7,6 +7,7 @@ paths:
   - "tools/scene_lab/moment_slot.py"
   - "src/sm64_events/server/scene_moments.py"
   - "src/sm64_events/ui/components/scenemoment.js"
+  - "src/sm64_events/ui/components/scenestrip.js"
   - "tests/test_slot_library.py"
   - "tests/test_handoff_try.py"
   - "tests/test_slot_relocate.py"
@@ -34,7 +35,7 @@ paths:
 | The slot refit after each spawn: which slots, its trigger, what it keeps and logs | `slotlibrary/refit.py`; wired by `SceneLab.follow_spawns` (lab only, live server only) |
 | The `.sm64state` file and its refusals | `slotlibrary/sharefile.py` |
 | Driving it by hand | `tools/scene_lab/slot_library.py` |
-| One recorded frame as a slot, the Scene viewer's Save states row | `tools/scene_lab/moment_slot.py` (the build and `compare`, its evidence), `server/scene_moments.py` (routes), `ui/components/scenemoment.js` (the row) |
+| One recorded frame as a slot, the Ghost Lab's save-state strip | `tools/scene_lab/moment_slot.py` (the build and `compare`, its evidence), `server/scene_moments.py` (routes), `ui/components/scenemoment.js` (the press), `ui/components/scenestrip.js` (the strip and keys 1-9) |
 | Which [[re-simulated scene]]s may make save states | `SAVE_STATES` in `tools/scene_lab/ghost_resim.py`, the one switch; `scene_moments._ghost_source` asks it. A reset's scene stays off until Griffin decides |
 
 Contracts the tests pin:

@@ -65,7 +65,7 @@ FPS_CHOICES = (30, 60)
 # lab reads every version in READABLE.
 TIMELINE_VERSION = 2
 READABLE = (1, 2)
-OTHER_VERSION = ("This recording was made by another version of the Scene viewer, so it cannot be made "
+OTHER_VERSION = ("This recording was made by another version of the Ghost Lab, so it cannot be made "
                  "into a video here.")
 NO_RIG_PATH = "The cinematic camera's path could not be read, so its shots show the recorded camera."
 DISPLAY_MS = 1000 / 60            # a display frame, for a timeline whose last entry has no end

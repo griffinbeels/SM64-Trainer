@@ -1,5 +1,5 @@
-// src/sm64_events/ui/components/scenepresets.js -- the Scene viewer's camera presets (M4 round 6,
-// item 2, lab only; sceneviewer.js draws the Cameras strip under the camera controls).
+// src/sm64_events/ui/components/scenepresets.js -- the Ghost Lab's camera presets (M4 round 6,
+// item 2, lab only; sceneviewer.js draws them as the Camera tab's Views row; Shift with 1-9 cuts to one).
 //
 // His words: "I set up a specific camera angle that I really like, and assign it to a camera slot
 // position (numbers 1-9 on the keyboard). I should be able to name the camera, and be able to swap
@@ -133,7 +133,7 @@ function stripNote(link, key, set) {
   if (!key) return { text: "This picture does not say which course and area it shows, so no cameras are kept for it.", bad: false };
   if (set?.problem) return { text: set.problem, bad: true };
   if (!set || set.state === "loading") return { text: "Reading the saved cameras...", bad: false };
-  return { text: "Keys 1-9 cut to a saved camera. Cameras are kept for this course and area.", bad: false };
+  return { text: "Shift with 1 to 9 cuts to a saved view. Views are kept for this course and area.", bad: false };
 }
 
 // A slot's name while it is being typed: Enter or leaving the field keeps it, Esc keeps the old one.
@@ -165,7 +165,7 @@ function NameField({ entry, done }) {
     onblur=${() => finish(true)} />`;
 }
 
-// The Cameras strip: nine slots for the place the picture on screen is in.
+// The Camera tab's Views row: nine slots for the place the picture on screen is in.
 export function CameraSlots({ link }) {
   const presets = link.presets, key = link.presetKey, set = presets.of(key);
   const [renaming, setRenaming] = useState(null);           // {key, slot}
@@ -197,16 +197,16 @@ export function CameraSlots({ link }) {
   const filled = (entry) => {
     const pressed = !!here && sameCamera(here, entry.camera);
     if (renaming?.key === key && renaming.slot === entry.slot) {
-      return html`<div class="scene-lab-slot-edit"><kbd>${entry.slot}</kbd><${NameField} entry=${entry} done=${(name) => {
+      return html`<div class="scene-lab-slot-edit"><kbd>⇧${entry.slot}</kbd><${NameField} entry=${entry} done=${(name) => {
         setRenaming(null);
         if (name != null) presets.rename(key, entry.slot, name);
       }} /></div>`;
     }
     return html`<button type="button" class="scene-lab-slot-cut" aria-pressed=${pressed} disabled=${!usable}
         aria-label=${`${entry.name}: camera ${entry.slot}`}
-        title=${`Cut to ${entry.name} (${entry.slot}). Drag it onto another slot to move it there.`}
+        title=${`Cut to ${entry.name} (Shift ${entry.slot}). Drag it onto another slot to move it there.`}
         onclick=${(event) => link.recallSlot(entry.slot, event.timeStamp)}>
-      <kbd>${entry.slot}</kbd><span class="scene-lab-slot-name">${entry.name}</span></button>
+      <kbd>⇧${entry.slot}</kbd><span class="scene-lab-slot-name">${entry.name}</span></button>
     <span class="scene-lab-slot-tools">
       <button type="button" disabled=${!usable} aria-label=${`Rename ${entry.name}`} title="Rename"
         onclick=${() => setRenaming({ key, slot: entry.slot })}><${Icon} name="edit" size=${12} /></button>
@@ -217,11 +217,10 @@ export function CameraSlots({ link }) {
   const empty = (number) => html`<button type="button" class="scene-lab-slot-save" disabled=${!usable}
       aria-label=${`Save current view in slot ${number}`} title="Save current view here"
       onclick=${() => saveHere(number)}>
-    <kbd>${number}</kbd><span class="scene-lab-slot-name"><${Icon} name="plus" size=${12} /> Save</span></button>`;
+    <kbd>⇧${number}</kbd><span class="scene-lab-slot-name"><${Icon} name="plus" size=${12} /> Save</span></button>`;
   const undone = presets.undo?.key === key ? presets.undo.entry : null;
   return html`<div class="scene-lab-cameras" role="group" aria-label="Cameras">
     <div class="scene-lab-cameras-head">
-      <h3>Cameras</h3>
       <p class=${`scene-lab-hint${note.bad ? " is-bad" : ""}`} role=${note.bad ? "status" : null}
         title=${note.text}>${note.text}</p>
       ${undone && html`<span class="scene-lab-cameras-undo">Deleted "${undone.name}" from slot ${undone.slot}.${" "}
