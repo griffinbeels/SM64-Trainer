@@ -24,7 +24,7 @@
 // store's feed (link.feed) redraws at once; the poll catches anything else. The lab draws each save's picture
 // itself (the recorded camera's, server/scene_moments.py) and serves it at the slot's "picture" URL.
 import { h } from "preact";
-import { useEffect } from "preact/hooks";
+import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { GhostFlag } from "./sceneghosts.js";
@@ -216,28 +216,39 @@ function SlotMenu({ link, entry, context }) {
   </span>`;
 }
 
-// A saved tile's middle and foot: its place's name when it has no picture, then its flag, ★ for the star's
+// A saved tile's middle and foot: its place's name when it shows no picture, then its flag, ★ for the star's
 // own set, and ⇄.
-function SavedMarks({ entry }) {
-  return html`${!entry.picture && html`<span class="ghost-lab-slot-place">${entry.place || "Save state"}</span>`}
+function SavedMarks({ entry, pictured }) {
+  return html`${!pictured && html`<span class="ghost-lab-slot-place">${entry.place || "Save state"}</span>`}
     <span class="ghost-lab-slot-marks"><span class="ghost-lab-slot-from"><${GhostFlag} version=${entry.version}
       size=${14} />${entry.set === "star" && html`<span class="ghost-lab-slot-star" aria-hidden="true">★</span>`}</span>${
       entry.translated && html`<span class="ghost-lab-slot-crossed" aria-hidden="true">⇄</span>`}</span>`;
+}
+
+// A saved tile's picture while it loads: [the URL to draw or null, what its <img> calls when it fails]. A picture
+// that does not load (gone, or not a picture) is dropped for good, and the tile shows its place's name as one saved
+// in the game does: a missing picture never paints a blank tile.
+function useTilePicture(entry, saved) {
+  const [broken, setBroken] = useState(null);                 // the picture URL that failed to load
+  const picture = saved && entry.picture && entry.picture !== broken ? entry.picture : null;
+  return [picture, () => setBroken(picture)];
 }
 
 // One slot: its picture, number and the loaded mark, then SavedMarks; a saved slot has its menu beside the
 // button (never inside it).
 function Tile({ link, entry, number, context, busy, disabled, press }) {
   const state = entry?.state || "unknown", saved = state === "saved";
+  const [picture, failed] = useTilePicture(entry, saved);
   const classes = ["ghost-lab-slot", `is-${state}`, entry?.loaded && "is-loaded", busy && "is-busy",
     entry?.set && `is-set-${entry.set}`].filter(Boolean);
   const label = tileLabel(entry, number);
   return html`<li class=${classes.join(" ")} data-slot=${number}>
     <button type="button" disabled=${disabled} aria-busy=${busy} aria-label=${label} title=${label} onclick=${press}>
-      ${saved && entry.picture && html`<img class="ghost-lab-slot-picture" src=${entry.picture} alt="" draggable="false" />`}
+      ${picture && html`<img class="ghost-lab-slot-picture" src=${picture} alt="" draggable="false"
+        onError=${failed} />`}
       <span class="ghost-lab-slot-top"><kbd>${number}</kbd>${entry?.loaded
         && html`<span class="ghost-lab-slot-loaded" aria-hidden="true">▶</span>`}</span>
-      ${saved && html`<${SavedMarks} entry=${entry} />`}
+      ${saved && html`<${SavedMarks} entry=${entry} pictured=${!!picture} />`}
     </button>
     ${saved && html`<${SlotMenu} link=${link} entry=${entry} context=${context} />`}
   </li>`;

@@ -18,7 +18,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from PIL import Image
+from PIL import Image, ImageStat
 from playwright.sync_api import sync_playwright
 
 import test_slot_library as libfakes
@@ -26,7 +26,7 @@ import test_ui_attempt_scene as attempt_scene
 from frontend_runner import run_frontend
 from sm64_events.slotlibrary.coursesets import CourseSets
 from sm64_events.slotlibrary.keeper import SetKeeper
-from sm64_events.slotlibrary.store import SlotLibrary
+from sm64_events.slotlibrary.store import JPEG_START, SlotLibrary
 from test_ui_scene_presets import _open, _placed
 from test_ui_scene_viewer import CAMERAS
 
@@ -53,6 +53,7 @@ def _rig(state: dict):
         for slot in (1, 3):
             sets.put(library, BOB, STAR, slot, kept[f"star {slot}"].id)
         library.put_picture(kept["star 3"].id, _frame_picture())
+        library.put_picture(kept["course 2"].id, JPEG_START + b"torn: not a picture" * 4)   # served, never drawn
         keeper = SetKeeper(library, sets, None, target=lambda: ("star", BOB, STAR))
         keeper.watch(game)
         keeper.apply(game)
@@ -87,6 +88,26 @@ def _keep_folder():
     """A person inspecting the strip names a folder; the screenshots are not otherwise kept."""
     named = os.environ.get("SM64_SLOT_SETS_SHOTS")
     return Path(named) if named else None
+
+
+def _brightness(page, slot: int) -> float:
+    """How light the tile looks on screen, 0 (black) to 255 (white): its pixels' mean."""
+    shot = Image.open(io.BytesIO(page.locator(f"{_tile(slot)} > button").screenshot())).convert("L")
+    return ImageStat.Stat(shot).mean[0]
+
+
+def _pictures(page) -> None:
+    """A tile shows its frame's picture only when the picture loads; one that does not (slot 2's file is torn) shows
+    its place's name like a tile with none (slots 1 and 8), and no tile paints a blank light square (the lead's
+    review: slot 3 once drew a planted all-white picture as a white tile)."""
+    page.locator(f"{_tile(2)} .ghost-lab-slot-place").wait_for(timeout=10000)
+    assert page.locator(f"{_tile(2)} img").count() == 0
+    assert page.locator(f"{_tile(2)} .ghost-lab-slot-place").inner_text() == "Bob-omb Battlefield"
+    for slot in (1, 8):
+        assert page.locator(f"{_tile(slot)} img").count() == 0, slot
+    page.wait_for_function(f"document.querySelector(\"{_tile(3)} img\")?.naturalWidth > 0", timeout=10000)
+    light = {slot: round(_brightness(page, slot)) for slot in (1, 2, 3, 8)}
+    assert all(value < 160 for value in light.values()), light
 
 
 def _marks(page, state) -> None:
@@ -172,6 +193,7 @@ def test_star_sets_on_the_strip_at_each_width(width, tmp_path, monkeypatch):
             _open(page, base)
             page.keyboard.press("ArrowRight")
             page.locator(f"{_tile(1)} .ghost-lab-slot-star").wait_for(timeout=20000)
+            _pictures(page)
             _marks(page, state)
             _layout(page)
             _menus(page, state, width, _keep_folder())

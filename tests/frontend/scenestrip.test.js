@@ -100,6 +100,17 @@ test("the tiles show the nine slots: picture or place, flag, ⇄, the loaded mar
   expect(five.querySelector("img, .ghost-lab-slot-place, .ghost-lab-slot-marks")).toBeNull();
 });
 
+test("a picture that does not load leaves the place's name, as a tile with none shows it", async () => {
+  setsAnswer = PLANTED;
+  const { container } = render(h(Strip, { link: makeLink() }));
+  const picture = (slot) => tile(container, slot).querySelector("img.ghost-lab-slot-picture");
+  await waitFor(() => expect(picture(1)).not.toBeNull());
+  fireEvent.error(picture(1));                                            // gone, or not a picture
+  await waitFor(() => expect(picture(1)).toBeNull());
+  expect(tile(container, 1).querySelector(".ghost-lab-slot-place").textContent).toBe("Bob-omb Battlefield");
+  expect(picture(2)).not.toBeNull();                                      // only that tile's
+});
+
 test("each tile names what is in it, its set and what a press does", async () => {
   setsAnswer = PLANTED;
   const { container } = render(h(Strip, { link: makeLink() }));

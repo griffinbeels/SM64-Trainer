@@ -21,11 +21,12 @@ measured. Restoring the readout sized by its digits turns this red (measured 202
 the play bar without its SteadyText). And as the page opens, no block stands emptier than a line.
 """
 import asyncio
-import base64
+import io
 import json
 from pathlib import Path
 
 from fastapi import APIRouter, Response
+from PIL import Image
 from playwright.sync_api import sync_playwright
 
 import scene_sound_fixture as sound_fixture
@@ -39,12 +40,21 @@ FRAME = "document.querySelector('.scene-lab-frame').textContent"
 BUILD = {"what": "scene", "stage": "re-simulating", "done": 131, "total": 318}
 WATCHED = "top-all-3"                        # the row made into a scene, slowly
 
-# A tiny JPEG (one flat colour) for the saved tiles' pictures.
-JPEG = base64.b64decode(
-    "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////"
-    "2wBDAf//////////////////////////////////////////////////////////////////////////////////////wAARCAAQABADASIAAhEBAxEB/8QAFQAB"
-    "AQAAAAAAAAAAAAAAAAAAAAf/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFAEBAAAAAAAAAAAAAAAAAAAAAP/EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhED"
-    "EQA/AKpgA//Z")
+
+
+def _frame_picture() -> bytes:
+    """A saved tile's picture as the lab keeps one: a small JPEG, colored stripes like the fake renderer's (never a
+    flat light square, which reads as a blank tile)."""
+    picture = Image.new("RGB", (160, 120))
+    for x in range(160):
+        for y in range(120):
+            picture.putpixel((x, y), ((x * 37) % 256, 255 - (x * 37) % 256, (x * 11) % 256))
+    out = io.BytesIO()
+    picture.save(out, "JPEG", quality=80)
+    return out.getvalue()
+
+
+JPEG = _frame_picture()
 
 
 def _slot(n: int, **fields) -> dict:
@@ -398,9 +408,35 @@ def _while_a_row_becomes_the_scene(page, shots: Path, measured: dict, seen: dict
     page.wait_for_function("!document.querySelector('.ghost-lab-play .ghost-lab-build')", timeout=20000)
 
 
-def measure_everything(tmp_path, monkeypatch, *, served=None) -> dict:
-    """Every width's boxes in every state, keyed by width then state. `served(page)` may change how the page is
-    served before it loads (a guard's mutation check)."""
+# The run you watch named three ways (its row to watch), then a planted name longer than any player's.
+NAMED = (("a long name", WATCHED), ("a short name", "top-all-4"), ("the longest name", "top-all-0"))
+PLANT_NAME = "(() => { document.querySelector('.ghost-lab-watching strong').textContent = 'W'.repeat(48); })()"
+
+
+def _bar_by_name(page) -> dict:
+    """The bar's height at every width while the run you watch has a long, a short and the longest name, and a
+    planted one longer than any, keyed by width then state. His words: "The UI should not be bouncing around"."""
+    heights = {width: {} for width in WIDTHS}
+    for state, ref in NAMED:
+        watch = page.locator(f"li.scene-lab-ghost[data-ref='{ref}'] > .ghost-lab-watch")
+        if watch.get_attribute("aria-pressed") != "true":
+            watch.click()
+        page.wait_for_function(f"document.querySelector(\"li.scene-lab-ghost[data-ref='{ref}'] > .ghost-lab-watch\")"
+                               "?.getAttribute('aria-pressed') === 'true'", timeout=20000)
+        for width in WIDTHS:
+            page.set_viewport_size({"width": width, "height": 1000})
+            heights[width][state] = _settle(page)["bar"][3]
+    page.evaluate(PLANT_NAME)
+    for width in WIDTHS:
+        page.set_viewport_size({"width": width, "height": 1000})
+        heights[width]["a planted name"] = _settle(page)["bar"][3]
+    return heights
+
+
+def measure_everything(tmp_path, monkeypatch, *, served=None) -> tuple[dict, dict]:
+    """Every width's boxes in every state, keyed by width then state, and the bar's height by the name of the run
+    you watch (_bar_by_name). `served(page)` may change how the page is served before it loads (a guard's mutation
+    check)."""
     shots = tmp_path / "shots"
     shots.mkdir()
     with attempt_scene._served(tmp_path, monkeypatch, lab_on=True, extra=_stubs(tmp_path)) as (base, seen), \
@@ -430,19 +466,24 @@ def measure_everything(tmp_path, monkeypatch, *, served=None) -> dict:
                 page.wait_for_timeout(200)
                 measured[width] = _states(page, shots, width)
             _while_a_row_becomes_the_scene(page, shots, measured, seen)
+            names = _bar_by_name(page)
             assert seen["saved"] == [5] * len(WIDTHS)
             assert errors == []
         finally:
             seen["release"] = True
             browser.close()
     (tmp_path / "steady-boxes.json").write_text(json.dumps(measured, indent=1), encoding="utf-8")
-    return measured
+    return measured, names
 
 
 def test_no_control_moves_or_resizes_when_another_changes_state(tmp_path, monkeypatch):
-    measured = measure_everything(tmp_path, monkeypatch)
+    measured, names = measure_everything(tmp_path, monkeypatch)
     moved = {width: _moved(states) for width, states in measured.items()}
     assert all(not rows for rows in moved.values()), json.dumps(moved, indent=1)[:6000]
+    for width, states in measured.items():             # the bar keeps its height whoever you watch (the lead's
+        heights = {"his own run": states["frame 1"]["bar"][3],      # review, 2026-11-08: at 850 it is two lines)
+                   "building": states["a row becoming the scene"]["bar"][3], **names[width]}
+        assert len(set(heights.values())) == 1, (width, heights)
     for width, states in measured.items():                             # the measure reached every part
         keys, camera = set(states["frame 1"]), set(states["camera tab"])
         for part in ("bar ", "play bar ", "strip ", "tab ", "player row "):
