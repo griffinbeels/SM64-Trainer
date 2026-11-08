@@ -27,16 +27,20 @@ Library keeps it; server/scene_moments.py takes it at the write).
 """
 from __future__ import annotations
 
+import json
 import logging
+import os
+import re
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from types import SimpleNamespace
 
 from sm64_events.memory.addresses import course_for_level, course_name, star_name
 from sm64_events.slotlibrary.atlas import AtlasStore
 from sm64_events.slotlibrary.coursesets import SLOTS, CourseSets, InstallReport, place_states
-from sm64_events.slotlibrary.store import Damaged, KeptState, SlotLibrary, state_id
+from sm64_events.slotlibrary.store import Damaged, KeptState, SlotLibrary, state_id, write_atomic
 from sm64_events.slotlibrary.usamune import (
     SLOT_COUNT,
     GameMemory,
@@ -55,6 +59,8 @@ log = logging.getLogger("sm64.slotlibrary")
 STAR_SIGNALS = frozenset({"target_changed", "star_collected"})
 LOAD_SIGNAL = "state_loaded"
 PICTURE_ROUTE = "/api/scene-lab/slot-sets/pictures/{id}"     # server/scene_lab_api.py serves it
+LEDGER_NAME, LEDGER_VERSION = "slot-ledger.json", 1            # in the Slot Library's folder
+_HEX_64 = re.compile(r"[0-9a-f]{64}")
 
 
 @dataclass(frozen=True)
@@ -92,28 +98,116 @@ def empty_view(game: dict | None = None) -> dict:
 
 
 class SlotLedger:
-    """For each slot (index 0-8), the kept state the Trainer last wrote there and the hash of the bytes written."""
+    """For each slot (index 0-8), the kept state the Trainer last wrote there and the hash of the bytes written.
 
-    def __init__(self):
+    With a path it lives on disk too, one entry per slot per Usamune build ("us", "jp"), so a server restart (he
+    restarts often) and another process that writes slots (the command line) still tell the Trainer's bytes from his:
+    each question first reads the file again when it changed. Without the file a restarted server took its own
+    earlier writes for his saves and stopped emptying another star's slots. A stale entry is harmless: it names a
+    hash, and a slot whose bytes changed no longer matches it. A file it cannot read is set aside, never trusted."""
+
+    def __init__(self, path: Path | None = None):
+        self.path = path
+        self.build: str | None = None              # whose slots these are; nothing is read or written until set
         self._slots: dict[int, tuple[str | None, str]] = {}
+        self._read_as: tuple[int, int] | None = None
+
+    def use_build(self, build: str) -> None:
+        """The running game's Usamune build: its slots' entries from the file."""
+        if build != self.build:
+            self.build, self._read_as = build, None
+            self._slots = {}
+            self._fresh()
+
+    def forget_build(self) -> None:
+        """Another game, or none: nothing is known until the next use_build."""
+        self.build, self._slots, self._read_as = None, {}, None
 
     def wrote(self, index: int, state: str | None, data: bytes) -> None:
+        self._fresh()
         self._slots[index] = (state, state_id(data))
+        self._save()
 
     def forget(self, index: int) -> None:
-        self._slots.pop(index, None)
+        self._fresh()
+        if self._slots.pop(index, None) is not None:
+            self._save()
 
     def ours(self, index: int, data: bytes) -> bool:
+        self._fresh()
         entry = self._slots.get(index)
         return entry is not None and entry[1] == state_id(data)
 
     def state_in(self, index: int, data: bytes) -> str | None:
         """The kept state these bytes are, when the Trainer wrote them; None when he has saved over them since."""
+        self._fresh()
         entry = self._slots.get(index)
         return entry[0] if entry is not None and entry[1] == state_id(data) else None
 
     def hashes(self) -> dict[int, str]:
+        self._fresh()
         return {index: digest for index, (_state, digest) in self._slots.items()}
+
+    # -- the file -----------------------------------------------------------------------------------------
+
+    def _stamp(self) -> tuple[int, int] | None:
+        try:
+            stat = self.path.stat()
+        except OSError:
+            return None
+        return stat.st_mtime_ns, stat.st_size
+
+    def _fresh(self) -> None:
+        """This build's entries as the file holds them, when it changed since the last read."""
+        if self.path is None or self.build is None:
+            return
+        stamp = self._stamp()
+        if stamp is None or stamp == self._read_as:
+            return
+        entries = self._read().get(self.build, {})
+        self._slots = {int(slot) - 1: (entry["state"], entry["hash"]) for slot, entry in entries.items()}
+        self._read_as = stamp
+
+    def _read(self) -> dict:
+        """{build: {slot "1"-"9": {state, hash}}}; an unreadable file is renamed .bad and reads as empty."""
+        try:
+            stored = json.loads(self.path.read_bytes())
+            builds = stored["builds"]
+            if stored.get("version") != LEDGER_VERSION or not all(
+                    isinstance(slots, dict) and all(_ledger_entry(slot, entry) for slot, entry in slots.items())
+                    for slots in builds.values()):
+                raise ValueError("not a version 1 slot ledger")
+            return builds
+        except FileNotFoundError:
+            return {}
+        except (OSError, ValueError, KeyError, TypeError, AttributeError, RecursionError) as error:
+            log.warning("Star sets: %s could not be read (%s); it is set aside as %s.", self.path.name, error,
+                        self.path.with_suffix(".bad.json").name)
+            try:
+                os.replace(self.path, self.path.with_suffix(".bad.json"))
+            except OSError:
+                pass
+            return {}
+
+    def _save(self) -> None:
+        if self.path is None or self.build is None:
+            return
+        builds = self._read()
+        builds[self.build] = {str(index + 1): {"state": state, "hash": digest}
+                              for index, (state, digest) in sorted(self._slots.items())}
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        write_atomic(self.path, json.dumps({"version": LEDGER_VERSION, "builds": builds}, indent=1).encode("utf-8"))
+        self._read_as = self._stamp()
+
+
+def _ledger_entry(slot: object, entry: object) -> bool:
+    return (isinstance(slot, str) and slot in {str(n) for n in SLOTS} and isinstance(entry, dict)
+            and (entry.get("state") is None or _HEX_64.fullmatch(str(entry.get("state"))) is not None)
+            and isinstance(entry.get("hash"), str) and _HEX_64.fullmatch(entry["hash"]) is not None)
+
+
+def ledger_path(library: SlotLibrary) -> Path:
+    return library.root / LEDGER_NAME
 
 
 @dataclass
@@ -134,7 +228,7 @@ class SetKeeper:
         self.library, self.sets, self.atlases = library, sets, atlases
         self.target, self.on_change = target, on_change
         self.lock = threading.RLock()
-        self.ledger = SlotLedger()
+        self.ledger = SlotLedger(ledger_path(library))
         self.context: Context | None = None      # where the game is now, as the last pass read it
         self.applied: Context | None = None      # the context the slots were last written for
         self.build: str | None = None            # the running game's version, as the last pass read it
@@ -192,6 +286,7 @@ class SetKeeper:
         context: write this one now, whatever the game says (the command line's set-install)."""
         build = check_cartridge(memory)
         self.build = build.version
+        self.ledger.use_build(build.version)
         if context is not None:
             self.context = context
         else:
@@ -264,7 +359,7 @@ class SetKeeper:
         """Another game, or none: the slots are unknown again, so the next watch takes stock before it assigns."""
         self._seen, self.applied, self.context, self._course = None, None, None, None
         self._loaded, self._load_seen = None, False
-        self.ledger = SlotLedger()
+        self.ledger.forget_build()                # the file keeps every build's entries; the next pass reads them
 
     def _note_load(self, memory: GameMemory, build, context: Context | None) -> bool:
         """After a state_loaded: the slot Usamune's load read, and the state the set names there. True when the
@@ -286,6 +381,7 @@ class SetKeeper:
         what the slots held before is not a save he just made."""
         build = check_cartridge(memory)
         self.build = build.version
+        self.ledger.use_build(build.version)
         context = self.locate(memory, build)
         loaded = self._note_load(memory, build, context)
         stock = self._seen is None

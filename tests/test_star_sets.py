@@ -210,6 +210,71 @@ def test_a_refit_after_a_reset_keeps_the_slot_its_set_state(game, library, sets)
     assert game.read(usamune.slot_address(4) + usamune.TRAILER_MARIO, 4) == bytes(4)
 
 
+def test_a_restart_still_empties_another_stars_slot_the_trainer_wrote(game, library, sets):
+    """He restarts often: a new keeper over the same Slot Library folder reads the ledger the last one wrote."""
+    three, five = keep(library, game, make_slot(0xB4)), keep(library, game, make_slot(0xB5))
+    sets.put(library, BOB, 3, 4, three.id)
+    sets.put(library, BOB, 5, 2, five.id)
+    before = stocked(game, library, sets, Target(("star", BOB, 3)))
+    before.apply(game)
+    assert game.slot(3) == make_slot(0xB4)
+    after = stocked(game, library, sets, Target(("star", BOB, 5)))      # the restarted server, star 5 picked
+    report = after.apply(game)
+    assert report.context == Context(BOB, 5) and report.emptied == [4] and report.written == [2]
+    assert after.watch(game) == [] and len(library.scan().states) == 2
+
+
+def test_a_restart_refits_the_trainers_slots_without_keeping_them_as_his_saves(game, library, sets):
+    """A state the command line installed (no set names it), then a restart and a practice reset."""
+    from sm64_events.slotlibrary.coursesets import place_states
+    from sm64_events.slotlibrary.keeper import SlotLedger, ledger_path
+    world.live_world(game)
+    state = keep(library, game, world.make_slot())
+    ledger = SlotLedger(ledger_path(library))
+    ledger.use_build("us")
+    place_states(game, library, {0: state.id})
+    ledger.wrote(0, state.id, game.slot(0))
+    after = stocked(game, library, sets)
+    refitter = refit.SlotRefitter(lambda: game, library, keeper=after, steady_seconds=0)
+    world.live_world(game, live=world.OBJ(77))              # a practice reset moved Mario
+    report = refitter.run_once(("practice_reset",))
+    assert [(o.slot, o.outcome) for o in report.slots] == [(0, refit.REFIT)]
+    assert len(library.scan().states) == 1, "the Trainer's own bytes are not a save of his"
+
+
+def test_the_command_lines_writes_never_fill_his_own_sets(game, library, sets, tmp_path, monkeypatch, capsys):
+    """The live try: a scratch sets file through the command line while his server runs. The server's watch reads
+    the ledger the command line wrote, so his course-sets.json fills only from his own play."""
+    sys.path.insert(0, str(ROOT / "tools" / "scene_lab"))
+    import slot_library as cli
+    monkeypatch.setattr(usamune, "attach", lambda _pid: game)
+    server = stocked(game, library, sets)
+    server.apply(game)
+    tried, other = keep(library, game, make_slot(0xB2)), keep(library, game, make_slot(0xB7))
+    root, scratch = ["--root", str(library.root)], ["--sets", str(tmp_path / "try-sets.json")]
+    assert cli.main([*root, *scratch, "set-put", "1", "--slot", "2", tried.id[:12]]) == 0
+    assert cli.main([*root, *scratch, "set-install", "1"]) == 0
+    assert cli.main([*root, "install", other.id[:12], "--slot", "6"]) == 0
+    assert game.slot(1) == make_slot(0xB2) and game.slot(6) == make_slot(0xB7)
+    assert server.watch(game) == [] and sets.courses() == {}, "his own sets are untouched"
+    assert CourseSets(tmp_path / "try-sets.json").slots(BOB, None) == {2: tried.id}
+    game.save(4, make_slot(0xE5))                           # his own save still joins his own set
+    assert [slot for slot, _ in server.watch(game)] == [5] and sets.slots(BOB, None) == {5: state_id(make_slot(0xE5))}
+
+
+def test_an_unreadable_ledger_is_set_aside_and_never_trusted(game, library, sets):
+    from sm64_events.slotlibrary.keeper import LEDGER_NAME
+    library.root.mkdir(parents=True, exist_ok=True)
+    (library.root / LEDGER_NAME).write_text('{"version": 1, "builds": {"us": {"4": {"hash": 7}}}}', encoding="utf-8")
+    state = keep(library, game, make_slot(0xA1))
+    sets.put(library, BOB, None, 1, state.id)
+    keeper = stocked(game, library, sets)
+    assert keeper.apply(game).written == [1]
+    assert (library.root / "slot-ledger.bad.json").exists()
+    stored = json.loads((library.root / LEDGER_NAME).read_text(encoding="utf-8"))
+    assert stored["version"] == 1 and stored["builds"]["us"]["1"]["state"] == state.id
+
+
 def test_the_worker_wakes_for_a_star_pick_only_with_a_keeper(game, library, sets):
     bare = refit.SlotRefitter(lambda: game, library)
     bare.observe(pick(BOB, 3))

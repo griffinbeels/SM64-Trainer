@@ -49,8 +49,12 @@ Contracts the tests pin:
   occupied word goes in; a change leaves the slot empty (`MarioMoved`). Only putting a backup back passes None.
 - **Relocated bytes are new bytes.** A slot's hash never names its kept state once the Trainer moved or translated
   it, so `keeper.SlotLedger` holds what the Trainer last wrote into each slot (the kept state and the bytes' hash).
-  The set write, the refit and the Ghost Lab write record there; the watch, the refit's keeping and the capture
-  before a write skip those bytes, or each reset would add a state per slot and every write would join a set.
+  The set write, the refit, the Ghost Lab write and the command line's `install`/`set-install` record there; the
+  watch, the refit's keeping and the capture before a write skip those bytes, or each reset would add a state per
+  slot and every write would join a set. The ledger lives on disk, `<library>/slot-ledger.json`, per Usamune build,
+  and every question reads it again when it changed: a restarted server still empties another star's slots, and a
+  command-line write never joins his sets. `slot_library.py --sets FILE` tries a set from a scratch file, so his
+  `course-sets.json` fills only from his own play.
 - **One worker, one lock.** The set write on a context change, the refit after a spawn and the watch for his saves
   run on the refitter's thread with its one reader, under `SetKeeper.lock`; the Ghost Lab's write takes the same
   lock. The set write runs before the refit in the same pass.

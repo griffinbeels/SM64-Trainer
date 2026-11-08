@@ -1,6 +1,6 @@
 """Drive the Slot Library from a command line (Ghost Handoff; the app's buttons do not exist yet).
 
-    uv run python tools/scene_lab/slot_library.py [--root DIR] [--pid P] COMMAND
+    uv run python tools/scene_lab/slot_library.py [--root DIR] [--sets FILE] [--pid P] COMMAND
 
     capture                     keep every occupied slot of the running game
     list                        every kept state, oldest first, and the course sets
@@ -15,7 +15,9 @@
 
 COURSE is the course number (Bob-omb Battlefield 1, Whomp's Fortress 2, ...); S the star as the Trainer counts it
 (0 is the course's first star). ID may be the start of an id. Only install and set-install write to game memory,
-each inside one slot's range.
+each inside one slot's range, and both record what they wrote in the slot ledger, so a running Trainer never takes
+those bytes for a save of his. --sets names the course sets file the set commands read and write (default
+course-sets.json in the library's folder): a scratch file tries a set without touching the sets his play fills.
 Import reads the game once for its Usamune fingerprint; with no game running it accepts the builds the library
 already holds.
 """
@@ -30,11 +32,11 @@ from sm64_events.core.paths import slot_library_dir
 from sm64_events.slotlibrary import usamune
 from sm64_events.slotlibrary.atlas import default_store
 from sm64_events.slotlibrary.coursesets import CourseSets, InstallReport, place_states
-from sm64_events.slotlibrary.keeper import Context, SetKeeper
+from sm64_events.slotlibrary.keeper import Context, SetKeeper, SlotLedger, ledger_path
 from sm64_events.slotlibrary.sharefile import export_state, import_state
 from sm64_events.slotlibrary.store import KeptState, SlotLibrary
 from sm64_events.slotlibrary.usamune import Refusal, WriteFailed, routine_fingerprint
-from sm64_events.slotlibrary.watcher import NEVER_SEEN, watch_step
+from sm64_events.slotlibrary.watcher import NEVER_SEEN, read_slot, watch_step
 
 
 def describe(state: KeptState) -> str:
@@ -107,6 +109,23 @@ def show_set(sets: CourseSets, course: int, star: int | None) -> int:
     return 0
 
 
+def install(args, library: SlotLibrary) -> int:
+    """One kept state into one slot. The slot ledger records it, so a running Trainer's star sets know the bytes are
+    the Trainer's and never take them for a save of his (which would put them into his own sets)."""
+    atlases, started = default_store(), time.perf_counter()
+    memory = usamune.attach(args.pid)
+    attached = time.perf_counter()
+    ledger = SlotLedger(ledger_path(library))
+    ledger.use_build(usamune.check_cartridge(memory).version)
+    report = place_states(memory, library, {args.slot: library.resolve(args.id)}, dry_run=args.dry_run,
+                          atlases=atlases, ours=ledger.hashes())
+    if not args.dry_run:
+        for placed in report.placements:
+            ledger.wrote(placed.slot, placed.state_id, read_slot(memory, placed.slot))
+    print_timing(started, attached, atlases)
+    return print_report(report, args.dry_run)
+
+
 def install_set(args, library: SlotLibrary, sets: CourseSets) -> int:
     keeper = SetKeeper(library, sets, default_store())
     report = keeper.apply(usamune.attach(args.pid), dry_run=args.dry_run, context=Context(args.course, args.star))
@@ -139,13 +158,7 @@ def run(args, library: SlotLibrary, sets: CourseSets) -> int:
         case "rename":
             print(describe(library.rename(library.resolve(args.id), args.name)))
         case "install":
-            atlases, started = default_store(), time.perf_counter()
-            memory = usamune.attach(args.pid)
-            attached = time.perf_counter()
-            report = place_states(memory, library, {args.slot: library.resolve(args.id)},
-                                  dry_run=args.dry_run, atlases=atlases)
-            print_timing(started, attached, atlases)
-            return print_report(report, args.dry_run)
+            return install(args, library)
         case "set-show":
             return show_set(sets, args.course, args.star)
         case "set-put":
@@ -168,6 +181,8 @@ def run(args, library: SlotLibrary, sets: CourseSets) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--root", type=Path, help="the library's folder; default the app's user data")
+    parser.add_argument("--sets", type=Path, help="the course sets file; default course-sets.json in the library's "
+                                                  "folder. A scratch file leaves his own sets as his play made them")
     parser.add_argument("--pid", type=int)
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("capture")
@@ -200,7 +215,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     root = args.root or slot_library_dir()
-    library, sets = SlotLibrary(root), CourseSets(root / "course-sets.json")
+    library, sets = SlotLibrary(root), CourseSets(args.sets or root / "course-sets.json")
     try:
         return run(args, library, sets)
     except (Refusal, WriteFailed) as error:
