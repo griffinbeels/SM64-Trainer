@@ -376,14 +376,17 @@ class WarmChild:
 
 def test_stages_are_warmed_in_his_order_once_each_in_the_background(recording, tmp_path, monkeypatch):
     """The lead's order (2026-11-08): the star he is looking at first, then the targets on a list he is looking at,
-    then his practice route's stars, then every other course and act; each once; one child at a time, started
-    at idle priority on one core (background=True); a segment warms nothing."""
+    then his practice route's stars, then every other stage, the ones without an act last (courses 16-24, the
+    arenas); each once; one child at a time, started at idle priority on one core (background=True); a segment
+    warms nothing."""
     from sm64_events.memory import version_probe
+    from sm64_events.server import scene_warm
     from sm64_events.server.scene_resim import SceneResim
     spawned, gate = [], threading.Event()
 
     def spawn(args, *, background=False):
-        spawned.append(((int(_value(args, "--course")), int(_value(args, "--act"))), background))
+        spawned.append(((int(_value(args, "--level")), int(_value(args, "--area")), int(_value(args, "--act"))),
+                        background))
         if len(spawned) > 1:
             gate.set()                                       # the rest run without waiting
         return WarmChild(gate)
@@ -404,15 +407,23 @@ def test_stages_are_warmed_in_his_order_once_each_in_the_background(recording, t
         client.get("/api/scene-lab/ghosts", params={"section": "top", "course": 5, "star": 0})        # a list
         client.get("/api/scene-lab/stage", params={"course": 2, "star": 2})                           # again
         client.get("/api/scene-lab/stage", params={"segment": 7})
+        client.get("/api/scene-lab/stage", params={"course": 17, "star": 0})                           # act-less
         gate.set()
         for _ in range(500):
-            if len(spawned) >= 90:
+            if len(spawned) >= len(scene_warm.rest()):
                 break
             threading.Event().wait(0.01)
         lab.resim.warmer.stop()
     keys = [key for key, _background in spawned]
-    assert keys[:5] == [(2, 3), (5, 1), (9, 6), (4, 1), (1, 1)]         # current, list, route (9:5, 4:0), rest
-    assert len(keys) == len(set(keys)) == 90 and all(background for _key, background in spawned)
+    wf, bitfs, bbh, ddd, ccm, bob = 24, 19, 4, 23, 5, 9     # levels of courses 2, 17, 5, 9, 4, 1 (memory/addresses.py)
+    assert keys[:6] == [(wf, 1, 3),                  # the star he opened first, already running
+                        (bitfs, 1, 1),               # the second star he opened (current beats the list)
+                        (bbh, 1, 1),                 # a target on the list he looked at
+                        (ddd, 1, 6), (ccm, 1, 1),    # his route: 9:5 and 4:0 (2:2 was made already)
+                        (bob, 1, 1)]                 # then the rest, course 1 act 1 first
+    assert keys[-3:] == [(30, 1, 1), (33, 1, 1), (34, 1, 1)]                        # the arenas end the rest
+    assert len(scene_warm.rest()) == 102 and len(keys) == len(set(keys)) == 102     # 90 acts, 9 courses, 3 arenas
+    assert all(background for _key, background in spawned)
 
 
 def test_a_click_joins_the_warm_of_its_own_stage_and_a_slow_game_holds_warming_back():
@@ -420,17 +431,17 @@ def test_a_click_joins_the_warm_of_its_own_stage_and_a_slow_game_holds_warming_b
     the stage again; while his game runs below its pace no warm starts."""
     from sm64_events.server import scene_warm
     gate, spawned = threading.Event(), []
-    warmer = scene_warm.StageWarmer(lambda course, act: spawned.append((course, act)) or WarmChild(gate))
-    warmer.ask(2, 3)
+    warmer = scene_warm.StageWarmer(lambda *stage: spawned.append(stage) or WarmChild(gate))
+    warmer.ask((24, 1, 3))
     for _ in range(200):
-        if warmer.running == (2, 3):
+        if warmer.running == (24, 1, 3):
             break
         threading.Event().wait(0.01)
     threading.Timer(0.3, gate.set).start()
     began = time.monotonic()
-    assert warmer.join((2, 3)) is True and time.monotonic() - began >= 0.25   # waited for the warm, then went on
+    assert warmer.join((24, 1, 3)) is True and time.monotonic() - began >= 0.25   # waited for the warm, then went on
     warmer.stop()
-    assert warmer.join((7, 1)) is False and (7, 1) in warmer.done              # nothing to join: the build makes it
+    assert warmer.join((22, 1, 1)) is False and (22, 1, 1) in warmer.done          # nothing to join: the build makes it
     clock, timer = [0.0], [1000]
     pace = scene_warm.GamePace(lambda: timer[0], clock=lambda: clock[0])
     for step in range(12):                                   # 2 s at 20 game frames a second: slow

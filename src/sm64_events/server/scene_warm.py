@@ -1,18 +1,26 @@
 """Stages made ahead, in the background, so a ghost's scene starts at once (lab only; scene_resim.py uses it).
 
 A stage from the cartridge alone costs ~6 s the first time (the cold boot, then the practice reset); a cached one
-~0.2 s. The warmer makes them before he asks, one course and act at a time, in this order (the lead's, 2026-11-08):
+~0.2 s. The warmer makes them before he asks, one stage (level, area, act) at a time, in this order (the lead's,
+2026-11-08):
 
     CURRENT  the star he is looking at (GET /stage)
     LIST     every target on a list he is looking at (GET /ghosts, GET /ghost: Top ghosts, the Library)
     ROUTE    his practice route's stars (the tracker's active route)
-    REST     every other course and act (courses 1-15, acts 1-6)
+    REST     every other stage: courses 1-15 x acts 1-6, then the stages without an act (the Bowser courses, the
+             slide, the cap courses, Wing Mario over the Rainbow, the aquarium, the three Bowser arenas): 102 in all
 
-Each course and act once per server run. One child at a time (ghost_resim's `warm` command), at idle priority pinned
-to one core, and suspended while his game runs slow (GamePace: the poller's own reads of the game clock, in
-process). A build he clicked joins a warm of its own course and act (join) instead of making the stage again.
-Disk: ~1.2 MB per course and act (90 of them ~110 MB), the boot RAM 1.2 MB, the packer's seed 23 MB per ROM, under
-the lab's resim/stages folder; not counted in GHOST FILES (ghost/storage.py) and never purged by it.
+The castle's own levels (the lobby, upstairs, the basement, the grounds, the courtyard) are not made ahead: the
+recipe's painting entry (warp node 0x0A) is no entry there (in the lobby it leads on into the slide, the basement
+has none and the game stops, the grounds drop him into the moat) and Usamune's practice reset is not shown to be one
+in a hub, so a castle secret star's or a castle movement's ghost starts from his own scene, a start file or another
+take of his (measured 2026-11-08).
+
+Each stage once per server run. One child at a time (ghost_resim's `warm` command), at idle priority pinned to one
+core, and suspended while his game runs slow (GamePace: the poller's own reads of the game clock, in process). A
+build he clicked joins a warm of its own stage (join) instead of making it again. Disk: ~1.2 MB per stage (~125 MB
+for all 102), the boot RAM 1.2 MB, the packer's seed 23 MB per ROM, under the lab's resim/stages folder; not
+counted in GHOST FILES (ghost/storage.py) and never purged by it.
 """
 from __future__ import annotations
 
@@ -32,6 +40,28 @@ WARM_SECONDS = 120.0               # a stuck warm is ended (a cold one takes ~8-
 JOIN_SECONDS = 60.0                # how long a click waits for the warm of its own stage
 CHECK_SECONDS = 0.5                # how often a running warm looks at his game's pace
 MAIN_COURSES, ACTS = range(1, 16), range(1, 7)
+ARENAS = (30, 33, 34)              # the Bowser fights' levels (memory/addresses.py leaves them without a course)
+
+
+def stage_of(course: int | None, star: int | None) -> tuple[int, int, int] | None:
+    """A star target's stage (level, area, act): a main course's stars 1-6 are its acts; its 100-coin star, and every
+    star of a course without an act selector, take act 1 (what a ghost there builds from). None for a castle star
+    (course 0) and anything else without a course level (memory/addresses.py COURSE_BY_LEVEL)."""
+    from sm64_events.memory.addresses import COURSE_BY_LEVEL
+    level = next((level for level, owner in COURSE_BY_LEVEL.items() if owner == course), None)
+    if level is None or star is None:
+        return None
+    return level, 1, star + 1 if 1 <= course <= 15 and 0 <= star <= 5 else 1
+
+
+def rest() -> list[tuple[int, int, int]]:
+    """Every stage the warmer makes after the ones he is looking at, in order: courses 1-15 x acts 1-6, then the
+    stages without an act (courses 16-24, then the arenas)."""
+    from sm64_events.memory.addresses import COURSE_BY_LEVEL
+    by_course = {course: level for level, course in COURSE_BY_LEVEL.items()}
+    stages = [(by_course[course], 1, act) for course in MAIN_COURSES for act in ACTS]
+    stages += [(by_course[course], 1, 1) for course in sorted(by_course) if course > max(MAIN_COURSES)]
+    return stages + [(level, 1, 1) for level in ARENAS]
 
 
 class GamePace:
@@ -90,33 +120,32 @@ def _priority(child: subprocess.Popen, below_normal: bool) -> None:
 
 
 class StageWarmer:
-    """The ordered queue and its one background child. `spawn(course, act)` starts the child (scene_resim builds
-    its arguments); `pace` is a GamePace or None."""
+    """The ordered queue and its one background child. `spawn(level, area, act)` starts the child (scene_resim builds
+    its arguments); `pace` is a GamePace or None; `route()` gives his route's "course:star" keys."""
 
     def __init__(self, spawn, *, pace: GamePace | None = None, route=None):
         self.spawn, self.pace, self.route = spawn, pace, route
         self.lock = threading.Lock()
-        self.queued: dict[tuple[int, int], tuple[int, int]] = {}   # (course, act) -> (tier, order)
-        self.done: set[tuple[int, int]] = set()                    # warmed or tried this run (or made by a build)
+        self.queued: dict[tuple[int, int, int], tuple[int, int]] = {}   # stage -> (tier, order)
+        self.done: set[tuple[int, int, int]] = set()                    # warmed or tried this run (or a build's)
         self.order = itertools.count()
-        self.running: tuple[int, int] | None = None
+        self.running: tuple[int, int, int] | None = None
         self.child: subprocess.Popen | None = None
         self.joined = threading.Event()
         self.finished = threading.Condition(self.lock)
         self.worker: threading.Thread | None = None
         self.stopped = threading.Event()
         self.started_rest = False
-        self.log: list[tuple[int, int]] = []                       # the order warms ran in (tests, the report)
+        self.log: list[tuple[int, int, int]] = []                       # the order warms ran in (tests, the report)
 
-    def ask(self, course: int | None, act: int | None, tier: int = CURRENT) -> None:
-        """Queues that course and act at `tier` (a better tier moves it forward); starts the worker."""
-        if course is None or act is None:
-            return
-        self.ask_many([(course, act)], tier)
+    def ask(self, stage: tuple[int, int, int] | None, tier: int = CURRENT) -> None:
+        """Queues that stage at `tier` (a better tier moves it forward); starts the worker."""
+        if stage is not None:
+            self.ask_many([stage], tier)
 
-    def ask_many(self, pairs, tier: int) -> None:
+    def ask_many(self, stages, tier: int) -> None:
         with self.lock:
-            for key in pairs:
+            for key in stages:
                 if key in self.done or key == self.running:
                     continue
                 known = self.queued.get(key)
@@ -126,7 +155,7 @@ class StageWarmer:
                 self.started_rest = True
                 for key in self._route():
                     self.queued.setdefault(key, (ROUTE, next(self.order)))
-                for key in ((course, act) for course in MAIN_COURSES for act in ACTS):
+                for key in rest():
                     self.queued.setdefault(key, (REST, next(self.order)))
                 for key in self.done:
                     self.queued.pop(key, None)
@@ -134,28 +163,29 @@ class StageWarmer:
                 self.worker = threading.Thread(target=self._work, name="resim-warm", daemon=True)
                 self.worker.start()
 
-    def _route(self) -> list[tuple[int, int]]:
+    def _route(self) -> list[tuple[int, int, int]]:
         try:
             keys = self.route() if self.route is not None else []
         except Exception:  # noqa: BLE001 - no route, no route tier
             return []
-        pairs = []
+        stages = []
         for key in keys or []:
             try:
                 course, star = (int(part) for part in str(key).split(":"))
             except ValueError:
                 continue
-            if 1 <= course <= 15 and 0 <= star <= 5:
-                pairs.append((course, star + 1))
-        return pairs
+            stage = stage_of(course, star)
+            if stage is not None:
+                stages.append(stage)
+        return stages
 
-    def made(self, key: tuple[int, int]) -> None:
+    def made(self, key: tuple[int, int, int]) -> None:
         """A build made that stage itself: nothing to warm."""
         with self.lock:
             self.done.add(key)
             self.queued.pop(key, None)
 
-    def join(self, key: tuple[int, int] | None) -> bool:
+    def join(self, key: tuple[int, int, int] | None) -> bool:
         """A click on a ghost of `key`: a running warm of it is raised to his priority and waited for (True); a
         queued one is dropped (the build makes the stage). False when there was nothing to join."""
         if key is None:
@@ -183,7 +213,7 @@ class StageWarmer:
         if child is not None and child.poll() is None:
             child.kill()
 
-    def _next(self) -> tuple[int, int] | None:
+    def _next(self) -> tuple[int, int, int] | None:
         with self.lock:
             if not self.queued or self.stopped.is_set():
                 self.running = None
@@ -205,7 +235,7 @@ class StageWarmer:
             try:
                 child = self.spawn(*key)
             except Exception as error:  # noqa: BLE001 - a warm that cannot start is skipped
-                log.info("The stage of course %s act %s could not be warmed: %s", *key, error)
+                log.info("The stage of level %s area %s act %s could not be warmed: %s", *key, error)
                 child = None
             with self.lock:
                 self.child = child
@@ -215,7 +245,7 @@ class StageWarmer:
                 self.child, self.running = None, None
                 self.finished.notify_all()
 
-    def _watch(self, child: subprocess.Popen, key: tuple[int, int]) -> None:
+    def _watch(self, child: subprocess.Popen, key: tuple[int, int, int]) -> None:
         """Waits for the child (its pipes read on a thread of their own, so it never blocks on them), suspended
         while his game runs slow, unless a click joined it."""
         said: list = []
@@ -239,4 +269,4 @@ class StageWarmer:
             answer = json.loads(line[0]) if line[0].startswith("{") else {"error": line[0]}
         except ValueError:
             answer = {"error": line[0]}
-        log.info("stage warmed (course %s act %s): %s", *key, answer)
+        log.info("stage warmed (level %s area %s act %s): %s", *key, answer)

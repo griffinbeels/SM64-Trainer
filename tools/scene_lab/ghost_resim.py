@@ -174,8 +174,9 @@ def words_match(words: dict, clip) -> bool:
 
 def words_reset(words: dict, first) -> bool:
     """A scene that begins with Usamune's practice reset in this ghost's level and area: the reset button
-    held and Mario in the spawn action (a take that begins any other way is mid-play or mid-warp)."""
-    return (words["level"], words["area"]) == (first.level, first.area) and words["action"] == stage_sim.SPAWN_ACTION \
+    held and Mario in a spawn action, his level's own (stage_sim.SPAWN_ACTIONS; a take that begins any other way
+    is mid-play or mid-warp)."""
+    return (words["level"], words["area"]) == (first.level, first.area) and words["action"] in stage_sim.SPAWN_ACTIONS \
         and bool((words["buttons"] or 0) & stage_sim.RESET_BUTTON)
 
 
@@ -552,13 +553,12 @@ def check_slot_load(package_path: Path, frame: int, slot: bytes, clip, stages: s
     return {"ok": True, "reason": None, "frames": played, "compared": compared}
 
 
-def warm(stages: stage_sim.Stages, course: int, area: int, act: int, scenes: GhostScenes | None = None) -> dict:
-    """What a first build of that course and act would make before its first frame, made ahead (the server's
+def warm(stages: stage_sim.Stages, level: int, area: int, act: int, scenes: GhostScenes | None = None) -> dict:
+    """What a first build of that stage would make before its first frame, made ahead (the server's
     background child, scene_resim.warm): the practice reset, the boot RAM, the packer's seed of the ROM and that
     level's ROM windows, and his scenes' first frames read (scene-probes.json)."""
     began = time.perf_counter()
     kept = sum(1 for _scene in scenes._scenes()) if scenes is not None else 0
-    level = stages.level_of_course(course)
     stages.reset(level, area, act)
     # A few frames of that stage packed and thrown away: the packer's seed then knows that level's ROM windows
     # (its first frames otherwise search the ROM: ~0.8 s of a first build, 2026-11-08).
@@ -604,6 +604,7 @@ def main(argv=None) -> int:
     parser.add_argument("--scene")
     parser.add_argument("--act", type=int)
     parser.add_argument("--course", type=int)
+    parser.add_argument("--level", type=int)
     parser.add_argument("--area", type=int, default=1)
     parser.add_argument("--frames", type=int, default=150)
     parser.add_argument("--package")
@@ -629,7 +630,8 @@ def main(argv=None) -> int:
                                "start": SIMULATED_RESET, "first_record": 0, "parting_frame": None,
                                "exact": EXACT[SIMULATED_RESET], "save_states": save_states(SIMULATED_RESET)}}
         elif args.command == "warm":
-            answer = warm(stages, args.course, args.area, args.act or 1,
+            level = args.level if args.level is not None else stages.level_of_course(args.course)
+            answer = warm(stages, level, args.area, args.act or 1,
                           GhostScenes(Path(args.lab_root), Path(args.cache), scenes_dir=[Path(folder) for folder in args.scenes],
                                       starts_dir=None, stages=stages))
         elif args.command == "check-slot":

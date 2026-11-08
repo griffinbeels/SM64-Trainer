@@ -116,14 +116,17 @@ def act_of_target(target) -> int | None:
     return star + 1 if 1 <= course <= 15 and 0 <= star <= 5 else None
 
 
-def stage_of_target(target, act: int | None) -> tuple[int, int] | None:
-    """(course, act) of a star ghost's stage, the warmer's key; None where the target names no course and act."""
-    if act is None or not isinstance(target, dict) or target.get("kind") != "star":
+def stage_of_target(target) -> tuple[int, int, int] | None:
+    """(level, area, act) of a star ghost's stage, the warmer's key (scene_warm.stage_of); None where the target names
+    no course level."""
+    from sm64_events.server.scene_warm import stage_of
+    if not isinstance(target, dict) or target.get("kind") != "star":
         return None
     try:
-        return int(str(target.get("entity_key", "")).split("-")[0]), act
+        course, star = (int(part) for part in str(target.get("entity_key", "")).split("-"))
     except ValueError:
         return None
+    return stage_of(course, star)
 
 
 class SceneResim:
@@ -266,7 +269,7 @@ class SceneResim:
         act = act or act_of_target(loaded.get("target"))
         if not progressive:
             return self.clip_scene_blocking(loaded["clip"], act=act)
-        return self._progressive(ref, loaded["clip"], act, stage_of_target(loaded.get("target"), act))
+        return self._progressive(ref, loaded["clip"], act, stage_of_target(loaded.get("target")))
 
     def is_building(self, ref) -> bool:
         build = self.building
@@ -296,7 +299,7 @@ class SceneResim:
                     path.unlink(missing_ok=True)
         return True
 
-    def _progressive(self, ref, clip: bytes, act: int | None, stage: tuple[int, int] | None):
+    def _progressive(self, ref, clip: bytes, act: int | None, stage: tuple[int, int, int] | None):
         running = self.building
         if running is not None and running.ref == ref and not running.done.is_set():
             build = running                           # the same ghost again: join its build
@@ -415,22 +418,23 @@ class SceneResim:
                               "--act", str(act), "--frames", str(frames)])
         return Path(answer["path"]), answer["info"]
 
-    def warm(self, course: int | None, act: int | None, tier: int | None = None) -> None:
-        """That course and act's stage made ahead, in the background (scene_warm.StageWarmer: its order, its one
-        idle child on one core, paused while his game runs slow). Never waits for anything."""
-        if self.stopped.is_set():
+    def warm(self, course: int | None, star: int | None, tier: int | None = None) -> None:
+        """That star's stage made ahead, in the background (scene_warm.StageWarmer: its order, its one idle child on
+        one core, paused while his game runs slow). Never waits for anything."""
+        if self.stopped.is_set() or course is None:
             return
         from sm64_events.server import scene_warm
-        self.warmer.ask(course, act, scene_warm.CURRENT if tier is None else tier)
+        self.warmer.ask(scene_warm.stage_of(course, star), scene_warm.CURRENT if tier is None else tier)
 
-    def _spawn_warm(self, course: int, act: int) -> subprocess.Popen:
+    def _spawn_warm(self, level: int, area: int, act: int) -> subprocess.Popen:
         config = self._config()
         with Path(config.rom).open("rb") as handle:
             header = handle.read(0x40)
         from sm64_events.memory.version_probe import version_from_header
         if version_from_header(header) is None:
             raise ResimRefused("The lab's ROM is not a cartridge a stage can be made from.")
-        args = ["warm", *self._common(config), "--course", str(course), "--act", str(act), *self._scene_args()]
+        args = ["warm", *self._common(config), "--level", str(level), "--area", str(area), "--act", str(act),
+                *self._scene_args()]
         return self._spawn(args, background=True)             # the warmer owns it: it ends it at shutdown
 
     def _route_stars(self) -> list[str]:
