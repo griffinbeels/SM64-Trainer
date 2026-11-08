@@ -45,6 +45,19 @@ DRAWN = "!!document.querySelector('.scene-lab-readout')"
 STAND_IN = "window.__pointerLockStandIn?.armed() === true"
 
 
+def camera_tab(page) -> None:
+    """The tray's Camera tab (round 9: every camera control lives there; Ghosts is open first)."""
+    page.get_by_role("tab", name=re.compile(r"^Camera")).click()
+    page.locator("#ghost-lab-panel-camera:not([hidden])").wait_for(timeout=5000)
+
+
+def more_menu(page) -> None:
+    """The bar's More menu (picture quality, numbers, Tune controls, keys, the lab's recordings), open."""
+    if page.get_by_role("button", name="More").get_attribute("aria-expanded") != "true":
+        page.get_by_role("button", name="More").click()
+    page.locator(".ghost-lab-more-pop:not([hidden])").wait_for(timeout=5000)
+
+
 def _hold(page, key: str, ms: int = 400) -> list:
     """Holds `key` with no button down and answers the free cameras asked for meanwhile."""
     before = page.evaluate("window.__cameras.length")
@@ -65,6 +78,7 @@ def _shoot(page, folder: Path, state: str) -> None:
 
 def _mouse_pick_hands_the_keyboard_back(page) -> None:
     """A Pictures choice made with the mouse: E then flies up, and never picks "Exact pixels" by its letter."""
+    more_menu(page)
     pictures = page.locator(".scene-lab-quality select")
     for choice in ("raw", "jpeg"):
         pictures.click()
@@ -77,6 +91,7 @@ def _mouse_pick_hands_the_keyboard_back(page) -> None:
 
 def _fields_keep_their_keys(page) -> None:
     """The tuning panel's number field and a contenteditable keep W; a mouse click on Tune controls does not."""
+    more_menu(page)
     page.get_by_role("button", name="Tune controls").click()
     assert page.evaluate(HAS_KEYBOARD)
     page.locator(".scene-lab-tune #flightSpeed").focus()
@@ -117,13 +132,14 @@ def test_arriving_gives_the_viewer_the_keyboard_and_w_flies_with_no_button(tmp_p
             box = page.locator(".scene-lab canvas").bounding_box()
             page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
             page.mouse.down(button="right")
-            page.wait_for_function("document.querySelector('.scene-lab-hint').textContent.includes('Move the mouse')")
+            # The keys while looking, on the picture itself (round 9: the hint paragraph under the camera is gone).
+            page.wait_for_function("document.querySelector('.scene-lab-cue')?.textContent.includes('W A S D move')")
             _shoot(page, tmp_path, "looking")
             page.mouse.up(button="right")
 
             # From the sidebar: away and back, the open scene comes back with the keyboard.
             page.locator('.nav-item[title="Practice"]:visible').click()
-            page.locator('.nav-item[title="Scene viewer"]:visible').click()
+            page.locator('.nav-item[title="Ghost Lab"]:visible').click()
             page.wait_for_function(DRAWN, timeout=20000)
             assert page.evaluate(HAS_KEYBOARD)
             slid = _hold(page, "d")
@@ -138,14 +154,22 @@ def test_arriving_gives_the_viewer_the_keyboard_and_w_flies_with_no_button(tmp_p
             browser.close()
 
 
-# The transport's buttons as drawn, left to right, and whether the bar scrolls sideways.
+# The play bar's buttons as drawn, left to right (each one's name: its label for a reader, else its words),
+# and whether the bar scrolls sideways.
 TRANSPORT_ROW = """(() => {
   const bar = document.querySelector('.scene-lab-bar[aria-label=Playback]');
   return { overflow: bar.scrollWidth - bar.clientWidth, buttons: [...bar.querySelectorAll('button')].map((b) => {
     const r = b.getBoundingClientRect();
-    return { name: b.textContent.trim(), top: Math.round(r.top), height: Math.round(r.height) }; }) };
+    return { name: b.getAttribute('aria-label') || b.textContent.trim(), top: Math.round(r.top * 100) / 100,
+      height: Math.round(r.height * 100) / 100 }; }) };
 })()"""
 PLAYING = "[...document.querySelectorAll('.scene-lab-bar button')].some((b) => b.textContent.trim() === 'Pause')"
+PLAY_BAR = ["Restart", "Back to the last action change", "Back 1", "Play", "Forward 1", "On to the next action change",
+            "1x", "½x", "¼x", "Loop", "Sound"]
+
+
+def _spread(buttons: list, key: str) -> float:
+    return max(button[key] for button in buttons) - min(button[key] for button in buttons)
 
 
 def _transport_fits_and_the_title_names_the_attempt(page, folder: Path) -> None:
@@ -153,13 +177,17 @@ def _transport_fits_and_the_title_names_the_attempt(page, folder: Path) -> None:
         page.set_viewport_size({"width": width, "height": 1000})
         page.wait_for_timeout(100)
         row = page.evaluate(TRANSPORT_ROW)
-        assert [b["name"] for b in row["buttons"]] == ["Restart", "Back 1", "Play", "Forward 1", "Loop"], row
-        assert len({b["top"] for b in row["buttons"]}) == 1, row          # one row
-        assert len({b["height"] for b in row["buttons"]}) == 1, row       # one weight
+        assert [b["name"] for b in row["buttons"]] == PLAY_BAR, row
+        # One row (the slider may wrap) of one weight: within half a pixel (the Play speed's segments are
+        # 34.5 px against the rest's 34, measured 2026-11-08; no one sees half a pixel).
+        tops = [(b["name"], b["top"], b["height"]) for b in row["buttons"]]
+        assert _spread(row["buttons"], "top") <= 0.5 and _spread(row["buttons"], "height") <= 0.5, f"{width}: {tops}"
         assert row["overflow"] <= 0, row
-        title = page.locator(".scene-lab-title").inner_text()
+        # The run on screen sits in the bar; the scene's whole title (course, star, strategy, time) on hover.
+        title = page.locator(".ghost-lab-watching").get_attribute("title")
         assert title.count(" · ") == 3, title
-        assert "sm64scene" not in page.locator(".scene-lab .workshop-hero").inner_text()
+        assert "sm64scene" not in page.locator(".ghost-lab-top").inner_text()
+        assert page.locator(".scene-lab .workshop-hero").count() == 0   # the old title row is gone
         page.locator(".scene-lab-player").screenshot(path=str(folder / f"scene-transport-{width}.png"))
 
 
@@ -265,6 +293,7 @@ def test_hud_off_reaches_the_lab_on_every_picture_and_is_remembered(tmp_path, mo
             page.wait_for_function(DRAWN, timeout=20000)
             page.wait_for_function(f"!({PLAYING})", timeout=20000)
             assert {hud for _id, hud in page.evaluate("window.__huds.asked")} == {None}   # on: the lab's default
+            camera_tab(page)
             hud = page.get_by_role("button", name="HUD")
             assert hud.get_attribute("aria-pressed") == "true"
             asked = page.evaluate("window.__huds.asked.length")
@@ -279,8 +308,9 @@ def test_hud_off_reaches_the_lab_on_every_picture_and_is_remembered(tmp_path, mo
             assert len(answers) == 2 and all(hud is False or reason for _id, hud, reason in answers), huds   # cut, or why not
             _shoot(page, tmp_path, "hud-off")
             page.locator('.nav-item[title="Practice"]:visible').click()
-            page.locator('.nav-item[title="Scene viewer"]:visible').click()
+            page.locator('.nav-item[title="Ghost Lab"]:visible').click()
             page.wait_for_function(DRAWN, timeout=20000)
+            camera_tab(page)
             assert page.get_by_role("button", name="HUD").get_attribute("aria-pressed") == "false"
             assert page.evaluate("window.__huds.asked.at(-1)[1]") is False
             assert errors == []

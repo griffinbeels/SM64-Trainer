@@ -262,10 +262,10 @@ def test_every_row_wears_its_scene_state_beside_play_without_wrapping(width, tmp
             shown = _measure(page)
             ghosts = [row["ghost"] for row in shown["rows"]]
             states = sorted({(g["disabled"], g["title"]) for g in ghosts if g})
-            assert (False, "Open in Scene viewer") in states and (True, "Scene finishing…") in states
+            assert (False, "Open in Ghost Lab") in states and (True, "Scene finishing…") in states
             assert (True, NO_CAPTURE) in states
             assert None in ghosts                                   # an attempt the lab does not know
-            assert all(g["first"] and g["label"] == "Open in Scene viewer" for g in ghosts if g)
+            assert all(g["first"] and g["label"] == "Open in Ghost Lab" for g in ghosts if g)
             for row in shown["rows"]:
                 assert len(set(row["tops"])) == 1, row              # one line of buttons: nothing wrapped
                 assert row["right"] <= shown["card"][1], row        # nothing clipped past the card
@@ -304,7 +304,7 @@ def test_one_click_opens_the_attempt_in_the_scene_viewer_and_plays_it(tmp_path, 
             page.wait_for_function("window.__scene.pause != null && window.__scene.draws.length >= 2", timeout=20000)
             page.wait_for_function("window.__scene.sends.some(([, frame]) => frame > 0)", timeout=20000)
             at = json.loads(page.evaluate("JSON.stringify(window.__scene)"))
-            assert page.locator(".nav-item.on").inner_text().strip() == "Scene viewer"
+            assert page.locator(".nav-item.on").inner_text().strip() == "Ghost Lab"
             assert [body for body in seen["opened"]] == [{"attempt": seen["opened"][0]["attempt"]}]
             assert seen["opened"][0]["attempt"] % 4 == READY
             frames = [frame for _, frame in at["sends"]]
@@ -333,6 +333,6 @@ def test_with_the_lab_off_no_row_asks_or_draws_a_ghost_button(tmp_path, monkeypa
             page.wait_for_timeout(1500)
             assert page.locator(".attempt-scene").count() == 0
             assert not [url for url in asked if "attempt-scenes" in url]
-            assert page.locator(".nav-item", has_text="Scene viewer").count() == 0
+            assert page.locator(".nav-item", has_text="Ghost Lab").count() == 0
         finally:
             browser.close()

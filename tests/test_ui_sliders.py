@@ -64,14 +64,18 @@ KINDS = [
     ("ghost-colour", ("components/ghostswitch.js", 4), "index.html",
      '<div class="ghost-field ghost-colour"><span class="ghost-field-name">Colour</span>{input}'
      '<span class="ghost-field-value">250°</span></div>', 'class="ghost-hue" min="0" max="359" step="1"'),
-    ("scene-frame", ("components/sceneviewer.js", 0), "index.html",
-     '<div class="scene-lab" style="width:900px"><div class="scene-lab-bar"><button type="button">Back 1</button>'
-     '<button type="button" class="primary">Play</button><button type="button">Forward 1</button>{input}'
-     '<span class="scene-lab-frame">Frame 120 of 120<small>level 9, area 1</small></span></div></div>',
+    ("scene-frame", ("components/sceneplaybar.js", 0), "index.html",
+     '<div class="scene-lab" style="width:900px"><div class="scene-lab-bar ghost-lab-play">'
+     '<div class="ghost-lab-play-steps"><button type="button">Back 1</button>'
+     '<button type="button" class="primary ghost-lab-play-main">Play</button><button type="button">Forward 1</button>'
+     '</div><div class="scene-lab-scrub">{input}<span class="scene-lab-frame">Frame 120 of 120<small>Mario: walking'
+     '</small></span></div><div class="ghost-lab-play-end"><button type="button">Loop</button></div></div></div>',
      'min="0" max="119"'),
     ("scene-volume", ("components/sceneaudio.js", 0), "index.html",
-     '<div class="scene-lab" style="width:900px"><div class="scene-lab-bar scene-lab-sound">'
-     '<button type="button">Mute</button>{input}<span class="scene-lab-sound-note">sound</span></div></div>',
+     '<div class="scene-lab" style="width:900px"><span class="ghost-lab-sound" style="position:relative;display:block;'
+     'height:160px"><div class="ghost-lab-pop ghost-lab-sound-pop" style="position:static">'
+     '<div class="scene-lab-bar scene-lab-sound"><button type="button">Mute</button>{input}'
+     '<span class="scene-lab-sound-note">sound</span></div></div></span></div>',
      'min="0" max="1" step="0.01"'),
     ("scene-rig", ("components/scenerigs.js", 0), "index.html",
      '<div class="scene-lab" style="width:900px"><div class="scene-lab-bar scene-lab-rig-options">'

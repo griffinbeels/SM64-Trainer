@@ -1,5 +1,5 @@
-"""Record in the Scene viewer (M4 round 6, item 3): the timeline the page keeps and the Record row's
-flow, in jsdom (tests/frontend/scenerecord.test.js), and the row on the real page through the UI
+"""Record in the Ghost Lab (M4 round 6, item 3; round 9: the Camera tab's Film row): the timeline the page
+keeps and the Record row's flow, in jsdom (tests/frontend/scenerecord.test.js), and the row on the real page through the UI
 fixture: Record, Stop, the video made by the real export child (over fake_viewer_host.py and the
 "frames" encoder), and "Show in folder", at 850 and 1280 pixels. The export's own checks are
 tests/test_scene_export.py; the video on the real renderer is the round's GPU check.
@@ -11,21 +11,23 @@ from playwright.sync_api import sync_playwright
 
 import test_ui_attempt_scene as attempt_scene
 from frontend_runner import run_frontend
+from test_ui_scene_viewer import camera_tab
 
 
 def test_the_page_keeps_one_entry_per_display_frame_and_ends_at_show_in_folder():
     run_frontend("scenerecord.test.js")
 
 
-# The Record row as drawn: its controls, whether it scrolls sideways, and the transport's button height.
+# The Record row as drawn (in the Camera tab's Film row): its controls, whether it scrolls sideways, and the
+# play bar's button height.
 RECORD_ROW = """(() => {
   const row = document.querySelector('.scene-lab-record');
   const play = document.querySelector('.scene-lab-bar[aria-label=Playback] button').getBoundingClientRect();
   return { overflow: row.scrollWidth - row.clientWidth, text: row.textContent.replace(/\\s+/g, ' ').trim(),
-    playHeight: Math.round(play.height), buttons: [...row.querySelectorAll('button')].map((b) => ({
-      name: b.textContent.trim(), height: Math.round(b.getBoundingClientRect().height), disabled: b.disabled })),
+    playHeight: Math.round(play.height * 100) / 100, buttons: [...row.querySelectorAll('button')].map((b) => ({
+      name: b.textContent.trim(), height: Math.round(b.getBoundingClientRect().height * 100) / 100, disabled: b.disabled })),
     right: Math.round(row.getBoundingClientRect().right),
-    card: Math.round(document.querySelector('.scene-lab-player').getBoundingClientRect().right) };
+    card: Math.round(document.querySelector('.ghost-lab-tray').getBoundingClientRect().right) };
 })()"""
 
 
@@ -35,17 +37,18 @@ def _row(page) -> dict:
 
 def _fits(row: dict) -> None:
     assert row["overflow"] <= 0 and row["right"] <= row["card"], row
-    assert all(button["height"] == row["playHeight"] for button in row["buttons"]), row   # the transport's weight
+    # The play bar's weight, to half a pixel (Stop, with its dot, is 34.5 px against 34, measured 2026-11-08).
+    assert all(abs(button["height"] - row["playHeight"]) <= 0.5 for button in row["buttons"]), row
 
 
 def _shoot(page, shots: Path, state: str) -> dict:
-    """The Record row at 850 and 1280 pixels: its measures, and a picture of the player card."""
+    """The Record row at 850 and 1280 pixels: its measures, and a picture of the tray."""
     rows = {}
     for width in (850, 1280):
         page.set_viewport_size({"width": width, "height": 1000})
         page.wait_for_timeout(80)
         rows[width] = _row(page)
-        page.locator(".scene-lab-player").screenshot(path=str(shots / f"record-{state}-{width}.png"))
+        page.locator(".ghost-lab-tray").screenshot(path=str(shots / f"record-{state}-{width}.png"))
     return rows
 
 
@@ -73,7 +76,8 @@ def test_record_then_stop_makes_the_video_and_shows_it_in_its_folder(tmp_path, m
             ready = page.locator(f"{attempt_scene.ROWS} .attempt-scene:not([disabled])").first
             ready.wait_for(timeout=20000)
             ready.click()
-            page.locator(".scene-lab-record").wait_for(timeout=20000)
+            page.locator(".scene-lab-record").wait_for(state="attached", timeout=20000)
+            camera_tab(page)
             page.get_by_role("button", name="Record", exact=True).click()
             page.locator(".scene-lab-record-time", has_text="Recording 0:01").wait_for(timeout=5000)
             states = {"recording": _shoot(page, shots, "recording")}

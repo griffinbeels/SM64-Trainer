@@ -5,9 +5,12 @@ The world is test_ui_scene_ghosts_end_to_end.py's: the real app through the UI f
 on a scratch lab, the ghost catalog over real native clips (each record's camera stands at (0, 100,
 500) looking at the origin, tests/ghost_native_fixture.py), fake_viewer_host.py's host and evaluator
 (headless, no GPU). The page alone is driven: add Sully's ghost, press his view, step, start Free
-camera from it, go back to the recorded camera. The pictures of each state are kept beside the test
+camera from it, go back to the recorded camera (round 9: the eyes in the Ghosts tab show them, the views are
+in the Camera tab's Camera row, and each ghost's own view button sits in "In the scene"). The pictures of each state are kept beside the test
 at 850 and 1280 px for the visual check.
 """
+import re
+
 from playwright.sync_api import sync_playwright
 
 import test_ui_scene_ghosts_end_to_end as world
@@ -52,15 +55,19 @@ def _answer_after(page, asked_before: int) -> dict:
 
 
 def _two_ghosts_in_the_stage(page) -> None:
-    """Pick Shoot into the Wild Blue (the stage opens), then add Sully's ghost and one of his."""
-    page.locator('.nav-item[title="Scene viewer"]:visible').click()
+    """Pick Shoot into the Wild Blue (the stage opens), then show Sully's ghost (Top) and one of his (Yours)
+    beside it, each with its row's eye; then open the Camera tab."""
+    page.locator('.nav-item[title="Ghost Lab"]:visible').click()
     page.locator(".scene-lab-target").click()
     page.locator("[role=dialog] button", has_text="Whomp's Fortress").first.click()
     page.locator("[role=dialog] .starcell", has_text="Shoot into the Wild Blue").first.click()
     page.wait_for_function("!!document.querySelector('.scene-lab-readout')", timeout=30000)
-    for rows, who in ((world.TOP_ROWS, world.SULLY), (world.YOURS_ROWS, world.YOURS)):
-        page.locator(rows, has_text=who).get_by_role("button", name="Add").click()
+    for rows, who, segment in ((world.TOP_ROWS, world.SULLY, "Top"), (world.YOURS_ROWS, world.YOURS, "Yours")):
+        page.locator(".ghost-lab-segments").get_by_role("button", name=segment, exact=True).click()
+        page.locator(rows, has_text=who).locator(":scope > button.ghost-lab-eye").click()
         page.locator(f"{rows}.is-shown", has_text=who).wait_for(timeout=20000)
+    page.get_by_role("tab", name=re.compile(r"^Camera")).click()
+    page.locator("#ghost-lab-panel-camera:not([hidden])").wait_for(timeout=5000)
 
 
 def _sullys_view(page, bar, folder) -> str:
@@ -77,8 +84,8 @@ def _sullys_view(page, bar, folder) -> str:
     assert sully.get_attribute("aria-pressed") == "true"
     assert bar.get_by_role("button", name="Recorded camera").get_attribute("aria-pressed") == "false"
     assert page.locator(".scene-lab-tag").inner_text() == f"{world.SULLY}'s view"
-    row = page.locator(f"{world.TOP_ROWS}.is-shown", has_text=world.SULLY)
-    assert row.get_by_role("button", name="Their view", exact=False).get_attribute("aria-pressed") == "true"
+    row = page.locator(".ghost-lab-scene-list li", has_text=world.SULLY)          # In the scene, Ghosts tab
+    assert row.locator(".scene-lab-ghost-view").get_attribute("aria-pressed") == "true"
     for width in (1280, 850):
         page.set_viewport_size({"width": width, "height": 1000})
         page.locator(".scene-lab").screenshot(path=str(folder / f"ghost-view-{width}.png"))

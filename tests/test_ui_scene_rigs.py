@@ -1,6 +1,7 @@
-"""The Scene viewer's cinematic cameras on the real page (round 6, item 1): the Cinematic row asks the
-lab for a rig, the corner names it, its settings fit beside the player at both supported widths, and
-Free camera takes over from it.
+"""The Ghost Lab's cinematic cameras on the real page (round 6, item 1): the Cinematic row asks the
+lab for a rig, the corner names it, its settings fit at both supported widths, and Free camera takes over
+from it. Round 9: the Cinematic row and the Look row (Tilt, Lens) sit in the Camera tab; a cinematic
+camera's settings sit on the picture's foot, so they take no row.
 
 The app boots through the UI fixture with test_ui_attempt_scene.py's scratch lab and fake renderer
 host (headless, no GPU). That recording carries no scene state, so the lab answers each rig with the
@@ -10,18 +11,20 @@ recorded picture and its reason, which the page shows: the camera's own pictures
 from playwright.sync_api import sync_playwright
 
 import test_ui_attempt_scene as attempt_scene
-from test_ui_scene_viewer import CAMERAS, DRAWN, PLAYING
+from test_ui_scene_viewer import CAMERAS, DRAWN, PLAYING, camera_tab
 
 LAST_RIG = "(window.__cameras.at(-1) || {}).rig?.kind ?? null"
-# The player card's widest row against the card: nothing of the Cinematic rows may stick out.
+# Each Cinematic row's widest part against what holds it (the settings: the picture; the row: the tray):
+# nothing may stick out.
+HOLDER = "(row) => row.closest('.scene-lab-stage') || row.closest('.ghost-lab-tray')"
 FITS = r"""
 (() => {
-  const card = document.querySelector('.scene-lab-player').getBoundingClientRect();
+  const holder = %s;
   const rows = [...document.querySelectorAll('.scene-lab-rigs, .scene-lab-rig-options')];
   return { rows: rows.length, over: Math.max(...rows.flatMap((row) => [...row.children].map(
-    (child) => child.getBoundingClientRect().right - card.right))) };
+    (child) => child.getBoundingClientRect().right - holder(row).getBoundingClientRect().right))) };
 })()
-"""
+""" % HOLDER
 
 
 def test_the_cinematic_row_asks_for_a_rig_names_it_fits_both_widths_and_hands_over_to_free_camera(tmp_path, monkeypatch):
@@ -38,6 +41,7 @@ def test_the_cinematic_row_asks_for_a_rig_names_it_fits_both_widths_and_hands_ov
             ready.click()
             page.wait_for_function(DRAWN, timeout=20000)
             page.wait_for_function(f"!({PLAYING})", timeout=20000)
+            camera_tab(page)
             rigs = page.locator(".scene-lab-rigs")
             assert page.locator(".scene-lab-rig-options").count() == 0              # no settings until one is on
 
@@ -58,7 +62,7 @@ def test_the_cinematic_row_asks_for_a_rig_names_it_fits_both_widths_and_hands_ov
                 page.wait_for_timeout(150)
                 fits = page.evaluate(FITS)
                 assert fits["rows"] == 2 and fits["over"] <= 0.5, (width, fits)
-                page.locator(".scene-lab-player").screenshot(path=str(tmp_path / f"scene-rigs-orbit-{width}.png"))
+                page.locator(".scene-lab").screenshot(path=str(tmp_path / f"scene-rigs-orbit-{width}.png"))
             assert page.locator(".scene-lab-rig-options").get_by_role("slider", name="Speed").count() == 1
             # Round 7, item 2: "This should be a setting (orbit while paused)", on until turned off.
             held = page.locator(".scene-lab-rig-options").get_by_role("button", name="Orbit while paused", exact=True)
@@ -73,18 +77,18 @@ def test_the_cinematic_row_asks_for_a_rig_names_it_fits_both_widths_and_hands_ov
             browser.close()
 
 
-# Round 7: everything in every camera row against the card (a slider may overflow a label that
+# Round 7: everything in every camera row against what holds it (a slider may overflow a label that
 # shrank), and the page against the window (no sideways scroll).
 FITS_ALL = r"""
 (() => {
-  const card = document.querySelector('.scene-lab-player').getBoundingClientRect();
+  const holder = %s;
   const rows = [...document.querySelectorAll('.scene-lab-rigs, .scene-lab-rig-options, .scene-lab-lens')];
   const page = document.scrollingElement;
   return { rows: rows.map((row) => row.getAttribute('aria-label')), over: Math.max(...rows.flatMap((row) =>
-    [...row.querySelectorAll('*')].map((part) => part.getBoundingClientRect().right - card.right))),
+    [...row.querySelectorAll('*')].map((part) => part.getBoundingClientRect().right - holder(row).getBoundingClientRect().right))),
     sideways: page.scrollWidth - page.clientWidth };
 })()
-"""
+""" % HOLDER
 SLIDE = "([name, value]) => { const input = document.querySelector(`.scene-lab-lens input[aria-label=\"${name}\"]`);" \
         " input.value = value; input.dispatchEvent(new Event('input', { bubbles: true })); }"
 
@@ -130,6 +134,7 @@ def test_tilt_lens_and_the_new_setups_reach_the_lab_and_fit_both_widths(tmp_path
             ready.click()
             page.wait_for_function(DRAWN, timeout=20000)
             page.wait_for_function(f"!({PLAYING})", timeout=20000)
+            camera_tab(page)
             lens = page.locator(".scene-lab-lens")
             assert lens.get_by_role("slider", name="Tilt").count() == 1        # control: the row is there
 
@@ -139,7 +144,7 @@ def test_tilt_lens_and_the_new_setups_reach_the_lab_and_fit_both_widths(tmp_path
                     page.wait_for_timeout(150)
                     fits = page.evaluate(FITS_ALL)
                     assert fits["over"] <= 0.5 and fits["sideways"] <= 0, (state, width, fits)
-                    page.locator(".scene-lab-player").screenshot(path=str(tmp_path / f"scene-lens-{state}-{width}.png"))
+                    page.locator(".scene-lab").screenshot(path=str(tmp_path / f"scene-lens-{state}-{width}.png"))
 
             # From the recorded camera Tilt starts Free camera from the picture, then turns it.
             page.evaluate(SLIDE, ["Tilt", "15"])
