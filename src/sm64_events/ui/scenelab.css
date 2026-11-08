@@ -107,6 +107,11 @@
 .ghost-lab-speeds button[aria-pressed="true"] { position: relative; z-index: 1; background: rgba(240,189,50,.12); }
 .scene-lab-scrub { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .scene-lab-scrub input[type=range] { flex: 1 1 0; min-width: 0; }
+.ghost-lab-track { position: relative; display: flex; flex: 1 1 0; align-items: center; min-width: 0; }
+/* The part of a run not built yet: striped and empty, past the last frame a drag can reach. */
+.ghost-lab-unbuilt { position: absolute; top: 50%; right: 0; height: 8px; transform: translateY(-50%); border-radius: 4px;
+  background: repeating-linear-gradient(135deg, rgba(255,255,255,.2) 0 4px, rgba(255,255,255,.06) 4px 8px);
+  pointer-events: none; transition: left .2s ease-out; }
 .scene-lab-frame { flex: none; display: grid; line-height: 1.25; font-variant-numeric: tabular-nums; }
 .scene-lab-frame small { display: block; color: var(--muted); font-size: .76rem; }
 /* While a run becomes the scene, its progress on the picture's foot just above the bar. */
@@ -118,11 +123,12 @@
   transform-origin: left center; transition: transform .2s ease-out; }
 .ghost-lab-build-words { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ghost-lab-build-share { flex: none; color: var(--gold-soft); font-variant-numeric: tabular-nums; }
+.ghost-lab-build-stop { flex: none; width: 24px; height: 24px; min-height: 24px; padding: 0; justify-content: center; }
 /* A row's: its share under the rank, and the bar along the row's foot. */
 .ghost-lab-build.is-compact { position: absolute; inset: auto 0 0 0; min-height: 0; padding: 0 0 3px 6px; border: 0;
   border-radius: 0; background: transparent; font-size: .7rem; line-height: 1.2; pointer-events: none; }
 .ghost-lab-build.is-compact .ghost-lab-build-share { max-width: 3.4ch; overflow: hidden; }
-@media (prefers-reduced-motion: reduce) { .ghost-lab-build-fill { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .ghost-lab-build-fill, .ghost-lab-unbuilt { transition: none; } }
 
 /* ---- The save-state strip (components/scenestrip.js): nine tiles in the order of Usamune's slots and the
    number keys, then the one line that says what a press did or why it cannot, with the course and star the

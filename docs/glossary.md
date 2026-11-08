@@ -1623,8 +1623,11 @@ the picture's foot.
   player's best; "more" opens their slower ones), a page at a time, each page asked once in a
   scene's life. A row is the layers pattern: the row itself **watches** that recording (it becomes the
   scene, its world, its camera and its save states: his [[attempt]]'s scene, or a [[Re-simulated
-  scene]] made from the [[ghost]]; meanwhile its row and the play bar show the progress and the old
-  scene plays on), and its eye **shows** it beside the one you watch. Every row wears the US or JP
+  scene]] made from the [[ghost]]), and its eye **shows** it beside the one you watch. A
+  [[Re-simulated scene]] opens once its first [[frame]]s exist (the old scene plays on until then) and
+  grows while the lab makes the rest: its row and the picture's foot show how far, with a Stop that keeps
+  the [[frame]]s made so far, and the slider shows the part not made yet as an empty striped stretch
+  that a drag cannot reach. Watching another row while the lab still makes one ends the older one. Every row wears the US or JP
   flag of the ROM its recording names, and no flag where its record names none.
 - **Camera**: one labeled row each: Camera (Recorded camera, each [[ghost's view]], Free camera,
   **Look at Mario**, **Set focus**, back to where Free camera began), Cinematic (the [[cinematic camera]]s Front, Side,

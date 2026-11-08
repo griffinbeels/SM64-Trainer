@@ -94,7 +94,7 @@ import { getJSON, send } from "../api.js";
 import { displayName } from "../entitysection.js";
 import { GhostFlag, GhostPanel, sceneGhost, viewName } from "./sceneghosts.js";
 import { StagePicker, attemptIn, entityTarget, stageDefault, targetKey, targetQuery, useStrategies } from "./scenestage.js";
-import { BuildProgress, useBuildProgress } from "./scenebuild.js";
+import { BuildProgress, buildOf, stopBuild, useBuildProgress } from "./scenebuild.js";
 import { PlayBar } from "./sceneplaybar.js";
 import { SaveSlots, SaveStrip } from "./scenestrip.js";
 import { usePop } from "./scenepop.js";
@@ -613,14 +613,16 @@ export class SceneLink {
   }
 
   // The open scene is still being written (an attempt scene whose fade-out has not reached the
-  // recording yet): the server's frames replace this scene's from `from` on, the slider grows
-  // with them, and a Play waiting at the newest picture goes on. `growing` false: it is whole.
+  // recording yet, or a watched run still being built, whose newest "resim" table comes along): the
+  // server's frames replace this scene's from `from` on, the slider grows with them, and a Play
+  // waiting at the newest picture goes on. `growing` false: it is whole.
   grown(message) {
     const scene = this.scene;
     if (!scene || message.session !== scene.session) return;
     scene.frames.splice(message.from, Infinity, ...message.frames);
     scene.growing = !!message.growing;
     if (message.audio) scene.audio = message.audio;
+    if (message.resim) scene.resim = message.resim;       // a watched run still being built (scenebuild.js)
     this.frame = clamp(this.frame, 0, Math.max(0, scene.frames.length - 1));
     this.sound.grew(scene);
     if (this.playback) this.playback.grew(scene);
@@ -1791,7 +1793,7 @@ function StageOverlays({ link }) {
 }
 
 // The picture, the play bar and the save-state strip: what you watch and the frame you save.
-function Player({ link, canvas, surface, building }) {
+function Player({ link, canvas, surface, building, stop }) {
   const classes = [link.freeAvailable && "is-movable", link.picking && "is-picking", link.looking && "is-flying"];
   return html`<section class="practice-card scene-lab-player ghost-lab-player">
     <div class="scene-lab-stage">
@@ -1799,7 +1801,7 @@ function Player({ link, canvas, surface, building }) {
         aria-label="The recording's picture" ...${pointerHandlers(link, surface)}></canvas>
       <${StageOverlays} link=${link} />
     </div>
-    <${PlayBar} link=${link} building=${building} />
+    <${PlayBar} link=${link} building=${building} stop=${stop} />
     <${SaveStrip} link=${link} />
   </section>`;
 }
@@ -2061,28 +2063,67 @@ function useStageChoice(link, open, close) {
 }
 
 // Watching a run (a ghost row, or a Library ghost): it becomes the scene. One of his attempts with a scene
-// opens that scene; any other run is made into a scene from its ghost (POST /open {ghost}: the first time
-// takes a while, and the old scene plays on meanwhile; `building` says how far it is). The opened scene
-// carries the run it shows (`watching`) and, made from a ghost, that ghost's ref, which its save states
-// are made from.
+// opens that scene; any other run is made into a scene from its ghost (POST /open {ghost}, scenebuild.js:
+// it answers once the first frames are built, the old scene playing on until then, and the scene grows
+// while the rest is built). `building` says how far, `stop` ends it (the scene keeps what it has). A newer
+// watch, or any other open, takes over from an older one (the lab cancels the older build). The opened
+// scene carries the run it shows (`watching`) and, made from a ghost, that ghost's ref, which its save
+// states are made from.
 function useWatch(link, open) {
-  const [building, setBuilding] = useState(null);         // {ref, name}
-  const progress = useBuildProgress(!!building);
+  const [pending, setPending] = useState(null);           // {ref, name, serial}: its /open has not answered
+  const progress = useBuildProgress(!!pending), stopped = useRef(0), serial = useRef(0);
   async function watch(item, target) {
-    if (building) return null;
-    setBuilding({ ref: item.ref, name: item.player });
-    let scene = item.attempt != null ? await open({ attempt: item.attempt }, { quiet: true }) : null;
-    const made = !scene;
-    if (made) scene = await open({ ghost: item.ref });
-    if (scene) {
-      Object.assign(scene, { watching: sceneGhost(item), ghost: made ? item.ref : null });
-      keep(scene, { target, watching: scene.watching, ghost: scene.ghost });
-      link.changed();
-    }
-    setBuilding(null);
+    const mine = ++serial.current, hush = () => stopped.current === mine;
+    setPending({ ref: item.ref, name: item.player, serial: mine });
+    const watching = sceneGhost(item);
+    let scene = item.attempt != null
+      ? await open({ attempt: item.attempt }, { quiet: true, adopt: { watching, ghost: null } }) : null;
+    const made = !scene && !hush() && mine === serial.current;
+    if (made) scene = await open({ ghost: item.ref }, { quiet: hush, adopt: { watching, ghost: item.ref } });
+    if (scene) keep(scene, { target, watching: scene.watching, ghost: scene.ghost });
+    setPending((now) => (now?.serial === mine ? null : now));
     return scene;
   }
-  return { watch, building: building && { ...building, progress } };
+  async function stop() {
+    stopped.current = pending?.serial ?? stopped.current;
+    setPending(null);
+    try { await stopBuild(); } catch (problem) { link.fail(problem.message); }
+  }
+  return { watch, stop, building: buildOf(link.scene, pending, progress) };
+}
+
+// Opening a scene: `open(body)` with {package} from the lab's list, {attempt} from the Ghost button or the
+// stage picker, or {ghost} for a run watched from a row. A refusal shows the server's own sentence
+// (`quiet`, true or a function asked when the answer comes: none). `adopt`: fields the scene carries from
+// its first picture on (the run it shows). An open that a newer one took over from neither connects nor
+// speaks (the lab ended it for the newer). The opened scene, or null; `opening` while one is on its way.
+function useOpen(link, surface, refresh) {
+  const [opening, setOpening] = useState(false);
+  const newest = useRef(0);
+  async function open(body, { play = false, quiet = false, adopt = null } = {}) {
+    const mine = ++newest.current, hush = () => (typeof quiet === "function" ? quiet() : quiet);
+    setOpening(true);
+    if (!hush()) link.fail(null);
+    let scene = null;
+    try {
+      scene = await send("POST", `${ROOT}/open`, body);
+    } catch (problem) { if (!hush() && mine === newest.current) link.fail(problem.message); }
+    if (scene && mine === newest.current) {
+      link.connect(Object.assign(scene, adopt), { play });
+      surface.current?.focus();
+    } else scene = null;
+    if (mine === newest.current) setOpening(false);
+    refresh.current();
+    return scene;
+  }
+  return { open, opening };
+}
+
+// What the page hands its parts each render: the watched run's star ({course_id, star_id}: a save joins
+// that star's set, scenestrip.js) and the store's event feed (its slot_sets_changed redraws the strip).
+function shareWithParts(link, target, t) {
+  link.stageTarget = target;
+  link.feed = t?.feed;
 }
 
 // `t.sceneLab.intent` (app.js): the Practice log's Ghost button names an attempt; the Ghost Lab opens
@@ -2094,14 +2135,15 @@ function useWatch(link, open) {
 export function SceneViewer({ t }) {
   const lab = t?.sceneLab, intent = lab?.intent;
   const [status, setStatus] = useState(null);
-  const [opening, setOpening] = useState(false);
   const [tab, setTab] = useState("ghosts");
   const [tuning, setTuning] = useState(false);
   const canvas = useRef(null), surface = useRef(null), refresh = useRef(null);
   const link = useSceneLink(canvas, refresh);
+  const { open, opening } = useOpen(link, surface, refresh);
   const { target, setTarget, stageNote, setStageNote, asked, choose } = useStageChoice(link, open, close);
-  const { watch, building } = useWatch(link, open);
+  const { watch, stop, building } = useWatch(link, open);
   const strategies = useStrategies(targetKey(target));
+  shareWithParts(link, target, t);
   refresh.current = async () => {
     try {
       const next = await getJSON(`${ROOT}/status`);
@@ -2153,22 +2195,6 @@ export function SceneViewer({ t }) {
   const owner = useKeyboardOwner(link, surface, canvas);
   useMovingObservations(link, surface);
   useEffect(() => { link.canvas = () => canvas.current; }, []);
-  // `body`: {package} from the lab's list, {attempt} from the Ghost button or the stage picker, or {ghost}
-  // for a run watched from a row. A refusal shows the server's own sentence (`quiet`: none). The opened
-  // scene, or null.
-  async function open(body, { play = false, quiet = false } = {}) {
-    setOpening(true);
-    if (!quiet) link.fail(null);
-    let scene = null;
-    try {
-      scene = await send("POST", `${ROOT}/open`, body);
-      link.connect(scene, { play });
-      surface.current?.focus();
-    } catch (problem) { if (!quiet) link.fail(problem.message); }
-    setOpening(false);
-    refresh.current();
-    return scene;
-  }
   async function close() {
     endLook(link, canvas.current, "closed", true);
     link.disconnect();
@@ -2184,14 +2210,14 @@ export function SceneViewer({ t }) {
         close=${close} tuning=${tuning} setTuning=${setTuning}>
       <${StagePicker} t=${t} target=${target} strategies=${strategies} onChoose=${choose} note=${null} />
     <//>
-    ${link.scene ? html`<${Player} link=${link} canvas=${canvas} surface=${surface} building=${building} />
+    ${link.scene ? html`<${Player} link=${link} canvas=${canvas} surface=${surface} building=${building} stop=${stop} />
       <${Tray} link=${link} tab=${tab} setTab=${setTab} watching=${watching} panels=${{
         ghosts: html`<${GhostPanel} link=${link} target=${target} strategies=${strategies} watching=${watching}
           building=${building} watch=${(item) => watch(item, target)} />`,
         camera: html`<${CameraTab} link=${link} />` }} />
       ${tuning && html`<${TunePanel} link=${link} />`}`
       : html`<section class="practice-card ghost-lab-empty">
-        ${building ? html`<${BuildProgress} build=${building} />` : html`<${Icon} name="ghost" size=${28} />`}
+        ${building ? html`<${BuildProgress} build=${building} stop=${stop} />` : html`<${Icon} name="ghost" size=${28} />`}
       </section>`}
   </div>`;
 }

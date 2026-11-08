@@ -185,7 +185,7 @@ function GhostRow({ item, link, watch, building, more = null, children = null, s
   const marks = [watched && "is-watched", mine && "is-building", shown && "is-shown"].filter(Boolean);
   return html`<li class=${["scene-lab-ghost", ...marks].join(" ")} data-ref=${item.ref}>
     <span class="scene-lab-ghost-rank">${item.rank != null ? `#${item.rank}` : ""}</span>
-    <${WatchButton} item=${item} watched=${watched} busy=${!!building} watch=${watch} strat=${strat} />
+    <${WatchButton} item=${item} watched=${watched} busy=${mine} watch=${watch} strat=${strat} />
     <${Eye} link=${link} item=${item} name=${item.player} watched=${watched} />
     ${mine && html`<${BuildProgress} build=${building} compact />`}
     ${more}

@@ -2589,7 +2589,8 @@ test("a row's watch makes its run the scene: his attempt's scene, else one made 
   fireEvent.click(within(ghostRow(page, "yours-3")).getByRole("button", { name: "Watch You 14\"03" }));
   await until(() => expect(made.length).toBe(1));
   expect(opens()).toEqual([{ attempt: 40 }, { attempt: 903 }, { ghost: "yours-3" }]);   // his scene of it first
-  // Meanwhile the row and the play bar show /status's progress, the old scene plays on, no other row starts one.
+  // Meanwhile the row and the play bar show /status's progress and the old scene plays on; another row may
+  // still take over (the lab ends the older build), this one waits.
   const row = ghostRow(page, "yours-3");
   const progress = await until(() => {
     const bar = within(row).getByRole("progressbar", { name: "Making your scene" });
@@ -2599,7 +2600,8 @@ test("a row's watch makes its run the scene: his attempt's scene, else one made 
   expect([row.classList.contains("is-building"), progress.getAttribute("aria-valuetext")]).toEqual([true, "Re-making the run"]);
   const playing = page.container.querySelector(".ghost-lab-play .ghost-lab-build");
   expect([playing.textContent.includes("Making your scene"), playing.textContent.includes("41%")]).toEqual([true, true]);
-  expect(within(ghostRow(page, "yours-1")).getByRole("button", { name: /^Watch/ }).disabled).toBe(true);
+  expect([within(ghostRow(page, "yours-1")).getByRole("button", { name: /^Watch/ }).disabled,
+    within(row).getByRole("button", { name: /^Watch/ }).disabled]).toEqual([false, true]);
   expect([sockets.length, page.container.querySelector(".scene-lab-player") != null]).toEqual([1, true]);
   expect(page.container.querySelector(".ghost-lab-top-note").textContent).toBe("");   // his scene's refusal is quiet
   made[0]();
@@ -2617,6 +2619,90 @@ test("a row's watch makes its run the scene: his attempt's scene, else one made 
   fireEvent.keyDown(page.container.querySelector(".scene-lab"), { key: "2", code: "Digit2" });
   await until(() => expect(moments().length).toBe(2));
   expect(moments()[0]).toEqual(["/api/scene-lab/moment", { ghost: "yours-3", frame: 1 }]);
+});
+
+// The lead's frozen contract for fast ghost loading (2026-11-08): POST /open {ghost} answers once the first
+// frames are built, "growing" with its "resim" table; each grown message adds frames and the newest table, and
+// the last one has none that says "building". The share built is frames / (records - first_record).
+const BUILDING = { start: "x", building: true, records: 11, first_record: 1, built_to: 3, parting_frame: null,
+  save_states: { allowed: true, reason: null, until: null, check: "load" } };
+const STILL_BUILDING = "This part of the run is still being built.";
+const frameSlider = (page) => page.container.querySelector('.ghost-lab-play input[aria-label="Frame"]');
+const frameWords = (page) => page.container.querySelector(".ghost-lab-play .scene-lab-frame").textContent;
+
+test("a watched run opens at its first frames and grows: the bar fills, a drag stops at the last frame built, and Stop keeps what it has", async () => {
+  ghostRoutes();
+  opened = { ...opened, frames: numbered(FRAMES) };
+  const page = arrive();
+  await sceneUp(1);
+  showList(page, "Yours");
+  await until(() => expect(ghostRow(page, "yours-3")).not.toBeNull());
+  let session = null;
+  routes.delete("/api/scene-lab/open");
+  routes.set("/api/scene-lab/open/cancel", () => respond({ cancelled: true }));
+  routes.set("/api/scene-lab/open", (url, options) => {
+    if (JSON.parse(options.body).attempt != null) return respond({ detail: "This attempt's scene was deleted." }, 404);
+    session = ++sessionSerial;
+    return respond({ ...opened, frames: numbered(FRAMES).slice(0, 3), growing: true, resim: BUILDING, session, attempt: null });
+  });
+  fireEvent.click(within(ghostRow(page, "yours-3")).getByRole("button", { name: "Watch You 14\"03" }));
+  const socket = await sceneUp(2);
+  // 3 of its 10 frames: the play bar and the row say 30%, the slider spans all 10, unfilled past frame 3.
+  const bar = await until(() => {
+    const found = page.container.querySelector(".ghost-lab-play .ghost-lab-build");
+    expect(found.getAttribute("aria-valuenow")).toBe("30");
+    return found;
+  });
+  expect([bar.textContent.includes("Making your scene"), ghostRow(page, "yours-3").className]).toEqual(
+    [true, "scene-lab-ghost is-watched is-building"]);
+  expect([frameSlider(page).max, frameWords(page).startsWith("Frame 1 of 10")]).toEqual(["9", true]);
+  expect(Number(page.container.querySelector(".ghost-lab-unbuilt").dataset.reach)).toBeCloseTo(2 / 9, 3);
+  // A drag past the part built stops at its last frame.
+  fireEvent.input(frameSlider(page), { target: { value: "8" } });
+  await until(() => expect(frameWords(page).startsWith("Frame 3 of 10")).toBe(true));
+  expect(frameSlider(page).value).toBe("2");
+  // Two more frames built: 50%. A press on a frame the lab will not save yet says why on the strip's line.
+  socket.text({ kind: "grown", session, from: 3, frames: numbered(FRAMES).slice(3), growing: true,
+    resim: { ...BUILDING, built_to: 5 } });
+  await until(() => expect(bar.getAttribute("aria-valuenow")).toBe("50"));
+  expect(Number(page.container.querySelector(".ghost-lab-unbuilt").dataset.reach)).toBeCloseTo(4 / 9, 3);
+  routes.set("/api/scene-lab/moment", () => respond({ refused: "building", reason: STILL_BUILDING }));
+  fireEvent.keyDown(page.container.querySelector(".scene-lab"), { key: "4", code: "Digit4" });
+  await until(() => expect(stripWords(page)).toBe(STILL_BUILDING));
+  // Stop: the lab ends the build, the scene keeps its 5 frames and is whole.
+  fireEvent.click(page.getByRole("button", { name: "Stop making the scene" }));
+  await until(() => expect(fetches.filter(([url, method]) => url === "/api/scene-lab/open/cancel" && method === "POST")).toHaveLength(1));
+  socket.text({ kind: "grown", session, from: 5, frames: [], growing: false,
+    resim: { ...BUILDING, built_to: 5, building: false, cancelled: true } });
+  await until(() => expect(page.container.querySelector('[role="progressbar"]')).toBeNull());
+  expect([frameSlider(page).max, frameWords(page).startsWith("Frame 3 of 5"),
+    page.container.querySelector(".ghost-lab-unbuilt")]).toEqual(["4", true, null]);
+});
+
+test("a newer watch takes over from one still on its way: the older's answer neither opens nor speaks", async () => {
+  ghostRoutes();
+  opened = { ...opened, frames: numbered(FRAMES) };
+  const page = arrive();
+  await sceneUp(1);
+  showList(page, "Yours");
+  await until(() => expect(ghostRow(page, "yours-1")).not.toBeNull());
+  const answers = [];
+  routes.delete("/api/scene-lab/open");
+  routes.set("/api/scene-lab/open", (url, options) => (JSON.parse(options.body).attempt != null
+    ? respond({ detail: "This attempt's scene was deleted." }, 404)
+    : new Promise((resolve) => { answers.push(resolve); })));
+  fireEvent.click(within(ghostRow(page, "yours-3")).getByRole("button", { name: /^Watch/ }));
+  await until(() => expect(answers).toHaveLength(1));
+  fireEvent.click(within(ghostRow(page, "yours-1")).getByRole("button", { name: /^Watch/ }));
+  await until(() => expect(answers).toHaveLength(2));
+  expect(["yours-3", "yours-1"].map((ref) => ghostRow(page, ref).classList.contains("is-building"))).toEqual([false, true]);
+  answers[0]({ ok: false, status: 409, json: () => Promise.resolve({ detail: "cancelled" }) });   // the lab ended it
+  await settled();
+  expect([page.container.querySelector(".ghost-lab-top-note").textContent, sockets.length]).toEqual(["", 1]);
+  answers[1](late({ ...opened, session: ++sessionSerial, attempt: null }));
+  await sceneUp(2);
+  await until(() => expect(ghostRow(page, "yours-1").classList.contains("is-watched")).toBe(true));
+  expect(ghostRow(page, "yours-3").classList.contains("is-watched")).toBe(false);
 });
 
 test("the tray opens on Ghosts, says what each tab holds, and the arrow keys move between its tabs", async () => {

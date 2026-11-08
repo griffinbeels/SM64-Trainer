@@ -7,8 +7,8 @@
 // Follow names); the Play speed (1x, ½x, ¼x), Loop, and the sound (its button opens the volume, Music and Sound
 // effects on top of the page, so they take no row). Every part has its size whatever it says (SteadyText),
 // and where the bar wraps (narrow panes: the slider takes its own row) depends on the pane's width alone.
-// While a watched run is being made into a scene, its progress sits on the picture's foot just above the bar
-// (scenebuild.js), so the bar does not move then either.
+// While a watched run is being made into a scene, its progress and Stop sit on the picture's foot just above
+// the bar, and the slider shows the part not built yet (scenebuild.js), so the bar does not move then either.
 import { h } from "preact";
 import { useEffect } from "preact/hooks";
 import htm from "htm";
@@ -16,7 +16,7 @@ import { Icon } from "./icons.js";
 import { usePop } from "./scenepop.js";
 import { ACTION_SIZES, ActionButton, actionLine, useActions } from "./sceneactions.js";
 import { NO_SOUND, SoundBar } from "./sceneaudio.js";
-import { BuildProgress } from "./scenebuild.js";
+import { BuildProgress, sceneGrowth, Unbuilt } from "./scenebuild.js";
 import { PlaySpeeds } from "./scenepathbar.js";
 import { SteadyText } from "./steadytext.js";
 
@@ -56,24 +56,33 @@ function SoundButton({ link }) {
 }
 
 // The slider and the readout: "Frame 312 of 604" and the move on screen; the frame's level, area and
-// game frame on hover.
+// game frame on hover. While the watched run is still being built (scenebuild.js), the slider spans the
+// whole run, the part not built yet is an unfilled stretch, and a drag stops at the last frame built.
 function Scrub({ link }) {
-  const frames = link.scene.frames, line = actionLine(link);
-  const words = `Frame ${link.frame + 1} of ${frames.length}${link.scene.growing ? "+" : ""}`;
+  const frames = link.scene.frames, line = actionLine(link), growth = sceneGrowth(link.scene);
+  const last = Math.max(0, frames.length - 1), length = growth ? growth.total : frames.length;
+  const words = `Frame ${link.frame + 1} of ${length}${link.scene.growing && !growth ? "+" : ""}`;
+  const seek = (event) => {
+    const wanted = Math.min(Number(event.currentTarget.value), last);
+    if (String(wanted) !== event.currentTarget.value) event.currentTarget.value = String(wanted);
+    link.pause();
+    link.seek(wanted, "input", event.timeStamp);
+  };
   return html`<div class="scene-lab-scrub">
-    <input type="range" min="0" max=${Math.max(0, frames.length - 1)} value=${link.frame} aria-label="Frame"
-      oninput=${(event) => { link.pause(); link.seek(Number(event.currentTarget.value), "input", event.timeStamp); }} />
+    <span class="ghost-lab-track">
+      <input type="range" min="0" max=${Math.max(0, length - 1)} value=${link.frame} aria-label="Frame" oninput=${seek} />
+      <${Unbuilt} scene=${link.scene} /></span>
     <span class="scene-lab-frame" title=${[words, frameWords(frames[link.frame])].filter(Boolean).join(" · ")}>
       <${SteadyText} text=${words} sizes=${FRAME_SIZE} />
       <small title=${line.title || line.text}><${SteadyText} text=${line.text} sizes=${ACTION_SIZES} /></small></span>
   </div>`;
 }
 
-// `building`: the run being made into a scene ({ref, name, progress}), or null.
-export function PlayBar({ link, building = null }) {
+// `building`: the run being made into a scene (scenebuild.js buildOf), or null; `stop` ends it.
+export function PlayBar({ link, building = null, stop = null }) {
   useActions(link);
   return html`<div class="scene-lab-bar ghost-lab-play" aria-label="Playback">
-    ${building && html`<${BuildProgress} build=${building} />`}
+    ${building && html`<${BuildProgress} build=${building} stop=${stop} />`}
     <div class="ghost-lab-play-steps">
       <${Tool} name="restart" label="Restart" title=${link.playing ? "Play again from the first frame" : "Go to the first frame"}
         onclick=${(event) => link.restart(event.timeStamp)} />

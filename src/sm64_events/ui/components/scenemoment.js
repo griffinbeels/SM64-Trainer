@@ -10,9 +10,10 @@ import { send } from "../api.js";
 const ROOT = "/api/scene-lab/moment";
 export const OLDER = "This recording is older, so a few small values were worked out and may not be exact.";
 
-// Why no press can run on this frame right now, or null.
+// Why no press can run on this frame right now, or null. A watched run still being made into a scene
+// (scene.resim.building) takes presses on the frames it has: the lab answers for each (scene_moments.py).
 export function whyNot(link) {
-  if (link.scene?.growing) return "This scene is still being recorded. Try again when it ends.";
+  if (link.scene?.growing && !link.scene.resim?.building) return "This scene is still being recorded. Try again when it ends.";
   const row = link.scene?.frames?.[link.frame];
   if (!row || row.package_frame == null) return "This scene does not say which frame this is.";
   if (row.package_frame === 0) return "This is the first frame. Pick a later frame.";
@@ -26,12 +27,13 @@ export function momentSource(scene) {
 }
 
 // One press: the build, then the write (with `picture`, a small JPEG of the frame on screen, which the strip
-// shows on that slot). Each step's refusal is the answer. A written answer names the build (US or JP) the save
-// state came from, for its flag; one written into the other build's game says so in words.
-export async function saveMoment(scene, row, shown, slot, picture = null) {
+// shows on that slot, and `extra`, more of the write's body: the watched run's {course_id, star_id}, so the
+// save joins that star's set). Each step's refusal is the answer. A written answer names the build (US or JP)
+// the save state came from, for its flag; one written into the other build's game says so in words.
+export async function saveMoment(scene, row, shown, slot, picture = null, extra = {}) {
   const built = await send("POST", ROOT, { ...momentSource(scene), frame: row.package_frame });
   if (built.refused) return { bad: true, text: built.reason };
-  const written = await send("POST", `${ROOT}/${built.id}/write`, { slot, ...(picture ? { picture } : {}) });
+  const written = await send("POST", `${ROOT}/${built.id}/write`, { slot, ...(picture ? { picture } : {}), ...extra });
   if (written.refused) return { bad: true, text: written.reason };
   const crossed = written.translated ? ` ${written.translated.words}` : "";
   const said = { bad: false, text: `Frame ${shown} is in slot ${slot}.${crossed}${built.exact ? "" : ` ${OLDER}`}` };
