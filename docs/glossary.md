@@ -1610,7 +1610,8 @@ the picture's foot.
   the [[stage ghost]] Follow names) is doing ("Mario: Dive"); the [[Play speed]] (1x, ½x, ¼x),
   **Loop** (kept per viewer) and **Sound** (Mute, the volume, **Music** and **Sound effects**). Moving
   the camera never pauses Play; only Pause, Space, a step or the slider do.
-- **The save-state strip**: Usamune's nine slots as they are in the running game, read only: each
+- **The save-state strip**: Usamune's nine slots as `slotlibrary/keeper.py` names them for the course and
+  [[star]] the game is in: each
   shows its number, a picture of the [[frame]] a save from this page came from (the lab draws it with
   the recorded camera; a state saved in the game itself shows its place's name), the flag of the
   version that made it, ⇄ when [[Save state translation]] changed it for this game, and a gold edge
