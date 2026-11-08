@@ -4,6 +4,7 @@ listed ghost's recording for the renderer.
 
     GET /api/scene-lab/stage?course=&star=&strat=        (or ?segment=&strat=)
     GET /api/scene-lab/ghosts?section=yours|top|search|player&course=&star=&strat=&page=N
+                             (section=top&strategies=all: every strategy at once, `every_top`)
     SceneLab.ghosts.load_ghost(ref) -> {"clip", "player", "frames", "label"}; LookupError says why
 
 server/scene_lab_api.py mounts the routes and owns the one SceneGhosts (`SceneLab.ghosts`); this
@@ -64,11 +65,14 @@ NO_SCENE = "No saved scene for this strategy yet: play it with the scene lab on.
 NO_STRATEGY = "Choose a strategy to see its ghosts."
 NO_YOURS = "You have no ghost recordings for this strategy yet."
 NO_GHOSTS = "No ghosts for this strategy yet."
+NO_GHOSTS_ANY = "No ghosts here yet."
 NO_MATCH = "No player by that name has a ghost for this strategy."
 NO_QUERY = "Type a player's name to search."
 NO_PLAYER = "That player has no ghosts for this strategy."
 NO_RECORDINGS = "Ghost recordings are not available in this window."
 UNLISTED = "That ghost is not in the list any more; pick it again."
+NOT_HELD = "That ghost could not be found. Open it from the Library again."
+OTHER_TARGET = "That ghost is for a different star or segment."
 NOT_SAVED = "This run's Mario poses are not saved."
 MAX_CLIP_BYTES = 256 << 20        # far above any real clip (100,000 records): a bound, not a limit
 
@@ -103,7 +107,8 @@ class Target:
 @dataclass(frozen=True)
 class Ghost:
     """One listed recording. `source` names where its bytes come from: ("attempt", id),
-    ("population", id) or ("import", id); `who` the player it belongs to (YOU for his)."""
+    ("population", id) or ("import", id); `who` the player it belongs to (YOU for his);
+    `version` the ROM it was recorded on ("us" or "jp"), None where its record does not say."""
     ref: str
     source: tuple
     player: str
@@ -113,6 +118,19 @@ class Ghost:
     yours: bool
     target: dict = field(compare=False)
     attempt: int | None = None       # his journal attempt behind it, when it is one
+    version: str | None = None
+
+
+def region(value) -> str | None:
+    """A recorded ROM as the page draws its flag: "us" or "jp", else None (never a default).
+
+    Where each source keeps it: his runs, the attempt's `game_version` (the poller stamps every
+    event with the running ROM; None for a run journaled before that stamp, or one whose first and
+    last events disagree, tracking/projection.py); a population row, its `game_version`, and a
+    bundled one its `recorded_game_version` (its `game_version` is only the query's ROM,
+    ghost/bundled_beta.py); a community row, its required `game_version`; an imported ghost, its
+    collection row's `game_version` (absent from a version-1 collection, ghost/portable.py)."""
+    return value if value in ("us", "jp") else None
 
 
 def _instant(text) -> float:
@@ -253,11 +271,12 @@ class SceneGhosts:
 
     # ------------------------------------------------------------ the stage
 
-    def stage(self, target: Target, strat: str | None = None) -> dict:
+    def stage(self, target: Target, strat: str | None = None, *, every: bool = False) -> dict:
         """The stage for this target and strategy and every attempt of it that has a scene,
-        fastest finished first, then the newest of the rest."""
+        fastest finished first, then the newest of the rest. `every`: of any strategy (a Library
+        ghost of a strategy he has no scene of still has a stage), named by the chosen one's."""
         from sm64_events.ghost.library_bests import _eligible
-        strat = strat or self.active_strategy(target)
+        strat = None if every else strat or self.active_strategy(target)
         clock = self._clock(target)
         scenes, db, attempts = self.scenes_of(), self.db, []
         if scenes is not None and db is not None:
@@ -272,6 +291,8 @@ class SceneGhosts:
                                            -_instant(attempt.ended_utc)))
         rows = [{"attempt": attempt.id, "time": bare_time(timed(attempt)), "recorded_utc": attempt.started_utc}
                 for attempt in attempts]
+        if every and attempts:
+            strat = attempts[0].strat_tag
         if strat:
             self._warm(target, strat)
         chosen = rows[0] if rows else {"attempt": None, "time": None}
@@ -402,13 +423,14 @@ class SceneGhosts:
                   *self._community_offers(context, runs),
                   *self._import_offers(target, strat, context, counts)]
         ghosts, seen = [], set()
-        for source, player, who, frames, recorded, yours, attempt in offers:
+        for source, player, who, frames, recorded, yours, attempt, version in offers:
             ref = self._ref(source)
             if ref in self._refused:
                 counts["unreadable"] += 1
             elif source not in seen:               # a race-held list and a viewer-held page can share a row
                 seen.add(source)
-                ghosts.append(Ghost(ref, source, player, who, frames, recorded, yours, target_row, attempt))
+                ghosts.append(Ghost(ref, source, player, who, frames, recorded, yours, target_row, attempt,
+                                    region(version)))
         with self._lock:
             self._refs.update((ghost.ref, ghost) for ghost in ghosts)
             if self._exclusions.get((target, strat)) != counts and any(counts.values()):
@@ -418,7 +440,7 @@ class SceneGhosts:
 
     def _run_offers(self, target: Target, strat: str, context, counts: dict, runs: dict):
         """His journal runs the race would play: (source, player, who, frames, recorded, yours,
-        attempt). `runs` collects their lineages and playback-copy hashes, so a population or
+        attempt, version). `runs` collects their lineages and playback-copy hashes, so a population or
         community copy of the same run is not listed twice."""
         from sm64_events.ghost.library_bests import _eligible
         if self.replay is None:
@@ -436,7 +458,8 @@ class SceneGhosts:
                 continue
             runs["lineages"].add((attempt.session_id, attempt.id))
             runs["clips"].add(clip[1].get("sha256"))
-            yield ("attempt", attempt.id), context.you, YOU, frames, attempt.started_utc, True, attempt.id
+            yield (("attempt", attempt.id), context.you, YOU, frames, attempt.started_utc, True, attempt.id,
+                   getattr(attempt, "game_version", None))
 
     def _same_run(self, row, runs: dict) -> bool:
         """Whether a population or community row is a copy of a run listed from the journal."""
@@ -466,7 +489,8 @@ class SceneGhosts:
             player = context.you if mine else str(row.get("player_name") or "Player")
             who = YOU if mine else ("player", row.get("player_id") or row["id"])
             yield (("population", row["id"]), player, who, frames, row.get("recorded_utc"), mine,
-                   self._his_attempt(row) if mine else None)
+                   self._his_attempt(row) if mine else None,
+                   row["recorded_game_version"] if "recorded_game_version" in row else row.get("game_version"))
 
     def _community_offers(self, context, runs: dict):
         """Community rows the viewer holds for this identity (scene_community.py; never a call)."""
@@ -479,7 +503,7 @@ class SceneGhosts:
             mine = row.get("player_id") in context.owned
             player = context.you if mine else str(row.get("player_name") or "Player")
             who = YOU if mine else ("player", row.get("player_id") or row["id"])
-            yield ("population", row["id"]), player, who, row["frames"], None, mine, None
+            yield ("population", row["id"]), player, who, row["frames"], None, mine, None, row.get("game_version")
 
     def _import_offers(self, target: Target, strat: str, context, counts: dict):
         """Imported ghosts of this target, strategy and clock whose recording is whole."""
@@ -493,7 +517,8 @@ class SceneGhosts:
             elif type(row.get("frames")) is int and row["frames"] > 0:
                 author = str(row.get("author") or "Player")
                 who = ("import", _folded(author))
-                yield ("import", row["import_id"]), author, who, row["frames"], row.get("recorded_utc"), False, None
+                yield (("import", row["import_id"]), author, who, row["frames"], row.get("recorded_utc"), False, None,
+                       row.get("game_version"))
 
     def _population_rows(self, population, identity, strat: str) -> tuple:
         """The population's recordings for this identity, kept until its `generation` moves:
@@ -552,15 +577,83 @@ class SceneGhosts:
 
     # ------------------------------------------------------------ the sections
 
+    def strategies(self, target: Target) -> list[str]:
+        """The strategies Top ghosts' All strategies reads, first seen first: the target's list as
+        the stage picker and the Practice card show it (tracking/views.build_entity_strategies), then
+        any other his runs or imported ghosts of this target name (his active strategy first). The
+        community lists only answer a named strategy, so a strategy no one here has named is not
+        asked for."""
+        names = [self.active_strategy(target)]
+        db = self.db
+        if db is not None and self.tracker is not None:
+            from sm64_events.tracking.views import build_entity_strategies
+            key = (f"segment:{target.segment_id}" if target.kind == "segment"
+                   else f"star:{target.course_id}:{target.star_id}")
+            try:
+                names += [row.get("name") for row in build_entity_strategies(db, self.tracker, key).get("strategies", ())]
+            except (LookupError, AttributeError, TypeError, ValueError):
+                log.debug("The scene ghosts read no strategy list for %s.", key, exc_info=True)
+            lookup = getattr(db, "target_attempts", None)
+            if lookup is not None:
+                names += [attempt.strat_tag for attempt in lookup(course_id=target.course_id, star_id=target.star_id,
+                                                                  segment_id=target.segment_id)]
+        sharing = self._sharing()
+        names += [row.get("strat") for row in (sharing.imported_rows() if sharing is not None else ())
+                  if (row.get("kind"), row.get("entity_key")) == (target.kind, target.entity_key)]
+        return list(dict.fromkeys(name for name in names if isinstance(name, str) and name))
+
+    def _every_context(self, target: Target) -> dict:
+        """{strategy: its race context} for All strategies, on the target's clock only: a ghost
+        timed on another clock is not a time the list can rank beside these."""
+        clock, contexts = self._clock(target), {}
+        for name in self.strategies(target):
+            context = self._context(target, name)
+            if context.clock == clock:
+                contexts[name] = context
+        return contexts
+
+    def every_top(self, target: Target, *, page: int = 1) -> dict:
+        """Top ghosts across every strategy: each player's one best ghost of this target whatever
+        its strategy, fastest first; rank is its place among those bests, and each row names its
+        strategy ("strat") and is graded on that strategy's ladder."""
+        if self.replay is None and self.rivals is None:
+            return _page([], {}, page, NO_RECORDINGS)
+        contexts, everything = self._every_context(target), []
+        for name, context in contexts.items():
+            everything += self.catalog(target, name, context)[0]
+        best = _places(everything)
+        leaders = {}
+        for ghost in sorted(everything, key=_fastest):
+            leaders.setdefault(ghost.who, ghost)
+        community = self.community
+        held = [context.identity for context in contexts.values()] if community is not None else []
+        note = next((said for said in (community.note(identity) for identity in held) if said), None)
+        more_pages = any(community.incomplete(identity) for identity in held)
+
+        def tiers(shown):
+            found = {}
+            for name, context in contexts.items():
+                mine = [ghost for ghost in shown if ghost.target["strat"] == name]
+                if mine:
+                    found.update(self._tiers(context, mine))
+            return found
+        return _page(list(leaders.values()), best, page, note or NO_GHOSTS_ANY, tiers=tiers, note=note,
+                     more_pages=more_pages)
+
     def ghosts(self, target: Target, strat: str | None = None, *, section: str, page: int = 1,
-               sort: str = "fastest", query: str = "", player: str = "") -> dict:
+               sort: str = "fastest", query: str = "", player: str = "", every: bool = False) -> dict:
         """One page (PAGE_SIZE rows) of a section: "yours" (his, fastest or newest first), "top"
-        (each player's best, fastest first), "search" (the best of each player whose name holds
-        `query`) or "player" (one player's ghosts, fastest first)."""
+        (each player's best, fastest first; `every`: across all strategies, `every_top`), "search"
+        (the best of each player whose name holds `query`) or "player" (one player's ghosts,
+        fastest first)."""
         if section not in SECTIONS:
             raise TargetError(f"Choose a section: {', '.join(SECTIONS)}.")
         if sort not in SORTS:
             raise TargetError("Sort by fastest or newest.")
+        if every:
+            if section != "top":
+                raise TargetError("Only Top ghosts lists every strategy.")
+            return self.every_top(target, page=page)
         strat = strat or self.active_strategy(target)
         if not strat:
             return _page([], {}, page, NO_STRATEGY)
@@ -599,18 +692,97 @@ class SceneGhosts:
         return _page(rows, best, page, note or NO_GHOSTS, tiers=tiers, more=owned, note=note, more_pages=more_pages)
 
     async def fill(self, target: Target, strat: str | None = None, *, section: str, page: int = 1,
-                   query: str = "", player: str = "") -> int:
+                   query: str = "", player: str = "", every: bool = False) -> int:
         """Before a /ghosts page is read: fetch what its section needs from the community that
         is not held yet (scene_community.py). On the event loop the client runs on; returns the
-        network calls it made, 0 inside the publication lease or without a community."""
-        strat = strat or self.active_strategy(target)
+        network calls it made, 0 inside the publication lease or without a community. All
+        strategies (`every`) fills each strategy's top list the same way, all at once."""
         community = self.community
+        if every:
+            if community is None or section != "top":
+                return 0
+            contexts = await asyncio.to_thread(self._every_context, target)
+            calls = await asyncio.gather(*(community.fill(context.identity, section="top",
+                                                          rows_wanted=max(1, page) * PAGE_SIZE)
+                                           for context in contexts.values()))
+            return sum(calls)
+        strat = strat or self.active_strategy(target)
         if community is None or not strat or section not in ("top", "search", "player"):
             return 0
         context = await asyncio.to_thread(self._context, target, strat)
         name = query if section == "search" else player
         return await community.fill(context.identity, section=section, rows_wanted=max(1, page) * PAGE_SIZE,
                                     name=name)
+
+    # ------------------------------------------------------------ one recording by id (the Library's ghost button)
+
+    def _held(self, identifier):
+        """The population's row for a recording id (a community row inside its lease, or a local
+        one), or None; ValueError for an id that is no recording id."""
+        population = getattr(self.rivals, "population", None)
+        if population is None:
+            return None
+        try:
+            return population.get(identifier)
+        except LookupError:
+            return None
+
+    async def fill_recording(self, identifier) -> int:
+        """Before `recording_item`: a community recording whose held row lapsed (the Library read it
+        more than the lease ago) is read again with the race's client (`recording_metadata`, one
+        call); 0 when it is held, local, or there is no community."""
+        community = self.community
+        try:
+            if community is None or await asyncio.to_thread(self._held, identifier) is not None:
+                return 0
+        except ValueError:
+            return 0
+        if not community.active():
+            return 0
+        from sm64_events.community.config import CommunityError
+        try:
+            await self.sync.recording_metadata(identifier)
+        except CommunityError as error:
+            log.info("The scene viewer could not read ghost %s again: %s", identifier, error.code)
+        return 1
+
+    def recording_item(self, target: Target, identifier) -> dict:
+        """One recording of the rival population by its id, as a row of this target's list
+        ({"item"}, its rank among its strategy's ghosts), so the page can add it and load_ghost can
+        play it like any listed ghost; or {"item": None, "reason"}. The Library's ghost button
+        names it; the row is the one the Library's page left with the race (never a call here)."""
+        try:
+            row = self._held(identifier)
+        except ValueError:
+            row = None
+        if row is None:
+            return {"item": None, "reason": NOT_HELD if self.rivals is not None else NO_RECORDINGS}
+        strat, frames = row.get("strategy"), row.get("frames")
+        if (row.get("kind"), row.get("entity_key")) != (target.kind, target.entity_key):
+            return {"item": None, "reason": OTHER_TARGET}
+        if not isinstance(strat, str) or not strat or type(frames) is not int or frames <= 0:
+            return {"item": None, "reason": NOT_HELD}
+        context = self._context(target, strat)
+        listed, _counts = self.catalog(target, strat, context)
+        source = ("population", row["id"])
+        ghost = next((ghost for ghost in listed if ghost.source == source), None)
+        if ghost is None:
+            mine = row.get("player_id") in context.owned
+            ghost = Ghost(self._ref(source), source, context.you if mine else str(row.get("player_name") or "Player"),
+                          YOU if mine else ("player", row.get("player_id") or row["id"]), frames,
+                          row.get("recorded_utc"), mine,
+                          {"kind": target.kind, "entity_key": target.entity_key, "strat": strat, "scope": "strategy"},
+                          None, region(row["recorded_game_version"] if "recorded_game_version" in row
+                                       else row.get("game_version")))
+            with self._lock:
+                refused = self._refused.get(ghost.ref)
+                if refused is None:
+                    self._refs[ghost.ref] = ghost
+            if refused is not None:
+                return {"item": None, "reason": refused}
+            listed = [*listed, ghost]
+        page = _page([ghost], _places(listed), 1, None, tiers=lambda shown: self._tiers(context, shown))
+        return {"item": page["items"][0]}
 
     def _tiers(self, context, ghosts) -> dict:
         """Each shown ghost's rank on the strategy's ladder (the Lineup's rank cap)."""
@@ -716,6 +888,7 @@ def _page(rows, best, page, empty_reason, *, tiers=lambda shown: {}, more=None, 
     items = [{"ref": ghost.ref, "player": ghost.player, "time": bare_time(ghost.frames), "frames": ghost.frames,
               "rank": _rank(ghost, best), "recorded_utc": ghost.recorded_utc,
               "more": max(0, more.get(ghost.who, 1) - 1) if more is not None else 0, "yours": ghost.yours,
-              "attempt": ghost.attempt, **graded.get(ghost.ref, {"tier": None, "division": None})}
+              "attempt": ghost.attempt, "strat": ghost.target.get("strat"), "version": ghost.version,
+              **graded.get(ghost.ref, {"tier": None, "division": None})}
              for ghost in shown]
     return {"items": items, "page": page, "pages": pages, "reason": None if items else empty_reason, "note": note}

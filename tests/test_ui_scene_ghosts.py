@@ -40,10 +40,11 @@ def _time(hundredths: int) -> str:
     return f"{minutes}'{seconds:02d}\"{cents:02d}" if minutes else f"{seconds}\"{cents:02d}"
 
 
-def _ghost(ref: str, player: str, hundredths: int, *, rank=None, more=0, yours=False, attempt=None, at=0) -> dict:
+def _ghost(ref: str, player: str, hundredths: int, *, rank=None, more=0, yours=False, attempt=None, at=0,
+           strat=None, version=None) -> dict:
     return {"ref": ref, "player": player, "time": _time(hundredths), "frames": hundredths * 30 // 100,
             "rank": rank, "recorded_utc": f"2026-10-{1 + at % 27:02d}T12:00:00Z", "more": more, "yours": yours,
-            "attempt": attempt}
+            "attempt": attempt, "strat": strat, "version": version}
 
 
 def _yours(sort: str) -> list[dict]:
@@ -56,8 +57,13 @@ def _slug(strat: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", strat.lower()).strip("-")
 
 
-def _top(strat: str) -> list[dict]:
-    rows = [_ghost(f"top-{_slug(strat)}-{i}", PLAYERS[i % len(PLAYERS)], 1001 + i * 9, rank=i + 1) for i in range(20)]
+ROMS = ("us", "jp", None)               # each top ghost in turn: US, JP, a record that names no ROM
+
+
+def _top(strat: str | None) -> list[dict]:
+    """One strategy's top ghosts, or (None) All strategies': each of those names its own, the long one too."""
+    rows = [_ghost(f"top-{_slug(strat or 'all')}-{i}", PLAYERS[i % len(PLAYERS)], 1001 + i * 9, rank=i + 1,
+                   strat=strat or (LONG_STRAT if i % 2 else "Single Jump"), version=ROMS[i % 3]) for i in range(20)]
     rows[2] = {**rows[2], "ref": REFUSED}
     return rows
 
@@ -104,13 +110,14 @@ def _stubs(app, lab, seen) -> None:
 
     @router.get("/api/scene-lab/ghosts")
     def ghosts(section: str, page: int = 1, sort: str = "fastest", strat: str | None = None, q: str = "",
-               player: str = "", course: int | None = None, star: int | None = None, segment: int | None = None):
+               player: str = "", course: int | None = None, star: int | None = None, segment: int | None = None,
+               strategies: str = "one"):
         seen["ghosts"].append({"section": section, "page": page, "sort": sort, "strat": strat, "q": q,
-                               "player": player, "course": course, "star": star})
+                               "player": player, "course": course, "star": star, "strategies": strategies})
         if section == "yours":
             return _page(_yours(sort), page)
         if section == "top":
-            return _page(_top(strat or ""), page)
+            return _page(_top(None if strategies == "all" else strat or ""), page)
         if section == "search":
             found = [name for name in PLAYERS if q.lower() in name.lower()]
             return _page([{**_player(name)[0], "more": 2} for name in found], page)
@@ -294,7 +301,8 @@ def _ghost_rows_align(page) -> None:
     for section in ("Your ghosts", "Top ghosts"):
         edges = page.evaluate(f"""[...document.querySelectorAll("{SECTION.format(section)} .scene-lab-ghost-list > li")]
           .map((li) => [Math.round(li.querySelector('.scene-lab-ghost-time').getBoundingClientRect().right),
-                        Math.round(li.lastElementChild.getBoundingClientRect().right)])""")
+                        Math.round(li.querySelector(':scope > button, :scope > .scene-lab-ghost-stage')
+                          .getBoundingClientRect().right)])""")
         assert len({edge[0] for edge in edges}) == 1 and len({edge[1] for edge in edges}) == 1, (section, edges)
 
 
@@ -340,9 +348,30 @@ def _a_player_and_their_slower_ghosts(page, seen) -> str:
     return name
 
 
+# Top ghosts' first rows: each one's flag (its alt, the region's word) and its strategy line.
+TOP_MARKS = f"""[...document.querySelectorAll("{SECTION.format('Top ghosts')} .scene-lab-ghost-list > li")]
+  .map((li) => [li.querySelector('.region-flag')?.alt ?? null, li.querySelector('.scene-lab-ghost-strat')?.textContent ?? null])"""
+# Every strategy line and flag stays inside its row (a long strategy is cut, never pushes the row wider).
+MARKS_INSIDE = f"""[...document.querySelectorAll("{SECTION.format('Top ghosts')} .scene-lab-ghost-list > li")]
+  .every((li) => {{ const row = li.getBoundingClientRect();
+    return [...li.querySelectorAll('.scene-lab-ghost-strat, .region-flag')]
+      .every((mark) => {{ const box = mark.getBoundingClientRect(); return box.left >= row.left - 1 && box.right <= row.right + 1; }}); }})"""
+
+
+def _top_lists_every_strategy_with_flags(page, seen) -> None:
+    """Round 9: Top ghosts asks All strategies first (item 7), each row names its strategy, and every row
+    wears the flag of its recording's ROM, none where the record names none (item 11)."""
+    asked = [ask for ask in seen["ghosts"] if ask["section"] == "top"]
+    assert (asked[0]["strategies"], asked[0]["strat"]) == ("all", None), asked
+    picker = page.locator(SECTION.format("Top ghosts")).get_by_role("combobox", name="Strategy for top ghosts")
+    assert picker.evaluate("(s) => s.options[s.selectedIndex].textContent") == "All strategies"
+    assert page.evaluate(TOP_MARKS)[:4] == [["US", "Single Jump"], ["JP", LONG_STRAT], [None, "Single Jump"],
+                                            ["US", LONG_STRAT]]
+
+
 def test_the_ghost_panel_pages_sorts_searches_and_adds_ghosts_into_the_scene(tmp_path, monkeypatch):
     import ui_fixture
-    first = f"top-{_slug(ui_fixture.FIXTURE_STRAT)}-0"
+    first = "top-all-0"
     with attempt_scene._served(tmp_path, monkeypatch, lab_on=True, extra=_stubs) as (base, seen), \
             sync_playwright() as play:
         _answer_ghosts(monkeypatch, seen)
@@ -358,10 +387,12 @@ def test_the_ghost_panel_pages_sorts_searches_and_adds_ghosts_into_the_scene(tmp
             assert page.locator(SECTION.format("Your ghosts")).get_by_text("Page 1", exact=True).is_visible()
             top = _rows(page, "Top ghosts")
             assert len(top) == 10 and top[0]["ref"] == first and top[2]["ref"] == REFUSED
-            for width in (850, 1280, 1440, 1500, 1600):
+            _top_lists_every_strategy_with_flags(page, seen)
+            for width in (850, 1200, 1280, 1440, 1500, 1600):
                 page.set_viewport_size({"width": width, "height": 1000})
                 page.wait_for_timeout(100)
                 _ghost_rows_align(page)
+                assert page.evaluate(MARKS_INSIDE), width
                 if width >= 1280:
                     _names_show_whole(page)
             page.set_viewport_size({"width": 1280, "height": 1000})
