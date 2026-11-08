@@ -22,6 +22,15 @@ REM --- pick the port (first arg, else 8066) ---
 set "SM64_PORT=%~1"
 if "%SM64_PORT%"=="" set "SM64_PORT=8066"
 
+REM --- the lab Scene viewer turns on by itself where this machine has a lab config ---
+REM  Its ghost button on each Practice log row, the Scene viewer and its recording
+REM  switch exist only when SM64_SCENE_LAB names a lab config. Linked to this file
+REM  instead of run-scene-lab.bat, his test server came up without them, more than
+REM  once ("this build doesn't have any ghosts and such set up so i can't test that.
+REM  this has happened a few times", 2026-11-07). A machine without the config is
+REM  unchanged.
+if not defined SM64_SCENE_LAB if exist "%LOCALAPPDATA%\SM64Trainer\scene-lab\lab.json" set "SM64_SCENE_LAB=%LOCALAPPDATA%\SM64Trainer\scene-lab\lab.json"
+
 REM --- uv is required ---
 where uv >nul 2>nul
 if errorlevel 1 (

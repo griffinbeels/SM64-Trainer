@@ -8,6 +8,8 @@ REM  config in %LOCALAPPDATA%\SM64Trainer\scene-lab\lab.json:
 REM  the ROM, the scene packages folder, the Project64 Plugin
 REM  folder (read only) and the symbol map. The viewer appears
 REM  in the sidebar under Lab; without this, nothing loads.
+REM  run-test-server.bat now names that config by itself when it
+REM  exists; this file differs only in stopping when it does not.
 REM
 REM  Usage:
 REM    run-scene-lab.bat            ->  http://127.0.0.1:8066
