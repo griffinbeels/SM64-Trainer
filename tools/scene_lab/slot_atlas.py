@@ -25,6 +25,8 @@ from sm64_events.slotlibrary.relocate import OBJECT_ACTIVE_FLAGS  # noqa: E402
 from sm64_events.slotlibrary.store import write_atomic  # noqa: E402
 
 ENTRY_FRAMES = 10                  # after the warp arrives: the moment the 2026-11-08 study learned its atlases at
+DEFAULT_NODE = 0x0A                # the entry node a painting uses
+AREA_BYTES, AREA_WARP_NODES = 0x3C, 0x14    # struct Area, and its ObjectWarpNode list (decomp include/types.h)
 sim = cold_boot.sim
 
 
@@ -47,9 +49,40 @@ def world_of(game: cold_boot.ColdGame) -> A.World:
     return A.World(version, pool, blocks, segments, cold_boot.USAMUNE[version]["settings"], tuple(objects))
 
 
+def entry_node(game: cold_boot.ColdGame, area: int) -> int:
+    """A warp node the loaded level gives this area: 0x0A when it has one, else its lowest entry."""
+    node, ids = game.cpu.u32(game.cpu.symbols["gAreaData"] + area * AREA_BYTES + AREA_WARP_NODES), []
+    while 0x80000000 < node < 0x80800000 and len(ids) < 64:
+        ids.append(int(game.cpu.ram[sim.phys(node)]))
+        node = game.cpu.u32(node + 8)
+    entries = [i for i in ids if i < 0xF0]                    # 0xF0 and up are the level's exits and deaths
+    if not entries:
+        raise SystemExit(f"area {area} of this level has no warp node to arrive by")
+    return DEFAULT_NODE if DEFAULT_NODE in entries else min(entries)
+
+
+def warp_into_area(game: cold_boot.ColdGame, level: int, area: int, node: int, limit: int = 900) -> int:
+    """Like cold_boot.warp_to, but done only once the level has been left and this area holds Mario: it works
+    from inside the same level too."""
+    def write():
+        struct.pack_into(">BBBBI", game.cpu.ram, sim.phys(game.cpu.symbols["sWarpDest"]), 1, level, area, node, 0)
+    game.pending = write
+    left = False
+    for frames in range(1, limit):
+        buttons = cold_boot.BUTTON_A if frames > 30 and frames % 20 == 0 and not game.mario_place() else 0
+        if not game.step(buttons):
+            raise SystemExit(f"{game.version}: {game.cpu.violations[:3]}")
+        left = left or not game.mario_place()
+        if left and game.in_level(level) and game.u16("gCurrAreaIndex") == area:
+            return frames
+    raise SystemExit(f"{game.version}: the warp to level {level} area {area} never arrived")
+
+
 def standing_in(version: str, level: int, area: int, config=None) -> cold_boot.ColdGame:
     game, _frame = cold_boot.boot_into_castle(version, config)
-    cold_boot.warp_to(game, level, area)
+    cold_boot.warp_to(game, level, 1)
+    if area != 1:
+        warp_into_area(game, level, area, entry_node(game, area))
     for _ in range(ENTRY_FRAMES):
         if not game.step():
             raise SystemExit(f"{version}: {game.cpu.violations[:3]}")
