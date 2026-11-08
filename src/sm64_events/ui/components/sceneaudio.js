@@ -635,12 +635,23 @@ function TrackSwitch({ sound, which, label }) {
       onclick=${() => sound.toggle(which)}>${label}</button>`;
 }
 
+// What the sound's timing against the pictures reads, for the viewer's readout lines ("" until it has
+// enough samples).
+export function syncWords(sound) {
+  const sync = sound.available ? sound.syncReadout() : null;
+  return sync ? `sound to picture ${Math.round(sync.p50)} ms (p95 ${Math.round(sync.p95)} ms)` : "";
+}
+
 // The Sound row under the transport: Mute (M), the volume, Music and Sound
-// effects, or why there is no sound.
+// effects, or why there is no sound. What this picture's sound is (it changes
+// as the scene plays: "Sound lost here") is one line in a place of its own,
+// cut short with the whole sentence on hover, so playing never moves the row
+// or the rows under it (round 9, item 3). Its timing against the pictures is
+// a readout line of the viewer's (syncWords).
 export function SoundBar({ sound, frame }) {
   useEffect(() => sound.cue(frame), [sound, frame]);
   if (!sound.available) return html`<p class="scene-lab-reason scene-lab-sound-none">${sound.reason || NO_SOUND}</p>`;
-  const here = sound.at(frame), note = soundNote(sound, here), sync = sound.syncReadout();
+  const here = sound.at(frame), note = soundNote(sound, here);
   return html`<div class="scene-lab-bar scene-lab-sound" aria-label="Sound">
     <button type="button" aria-pressed=${sound.muted} onclick=${() => sound.toggleMute()}
         title=${sound.muted ? "Turn the recording's sound back on (M)" : "Mute the recording's sound (M)"}>
@@ -649,8 +660,7 @@ export function SoundBar({ sound, frame }) {
       oninput=${(event) => sound.setVolume(event.currentTarget.value)} />
     <${TrackSwitch} sound=${sound} which="music" label="Music" />
     <${TrackSwitch} sound=${sound} which="effects" label="Sound effects" />
-    ${note && html`<span class=${`scene-lab-sound-note ${here === "lost" || here === "unsplit" ? "is-lost" : ""}`}>${note}</span>`}
-    ${sync && html`<span class="scene-lab-readout scene-lab-sound-sync">sound to picture ${Math.round(sync.p50)} ms
-      (p95 ${Math.round(sync.p95)} ms)</span>`}
+    <span class=${`scene-lab-sound-note${here === "lost" || here === "unsplit" ? " is-lost" : ""}`}
+      title=${note || undefined}>${note || ""}</span>
   </div>`;
 }

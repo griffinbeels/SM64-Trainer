@@ -30,29 +30,46 @@
 .scene-lab-tag { left: 10px; }
 .scene-lab-tag.is-free, .scene-lab-tag.is-view { color: var(--gold-soft); }
 .scene-lab-busy { right: 10px; color: var(--muted); }
-.scene-lab-cue { position: absolute; left: 50%; bottom: 12px; max-width: calc(100% - 24px); margin: 0; padding: 4px 10px;
-  transform: translateX(-50%); border-radius: 6px; background: rgba(0,0,0,.66); color: var(--text); font-size: .78rem;
-  text-align: center; pointer-events: none; }
+/* What the picture says on itself: why a click on it did nothing (the notice), then the keys of what
+   you are doing (the cue). On the picture, not between rows, so neither moves the controls. */
+.scene-lab-overlay { position: absolute; left: 50%; bottom: 12px; display: grid; justify-items: center; gap: 6px;
+  width: max-content; max-width: calc(100% - 24px); transform: translateX(-50%); pointer-events: none; }
+.scene-lab-cue, .scene-lab-notice { margin: 0; padding: 4px 10px; border-radius: 6px; background: rgba(0,0,0,.66);
+  color: var(--text); font-size: .78rem; line-height: 1.5; text-align: center; }
+.scene-lab-notice { color: var(--gold-soft); }
+/* Every bar wraps by its controls' fixed sizes only: a control or readout whose words change is a
+   SteadyText (components/steadytext.js), so where a row wraps never depends on what it says
+   (round 9, item 3: "The UI should not be bouncing around like that when we go between playing /
+   paused"). tests/test_ui_scene_steady.py measures every box through every state. */
 .scene-lab-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
 .scene-lab-bar input[type=range] { flex: 1 1 220px; min-width: 0; }
 .scene-lab-bar button[aria-pressed="true"] { border-color: var(--gold); color: var(--gold-soft); }
-.scene-lab-frame { min-width: 13ch; font-variant-numeric: tabular-nums; }
+/* The frame slider and its readout wrap as one: on the buttons' row while the slider keeps 220px
+   beside the readout's 230px, else together on the next row, never the readout alone under a slider
+   that grew into its place. */
+.scene-lab-scrub { flex: 1 1 460px; display: flex; align-items: center; gap: 8px; min-width: 0; }
+.scene-lab-frame { flex: none; font-variant-numeric: tabular-nums; }
 .scene-lab-frame small { display: block; color: var(--muted); }
 .scene-lab-quality { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; color: var(--muted); }
 .scene-lab-quality select { background: var(--surface-2); }
 .scene-lab-hint, .scene-lab-readout { margin: 0; color: var(--muted); font-size: .8rem; line-height: 1.5; }
 .scene-lab-hint.is-bad { color: var(--coral); }
-/* The Cinematic rows (components/scenerigs.js): the three cameras and Follow, then the one on screen's settings. */
+/* The Cinematic row (components/scenerigs.js): the cameras and Follow. The camera on screen's settings
+   sit on the picture's foot, under its notice, while one is on: a row of them that came and went moved
+   every row under it, and a row kept for them stood empty with no camera on (round 9). */
 .scene-lab-rigs-name { color: var(--muted); }
 .scene-lab-rigs label, .scene-lab-rig-options label, .scene-lab-lens label { display: inline-flex; align-items: center;
   gap: 8px; min-width: 0; color: var(--muted); }
 .scene-lab-rig-note { color: var(--muted); font-size: .8rem; }
 .scene-lab-rigs select, .scene-lab-rig-options select { min-width: 0; max-width: 220px; background: var(--surface-2); }
+.scene-lab-overlay .scene-lab-rig-options { justify-content: center; padding: 6px 8px; border-radius: 8px;
+  background: rgba(0,0,0,.72); pointer-events: auto; }
+.scene-lab-overlay .scene-lab-rig-options label { color: var(--text); }
 .scene-lab-rig-shots { display: inline-flex; gap: 6px; }
 .scene-lab-bar .scene-lab-rig-range input[type=range] { flex: 0 1 120px; width: 120px; }
-.scene-lab-rig-range output { min-width: 7ch; color: var(--text); font-variant-numeric: tabular-nums; }
+.scene-lab-rig-range output { color: var(--text); font-variant-numeric: tabular-nums; }
 .scene-lab-speed { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
-.scene-lab-speed output { min-width: 5ch; text-align: center; color: var(--text); font-variant-numeric: tabular-nums; }
+.scene-lab-speed output { text-align: center; color: var(--text); font-variant-numeric: tabular-nums; }
 .scene-lab-speed button { min-width: 34px; justify-content: center; }
 .scene-lab-tune { display: grid; gap: 8px; min-width: 0; }
 .scene-lab-tune-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
@@ -67,26 +84,34 @@
 .scene-lab-tune .tune-row > input[type=range] { grid-column: 1 / -1; width: 100%; margin: 0; }
 .scene-lab-tune .tune-row.is-changed > label { color: var(--gold-soft); font-weight: 600; }
 .scene-lab-readout { font-variant-numeric: tabular-nums; }
-/* The Sound row (components/sceneaudio.js): a short volume slider, then what this picture's sound is. */
+/* The Sound row (components/sceneaudio.js): a short volume slider, then what this picture's sound is.
+   The note changes as the scene plays, so it is one line in a place sized by the row, never by its
+   words (the whole sentence is its title). */
 .scene-lab-sound input[type=range] { flex: 0 1 140px; }
-.scene-lab-sound-note { min-width: 0; color: var(--muted); font-size: .8rem; line-height: 1.5; }
+.scene-lab-sound-note { flex: 1 1 18rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--muted); font-size: .8rem; line-height: 1.5; }
 .scene-lab-sound-note.is-lost { color: var(--gold-soft); }
-.scene-lab-sound-sync { margin-left: auto; }
-/* The Record row (components/scenerecord.js): Record or Stop, how long, then the video's progress. */
+/* The Record row (components/scenerecord.js): Record or Stop, then a place of its own for how long,
+   the video's progress and what became of it, each one line, so pressing Record moves nothing. */
 .scene-lab-record-dot { color: var(--coral); fill: currentColor; }
 .scene-lab-record button.is-recording { border-color: var(--coral); color: var(--coral); }
+.scene-lab-record-status { flex: 1 1 18rem; align-self: stretch; display: flex; align-items: center; gap: 8px; min-width: 0; }
 .scene-lab-record-time { color: var(--coral); font-variant-numeric: tabular-nums; }
 .scene-lab-record progress { flex: 0 1 160px; min-width: 80px; accent-color: var(--gold); }
-.scene-lab-record-note { min-width: 0; overflow-wrap: anywhere; color: var(--muted); font-size: .85rem; line-height: 1.5; }
+.scene-lab-record-note { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--muted); font-size: .85rem; line-height: 1.5; }
 .scene-lab-record-note.is-bad { color: var(--coral); }
-.scene-lab-record-link { color: var(--gold-soft); white-space: nowrap; }
+.scene-lab-record-link { flex: none; color: var(--gold-soft); white-space: nowrap; }
 /* The Cameras strip (components/scenepresets.js): nine slots in one row, in the order of the number
    keys that cut to them. A slot is its number over its name; rename and delete sit in its corner. */
 .scene-lab-cameras { display: grid; gap: 6px; min-width: 0; }
-.scene-lab-cameras-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; min-width: 0; }
-.scene-lab-cameras-head h3 { margin: 0; color: var(--muted); font-size: .78rem; letter-spacing: .06em; text-transform: uppercase; }
-.scene-lab-cameras-head .scene-lab-hint { flex: 1 1 260px; min-width: 0; }
-.scene-lab-cameras-undo { color: var(--muted); font-size: .8rem; }
+/* Its heading line (and Save states', the same class) is one line as tall as the Undo button, its
+   sentence cut short with the whole of it on hover: what a press says never moves the slots or
+   the rows under them (round 9, item 3). */
+.scene-lab-cameras-head { display: flex; align-items: center; gap: 2px 12px; min-width: 0; min-height: 26px; }
+.scene-lab-cameras-head h3 { flex: none; margin: 0; color: var(--muted); font-size: .78rem; letter-spacing: .06em; text-transform: uppercase; }
+.scene-lab-cameras-head .scene-lab-hint { flex: 1 1 260px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scene-lab-cameras-undo { flex: none; color: var(--muted); font-size: .8rem; }
 .scene-lab-cameras-undo button { min-height: 26px; padding: 0 8px; font-size: .78rem; }
 .scene-lab-slots { display: grid; grid-template-columns: repeat(9, minmax(0, 1fr)); gap: 6px; margin: 0; padding: 0; list-style: none; }
 /* The Save states row (components/scenemoment.js): nine numbers on the Cameras strip's grid. */
@@ -147,8 +172,13 @@
 .scene-lab-ghost.is-shown { border-color: var(--gold); background: rgba(240,189,50,.08); }
 .scene-lab-ghost.is-waiting { border-color: var(--border-soft); border-style: dashed; }
 .scene-lab-ghost-rank { color: var(--muted); font-size: .78rem; font-variant-numeric: tabular-nums; }
+/* The player cell: the ROM's flag (none where unknown), then the name, cut before the flag is. */
+.scene-lab-ghost-who { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .scene-lab-ghost-player { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 .scene-lab-ghost-player small { color: var(--muted); font-weight: 400; }
+/* All strategies: the row's strategy on its own line under the name, across the time and button. */
+.scene-lab-ghost-strat { grid-column: 2 / -1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--muted); font-size: .76rem; line-height: 1.3; }
 .scene-lab-ghost-time { text-align: right; font-variant-numeric: tabular-nums; }
 .scene-lab-ghost button { min-height: 30px; padding: 2px 10px; }
 .scene-lab-ghost > button:not(.scene-lab-ghost-more) { justify-self: stretch; justify-content: center; }

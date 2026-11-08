@@ -15,7 +15,10 @@ by id. So the saving is in not asking (docs/community-protocol.md, "The Scene vi
 - Top: one `GET /v1/library/recordings` page (20 rows, fastest first) serves two viewer pages;
   the next page is asked only when the viewer pages past what is held, at most MAX_PAGES_PER_ASK
   a request. A list is held for `cache.TTL` (600 s, the publication lease every community row
-  already carries), so reopening a target inside it costs nothing.
+  already carries), so reopening a target inside it costs nothing. A strategy the catalog does not
+  list (`CommunitySync.catalog_lists`: the race's hourly `/v1/catalog`) is never asked: the service
+  would refuse it. All strategies (Top ghosts' first choice, `SceneGhosts.every_top`) fills every
+  strategy's list this way at once, so a target's first look costs one page per listed strategy.
 - Search and one player's ghosts: answered from what is held when the held top list is complete,
   or a held search for a shorter name already was; otherwise one `GET /v1/search` (20 rows) per
   name, held for the same lease. The page asks when a search is submitted, never per keystroke.
@@ -138,6 +141,8 @@ class CommunityGhosts:
         with self._lock:
             held = self.lists.get(key)
         if held is None or held.until <= now:
+            if not await self.sync.catalog_lists(identity):      # a strategy no one can share: nothing to ask
+                return 0
             shelf = Shelf(until=now + TTL)
         elif held.complete or len(held.rows) >= rows_wanted:
             return 0

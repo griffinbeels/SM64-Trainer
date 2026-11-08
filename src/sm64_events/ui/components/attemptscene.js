@@ -8,7 +8,10 @@
 // leaves out ids the lab knows nothing about: those rows draw no button. A
 // table asks once for the rows it shows whenever that set of ids changes, and
 // again every SCENE_POLL.ms only while one of them is still cutting, so a row
-// whose cut lands turns its button on by itself. With the lab off
+// whose cut lands turns its button on by itself. It also asks again when the
+// caller's `revision` changes: the newest `ghost_files_changed` event, which a
+// Settings -> Ghost files purge broadcasts (ghoststorage.js), so a row whose
+// scene was deleted loses its button without a reload. With the lab off
 // (`t.sceneLab` is null, app.js) nothing is asked and no row draws it.
 // Nothing here imports the viewer: app.js loads it only once the lab answers.
 import { createContext, h } from "preact";
@@ -34,8 +37,9 @@ const cutting = (scenes) => Object.values(scenes).some((scene) => scene?.state =
 
 // The lab's answers for the attempt ids a table shows, keyed by id ({} with the lab off or
 // before the first answer). A failed ask keeps the last answers and, while one was cutting,
-// asks again on the same beat.
-export function useAttemptScenes(ids, enabled) {
+// asks again on the same beat. A new `revision` (any value; compared by identity) asks again
+// for the same ids; keep it stable across renders, or every render asks.
+export function useAttemptScenes(ids, enabled, revision = null) {
   const key = enabled ? [...new Set(ids)].sort((a, b) => a - b).join(",") : "";
   const [scenes, setScenes] = useState({});
   useEffect(() => {
@@ -50,7 +54,7 @@ export function useAttemptScenes(ids, enabled) {
     };
     ask();
     return () => { live = false; clearTimeout(timer); };
-  }, [key]);
+  }, [key, revision]);
   return key ? scenes : {};
 }
 
@@ -62,7 +66,13 @@ export const AttemptScenes = createContext({});
 export function SceneButton({ attempt, open }) {
   const shown = sceneButton(useContext(AttemptScenes)[attempt]);
   if (!shown) return null;
-  return html`<button type="button" class="icon-button attempt-scene" disabled=${shown.disabled}
-      title=${shown.title} aria-label=${OPEN_IN_VIEWER} onclick=${shown.disabled ? null : open}>
+  return html`<${GhostButton} disabled=${shown.disabled} title=${shown.title} open=${open} />`;
+}
+
+// The one Ghost button: the Practice log's rows (above) and the Library's community ghosts
+// (community-library.js), which open that ghost in the Scene viewer. `label` names it for a reader.
+export function GhostButton({ open, disabled = false, title = OPEN_IN_VIEWER, label = OPEN_IN_VIEWER }) {
+  return html`<button type="button" class="icon-button attempt-scene" disabled=${disabled}
+      title=${title} aria-label=${label} onclick=${disabled ? null : open}>
     <${Icon} name="ghost" size=${16} /></button>`;
 }

@@ -829,6 +829,9 @@ class Database:
     # accidentally commit that caller's unfinished work on this connection.
     def __init__(self, path: str | Path):
         Path(path).parent.mkdir(parents=True, exist_ok=True)
+        # The file this journal lives in: what keys data kept beside it per
+        # journal (the scene lab's attempt scenes, tools/scene_lab/attempt_scenes.py).
+        self.path = Path(path)
         self._conn = sqlite3.connect(str(path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._lock = threading.Lock()

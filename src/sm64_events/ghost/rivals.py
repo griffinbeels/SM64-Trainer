@@ -363,6 +363,11 @@ class Rivals:
         self.manual = False
         self.held, self.family = {}, frozenset()
 
+    def files_changed(self):
+        """Settings deleted ghost files: forget the prepared lineup and the saved PB read, so the
+        next resolve asks every provider again (a deleted recording leaves its seat)."""
+        self.fingerprint = self.prepared_key = self._saved_pb = None
+
     def pb_changed(self, target=None):
         target = target or self.target
         if target is None:

@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {Miniflare,convertV4MiniflareOptions,Response as MFResponse} from 'miniflare';
 import {generateKeyPair,exportJWK,SignJWT} from 'jose';
-import {alice,nativeClip,upload} from './fixtures.js';
+import {randomBytes} from 'node:crypto';
+import {alice,nativeClip,upload,digest} from './fixtures.js';
 import {Store} from '../src/store.js';
 import {config} from '../src/config.js';
 const model=JSON.parse(readFileSync(new URL('../catalog.json',import.meta.url),'utf8'));
@@ -29,7 +30,7 @@ try{
   const progressMigration=readFileSync(new URL('../migrations/0006_player_progress.sql',import.meta.url),'utf8'),triggerStart=progressMigration.indexOf('CREATE TRIGGER');
   for(const sql of progressMigration.slice(0,triggerStart).split(';').map(s=>s.replace(/--[^\n]*/g,'').trim()).filter(Boolean))await db.prepare(sql).run();
   await db.prepare(progressMigration.slice(triggerStart)).run();
-  for(const sql of readFileSync(new URL('../migrations/0007_player_recording_epoch.sql',import.meta.url),'utf8').split(';').map(s=>s.trim()).filter(Boolean))await db.prepare(sql).run();
+  for(const migration of ['0007_player_recording_epoch.sql','0008_ghost_start.sql'])for(const sql of readFileSync(new URL('../migrations/'+migration,import.meta.url),'utf8').split(';').map(s=>s.replace(/--[^\n]*/g,'').trim()).filter(Boolean))await db.prepare(sql).run();
   await db.prepare('UPDATE settings SET generation=? WHERE id=1').bind(model.generation).run();
   await db.prepare("INSERT INTO accounts(uid,issuer,subject,invited,status,name,name_key,sharing,terms_version,privacy_version,created_at,updated_at) VALUES(?,?,?,1,'active','Runtime','runtime',1,'test-1','test-1',0,0)").bind(alice,issuer,alice).run();
   async function call(path,{method='GET',body,bytes,bearer=token,key=crypto.randomUUID(),status=200}={}){
@@ -76,6 +77,21 @@ try{
   assert.deepEqual((await call('/v1/recordings/metadata',{method:'POST',body:{recording_ids:[id]}})).json.unavailable,[id]);
   assert.deepEqual((await call('/v1/library')).json.entries,[]);
   const denied=await mf.dispatchFetch('https://community.example.invalid/v1/recordings/'+id+'/asset',{headers:{authorization:'Bearer '+token}});assert.equal(denied.status,404);
+  // A ghost's start in real workerd/D1/R2: one object holds the ghost and then
+  // its start, both read back by range through the private asset cache export.
+  await call('/v1/account/sharing',{method:'PUT',body:{enabled:true}});
+  const g=upload(nativeClip({marker:2})),start=randomBytes(26132);
+  g.body={...g.body,target:entry.target,strategy:entry.strategies[0].name,generation:model.generation,start_sha256:digest(start),start_bytes:start.length};
+  const startGrant=await call('/v1/uploads',{method:'POST',body:g.body});
+  const startPublished=await call('/v1/uploads/'+startGrant.json.upload_id,{method:'PUT',bytes:Buffer.concat([g.bytes,start])});
+  assert.equal(startPublished.json.disposition,'published');
+  const startID=startPublished.json.recording_id,startKey=(await db.prepare('SELECT asset_key FROM recordings WHERE id=?').bind(startID).first()).asset_key;
+  const stored=await objects.get(startKey);assert.deepEqual(Buffer.from(await stored.arrayBuffer()),Buffer.concat([g.bytes,start]));
+  assert.equal(stored.customMetadata.start_sha256,g.body.start_sha256);
+  const ghost=await call('/v1/recordings/'+startID+'/asset');assert.deepEqual(Buffer.from(await ghost.response.arrayBuffer()),g.bytes);
+  assert.equal(ghost.response.headers.get('ghost-start-sha256'),g.body.start_sha256);assert.equal(ghost.response.headers.get('ghost-start-bytes'),String(start.length));
+  const served=await call('/v1/recordings/'+startID+'/start');assert.deepEqual(Buffer.from(await served.response.arrayBuffer()),start);
+  assert.deepEqual(await db.prepare('SELECT bytes_used FROM storage_budget').first(),{bytes_used:f.bytes.length+g.bytes.length+start.length});
   const fresh='30000000-0000-4000-8000-000000000001';
   await db.prepare("UPDATE quotas SET ops=ops_limit WHERE owner='*'").run();
   const store=new Store(db,config(bindings));

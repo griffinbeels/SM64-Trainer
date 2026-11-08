@@ -6,6 +6,9 @@ const sec=()=>Math.floor(Date.now()/1000);
 // Identical bytes can legitimately have different strategy/timing metadata.
 // Deduplication and publication must agree on the full immutable identity.
 const recordingID=r=>sha256(canonical([r.uid,r.target_key,r.clock,r.rom,r.strategy,r.frames,r.raw_sha256]));
+// The bytes one grant or asset holds in R2: the ghost, then its start (if any)
+// in the same object. Reservations, charges and refunds all use this sum.
+export const storedBytes=x=>x.encoded_bytes+(x.start_bytes||0);
 export class Store {
   constructor(db,cfg) {this.db=db;this.cfg=cfg;}
   sql(sql,...values) {return this.db.prepare(sql).bind(...values);}
@@ -171,20 +174,22 @@ export class Store {
     const winner=await this.one("SELECT frames FROM winners WHERE uid=? AND target_key=? AND clock=? AND rom=? AND strategy=? AND generation=? AND step=?",
       a.uid,grading.key,input.clock,input.rom,input.strategy,catalog.generation,grading.step);
     if(winner && winner.frames<=input.frames) return {disposition:"not_faster"};
-    // Admission consumption never refunds daily bytes or operations.
-    await this.ticket(a.uid,{uploadBytes:input.encoded_bytes,classA:3});
+    // Admission consumption never refunds daily bytes or operations. A ghost's
+    // start rides in the ghost's own object, so it costs bytes, not operations.
+    const startSHA=input.start_sha256??null,startBytes=input.start_bytes??0,bytes=input.encoded_bytes+startBytes;
+    await this.ticket(a.uid,{uploadBytes:bytes,classA:3});
     const id=crypto.randomUUID(),expires=sec()+LIMITS.grant_seconds,assetKey=a.uid+"/"+input.raw_sha256+"/"+id;
     await this.tx(
       "EXISTS(SELECT 1 FROM accounts WHERE uid=? AND invited=1 AND status='active' AND sharing=1 AND terms_version=? AND privacy_version=? AND pending<? AND bytes_used+bytes_reserved+?<=?) AND "+
       "(SELECT bytes_used+bytes_reserved FROM storage_budget WHERE id=1)+?<=? AND "+
       "(SELECT generation FROM settings WHERE id=1)=? AND (SELECT migration_generation FROM settings WHERE id=1) IS NULL",
-      [a.uid,this.cfg.terms,this.cfg.privacy,LIMITS.pending_uploads,input.encoded_bytes,LIMITS.retained_bytes,
-       input.encoded_bytes,LIMITS.global_bytes,catalog.generation],[
-      this.sql("UPDATE accounts SET bytes_reserved=bytes_reserved+?,pending=pending+1 WHERE uid=?",input.encoded_bytes,a.uid),
-      this.sql("UPDATE storage_budget SET bytes_reserved=bytes_reserved+? WHERE id=1",input.encoded_bytes),
-      this.sql("INSERT INTO grants(id,uid,request_key,request_digest,target_key,target_json,clock,rom,strategy,frames,raw_sha256,raw_bytes,encoded_sha256,encoded_bytes,generation,step,overall_step,state,expires_at,asset_key,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending',?,?,?)",
+      [a.uid,this.cfg.terms,this.cfg.privacy,LIMITS.pending_uploads,bytes,LIMITS.retained_bytes,
+       bytes,LIMITS.global_bytes,catalog.generation],[
+      this.sql("UPDATE accounts SET bytes_reserved=bytes_reserved+?,pending=pending+1 WHERE uid=?",bytes,a.uid),
+      this.sql("UPDATE storage_budget SET bytes_reserved=bytes_reserved+? WHERE id=1",bytes),
+      this.sql("INSERT INTO grants(id,uid,request_key,request_digest,target_key,target_json,clock,rom,strategy,frames,raw_sha256,raw_bytes,encoded_sha256,encoded_bytes,generation,step,overall_step,state,expires_at,asset_key,created_at,start_sha256,start_bytes) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending',?,?,?,?,?)",
         id,a.uid,key,digest,grading.key,canonical(grading.entry.target),input.clock,input.rom,input.strategy,input.frames,
-        input.raw_sha256,input.raw_bytes,input.encoded_sha256,input.encoded_bytes,catalog.generation,grading.step,grading.overallStep,expires,assetKey,sec())],
+        input.raw_sha256,input.raw_bytes,input.encoded_sha256,input.encoded_bytes,catalog.generation,grading.step,grading.overallStep,expires,assetKey,sec(),startSHA,startBytes)],
       "storage_limit","Upload reservation unavailable.",429);
     return {disposition:"upload",upload_id:id,expires_at:expires};
   }
@@ -206,17 +211,19 @@ export class Store {
   }
   async release(g) {
     // Only unstored reservations refund. The SQL predicate makes repeated cleanup harmless.
+    const bytes=storedBytes(g);
     await this.tx("EXISTS(SELECT 1 FROM grants WHERE id=? AND state IN ('pending','receiving','recovering'))",[g.id],[
-      this.sql("UPDATE accounts SET bytes_reserved=bytes_reserved-?,pending=pending-1 WHERE uid=?",g.encoded_bytes,g.uid),
-      this.sql("UPDATE storage_budget SET bytes_reserved=bytes_reserved-? WHERE id=1",g.encoded_bytes),
+      this.sql("UPDATE accounts SET bytes_reserved=bytes_reserved-?,pending=pending-1 WHERE uid=?",bytes,g.uid),
+      this.sql("UPDATE storage_budget SET bytes_reserved=bytes_reserved-? WHERE id=1",bytes),
       this.sql("UPDATE grants SET state='failed' WHERE id=?",g.id)]);
   }
   async stored(g) {
+    const bytes=storedBytes(g);
     await this.tx("EXISTS(SELECT 1 FROM grants WHERE id=? AND state IN ('receiving','recovering'))",[g.id],[
-      this.sql("INSERT INTO assets(key,uid,raw_sha256,encoded_sha256,encoded_bytes,state,created_at) VALUES(?,?,?,?,?,'stored',?)",
-        g.asset_key,g.uid,g.raw_sha256,g.encoded_sha256,g.encoded_bytes,sec()),
-      this.sql("UPDATE accounts SET bytes_reserved=bytes_reserved-?,bytes_used=bytes_used+?,pending=pending-1 WHERE uid=?",g.encoded_bytes,g.encoded_bytes,g.uid),
-      this.sql("UPDATE storage_budget SET bytes_reserved=bytes_reserved-?,bytes_used=bytes_used+? WHERE id=1",g.encoded_bytes,g.encoded_bytes),
+      this.sql("INSERT INTO assets(key,uid,raw_sha256,encoded_sha256,encoded_bytes,state,created_at,start_sha256,start_bytes) VALUES(?,?,?,?,?,'stored',?,?,?)",
+        g.asset_key,g.uid,g.raw_sha256,g.encoded_sha256,g.encoded_bytes,sec(),g.start_sha256??null,g.start_bytes||0),
+      this.sql("UPDATE accounts SET bytes_reserved=bytes_reserved-?,bytes_used=bytes_used+?,pending=pending-1 WHERE uid=?",bytes,bytes,g.uid),
+      this.sql("UPDATE storage_budget SET bytes_reserved=bytes_reserved-?,bytes_used=bytes_used+? WHERE id=1",bytes,bytes),
       this.sql("UPDATE grants SET state='stored' WHERE id=?",g.id)]);
   }
   async publish(g) {
@@ -267,7 +274,7 @@ export class Store {
     this.active(a);
     if(!ids.length)return [];
     const owners=this.visibleOwners(a),ownerSQL=owners===null?'':' AND r.uid IN ('+owners.map(()=>'?').join(',')+')';
-    return this.rows("SELECT r.*,a.name,a.status,x.state AS asset_state FROM recordings r JOIN accounts a ON a.uid=r.uid JOIN assets x ON x.key=r.asset_key "+
+    return this.rows("SELECT r.*,a.name,a.status,x.state AS asset_state,x.start_sha256,x.start_bytes FROM recordings r JOIN accounts a ON a.uid=r.uid JOIN assets x ON x.key=r.asset_key "+
       "WHERE r.id IN ("+ids.map(()=>'?').join(',')+") AND r.published=1 AND a.invited=1 AND a.status IN ('active','rename_required') AND x.state='stored' AND "+
       "(EXISTS(SELECT 1 FROM winners w WHERE w.recording_id=r.id) OR EXISTS(SELECT 1 FROM pins p WHERE p.recording_id=r.id AND p.uid=? AND p.expires_at>?))"+ownerSQL,...ids,a.uid,sec(),...(owners||[]));
   }
