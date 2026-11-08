@@ -4,7 +4,6 @@ import asyncio
 import json
 import logging
 import os
-import shutil
 import sys
 import threading
 from pathlib import Path
@@ -14,8 +13,8 @@ from sm64_events.compare.service import CompareService
 from sm64_events.core.logging_setup import configure_logging
 from sm64_events.core.build_channel import current_build
 from sm64_events.core.paths import (
-    bundled_ffmpeg,
     compare_cache_dir,
+    ffmpeg_program,
     compilations_dir,
     db_path,
     data_root,
@@ -341,10 +340,9 @@ def _build_replay(replay_cfg, layout_of, service, *, recorder_lock=None):
     # the audio pump — every remaining replay glitch class traced to
     # that coupling (scattered missed slots, rare 100-200 ms gaps,
     # correlated audio hiccups). Fallback: the in-process writer.
-    import shutil as _shutil
     import subprocess as _sp
     video_sink_factory = None
-    _ffmpeg = bundled_ffmpeg() or _shutil.which("ffmpeg")
+    _ffmpeg = ffmpeg_program()
     if _ffmpeg:
         def video_sink_factory(cfg, on_seg, codec):
             from sm64_events.replay.ffmpeg_sink import FfmpegAvSink
@@ -461,7 +459,7 @@ def _comparison_services(replay, service, broadcaster, codec, replay_cfg):
     # (task 0053). The service reads tracker.db per call, so it answers 503
     # until the db lands, then works with no restart.
     compare = None
-    _ffmpeg_bin = bundled_ffmpeg() or shutil.which("ffmpeg")
+    _ffmpeg_bin = ffmpeg_program()
     if _ffmpeg_bin:
         importer = VideoImporter(compare_cache_dir(), _ffmpeg_bin)
         compare = CompareService(importer, service, broadcaster,
@@ -767,8 +765,30 @@ def _build_stale_natives() -> None:
         states = module.ensure()
     except Exception as failure:  # noqa: BLE001 - never stop the server over the bundle
         print(f"  WARNING: the native bundle was not checked: {failure}")
+    else:
+        print("  " + ", ".join(f"{name} {state}" for name, state in states.items()))
+    _place_pinned_ffmpeg(tool.parent / "build_ffmpeg.py")
+
+
+def _place_pinned_ffmpeg(tool) -> None:
+    """The ffmpeg.exe a release bundles, from the build cache into this
+    checkout (core/paths.py SOURCE_FFMPEG), so a source run uses it rather
+    than whichever ffmpeg is on PATH. Never compiles: without a cached build
+    the server says so and falls back to PATH."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("build_ffmpeg", tool)
+    try:
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        state = module.place()
+    except Exception as failure:  # noqa: BLE001 - never stop the server over ffmpeg
+        print(f"  WARNING: the pinned ffmpeg.exe was not checked: {failure}")
         return
-    print("  " + ", ".join(f"{name} {state}" for name, state in states.items()))
+    if state == "not built":
+        print("  ffmpeg.exe: the pinned build is not in the build cache; using the ffmpeg on PATH "
+              "(uv run python tools/build_ffmpeg.py builds it, a few minutes once)")
+    else:
+        print(f"  ffmpeg.exe {state}")
 
 
 def run(*, recorder_lock=None) -> None:

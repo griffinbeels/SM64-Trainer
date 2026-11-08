@@ -32,7 +32,10 @@ CASES = {
                   "-video_track_timescale", "90000"], None),
     "h264_bframes.mp4": ([*PICTURES, *VFR, "-c:v", "libx264", "-bf", "2",
                           "-video_track_timescale", "90000"], None),
-    "av1.mp4": ([*PICTURES, *VFR, "-c:v", "libsvtav1", "-video_track_timescale", "90000"], None),
+    # Stored, not made: the ffmpeg the app ships has no AV1 software encoder
+    # (ffmpeg/README.md). Made once with SVT-AV1 by the same recipe:
+    # PICTURES, VFR, -c:v libsvtav1 -video_track_timescale 90000 (25 pictures).
+    "av1.mp4": (FIXTURES / "mediaprobe_av1.mp4", None),
     "with_audio.mp4": ([*PICTURES, *TONE, *VFR, "-c:v", "libx264", "-bf", "0", "-c:a", "aac",
                         "-video_track_timescale", "90000", "-movflags", "+faststart"], None),
     "segment.ts": (["-f", "lavfi", "-i", "testsrc=size=320x240:rate=60:duration=2", *TONE,

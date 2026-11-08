@@ -270,7 +270,7 @@ def test_codec_selection_targets_the_backend_that_will_actually_run(monkeypatch,
     binary = "C:/specific/build/ffmpeg.exe"
     selected = "h264_amf" if ffmpeg_works else "libx264"
     calls, captured, instances = [], {}, {}
-    monkeypatch.setattr(main_mod, "bundled_ffmpeg", lambda: binary)
+    monkeypatch.setattr(main_mod, "ffmpeg_program", lambda: binary)
 
     def version(args, **kwargs):
         assert args == [binary, "-version"]
@@ -568,7 +568,7 @@ def test_dbless_boot_still_mounts_compare_and_compilation(monkeypatch):
     monkeypatch.setattr(main_mod, "acquire_instance_lock", lambda path: None)
     # ffmpeg must "exist" for the importer; a fake path is fine — the replay
     # sink's -version probe fails closed to the in-process encoder.
-    monkeypatch.setattr(main_mod, "bundled_ffmpeg",
+    monkeypatch.setattr(main_mod, "ffmpeg_program",
                         lambda: "C:/nonexistent/ffmpeg.exe")
     app = main_mod.build()
     paths = {r.path for r in app.routes}

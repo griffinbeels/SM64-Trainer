@@ -55,10 +55,22 @@ notices only (`licenses/third-party-sources.json`, `not_attached`).
 `test_components` adds what the tests' own ffmpeg command lines build their
 fixtures with: the lavfi input and its `color`, `testsrc`, `testsrc2`,
 `sine` and `anullsrc` sources (their pictures arrive as `wrapped_avframe`,
-so that decoder is included too), the `select` filter, and the `tee` muxer.
+so that decoder is included too), the `select` and `negate` filters (`negate`
+needs `lut`), the `qtrle` decoder that reads back the overlay movies, and the
+`tee` muxer.
 The app uses none of them. They are there so the suite tests the binary the
 app ships. Without them, 23 of the focused replay tests failed and 49 were
-skipped.
+skipped. `test_programs` also builds `ffprobe.exe` from the same tree: the
+tests use it to count a clip's packets and pictures. Its SHA-256 is pinned in
+`test_programs_sha256`, and the app neither ships nor runs it.
+
+A checkout runs the same binary. `tools/build_ffmpeg.py`, and the server
+starting from source (`python -m sm64_events.main`), place the cached pinned
+build in `src/sm64_events/data/ffmpeg/`, which git ignores, with
+`ffprobe.exe` beside it. `core/paths.py` `ffmpeg_program()` is the one
+answer to which ffmpeg runs: the bundled one, else the one on PATH. The
+server never compiles it: without a cached build it says so and uses PATH.
+CI's `ffmpeg` job builds it once per recipe and hands it to every test job.
 
 Unlike gyan.dev's build, this one carries no ffprobe or ffplay; the app
 never needed them. FFmpeg 8.1 also removed the old `hls` protocol handler
@@ -97,10 +109,12 @@ keyed by a digest of the inputs, the patches and the build script.
 
 To change a source, a package, a flag or a component:
 
-1. Edit `build-inputs.json` and remove `expected_sha256`.
-2. Build twice (`--rebuild`), and confirm that both builds have the same
-   SHA-256.
-3. Pin that SHA-256 as `expected_sha256`.
+1. Edit `build-inputs.json` and remove `expected_sha256` and
+   `test_programs_sha256`.
+2. Build twice (`--rebuild`), and confirm that both builds give the same
+   SHA-256 for each program.
+3. Pin ffmpeg.exe's as `expected_sha256` and ffprobe.exe's in
+   `test_programs_sha256`.
 4. Run `--notices`.
 5. Add any new source archive to `licenses/third-party-sources.json`.
    `tests/test_corresponding_source.py` refuses a build input that no

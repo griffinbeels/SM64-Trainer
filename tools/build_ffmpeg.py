@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -40,8 +41,6 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 INPUTS = REPO / "ffmpeg" / "build-inputs.json"
 PATCHES = REPO / "ffmpeg" / "patches"
-sys.path.insert(0, str(REPO / "tools"))
-import source_patch  # noqa: E402
 BELOW_NORMAL = 0x00004000
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 SOURCE_DATE_EPOCH = 1_788_000_000   # fixed; the binary carries no build date anyway
@@ -76,8 +75,8 @@ def build_id() -> str:
     left out), the patches and the build script itself, for a stand-in work
     folder (the real one never reaches the binary). Editing this file's
     checks or text leaves the cached build valid."""
-    spec = inputs()
-    spec.pop("expected_sha256", None)
+    spec = {key: value for key, value in inputs().items()
+            if key not in ("expected_sha256", "test_programs_sha256")}
     recipe = build_script(spec, Path("/work"), 1)
     digest = hashlib.sha256(json.dumps(spec, sort_keys=True).encode() + b"\0" + recipe.encode())
     for patch in sorted(PATCHES.glob("*.json")):
@@ -159,6 +158,11 @@ def unpack_sources(spec: dict, root: Path, work: Path) -> None:
         with tarfile.open(archive) as bundle:
             bundle.extractall(work / "src", filter="data")
         (work / "src" / item["folder"]).rename(work / "src" / name)
+    # Loaded by path, not through sys.path: the server imports this module
+    # (place) and must not gain tools/ on its import path.
+    spec = importlib.util.spec_from_file_location("ffmpeg_source_patch", REPO / "tools" / "source_patch.py")
+    source_patch = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(source_patch)
     for patch in sorted(PATCHES.glob("*.json")):
         source_patch.apply_patch(work / "src", patch)
 
@@ -172,10 +176,17 @@ def components(spec: dict) -> dict[str, list[str]]:
     return merged
 
 
+def programs(spec: dict) -> list[str]:
+    """The programs the build writes: ffmpeg.exe, which the app bundles, then
+    the test-only ones (`test_programs`: ffprobe.exe, the tests' witness)."""
+    return ["ffmpeg.exe", *(f"{name}.exe" for name in spec.get("test_programs", []))]
+
+
 def configure_args(spec: dict) -> list[str]:
     """FFmpeg's configure line: the pinned flags, then each component list.
     It names no path of this machine (ffmpeg -version prints it)."""
-    args = [f"--extra-version={spec['version_suffix']}", *spec["configure"]]
+    args = [f"--extra-version={spec['version_suffix']}", *spec["configure"],
+            *(f"--enable-{name}" for name in spec.get("test_programs", []))]
     for kind, names in components(spec).items():
         if names:
             args.append(f"--enable-{kind}={','.join(names)}")
@@ -239,12 +250,13 @@ sed -i 's/^Libs: \\(.*\\)$/Libs: \\1 -lstdc++/' "$P/lib/pkgconfig/vpl.pc"
 echo "== ffmpeg"
 cd "$W/src/ffmpeg"
 ./configure {ffmpeg_configure}
-make -j$J ffmpeg.exe
+make -j$J {" ".join(programs(spec))}
 """
 
 
 def build(root: Path, jobs: int) -> Path:
-    """Build ffmpeg.exe for the pinned inputs into `root/out/<build id>/`."""
+    """Build the programs for the pinned inputs into `root/out/<build id>/`;
+    return ffmpeg.exe's path there."""
     spec = inputs()
     msys = toolchain(root, spec)
     work = root / "work"
@@ -252,30 +264,42 @@ def build(root: Path, jobs: int) -> Path:
     (work / "src").mkdir(parents=True)
     unpack_sources(spec, root, work)
     _run_bash(msys, build_script(spec, work, jobs), root / "build.log", work)
-    built = work / "src" / "ffmpeg" / "ffmpeg.exe"
-    if not built.is_file():
-        raise RuntimeError(f"the build reported success but {built} is missing")
-    target = root / "out" / build_id() / "ffmpeg.exe"
-    target.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(built, target)
+    out = root / "out" / build_id()
+    out.mkdir(parents=True, exist_ok=True)
+    for name in programs(spec):
+        built = work / "src" / "ffmpeg" / name
+        if not built.is_file():
+            raise RuntimeError(f"the build reported success but {built} is missing")
+        shutil.copyfile(built, out / name)
     _rmtree(work)
-    return target
+    return out / "ffmpeg.exe"
+
+
+def pins(spec: dict) -> dict[str, str]:
+    """Each program's pinned SHA-256: ffmpeg.exe's `expected_sha256`, then the
+    test programs' `test_programs_sha256`."""
+    pinned = dict(spec.get("test_programs_sha256", {}))
+    if spec.get("expected_sha256"):
+        pinned["ffmpeg.exe"] = spec["expected_sha256"]
+    return pinned
 
 
 def ensure(root: Path | None = None, jobs: int = 12, rebuild: bool = False, *, build_missing: bool = True) -> Path:
     """The ffmpeg.exe for these inputs: cached by build id, built when missing
-    (unless `build_missing` is off: a read-only check), and refused when it is
-    not the pinned result."""
+    (unless `build_missing` is off: a read-only check), and refused when it or
+    a test program beside it is not the pinned result."""
     root = root or default_root()
-    cached = root / "out" / build_id() / "ffmpeg.exe"
-    if not (rebuild or cached.is_file() or build_missing):
-        raise RuntimeError(f"ffmpeg.exe for these inputs is not built yet ({cached}): "
+    spec = inputs()
+    out = root / "out" / build_id()
+    cached = all((out / name).is_file() for name in programs(spec))
+    if not (rebuild or cached or build_missing):
+        raise RuntimeError(f"ffmpeg.exe for these inputs is not built yet ({out}): "
                            "run uv run python tools/build_ffmpeg.py")
-    path = build(root, jobs) if rebuild or not cached.is_file() else cached
-    expected = inputs().get("expected_sha256")
-    if expected and _sha256(path) != expected:
-        raise RuntimeError(f"{path} ({_sha256(path)}) is not the pinned build ({expected}): "
-                           "same inputs, other bytes")
+    path = build(root, jobs) if rebuild or not cached else out / "ffmpeg.exe"
+    for name, expected in pins(spec).items():
+        if _sha256(out / name) != expected:
+            raise RuntimeError(f"{out / name} ({_sha256(out / name)}) is not the pinned build ({expected}): "
+                               "same inputs, other bytes")
     return path
 
 
@@ -343,9 +367,42 @@ def notices_text(spec: dict | None = None) -> str:
     lines += ["", "Inside ffmpeg.exe, with the license texts in this folder:"]
     for folder, what, license in NOTICE_FOLDERS:
         lines += [f"  {folder}/: {what}", f"    {license}"]
-    lines += ["", "Configuration (what ffmpeg -version prints):"]
+    lines += ["", "The same build also writes ffprobe.exe (--enable-ffprobe) for the trainer's tests;",
+              "the app does not ship it.", "", "Configuration (what ffmpeg -version prints):"]
     lines += [f"  {arg}" for arg in configure_args(spec)]
     return "\n".join(lines) + "\n"
+
+
+# Where a checkout runs it from (src/sm64_events/core/paths.py SOURCE_FFMPEG;
+# git ignores it), as tools/build_natives.py places the natives.
+SOURCE_COPY = REPO / "src" / "sm64_events" / "data" / "ffmpeg" / "ffmpeg.exe"
+
+
+def place(root: Path | None = None, target: Path = SOURCE_COPY) -> str:
+    """Put the pinned build where a source run finds it, ffprobe.exe beside
+    ffmpeg.exe as the tests expect: "fresh" when they are there already,
+    "placed" when copied from the build cache, "not built" when the cache
+    holds no build of these inputs. Never compiles: the build takes minutes
+    and downloads its toolchain, so it is tools/build_ffmpeg.py's own job. A
+    copy that is not the pin is removed, so a source run falls back to PATH
+    rather than to a stale build."""
+    pinned = pins(inputs())
+    folder, cache = target.parent, (root or default_root()) / "out" / build_id()
+    if all((folder / name).is_file() and _sha256(folder / name) == sha for name, sha in pinned.items()):
+        return "fresh"
+    try:
+        if not all((cache / name).is_file() and _sha256(cache / name) == sha for name, sha in pinned.items()):
+            for name in pinned:
+                (folder / name).unlink(missing_ok=True)
+            return "not built"
+        folder.mkdir(parents=True, exist_ok=True)
+        for name in pinned:
+            partial = folder / (name + ".partial")
+            shutil.copyfile(cache / name, partial)
+            os.replace(partial, folder / name)
+    except PermissionError:
+        return "in use"     # a running ffmpeg.exe holds it; the next start replaces it
+    return "placed"
 
 
 def _listed(ffmpeg: Path, flag: str) -> str:
@@ -385,7 +442,8 @@ def verify(ffmpeg: Path) -> list[str]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--root", type=Path, default=None, help="build cache folder")
-    parser.add_argument("--out", type=Path, default=None, help="also copy ffmpeg.exe into this folder")
+    parser.add_argument("--out", type=Path, default=None,
+                        help="also copy ffmpeg.exe and the test programs into this folder")
     parser.add_argument("--jobs", type=int, default=12, help="parallel compilers (default 12)")
     parser.add_argument("--rebuild", action="store_true", help="build again even when cached")
     parser.add_argument("--notices", action="store_true",
@@ -406,8 +464,9 @@ def main() -> int:
         return 2
     if args.out:
         args.out.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(path, args.out / "ffmpeg.exe")
-    print(f"{path}\nsha256 {_sha256(path)}")
+        for name in programs(inputs()):
+            shutil.copyfile(path.parent / name, args.out / name)
+    print(f"{path}\nsha256 {_sha256(path)}\nthis checkout's copy: {place(args.root)}")
     return 0
 
 

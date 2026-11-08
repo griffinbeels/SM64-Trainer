@@ -2,7 +2,7 @@ ffmpeg.exe for SM64 Trainer
 
 Version: 8.1.1-sm64trainer
 
-SHA-256: 6118290676b7273f6a0c6cabb4ff898ff2a40666046ec2264615914326100918
+SHA-256: e611814e87ee9c77141ca7587298212612d98762032ca882b11816963b03b61e
 
 License: GPL version 3 or later. FFmpeg is configured with --enable-gpl
 --enable-version3, and links x264 (GPL v2 or later).
@@ -62,6 +62,9 @@ Inside ffmpeg.exe, with the license texts in this folder:
   gcc-runtime/: libgcc and libstdc++ from GCC 16.2.0 (libvpl is C++)
     GPL-3.0 with the GCC Runtime Library Exception (COPYING.RUNTIME; the GPL v3 is FFmpeg/COPYING.GPLv3)
 
+The same build also writes ffprobe.exe (--enable-ffprobe) for the trainer's tests;
+the app does not ship it.
+
 Configuration (what ffmpeg -version prints):
   --extra-version=sm64trainer
   --disable-everything
@@ -90,11 +93,12 @@ Configuration (what ffmpeg -version prints):
   --enable-dxva2
   --enable-schannel
   --enable-network
+  --enable-ffprobe
   --enable-encoder=libx264,h264_nvenc,av1_nvenc,h264_amf,av1_amf,h264_qsv,av1_qsv,aac,pcm_s16le,wrapped_avframe,rawvideo,prores_ks,qtrle,png
-  --enable-decoder=rawvideo,pcm_s16le,pcm_s16be,pcm_s24le,pcm_s32le,pcm_f32le,pcm_u8,h264,hevc,vp8,vp9,libdav1d,mpeg4,mpeg2video,mpeg1video,png,mjpeg,aac,aac_latm,opus,vorbis,mp3float,mp2float,flac,ac3,eac3,alac,wrapped_avframe
+  --enable-decoder=rawvideo,pcm_s16le,pcm_s16be,pcm_s24le,pcm_s32le,pcm_f32le,pcm_u8,h264,hevc,vp8,vp9,libdav1d,mpeg4,mpeg2video,mpeg1video,png,mjpeg,aac,aac_latm,opus,vorbis,mp3float,mp2float,flac,ac3,eac3,alac,wrapped_avframe,qtrle
   --enable-demuxer=nut,mov,matroska,mpegts,mpegps,rawvideo,pcm_s16le,wav,concat,image2,image_png_pipe,hls,flv,live_flv,mp3,ogg,aac,avi,ivf,h264,hevc,m4v,ffmetadata
   --enable-muxer=mp4,mov,ipod,framemd5,null,segment,mpegts,rawvideo,flv,matroska,webm,nut,ffmetadata,wav,tee
-  --enable-filter=aresample,aformat,anull,abuffer,abuffersink,atrim,asetpts,apad,asplit,volume,buffer,buffersink,null,format,scale,pad,setsar,setdar,fps,concat,crop,vflip,hflip,transpose,rotate,trim,setpts,setparams,ssim,split,copy,color,testsrc,testsrc2,sine,anullsrc,select
+  --enable-filter=aresample,aformat,anull,abuffer,abuffersink,atrim,asetpts,apad,asplit,volume,buffer,buffersink,null,format,scale,pad,setsar,setdar,fps,concat,crop,vflip,hflip,transpose,rotate,trim,setpts,setparams,ssim,split,copy,color,testsrc,testsrc2,sine,anullsrc,select,lut,negate
   --enable-bsf=setts,aac_adtstoasc,vp9_superframe,vp9_superframe_split,h264_mp4toannexb,hevc_mp4toannexb,extract_extradata,null
   --enable-parser=h264,hevc,vp8,vp9,av1,mpeg4video,mpegvideo,aac,aac_latm,opus,vorbis,mpegaudio,flac,ac3,png,mjpeg
   --enable-protocol=file,pipe,concat,http,https,tls,tcp,crypto,data,httpproxy

@@ -277,8 +277,8 @@ class SceneExports:
                 package, sidecar = lab.open_path, None
         encoder = self.options.get("encoder") or {"kind": "ffmpeg"}
         if encoder.get("kind", "ffmpeg") == "ffmpeg":
-            from sm64_events.core.paths import bundled_ffmpeg
-            ffmpeg = encoder.get("ffmpeg") or bundled_ffmpeg() or shutil.which("ffmpeg")
+            from sm64_events.core.paths import ffmpeg_program
+            ffmpeg = encoder.get("ffmpeg") or ffmpeg_program()
             if not ffmpeg:
                 raise RuntimeError("FFmpeg is missing, so the video cannot be encoded.")
             encoder = {"kind": "ffmpeg", "ffmpeg": ffmpeg, "codec": encoder.get("codec") or self.codec}

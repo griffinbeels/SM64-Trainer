@@ -1,6 +1,9 @@
 {
   "about": "ffmpeg.exe, built by tools/build_ffmpeg.py from pinned sources with a pinned portable MSYS2 UCRT64 toolchain: the sources PyAV's own FFmpeg comes from (pyav-ffmpeg 8.1.1-2), trimmed to what the app runs (ffmpeg/README.md).",
-  "expected_sha256": "6118290676b7273f6a0c6cabb4ff898ff2a40666046ec2264615914326100918",
+  "expected_sha256": "e611814e87ee9c77141ca7587298212612d98762032ca882b11816963b03b61e",
+  "test_programs_sha256": {
+    "ffprobe.exe": "cb3a745815f53ee219703d336d71bca8d283bb571e5c231c0feba9016dab6c88"
+  },
   "pyav_ffmpeg": {
     "tag": "8.1.1-2",
     "url": "https://github.com/PyAV-Org/pyav-ffmpeg/tree/8.1.1-2",
@@ -340,11 +343,12 @@
     "--enable-schannel",
     "--enable-network"
   ],
-  "test_components_about": "Not used by the app: what the tests' own ffmpeg command lines make their fixtures with (the lavfi input and its sources, whose pictures arrive as wrapped_avframe; the select filter; the tee muxer), so the suite runs against the binary the app ships.",
+  "test_components_about": "Not used by the app: what the tests' own ffmpeg command lines make their fixtures with (the lavfi input and its sources, whose pictures arrive as wrapped_avframe; the select and negate filters, negate needing lut; the qtrle decoder that reads back overlay movies; the tee muxer), so the suite runs against the binary the app ships. test_programs: ffprobe.exe, the tests' independent count of a clip's packets and pictures, built from the same tree; the app never ships or runs it.",
+  "test_programs": ["ffprobe"],
   "test_components": {
     "indev": ["lavfi"],
-    "decoder": ["wrapped_avframe"],
-    "filter": ["color", "testsrc", "testsrc2", "sine", "anullsrc", "select"],
+    "decoder": ["wrapped_avframe", "qtrle"],
+    "filter": ["color", "testsrc", "testsrc2", "sine", "anullsrc", "select", "lut", "negate"],
     "muxer": ["tee"]
   },
   "components": {

@@ -31,6 +31,8 @@ def test_every_input_is_pinned_by_url_and_sha256():
         assert re.fullmatch(r"https://repo\.msys2\.org/(mingw/ucrt64/mingw-w64-ucrt-x86_64-|msys/x86_64/)"
                             r"[^/]+-\d[^/]*\.pkg\.tar\.zst", item["url"]), item
     assert re.fullmatch(r"[0-9a-f]{64}", SPEC["expected_sha256"])
+    assert set(build_ffmpeg.pins(SPEC)) == set(build_ffmpeg.programs(SPEC)), "every program built is pinned"
+    assert all(re.fullmatch(r"[0-9a-f]{64}", sha) for sha in build_ffmpeg.pins(SPEC).values())
 
 
 def test_the_configuration_is_gpl_v3_without_nonfree_and_names_no_local_path():
@@ -91,17 +93,26 @@ def test_the_cache_key_follows_the_recipe_not_the_tools_own_text(monkeypatch):
 def test_a_build_that_is_not_the_pin_is_refused(tmp_path, monkeypatch):
     out = tmp_path / "out" / build_ffmpeg.build_id()
     out.mkdir(parents=True)
-    (out / "ffmpeg.exe").write_bytes(b"another build")
+    for name in build_ffmpeg.programs(SPEC):
+        (out / name).write_bytes(b"another build")
     with pytest.raises(RuntimeError, match="not the pinned build"):
         build_ffmpeg.ensure(tmp_path, build_missing=False)
-    (out / "ffmpeg.exe").unlink()
+    (out / "ffprobe.exe").unlink()
     with pytest.raises(RuntimeError, match="not built yet"):
         build_ffmpeg.ensure(tmp_path, build_missing=False)
 
 
+def test_ffprobe_is_built_for_the_tests_and_never_shipped():
+    assert build_ffmpeg.programs(SPEC) == ["ffmpeg.exe", "ffprobe.exe"]
+    assert "--enable-ffprobe" in build_ffmpeg.configure_args(SPEC)
+    exe = (ROOT / "tools" / "build_exe.py").read_text(encoding="utf-8")
+    assert "ffprobe" not in exe, "the app bundles ffmpeg.exe alone"
+
+
 def test_the_built_binary_lists_every_pinned_component():
-    cached = build_ffmpeg.default_root() / "out" / build_ffmpeg.build_id() / "ffmpeg.exe"
-    if not cached.is_file():
-        pytest.skip(f"ffmpeg.exe is not built in this machine's cache ({cached}): tools/build_ffmpeg.py")
-    assert build_ffmpeg._sha256(cached) == SPEC["expected_sha256"]
-    assert build_ffmpeg.verify(cached) == []
+    out = build_ffmpeg.default_root() / "out" / build_ffmpeg.build_id()
+    if not (out / "ffmpeg.exe").is_file():
+        pytest.skip(f"ffmpeg.exe is not built in this machine's cache ({out}): tools/build_ffmpeg.py")
+    for name, sha in build_ffmpeg.pins(SPEC).items():
+        assert build_ffmpeg._sha256(out / name) == sha, name
+    assert build_ffmpeg.verify(out / "ffmpeg.exe") == []
