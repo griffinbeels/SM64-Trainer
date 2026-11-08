@@ -150,7 +150,7 @@ test('a new privacy version holds an account at the consent step until it accept
   }finally{env.DB.close();}
 });
 
-test('the privacy notice says what a ghost start holds, its size, who receives it and that it is deleted with its ghost',async()=>{
+test('the privacy notice says what a ghost start holds, its size, who receives it, that it is deleted with its ghost, and that controller input is always shared',async()=>{
   const {env}=await environment(),h=harness(env);
   try{
     const page=await (await h.call('/policies')).response.text();
@@ -163,6 +163,11 @@ test('the privacy notice says what a ghost start holds, its size, who receives i
       'The players who can download a ghost can also download its start',
       'when your account is deleted, the start is removed together with the ghost'])
       assert(paragraph.includes(words),words);
+    // Every shared ghost carries its pads (required since 2026-10-12), so the
+    // notice must not call controller input optional.
+    const privacy=page.slice(page.indexOf('<section id="privacy">'),page.indexOf('<section id="progress">'));
+    assert(privacy.includes('Native bytes contain pose and camera data, raw controller input,'));
+    assert(!/optional[^.]*controller input/i.test(privacy),'controller input is always included');
   }finally{env.DB.close();}
 });
 
