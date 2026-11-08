@@ -41,7 +41,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import handoff_slot as slots  # noqa: E402
 
 sim = slots.sim
-from sm64_events.slotlibrary.usamune import BODY_BYTES, BODY_START, SEGMENT_BYTES, SEGMENT_TABLE  # noqa: E402
+from sm64_events.slotlibrary.usamune import BODY_BYTES, SEGMENT_BYTES, US  # noqa: E402
+
+BODY_START, SEGMENT_TABLE = US.body_start, US.segment_table   # its scenes are recordings of Usamune US
 
 CURR_DEMO_INPUT = 0x8032D5F0         # the dispatcher saves only while this is 0 (read off its code, 0x8041266C)
 RANDOM_SEED_WORD = slots.RANDOM_SEED & ~3

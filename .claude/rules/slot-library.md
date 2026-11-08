@@ -11,6 +11,9 @@ paths:
   - "tests/test_handoff_try.py"
   - "tests/test_slot_relocate.py"
   - "tests/test_slot_refit.py"
+  - "tests/test_slot_builds.py"
+  - "tests/test_slot_translate.py"
+  - "tools/scene_lab/slot_atlas.py"
   - "tools/scene_lab/handoff_relocate.py"
 ---
 
@@ -19,6 +22,8 @@ paths:
 | To change... | Edit |
 |---|---|
 | Slot format, cartridge checks, the one write into game memory | `slotlibrary/usamune.py`. Every write goes through `write_slot_bytes`, inside one slot's range |
+| A save state from the other build (US in a JP game, or back) | `slotlibrary/translate.py::for_build`, the one door: `coursesets.place_states` and `handoff_try.install` call it when the state's build differs from the running one. `slotlibrary/atlas.py` owns the per-place atlas (format, `AtlasStore`, the hidden child); `tools/scene_lab/slot_atlas.py` builds one from cold boots of both ROMs (`cold_boot.py`). Static memory moves by `data/build_shifts.tsv` (`tools/import_stroop_maps.py`) |
+| Which Usamune build (US or JP) a slot belongs to | `slotlibrary/usamune.py`: `check_cartridge` returns the running `Build`, built from that version's layout rows; every reader and writer takes it. Module constants are slot-format offsets, the same in both builds. `KeptState.build` reads the cartridge name the record already holds, so no record changed |
 | Moving Mario inside a slot's data to the running game's place | `slotlibrary/relocate.py` (`to_live_place`); the simulation's evidence is `tools/scene_lab/handoff_relocate.py` |
 | How a kept state is stored, named or looked up | `slotlibrary/store.py`; `core/paths.py::slot_library_dir` says where. Nothing deletes a state |
 | What counts as a new save | `slotlibrary/watcher.py::watch_step` |
@@ -27,6 +32,7 @@ paths:
 | The `.sm64state` file and its refusals | `slotlibrary/sharefile.py` |
 | Driving it by hand | `tools/scene_lab/slot_library.py` |
 | One recorded frame as a slot, the Scene viewer's Save states row | `tools/scene_lab/moment_slot.py` (the build and `compare`, its evidence), `server/scene_moments.py` (routes), `ui/components/scenemoment.js` (the row) |
+| Which [[re-simulated scene]]s may make save states | `SAVE_STATES` in `tools/scene_lab/ghost_resim.py`, the one switch; `scene_moments._ghost_source` asks it. A reset's scene stays off until Griffin decides |
 
 Contracts the tests pin:
 
@@ -48,6 +54,16 @@ Contracts the tests pin:
   one `data/slot_refit.jsonl` line per pass (counts and kinds, no addresses; `tools/what_happened.py` shows it).
   It is the Trainer's action, so it is never a journal event.
 - **Capture before the first write.** A capture that fails writes nothing.
+- **Translation is exact or nothing.** `for_build` refuses unless the game stands in the state's level and area and
+  its main pool starts as the atlas says; a pointer it cannot map is reported (`Translation.unmapped`) and both
+  writers refuse the state. Segmented addresses are read only at object rawData and gPlayerSpawnInfos. An object
+  whose script the running build lacks is unloaded in the data the way `unload_object` does it, unless anything but
+  its list and the scene graph holds it. The kept state stays in its own build: `keep_built` records the image's
+  build, not the running game's. Evidence, simulation only (2026-11-08, `tools/scene_lab/slot_atlas.py` and the
+  shipped modules end to end): BoB US to JP and JP to US, and 7 of his WF kept states US to JP, each loaded by the
+  other build's own Usamune load: Mario 0.000 units off for 300 frames, 0 unmapped pointers.
+- **An atlas needs both ROMs and the simulator.** The child runs `slot_atlas.py` with the venv's packages (unicorn is
+  a dev dependency today), so the frozen app cannot build one yet.
 - **The watcher never runs on the poller's thread.** Nine slots cost 4.3 ms to read and 0.3 ms to hash, and a new
   state adds a compress and a disk write.
 

@@ -333,7 +333,8 @@ slot, and checks the rest of the [[frame]] against the recording. A [[frame]] Us
 the row says why. So does a game in another level, or a level that loaded in another way. If Mario sits in another
 place in the game's memory, the write uses [[mario relocation]] first. A recording made before
 this feature lacks a few small values, so the row says it may not be exact. A state the row writes joins the
-[[slot library]].
+[[slot library]]. After a write the row shows the flag of the version the save state came from; one written into
+the other version's game says so in words ([[save state translation]]).
 
 - **Lives** -- `tools/scene_lab/moment_slot.py`, `src/sm64_events/server/scene_moments.py`,
   `src/sm64_events/ui/components/scenemoment.js`; lab only
@@ -382,6 +383,26 @@ through is not written.
 - **Lives** -- `src/sm64_events/slotlibrary/relocate.py`; every write runs it
 - **Not** -- changing Usamune's check, which Griffin ruled out (2026-11-05)
 
+### Save state translation
+
+A save state made by Usamune US, written into a game running Usamune JP, or the other way round. Both versions save
+the same bytes in the same order. Only the addresses inside differ, so the Trainer rewrites each address to the place
+the other version keeps the same thing. The game must stand in the save state's level and area. The Trainer leaves
+out an object the other version does not have, and the page says what is there instead. The Trainer writes nothing
+when an address has no place in the other version. Then the Trainer moves Mario with [[mario relocation]], as for
+any save state. The [[kept state]] keeps its own version's bytes.
+
+- **Lives** -- `src/sm64_events/slotlibrary/translate.py`; every write path calls it when the versions differ
+- **Not** -- a change to the game or Usamune: the data changes, the code does not
+
+### Atlas
+
+For one level and area, which address in the US game holds the same level data as which address in the JP game. The
+Trainer makes one the first time a [[save state translation]] needs it, by starting both games from their cartridges
+in its simulator, about 10 seconds. It keeps the atlas beside the [[slot library]]. Making one needs both ROMs.
+
+- **Lives** -- `src/sm64_events/slotlibrary/atlas.py`, built by `tools/scene_lab/slot_atlas.py`; lab only
+
 ### Slot refit
 
 After every spawn (a practice [[reset]], entering a level or an area), the Trainer gives each Usamune save state
@@ -397,7 +418,9 @@ not written again. The pass skips a state he saves over while it works. Before i
 
 One [[kept state]] as a `.sm64state` file you can send to a friend. Opening one
 adds it to the [[slot library]] and writes nothing to the game. The Trainer
-refuses a damaged or oversized file, and one from another Usamune build.
+refuses a damaged or oversized file, and one from another Usamune build. While
+the game is running, the Trainer keeps a file from the other version (US or JP),
+because [[save state translation]] can place it.
 
 - **Lives** -- `src/sm64_events/slotlibrary/sharefile.py`
 
@@ -1497,6 +1520,38 @@ The reader refuses a version or layer it does not know.
   (`tools/scene_lab/audio_session.py`)
 - **Not** -- what the [[scene tap]] itself writes, which holds raw memory
   images and pictures and stays private on the machine that recorded it
+
+### Re-simulated scene
+
+A [[scene package]] the lab makes from a [[ghost]] alone: the [[ghost]]'s
+recorded pads play SM64's own code from a start, in the simulation, and the
+real [[scene tap]] producer records each simulated [[frame]]. The start, best
+first: the [[ghost's start]]; his own [[attempt scene]] that begins at the
+[[ghost]]'s first record; another take's practice [[reset]] in that level; or a
+practice [[reset]] the simulation makes from the cartridge alone for any course
+and act, even one he never played (a stage). That last [[reset]] needs no
+recording, and every machine with the same ROM makes the same bytes, so the
+lab also measures a [[ghost's start]] against it. The lab compares every simulated
+[[frame]]'s Mario with the [[ghost]]'s recorded pose, and the scene names the
+first record where they part. From his own [[attempt scene]] or a start file
+the scene matches to the byte; from a [[reset]] Mario stays exact, but moving
+platforms and enemies may stand at another point in their cycle, so such a
+scene makes a save state only before the parting record, and only after the
+slot passes a load check in the simulation (one switch: `SAVE_STATES` in
+`tools/scene_lab/ghost_resim.py`). Another player's [[ghost]] works the same
+way: the act is its [[star]]'s, and the scene names the cartridge its player
+recorded it on beside the one it ran on. The lab plays these scenes on the US
+cartridge only for now. It makes a JP [[reset]] and checks JP starts against it,
+but it cannot play a JP scene or make a JP save state yet, and it says so in
+one sentence when asked. Three of his Whomp's Fortress [[ghost]]s and two
+other players' (2026-11-08): no parting record from any start, about 25-45 s
+to make, a cache read after that.
+
+- **Lives** -- `tools/scene_lab/ghost_resim.py` (from a ghost),
+  `tools/scene_lab/stage_sim.py` (a stage), `tools/scene_lab/sim_scene.py`
+  (the producer feed); `src/sm64_events/server/scene_resim.py` runs them in a
+  child process; lab only
+- **Not** -- an [[attempt scene]], which the cutter cuts from the live recording
 
 ### Scene evaluator
 
@@ -2677,17 +2732,31 @@ it does not certify that gameplay was legitimate. Sharing begins unchecked.
 ### Ghost's start
 
 The game state a [[ghost]] begins from, saved with its recording. With it, the
-[[ghost]]'s recorded pads re-simulate the whole recording exactly. The trainer
-uploads a [[community ghost]]'s start after the [[ghost]]'s own bytes when the
-cloud accepts one, at most 64 KiB. The cloud keeps the start in the same object as
-its [[ghost]], counts its bytes in every storage budget and deletes it with the
-[[ghost]]. The cloud and the community client never read inside a start. A
-downloaded start came from another player's trainer, so its owner validates it
-before any use. A missing start never stops a [[ghost]] from sharing or playing.
+[[ghost]]'s recorded pads re-simulate the whole recording exactly in a
+[[re-simulated scene]], even after the [[attempt scene]] it came from is gone:
+the [[scene state]] regions of that first record, and his own copy also keeps
+the main pool's difference from the simulated practice [[reset]] of that level
+and act. About 25 KB on his machine; about 21 KB travels, without the main-pool
+part, which no other machine applies. The trainer saves one when an [[attempt
+scene]] becomes ready while its recording's clip exists, and when the lab
+re-simulates a [[ghost]] from his own [[attempt scene]]. It uploads a [[community
+ghost]]'s start after the [[ghost]]'s own bytes when the cloud accepts one, at
+most 64 KiB. The cloud keeps the start in the same object as its [[ghost]],
+counts its bytes in every storage budget and deletes it with the [[ghost]]; on
+his machine a purge deletes a start when the last clip of its bytes goes. The
+cloud and the community client never read inside a start. A downloaded start
+came from another player's trainer, so its owner checks its size, shape and
+binding to the [[ghost]]'s first record, keeps it apart from his own, and the
+lab checks every pointer in it against his ROM before it simulates anything. A
+missing or refused start never stops a [[ghost]] from sharing or playing.
 
-- **Lives** — `cloud/community/src/service.js` (storage and routes),
+- **Lives** -- `src/sm64_events/ghost/start_frame.py` (the versioned file and its
+  checks, in the ghost population folder's starts folder),
+  `tools/scene_lab/start_check.py` (the pointer checks),
+  `cloud/community/src/service.js` (storage and routes),
   `src/sm64_events/community/ghost_start.py` (the client's seam to its owner) and
   `src/sm64_events/community/sync.py` (send and download)
+- **Not** -- the clip, whose format the race and the community exchange
 
 ### Has ghost
 

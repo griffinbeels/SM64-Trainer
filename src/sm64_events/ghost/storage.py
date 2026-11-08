@@ -15,6 +15,11 @@ handed, skipping what Windows will not let go of.
 | his ghost population (`ghost_population_root()`) | `ghost/population.py` `LocalPopulation.holdings` / `remove` | the attempt it came from, else the row |
 | downloaded community ghosts (packaged builds) | `community/cache.py` `CachedPopulation.cached_holdings` / `drop_cached` | the recording |
 | imported ghosts (`shared-ghosts/`) | `ghost/sharing.py` `GhostSharing.holdings` / `remove` | the import |
+| ghost starts (`starts/` beside the population) | `ghost/start_frame.py` `holdings` / `remove_holdings` | its clip's ghost |
+
+A ghost start (the game state a ghost begins from, kept so the lab can re-simulate it) follows its clip: it
+counts in the ghost that clip counts in, is kept and pinned with it, and goes only when every clip of its
+sha goes (a population row and his recorded run may share the bytes).
 
 "Keep PBs" keeps, besides every kept attempt's files: each PB (the latest visible save of every
 star and segment, per strategy and per ROM, so whichever ROM runs and whichever slot grades, the
@@ -48,6 +53,8 @@ log = logging.getLogger("sm64.ghost")
 
 #: How far back the owed table is read for runs a purge must not touch.
 OWED_LIMIT = 4096
+#: (path, size, mtime) -> sha256 of a clip a start may belong to (Settings asks often; clips rarely change).
+_CLIP_SHAS: dict = {}
 _PURGING = threading.Lock()
 
 
@@ -64,6 +71,7 @@ class Holding:
     pinned: bool = False        # never deleted by either button
     busy: bool = False          # in use right now
     shares: tuple = field(default_factory=tuple)   # population: clip bytes counted once per digest
+    owners: tuple = field(default_factory=tuple)   # a start: id() of every clip holding of its sha
 
 
 def _normal(path) -> str:
@@ -151,7 +159,58 @@ class GhostStorage:
             holding.pinned = (holding.pinned or bool(normal & uploads) or bool(set(holding.shares) & digests)
                               or (blind and holding.kind in ("recorded", "population")))
             holding.keep = holding.kind == "import" or (holding.attempt is not None and holding.attempt in keep)
+        try:
+            found += self._starts(found)
+        except Exception:  # noqa: BLE001 - starts that cannot be listed are neither shown nor deleted
+            log.warning("Ghost starts could not be listed.", exc_info=True)
         return found
+
+    def _starts_root(self):
+        store = self._local_store()
+        return getattr(store, "root", None)
+
+    def _clip_shas(self, holding: Holding) -> set[str]:
+        """The sha256 of every clip a holding deletes: the digest it names, else its .ghost files hashed
+        (remembered by path, size and time, so Settings reads each clip once)."""
+        import hashlib
+        if holding.shares:
+            return set(holding.shares)
+        found = set()
+        for path in holding.paths:
+            path = Path(path)
+            if path.suffix != ".ghost":
+                continue
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            key = (_normal(path), stat.st_size, stat.st_mtime_ns)
+            digest = _CLIP_SHAS.get(key)
+            if digest is None:
+                digest = _CLIP_SHAS[key] = hashlib.sha256(path.read_bytes()).hexdigest()
+            found.add(digest)
+        return found
+
+    def _starts(self, found: list[Holding]) -> list[Holding]:
+        from sm64_events.ghost import start_frame
+        root = self._starts_root()
+        rows = start_frame.holdings(root) if root is not None else []
+        if not rows:
+            return []
+        wanted = {row["sha256"] for row in rows}
+        owners = defaultdict(list)
+        for holding in found:
+            if holding.kind in ("recorded", "population", "community", "import"):
+                for digest in self._clip_shas(holding) & wanted:
+                    owners[digest].append(holding)
+        starts = []
+        for row in rows:
+            mine = owners.get(row["sha256"], [])
+            starts.append(Holding("start", row["sha256"], mine[0].ghost if mine else ("start", row["sha256"]),
+                                  row["bytes"], (row["path"],), attempt=mine[0].attempt if mine else None,
+                                  keep=any(h.keep for h in mine), pinned=any(h.pinned for h in mine),
+                                  busy=any(h.busy for h in mine), owners=tuple(id(h) for h in mine)))
+        return starts
 
     def _pending_uploads(self):
         """(paths, digests) of unsent uploads, ((), ()) with no community, None when unreadable."""
@@ -256,8 +315,13 @@ class GhostStorage:
 
     @staticmethod
     def _deletable(holdings, keep_pbs: bool) -> list[Holding]:
-        return [holding for holding in holdings
-                if not holding.pinned and not holding.busy and not (keep_pbs and holding.keep)]
+        """A start goes only with every clip of its sha (a start whose clips are all gone already goes too)."""
+        chosen = [holding for holding in holdings if holding.kind != "start"
+                  and not holding.pinned and not holding.busy and not (keep_pbs and holding.keep)]
+        ids = {id(holding) for holding in chosen}
+        return chosen + [holding for holding in holdings if holding.kind == "start"
+                         and not holding.pinned and not holding.busy and not (keep_pbs and holding.keep)
+                         and all(owner in ids for owner in holding.owners)]
 
     @staticmethod
     def _freed(holdings, chosen) -> dict:
@@ -277,7 +341,9 @@ class GhostStorage:
                 if not staying[key] and key not in counted:
                     counted.add(key)
                     total += holding.bytes
-        return {"ghosts": len({holding.ghost for holding in chosen}), "bytes": total}
+        # A start counts in its clip's ghost; one whose clips are all gone already is bytes, not a ghost.
+        return {"ghosts": len({holding.ghost for holding in chosen if holding.kind != "start" or holding.owners}),
+                "bytes": total}
 
     def usage(self) -> dict:
         """GET /api/ghost/storage: what ghost files use, and what each button would free now."""
@@ -303,13 +369,25 @@ class GhostStorage:
             by_kind = defaultdict(list)
             for holding in chosen:
                 by_kind[holding.kind].append(holding)
-            deleted, skipped, freed = set(), set(busy), 0
+            deleted, skipped, freed, gone_ids = set(), set(busy), 0, set()
+            starts = by_kind.pop("start", [])
             for kind, rows in by_kind.items():
                 result = self._delete(kind, rows)
                 freed += result["bytes"]
                 gone = set(result["deleted"])
                 for holding in rows:
                     (deleted if holding.ref in gone else skipped).add(holding.ghost)
+                    if holding.ref in gone:
+                        gone_ids.add(id(holding))
+            # A start goes after its clips, and only when every one of them went.
+            starts = [holding for holding in starts if all(owner in gone_ids for owner in holding.owners)]
+            if starts:
+                result = self._delete("start", starts)
+                freed += result["bytes"]
+                gone = set(result["deleted"])
+                for holding in starts:
+                    if holding.ref not in gone:
+                        skipped.add(holding.ghost)
             # A ghost is deleted only when none of its files stayed behind.
             deleted -= skipped
             log.info("ghost files purged: %d ghosts, %d bytes freed, %d skipped (keep_pbs=%s)",
@@ -334,6 +412,9 @@ class GhostStorage:
                 return cache.drop_cached(refs)
             if kind == "import":
                 return self._call(self.sharing).remove(refs)
+            if kind == "start":
+                from sm64_events.ghost import start_frame
+                return start_frame.remove_holdings(self._starts_root(), refs)
         except Exception:  # noqa: BLE001 - one owner's failure never stops the others
             log.warning("Ghost files of kind %s could not be deleted.", kind, exc_info=True)
         return {"deleted": [], "bytes": 0, "skipped": refs}

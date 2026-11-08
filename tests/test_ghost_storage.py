@@ -342,3 +342,50 @@ def test_a_clip_two_rows_share_frees_its_bytes_only_when_both_rows_go(world):
     recorded_run = 2 * 4 * KB + 2 * 64
     # Run 5's row goes but its clip stays for the twin: only run 2's row frees population bytes.
     assert result["bytes"] == usage["except_pbs"]["bytes"] == 2 * recorded_run + 8 * KB + 16 * KB + 2 * 2 * KB
+
+
+def _start(world, digest: str, size: int = 3 * KB, *, downloaded: bool = False) -> Path:
+    """A ghost start beside the population, as ghost/start_frame.py names it."""
+    folder = world.store.root / "starts" / ("downloaded" if downloaded else "")
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"{digest}.sm64start"
+    path.write_bytes(b"s" * size)
+    return path
+
+
+def test_a_ghost_start_goes_with_its_clip_and_counts_in_its_ghost(world):
+    """Run 5's population row goes with "keep PBs" and takes its start; PB run 1's start stays."""
+    gone, kept = _start(world, _digest(5)), _start(world, _digest(1), downloaded=True)
+    usage = world.storage.usage()
+    result = world.storage.purge(keep_pbs=True)
+    assert not gone.exists() and kept.exists()
+    recorded_run = 2 * 4 * KB + 2 * 64
+    assert result["bytes"] == usage["except_pbs"]["bytes"] == 2 * recorded_run + 2 * 8 * KB + 16 * KB + 2 * 2 * KB + 3 * KB
+    assert (result["deleted"], usage["except_pbs"]["ghosts"]) == (3, 3)      # the start is no ghost of its own
+    assert usage["total"]["bytes"] - world.storage.usage()["total"]["bytes"] == result["bytes"]
+
+
+def test_a_start_stays_while_any_clip_of_its_bytes_stays(world):
+    twin = _population_row(world.store, 42, {"session_id": 3, "attempt_id": 1, "started_utc": STARTED.format(1)},
+                           digest=_digest(5))                    # run 5's bytes, kept under PB run 1
+    start = _start(world, _digest(5))
+    world.storage.purge(keep_pbs=True)
+    assert start.exists() and twin in {row["id"] for row in world.store.holdings()}
+    world.storage.purge(keep_pbs=False)
+    assert not start.exists()
+
+
+def test_a_start_of_his_recorded_run_follows_that_run(world):
+    import hashlib
+    clip = world.replays / "native" / "attempt_2.ghost"           # run 2: the PB run 1 replaced
+    clip.write_bytes(b"run two's own bytes" * 200)                 # the fixture's runs share their bytes otherwise
+    start = _start(world, hashlib.sha256(clip.read_bytes()).hexdigest())
+    world.storage.purge(keep_pbs=True)
+    assert not clip.exists() and not start.exists()
+
+
+def test_a_start_whose_clip_is_gone_goes_with_either_button(world):
+    orphan = _start(world, _digest(999))
+    usage = world.storage.usage()
+    world.storage.purge(keep_pbs=True)
+    assert not orphan.exists() and usage["except_pbs"]["ghosts"] == 3   # freed bytes, no extra ghost counted

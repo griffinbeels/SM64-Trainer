@@ -38,6 +38,7 @@ from sm64_events.slotlibrary.relocate import Ambiguous, to_live_place
 from sm64_events.slotlibrary.store import Damaged, SlotLibrary, state_id
 from sm64_events.slotlibrary.usamune import (
     SLOT_COUNT,
+    Build,
     GameMemory,
     MarioMoved,
     Refusal,
@@ -80,6 +81,7 @@ class RefitReport:
     not_ready: str | None = None       # the pass did not run: no game, no Mario, or the game did not settle
     originals: tuple[tuple[int, bytes], ...] = field(default=(), repr=False)   # bytes before each attempted write
     written: tuple[tuple[int, bytes], ...] = field(default=(), repr=False)     # bytes each refit slot now holds
+    build: Build | None = field(default=None, repr=False)                      # the running game's, when it ran
 
     def count(self, outcome: str) -> int:
         return sum(1 for slot in self.slots if slot.outcome == outcome)
@@ -89,10 +91,10 @@ def refit_slots(memory: GameMemory) -> RefitReport:
     """One pass over the nine slots. Writes only slots made for the game's current level and area whose Mario sits
     elsewhere; stops at a Mario that moves during a write, because every later slot would be made for the old place."""
     try:
-        check_cartridge(memory)
+        build = check_cartridge(memory)
     except Refusal as refused:
         return RefitReport(not_ready=str(refused))
-    live = live_facts(memory)
+    live = live_facts(memory, build)
     if live.mario_object == 0:
         return RefitReport(live.level, live.area, not_ready="Mario is not in a level")
     outcomes: list[SlotOutcome] = []
@@ -114,7 +116,7 @@ def refit_slots(memory: GameMemory) -> RefitReport:
             outcomes.append(SlotOutcome(index, ALREADY_FIT))
             continue
         try:
-            fitted = to_live_place(memory, data)
+            fitted = to_live_place(memory, data, build)
         except Refusal as refused:
             log.debug("slot refit: slot %d refused: %s", index, refused)
             outcomes.append(SlotOutcome(index, REFUSED, UNCLEAR if isinstance(refused, Ambiguous) else GAME))
@@ -124,7 +126,7 @@ def refit_slots(memory: GameMemory) -> RefitReport:
             continue
         originals.append((index, data))
         try:
-            write_slot_bytes(memory, index, fitted, mario_place=live.mario_object)
+            write_slot_bytes(memory, build, index, fitted, mario_place=live.mario_object)
         except MarioMoved as moved:
             log.debug("slot refit: %s", moved)
             outcomes.append(SlotOutcome(index, REFUSED, MOVED))
@@ -135,7 +137,8 @@ def refit_slots(memory: GameMemory) -> RefitReport:
             continue
         outcomes.append(SlotOutcome(index, REFIT))
         written.append((index, fitted))
-    return RefitReport(live.level, live.area, tuple(outcomes), originals=tuple(originals), written=tuple(written))
+    return RefitReport(live.level, live.area, tuple(outcomes), originals=tuple(originals), written=tuple(written),
+                       build=build)
 
 
 def log_path() -> Path:
@@ -256,24 +259,31 @@ class SlotRefitter:
         if detach is not None:
             detach()
 
-    def _steady(self, memory: GameMemory) -> bool:
+    def _steady(self, memory: GameMemory, build: Build) -> bool:
         for _ in range(STEADY_TRIES):
-            first = live_facts(memory)
+            first = live_facts(memory, build)
             if self._stopping.wait(self.steady_seconds):
                 return False
-            if first.mario_object != 0 and live_facts(memory) == first:
+            if first.mario_object != 0 and live_facts(memory, build) == first:
                 return True
         return False
+
+    def _pass(self, memory: GameMemory) -> RefitReport:
+        try:
+            build = check_cartridge(memory)
+        except Refusal as refused:
+            return RefitReport(not_ready=str(refused))
+        if not self._steady(memory, build):
+            return RefitReport(not_ready="the game did not settle after the spawn")
+        return refit_slots(memory)
 
     def run_once(self, triggers: tuple[str, ...] = (), frame: int | None = None) -> RefitReport:
         started = time.perf_counter()
         memory = self._reader()
         if memory is None:
             report = RefitReport(not_ready="no Project64 with a running game")
-        elif not self._steady(memory):
-            report = RefitReport(not_ready="the game did not settle after the spawn")
         else:
-            report = refit_slots(memory)
+            report = self._pass(memory)
         seconds = time.perf_counter() - started
         kept = self._keep_originals(memory, report) if memory is not None else 0
         self.passes += 1
@@ -291,12 +301,12 @@ class SlotRefitter:
         """His saves, before their first refit, into the library. Bytes this refitter wrote are a move of a state
         already kept, so they are skipped: a reset adds no file."""
         kept = 0
-        if self.library is not None:
+        if self.library is not None and report.build is not None:
             for index, data in report.originals:
                 if self._wrote.get(index) == state_id(data):
                     continue
                 try:
-                    kept += keep(memory, self.library, data)[1]
+                    kept += keep(memory, self.library, data, report.build)[1]
                 except (Refusal, OSError, Damaged) as error:
                     log.warning("slot refit: slot %d was not kept: %s", index, error)
         for index, data in report.written:

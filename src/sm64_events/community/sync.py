@@ -942,7 +942,7 @@ class CommunitySync:
         kept = await self._cpu(lambda: self.population.store_asset(row, encoded, raw, owner=owner, start=start))
         if start is not None and kept:
             try:
-                await self._cpu(ghost_start.accept_download, identifier, row["raw_sha256"], start)
+                await self._cpu(ghost_start.accept_download, identifier, row["raw_sha256"], start, raw)
             except Exception:  # noqa: BLE001 -- a start its owner refuses must never cost the ghost
                 logger.warning("The owner of ghost starts refused one; its ghost plays without it.", exc_info=True)
 

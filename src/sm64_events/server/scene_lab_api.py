@@ -10,7 +10,10 @@ one reader, and without it this module is never imported and no route is added. 
     GET  /api/scene-lab/status    the config's readiness, the packages, the open scene, the last end
     GET  /api/scene-lab/attempt-scenes?ids=12,13   each known attempt's scene: ready, cutting, unavailable
     POST /api/scene-lab/open      {package: <a listed name>} or {attempt: <id>} -> the scene (with its
-                                  "title" and "target"); 409 with the reason
+                                  "title" and "target"); 409 with the reason. {ghost: <a ref /ghosts
+                                  listed>} or {stage: {course, act[, area]}}: a scene the simulation makes
+                                  (server/scene_resim.py), its "resim" table saying how (start, parting_frame,
+                                  save_states)
     GET  /api/scene-lab/stage?course=&star=&strat=   the stage for a target and strategy (scene_ghosts.py)
     GET  /api/scene-lab/ghosts?section=&...&page=    one page of the ghosts that could be drawn into it
                                   (section=top&strategies=all: every strategy's top ghosts at once)
@@ -129,6 +132,7 @@ MAX_QUESTIONS_WAITING = 8     # poses and picks a socket holds; the oldest is an
 PICTURES_IN_FLIGHT = 2        # pictures a socket has begun and not yet sent (the page keeps as many)
 GROW_SECONDS = 0.25           # how often an open scene still being written takes its newest frames
 GROW_FAILURES = 3             # publications in a row it cannot read before it stops growing
+_HIS_LIBRARY = object()       # follow_spawns' default: the Slot Library in his user data
 WARM_WAIT_SECONDS = 30.0      # how long a scene's first picture waits for an idle page to warm the free camera
 WARM_QUIET_SECONDS = 0.5      # idle = no picture asked for this long (Play asks one every frame, so it never is)
 WARM_POLL_SECONDS = 0.1
@@ -310,6 +314,8 @@ class SceneLab:
         self.switch_lock = threading.Lock()
         self.open_path: Path | None = None             # the package the open scene reads (retention spares it)
         self.open_attempt: int | None = None
+        self.open_resim: dict | None = None                # how a re-simulated scene was made (scene_resim.py)
+        self.resim = None                                  # scene_resim.SceneResim, made by mount_scene_lab
         self.tracker = None                                # follow_attempts': whose journal the scenes belong to
         try:
             self.scenes = _lab_module("attempt_scenes").AttemptScenes(
@@ -349,6 +355,7 @@ class SceneLab:
 
     def _scene(self, described: dict) -> dict:
         scene = {"session": self.generation, **described, "shared_pictures": self.shared is not None, **self.heading}
+        scene |= {"resim": self.open_resim} if self.open_resim is not None else {}
         return scene | ({"attempt": self.open_attempt} if self.open_attempt is not None else {})
 
     def _heading(self, attempt: int | None) -> dict:
@@ -379,6 +386,16 @@ class SceneLab:
         return _lab_module("attempt_scenes").journal_folder(self._lab_root() / "attempts", self._journal())
 
     def _start_cutter(self, folder: Path, on_event):
+        resim = self.resim
+
+        def observed(event, on_event=on_event):
+            on_event(event)
+            if resim is not None:
+                try:
+                    resim.observe_cutter(event)
+                except Exception:  # noqa: BLE001 - a start not kept never costs a scene
+                    log.warning("A ready scene's ghost start was not queued.", exc_info=True)
+        on_event = observed
         if self.cutter_factory is not None:
             return self.cutter_factory(folder, on_event)
         config = LabConfig.load(self.config_path)
@@ -479,15 +496,19 @@ class SceneLab:
         if broadcaster is not None and hasattr(broadcaster, "observe"):
             broadcaster.observe(scenes.observe_event)
 
-    def follow_spawns(self, tracker, *, game=None, library=None, log_file=None) -> None:
+    def follow_spawns(self, tracker, *, game=None, library=_HIS_LIBRARY, log_file=None) -> None:
         """After every spawn the event stream announces, the slots made for that place get Mario's new place
         (slotlibrary/refit.py). The observer only stamps a deadline; the refitter's own thread and reader do the
-        work, started and stopped with the app. Tests inject the game, the library and the log file."""
+        work, started and stopped with the app. Tests inject the game, the library and the log file.
+
+        library=None keeps nothing, as SlotRefitter reads it; only leaving it out means his own Slot Library. Until
+        2026-11-08 None meant his library too, and the attempt-scenes test's fake slot (fake fingerprint d3fca85f)
+        landed in his real library as a captured BoB state."""
         broadcaster = getattr(tracker, "broadcaster", None)
         if broadcaster is None or not hasattr(broadcaster, "observe"):
             return
         from sm64_events.slotlibrary import refit, usamune
-        if library is None:
+        if library is _HIS_LIBRARY:
             from sm64_events.core.paths import slot_library_dir
             from sm64_events.slotlibrary.store import SlotLibrary
             library = SlotLibrary(slot_library_dir())
@@ -514,6 +535,7 @@ class SceneLab:
         report = await asyncio.to_thread(self._status_blocking)
         report["session"] = self._scene(self.described) if self.session is not None and self.described else None
         report["ended"] = self.ended
+        report["resim"] = self.resim.progress if self.resim is not None else None   # a first build, while it runs
         if self.loop_probe is not None:
             report["loop"] = self.loop_probe.summary()
         return report
@@ -528,12 +550,16 @@ class SceneLab:
             raise SceneRefused(str(refused)) from None
         return session, session.describe()
 
-    async def open(self, name: str | None = None, *, attempt: int | None = None) -> dict:
+    async def open(self, name: str | None = None, *, attempt: int | None = None, ghost: str | None = None,
+                   stage: dict | None = None) -> dict:
         """A listed package by name, or an attempt's scene by its id (LookupError: none known;
-        SceneRefused: still being cut, or never, with the reason)."""
+        SceneRefused: still being cut, or never, with the reason); or a listed ghost, or a course and act,
+        re-simulated into a scene (scene_resim.py; the build runs before the open scene is replaced)."""
         config = await asyncio.to_thread(LabConfig.load, self.config_path)
-        sidecar = None
-        if attempt is None:
+        sidecar = resim = None
+        if ghost is not None or stage is not None:
+            path, resim = await self._resim_source(ghost, stage)
+        elif attempt is None:
             path = await asyncio.to_thread(config.package_path, name)
         elif self.scenes is None:
             raise SceneRefused(self.live_problem or "This lab has no attempt scenes.")
@@ -557,7 +583,7 @@ class SceneLab:
                 if quiet and described["audio"].get("reason") == _lab_module("scene_audio").NO_SOUND:
                     described = {**described, "audio": {**described["audio"], "reason": quiet}}
             self.session, self.worker, self.described = session, worker, described
-            self.open_path, self.open_attempt = path, attempt
+            self.open_path, self.open_attempt, self.open_resim = path, attempt, resim
             self.heading = heading
             self.delivery =ThreadPoolExecutor(max_workers=1, thread_name_prefix="scene-lab-delivery")
             self.generation += 1
@@ -566,6 +592,17 @@ class SceneLab:
             self.ended = self.host_exit = None
             self._start_watch()
             return self._scene(described)
+
+    async def _resim_source(self, ghost: str | None, stage: dict | None) -> tuple[Path, dict]:
+        """(package, its resim table) for a ghost or a stage; SceneRefused with the sentence otherwise."""
+        from sm64_events.server.scene_resim import ResimRefused
+        try:
+            if ghost is not None:
+                return await asyncio.to_thread(self.resim.ghost_scene_blocking, ghost)
+            return await asyncio.to_thread(self.resim.stage_scene_blocking, stage["course"], stage["act"],
+                                           stage.get("area") or 1)
+        except ResimRefused as refused:
+            raise SceneRefused(str(refused)) from None
 
     async def close(self, code: str = "closed") -> None:
         async with self.lock:
@@ -578,7 +615,7 @@ class SceneLab:
         if session is None:
             return
         self.session = self.worker = self.delivery = self.described = None
-        self.open_path = self.open_attempt = None
+        self.open_path = self.open_attempt = self.open_resim = None
         self.ended = {"code": code, "message": message or ENDS[code], "name": session.name}
         try:
             self.host_exit = await asyncio.get_running_loop().run_in_executor(worker, session.close)
@@ -592,6 +629,8 @@ class SceneLab:
             self.loop_probe.task = None
 
     async def shutdown(self) -> None:
+        if self.resim is not None:
+            self.resim.shutdown()                          # its child, by its handle
         if self.watch_task is not None:
             self.watch_task.cancel()
         await self.close("shutdown")
@@ -1063,14 +1102,22 @@ class _PageSocket:
                 await self.send(reply)
 
 
+class StageBody(BaseModel):
+    course: int = Field(ge=1, le=25)
+    act: int = Field(ge=1, le=6)
+    area: int = Field(default=1, ge=1, le=8)
+
+
 class OpenBody(BaseModel):
     package: str | None = Field(default=None, min_length=1, max_length=255)
     attempt: int | None = Field(default=None, ge=0)
+    ghost: str | None = Field(default=None, min_length=1, max_length=512)
+    stage: StageBody | None = None
 
     @model_validator(mode="after")
     def one_of_them(self):
-        if (self.package is None) == (self.attempt is None):
-            raise ValueError("Name a package or an attempt.")
+        if sum(value is not None for value in (self.package, self.attempt, self.ghost, self.stage)) != 1:
+            raise ValueError("Name one package, attempt, ghost or stage.")
         return self
 
 
@@ -1108,8 +1155,10 @@ def _mount_ghost_routes(router: APIRouter, lab: SceneLab) -> None:
     @router.get("/stage")
     def stage(course: int | None = None, star: int | None = None, segment: int | None = None,
               strat: str | None = Query(default=None, max_length=256),
-              strategies: str = Query(default="one", pattern="^(one|all)$")):
-        return lab.ghosts.stage(target_of(course, star, segment), strat or None, every=strategies == "all")
+              strategies: str = Query(default="one", pattern="^(one|all)$"),
+              ghost: str | None = Query(default=None, min_length=1, max_length=512)):
+        found = lab.ghosts.stage(target_of(course, star, segment), strat or None, every=strategies == "all")
+        return _stage_open(found, ghost)
 
     @router.get("/ghosts")
     async def ghosts(section: str = "yours", course: int | None = None, star: int | None = None,
@@ -1134,6 +1183,16 @@ def _mount_ghost_routes(router: APIRouter, lab: SceneLab) -> None:
         target = await asyncio.to_thread(target_of, course, star, segment)
         await lab.ghosts.fill_recording(recording)
         return await asyncio.to_thread(lab.ghosts.recording_item, target, recording)
+
+
+def _stage_open(found: dict, ghost: str | None) -> dict:
+    """What POST /open takes for this stage: his scene of the target, else (with the Library ghost that asked)
+    that ghost re-simulated into a scene of its own (scene_resim.py), which needs no scene of his."""
+    if found.get("attempt") is not None:
+        return {**found, "open": {"attempt": found["attempt"]}, "resim": False}
+    if ghost is not None:
+        return {**found, "open": {"ghost": ghost}, "resim": True, "reason": None}
+    return {**found, "open": None, "resim": False}
 
 
 class PresetsBody(BaseModel):
@@ -1168,11 +1227,15 @@ def _mount_preset_routes(router: APIRouter, lab: SceneLab) -> None:
             raise HTTPException(422, str(refused)) from None
 
 
-def _mount_job_routes(router: APIRouter, lab: SceneLab, export_options: dict, moment_options: dict) -> None:
-    """What runs in a child of its own: a recording made into a video (scene_exports.py), and one frame made into a
-    Usamune save state (scene_moments.py)."""
+def _mount_job_routes(router: APIRouter, lab: SceneLab, export_options: dict, moment_options: dict,
+                      resim_options: dict) -> None:
+    """What runs in a child of its own: a recording made into a video (scene_exports.py), one frame made into a
+    Usamune save state (scene_moments.py), and a ghost or a stage re-simulated into a scene (scene_resim.py, which
+    POST /open and /moment reach through lab.resim)."""
     from sm64_events.server.scene_exports import SceneExports, mount_export_routes
     from sm64_events.server.scene_moments import SceneMoments, mount_moment_routes
+    from sm64_events.server.scene_resim import SceneResim
+    lab.resim = SceneResim(lab, **resim_options)
     lab.exports = SceneExports(lab, **export_options)
     mount_export_routes(router, lab.exports)
     lab.moments = SceneMoments(lab, **moment_options)
@@ -1200,8 +1263,8 @@ def mount_scene_lab(app, config_path, **options) -> SceneLab:
     SceneLab's (tests and e3_measure.py inject doubles and short timers), and `ghost_sources`,
     what the stage and the ghost catalog read: {"tracker", "replay", "ghost", "community"} (scene_ghosts.py)."""
     sources = options.pop("ghost_sources", None) or {}
-    export_options = options.pop("export_options", None) or {}
-    moment_options = options.pop("moment_options", None) or {}
+    export_options, moment_options, resim_options = (options.pop(name, None) or {} for name in (
+        "export_options", "moment_options", "resim_options"))
     lab = SceneLab(Path(config_path), **options)
     from sm64_events.server.scene_ghosts import SceneGhosts
     lab.ghosts = SceneGhosts(sources.get("tracker"), scenes=lambda: lab.scenes, replay=sources.get("replay"),
@@ -1209,7 +1272,7 @@ def mount_scene_lab(app, config_path, **options) -> SceneLab:
     router = APIRouter(prefix="/api/scene-lab")
     _mount_ghost_routes(router, lab)
     _mount_preset_routes(router, lab)
-    _mount_job_routes(router, lab, export_options, moment_options)
+    _mount_job_routes(router, lab, export_options, moment_options, resim_options)
 
     _mount_live_routes(router, lab)
 
@@ -1225,7 +1288,8 @@ def mount_scene_lab(app, config_path, **options) -> SceneLab:
     @router.post("/open")
     async def open_scene(body: OpenBody):
         try:
-            return await lab.open(body.package, attempt=body.attempt)
+            return await lab.open(body.package, attempt=body.attempt, ghost=body.ghost,
+                                  stage=body.stage.model_dump() if body.stage is not None else None)
         except LookupError as missing:
             raise HTTPException(404, str(missing)) from None
         except (ConfigError, SceneRefused) as refused:

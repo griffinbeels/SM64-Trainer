@@ -52,13 +52,13 @@ class FakeGame:
         self.fail_read_back = False
         self.torn_reads: dict[int, int] = {}
         self.poke(usamune.OS_MEM_SIZE, struct.pack(">I", usamune.EXPANSION_BYTES))
-        self.poke(usamune.CURR_LEVEL, struct.pack(">h", LEVEL))
-        self.poke(usamune.CURR_AREA, struct.pack(">h", AREA))
-        self.poke(usamune.MARIO_OBJECT, struct.pack(">I", MARIO))
-        self.poke(usamune.CURRENT_AREA_POINTER, struct.pack(">I", CURRENT_AREA))
-        self.poke(usamune.SEGMENT_TABLE, SEGMENTS)
-        self.poke(usamune.SAVE, b"\x11" * usamune.FINGERPRINT_BYTES)
-        self.poke(usamune.LOAD, b"\x22" * usamune.FINGERPRINT_BYTES)
+        self.poke(usamune.US.curr_level, struct.pack(">h", LEVEL))
+        self.poke(usamune.US.curr_area, struct.pack(">h", AREA))
+        self.poke(usamune.US.mario_object, struct.pack(">I", MARIO))
+        self.poke(usamune.US.current_area_pointer, struct.pack(">I", CURRENT_AREA))
+        self.poke(usamune.US.segment_table, SEGMENTS)
+        self.poke(usamune.US.save, b"\x11" * usamune.FINGERPRINT_BYTES)
+        self.poke(usamune.US.load, b"\x22" * usamune.FINGERPRINT_BYTES)
 
     def poke(self, address: int, data: bytes) -> None:
         at = address - 0x80000000
@@ -91,7 +91,7 @@ class FakeGame:
         return bytes(self.ram[usamune.slot_address(index) - 0x80000000:][:usamune.SLOT_BYTES])
 
     def fingerprint(self) -> str:
-        return usamune.routine_fingerprint(self.read)
+        return usamune.routine_fingerprint(self.read, usamune.US)
 
 
 def make_slot(fill: int, *, mario: int = MARIO, level: int = LEVEL, area: int = AREA) -> bytes:
@@ -225,7 +225,7 @@ def test_a_trainer_write_is_not_a_new_save_unless_its_bytes_are_new(game, librar
     assert result.captured == [] and result.known == [(2, kept.id)]
     assert library.get(kept.id).source == BUILT
     new_bytes = make_slot(0xB2)
-    usamune.write_slot_bytes(game, 3, new_bytes, mario_place=None)
+    usamune.write_slot_bytes(game, usamune.US, 3, new_bytes, mario_place=None)
     assert [state.id for _, state in watch_step(game, library, result.seen).captured] == [state_id(new_bytes)]
 
 
@@ -331,7 +331,7 @@ def test_a_slot_being_written_stops_the_capture(game, library):
     game.save(0, make_slot(0xC0))
     game.torn_reads[usamune.slot_address(0)] = 1
     with pytest.raises(Refusal):
-        capture_all(game, library)
+        capture_all(game, library, usamune.US)
 
 
 def test_a_course_set_goes_in_order_and_leaves_later_slots_alone(game, library, tmp_path):
@@ -418,7 +418,7 @@ def test_a_matching_state_reports_it_loads_now(game, library):
     state = watch_step(game, library, NEVER_SEEN).captured[0][1]
     placed = place_states(game, library, {1: state.id}).placements[0]
     assert placed.loadable_now and placed.pointers_match is True
-    game.poke(usamune.SEGMENT_TABLE + 8, b"\xFF\xFF\xFF\xFF")
+    game.poke(usamune.US.segment_table + 8, b"\xFF\xFF\xFF\xFF")
     assert place_states(game, library, {2: state.id}).placements[0].pointers_match is False
 
 
@@ -456,12 +456,12 @@ def test_another_build_or_rom_or_damage_refuses_before_anything_is_captured(game
     game.save(1, make_slot(0xC1))
     state = keep(library, game, make_slot(0xD1))
     other_build = game.fingerprint()
-    game.poke(usamune.LOAD + 8, b"\x00")
+    game.poke(usamune.US.load + 8, b"\x00")
     assert game.fingerprint() != other_build
     with pytest.raises(Refusal):
         place_states(game, library, {0: state.id})
     assert game.writes == [] and not library.has(state_id(make_slot(0xC1)))
-    game.poke(usamune.LOAD + 8, b"\x22")
+    game.poke(usamune.US.load + 8, b"\x22")
     game.head = cartridge(b"SUPER MARIO 64")
     with pytest.raises(Refusal):
         place_states(game, library, {0: state.id})
@@ -475,7 +475,7 @@ def test_another_build_or_rom_or_damage_refuses_before_anything_is_captured(game
 def test_a_failed_write_is_reported_and_stops_the_set(game, library):
     first, second = keep(library, game, make_slot(0xD1)), keep(library, game, make_slot(0xD2))
     game.save(0, make_slot(0xC0))
-    capture_all(game, library)
+    capture_all(game, library, usamune.US)
     game.fail_read_back = True
     # The capture's own read pair must still agree; only the writer's read-back differs from the data.
     report = place_states(game, library, {0: first.id, 1: second.id})
