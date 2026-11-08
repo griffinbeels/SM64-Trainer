@@ -41,7 +41,13 @@ About dialog. griffman1212 built the capture overlay and the capture layer on
 top of it.
 
 GLideN64 is licensed under the GNU GPL v2 (`LICENSE` in the upstream tree),
-so this modified build is too. The complete corresponding source is:
+so this modified build is too. The trainer's own additions (the overlay, the
+capture layer, the pose model and the build tools below) are licensed GPL v2
+or later, so they combine with GLideN64's v2 and stay usable in the rest of
+the trainer, which is GPL v3 or later (`plugin/gfxwrap/LICENSE.md`;
+`licenses/README.md` lists every such file). FreeType inside the plugin is
+taken under its GPL v2 option, since its own FreeType License does not
+combine with the GPL v2. The complete corresponding source is:
 
 - the upstream tree at commit `d0d1010`, pinned by archive and tree hash in
   `build-inputs.json`;
@@ -65,7 +71,12 @@ so this modified build is too. The complete corresponding source is:
   first, and inside Project64 nothing names one), and the renaming of
   upstream's Zilmar functions to `GLideN64_<name>` and its `DllMain` to
   `GLideN64_DllMain` (`stage_renderer_entries`), so the capture layer
-  exports those names and calls the renderer's; their bodies are unchanged.
+  exports those names and calls the renderer's; their bodies are unchanged;
+- the libraries it links that are not in this repository: Qt 5.15.2 (the
+  qtbase source, configured as "The three prebuilt libraries" below says),
+  and FreeType 2.5.3, libpng 1.6.32 and zlib 1.2.8, which the upstream tree
+  carries only as prebuilt `projects/msvc/lib/rel/*.lib` files, without the
+  scripts that built them. `licenses/README.md` points to each source.
 
 Project64 shows the plugin's own About box (the credits and the build id).
 The renderer's About dialog is not reachable from Project64.
