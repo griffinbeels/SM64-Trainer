@@ -1,4 +1,4 @@
-// The Scene viewer's sign and switch for the live scene recording (clean-behavior, 2026-11-06).
+// The Ghost Lab's sign and switch for the live scene recording (clean-behavior, 2026-11-06), in its bar.
 //
 // The scene lab asks the game's graphics plugin to record every frame of recent play, so each
 // attempt gets a scene. Recording that runs where nobody can see it, or that nobody can stop, is

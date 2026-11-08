@@ -90,7 +90,7 @@ echo   Tuning: http://127.0.0.1:%SM64_PORT%/ui/tunemarelo.html   (overall rank-u
 echo   Tuning: http://127.0.0.1:%SM64_PORT%/ui/tunelog.html   (practice log card layout)
 echo   Tuning: http://127.0.0.1:%SM64_PORT%/ui/tuneselector.html   (selector card exchange)
 echo   Tuning: http://127.0.0.1:%SM64_PORT%/ui/tunefeed.html   (feed arrival + every dropdown)
-if defined SM64_SCENE_LAB echo   Lab:    Scene viewer in the sidebar, under Lab   (%SM64_SCENE_LAB%)
+if defined SM64_SCENE_LAB echo   Lab:    Ghost Lab in the sidebar, under Lab   (%SM64_SCENE_LAB%)
 echo   The real trainer exe keeps its own port (8064) untouched.
 echo   Press CTRL+C in this window to stop the test server.
 echo ============================================================

@@ -53,10 +53,10 @@
 // The recording's sound (sceneaudio.js) follows the picture clock: SceneLink
 // tells it when Play starts, each picture it draws, and every stop.
 //
-// Above the player, the stage picker (scenestage.js) chooses which recording
-// is the stage; below it, the ghost panel (sceneghosts.js) adds ghosts into it.
-// Each ghost in the scene gets a view button beside Recorded camera (and Their
-// view on its row): the stage seen from that ghost's own recorded camera, which
+// In the bar, the stage picker (scenestage.js) chooses which recording is the
+// stage; the Ghosts tab (sceneghosts.js) watches another one or shows ghosts in it.
+// Each ghost in the scene gets a view button in the Camera tab (and Their view
+// on its row): the stage seen from that ghost's own recorded camera, which
 // the lab finds for every picture, so it follows the ghost through Play, steps
 // and seeks. Free camera from a ghost's view starts at that camera. The
 // Cinematic row (scenerigs.js) adds Front, Side, Orbit, Chase, Overhead and
@@ -70,16 +70,15 @@
 // tilt while held, X levels, - and = change the lens while held, and Ctrl with
 // the wheel changes it too; Reset view puts the free camera's back as well.
 //
-// Under the camera controls, the Cameras strip (scenepresets.js) keeps named cameras in slots 1-9
-// for the course and area on screen: keys 1-9 or a click cut to one as a free camera (cutTo), and
-// Play keeps playing.
+// The Camera tab's Views row (scenepresets.js) keeps named cameras in slots 1-9 for the course and
+// area on screen: Shift with 1-9 or a click cut to one as a free camera (cutTo), and Play keeps
+// playing. Its Path row (scenepathbar.js, its math scenepath.js) keeps keys the camera moves
+// through; with Path on screen, Play keeps the path's own clock and every display frame asks the
+// picture from the path's camera then.
 //
-// Under the Cameras strip, the camera path block (scenepathbar.js, its math scenepath.js) keeps keys
-// the camera moves through; with Path on screen, Play keeps the path's own clock and every display
-// frame asks the picture from the path's camera then.
-//
-// Under those, the Save states row (scenemoment.js) puts the frame on screen in a Usamune slot of the
-// running game, one press, numbered as Usamune's menu numbers them.
+// The save-state strip under the play bar (scenestrip.js, its press scenemoment.js) puts the frame
+// on screen in a Usamune slot of the running game, one press or the key 1-9, numbered as Usamune's
+// menu numbers them.
 //
 // Play stops only when the person pauses (Pause, Space, a step, the slider):
 // moving the camera, by any of the ways above, keeps it playing. Restart goes
@@ -385,7 +384,7 @@ export class SceneLink {
       this.waiting = [];
       if (list.length) this.setGhosts(list);
     };
-    ws.onclose = () => { if (this.ws === ws) this.end("The connection to the scene viewer closed."); };
+    ws.onclose = () => { if (this.ws === ws) this.end("The connection to the Ghost Lab closed."); };
     // A scene's first picture carries the session's cold start (a seek from nothing), so it never
     // counts towards how far ahead a play asks: a Play started on it would skip the opening frames.
     // A new scene starts with no ghosts.
@@ -915,7 +914,7 @@ export class SceneLink {
     this.changed();
   }
 
-  // Keys 1-9: the saved camera in that slot for the place on screen.
+  // Shift with 1-9 (and a click on a view): the saved camera in that slot for the place on screen.
   recallSlot(number, time) {
     if (!this.freeAvailable) return;
     const saved = this.presets.slot(this.presetKey, number);
@@ -1406,6 +1405,7 @@ const PRESSED = new Set(["button", "submit", "reset", "checkbox", "radio"]);
 const SLIDER_KEYS = new Set(["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown"]);
 function ownKey(target, key) {
   const type = target?.tagName === "INPUT" ? target.type : null;
+  if (target?.getAttribute?.("role") === "tab") return key === " " || key === "Enter" || key === "ArrowLeft" || key === "ArrowRight";
   if (target?.tagName === "BUTTON" || PRESSED.has(type)) return key === " " || key === "Enter";
   return type === "range" && SLIDER_KEYS.has(key);
 }

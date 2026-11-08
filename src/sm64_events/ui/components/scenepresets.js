@@ -1,5 +1,5 @@
-// src/sm64_events/ui/components/scenepresets.js -- the Scene viewer's camera presets (M4 round 6,
-// item 2, lab only; sceneviewer.js draws the Cameras strip under the camera controls).
+// src/sm64_events/ui/components/scenepresets.js -- the Ghost Lab's camera presets (M4 round 6,
+// item 2, lab only; sceneviewer.js draws them as the Camera tab's Views row; Shift with 1-9 cuts to one).
 //
 // His words: "I set up a specific camera angle that I really like, and assign it to a camera slot
 // position (numbers 1-9 on the keyboard). I should be able to name the camera, and be able to swap
@@ -165,7 +165,7 @@ function NameField({ entry, done }) {
     onblur=${() => finish(true)} />`;
 }
 
-// The Cameras strip: nine slots for the place the picture on screen is in.
+// The Camera tab's Views row: nine slots for the place the picture on screen is in.
 export function CameraSlots({ link }) {
   const presets = link.presets, key = link.presetKey, set = presets.of(key);
   const [renaming, setRenaming] = useState(null);           // {key, slot}

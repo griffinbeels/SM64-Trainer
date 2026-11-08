@@ -1,14 +1,8 @@
-/* The Scene viewer's camera path block (components/scenepathbar.js links this sheet when it loads, so
-   with the lab switched off the browser never fetches it). One block under the Cameras strip: the
-   Play speed and Action row, the Path row, then one row per key. It lays out by wrapping, never by the
+/* The Ghost Lab's camera path controls (components/scenepathbar.js links this sheet when it loads, so
+   with the lab switched off the browser never fetches it): the Camera tab's Path row and its keys,
+   and the play bar's Play speed (its look is scenelab.css's). It lays out by wrapping, never by the
    viewport, and no control in it moves when another changes state (viewer round 9's SteadyText): the
-   action's name keeps its own width, and the Path row's note is one line cut short. */
-.scene-lab-path-panel { display: grid; gap: 8px; min-width: 0; }
-.scene-lab-path-play { column-gap: 18px; }
-.scene-lab-path-speeds, .scene-lab-action { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
-.scene-lab-path-speeds button { min-width: 44px; justify-content: center; }
-.scene-lab-action button { width: 34px; justify-content: center; padding: 0; }
-.scene-lab-action-name { min-width: 0; max-width: 100%; }
+   Path row's note is one line cut short. */
 .scene-lab-path { display: grid; gap: 6px; min-width: 0; }
 .scene-lab-path > .scene-lab-bar .scene-lab-path-note { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis;
   white-space: nowrap; }

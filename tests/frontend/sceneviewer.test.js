@@ -2508,8 +2508,9 @@ const late = (body) => ({ ok: true, status: 200, json: () => Promise.resolve(bod
 test("1 to 9 save the frame on screen into that Usamune slot, as a tile's click does; the line under the tiles says what happened", async () => {
   opened = { ...opened, frames: numbered(FRAMES) };
   const writes = [];
-  momentRoutes((body) => new Promise((resolve) => writes.push((answer = { written: true, slot: body.slot, build: "us" }) =>
-    resolve(late(answer)))));
+  momentRoutes((body) => new Promise((resolve) => {
+    writes.push((answer = { written: true, slot: body.slot, build: "us" }) => resolve(late(answer)));
+  }));
   vi.spyOn(HTMLCanvasElement.prototype, "toDataURL").mockReturnValue("data:image/jpeg;base64,AAAA");
   const { page, socket, root } = await openScene({ tab: "ghosts" });
   await socket.picture(socket.sent[0]);
@@ -2582,7 +2583,7 @@ test("a row's watch makes its run the scene: his attempt's scene, else one made 
   const made = [];
   routes.set("/api/scene-lab/open", (url, options) => (JSON.parse(options.body).attempt != null
     ? respond({ detail: "This attempt's scene was deleted." }, 404)
-    : new Promise((resolve) => made.push(() => resolve(late({ ...opened, session: ++sessionSerial, attempt: null }))))));
+    : new Promise((resolve) => { made.push(() => resolve(late({ ...opened, session: ++sessionSerial, attempt: null }))); })));
   routes.set("/api/scene-lab/status", () => respond({ ready: true, problems: [], hold: null, session: null, ended: null,
     packages: [], resim: { what: "scene", stage: "re-simulating", done: 131, total: 318 } }));
   fireEvent.click(within(ghostRow(page, "yours-3")).getByRole("button", { name: "Watch You 14\"03" }));
@@ -2636,11 +2637,9 @@ test("the tray opens on Ghosts, says what each tab holds, and the arrow keys mov
 
 // The page's own rule (onKey): "a focused control [keeps] the keys it acts on itself ... so only a control
 // reached with Tab keeps them". A tab reached with Tab acts on Left and Right (it moves to the next tab), so
-// those keys are the tab's alone, as a slider keeps its arrows. On 944d69d3 the tablist moves the tab and the
-// arrow also reaches the keyboard owner, which steps the scene a frame: a product bug, reported. Marked
-// `test.fails` only because this file runs as one pytest test (test_ui_scene_viewer.py), where one red test
-// hides the rest; once the arrows stay the tab's, this turns red: make it a plain test().
-test.fails("an arrow key on a focused tab moves the tab and steps no frame", async () => {
+// those keys are the tab's alone, as a slider keeps its arrows (ownKey). On 944d69d3 the arrow also reached the
+// keyboard owner and stepped the scene a frame.
+test("an arrow key on a focused tab moves the tab and steps no frame", async () => {
   ghostRoutes();
   const page = arrive();
   const socket = await sceneUp(1);

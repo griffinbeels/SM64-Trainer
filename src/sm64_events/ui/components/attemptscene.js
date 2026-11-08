@@ -1,6 +1,6 @@
 // src/sm64_events/ui/components/attemptscene.js -- the Practice log's Ghost
-// button (M4, lab only): one click opens that attempt's scene in the Scene
-// viewer and plays it.
+// button (M4, lab only): one click opens that attempt's scene in the Ghost
+// Lab and plays it.
 //
 // The lab cuts each finished attempt into a scene (server/scene_lab_api.py).
 // GET /api/scene-lab/attempt-scenes?ids= answers, per attempt id, whether its
@@ -62,7 +62,7 @@ export function useAttemptScenes(ids, enabled, revision = null) {
 // row component gains a prop.
 export const AttemptScenes = createContext({});
 
-// The ghost mark the shell's own "Scene viewer" entry wears, the play button's size and frame.
+// The ghost mark the shell's own "Ghost Lab" entry wears, the play button's size and frame.
 export function SceneButton({ attempt, open }) {
   const shown = sceneButton(useContext(AttemptScenes)[attempt]);
   if (!shown) return null;
@@ -70,7 +70,7 @@ export function SceneButton({ attempt, open }) {
 }
 
 // The one Ghost button: the Practice log's rows (above) and the Library's community ghosts
-// (community-library.js), which open that ghost in the Scene viewer. `label` names it for a reader.
+// (community-library.js), which watch that ghost in the Ghost Lab. `label` names it for a reader.
 export function GhostButton({ open, disabled = false, title = OPEN_IN_VIEWER, label = OPEN_IN_VIEWER }) {
   return html`<button type="button" class="icon-button attempt-scene" disabled=${disabled}
       title=${title} aria-label=${label} onclick=${disabled ? null : open}>

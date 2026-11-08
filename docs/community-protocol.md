@@ -358,9 +358,9 @@ Beta worker owns channel/path/updater/desktop identity and beta builder/tests;
 it leaves main.py and community config to root/client respectively. Writers
 use separate worktrees, commit only owned files and report tested commits.
 
-## The Scene viewer's reads
+## The Ghost Lab's reads
 
-The lab's [Scene viewer](api.md#scene-viewer-m4-lab-source-checkouts-only-off-by-default)
+The lab's [Ghost Lab](api.md#ghost-lab-m4-lab-source-checkouts-only-off-by-default)
 lists other players' ghosts through this same client, cache and account
 (`server/scene_community.py`); it adds no route, key or store. Each Worker call
 below spends one account ticket, cache hits on the service included, and listings

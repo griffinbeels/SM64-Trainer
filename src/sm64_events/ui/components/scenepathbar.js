@@ -1,6 +1,6 @@
-// src/sm64_events/ui/components/scenepathbar.js -- the Scene viewer's camera path controls (lab only).
+// src/sm64_events/ui/components/scenepathbar.js -- the Ghost Lab's camera path controls (lab only).
 //
-// One block under the Cameras strip (sceneviewer.js draws PathPanel): the Play speed (1x, 1/2x, 1/4x:
+// The Camera tab's Path row (sceneviewer.js draws PathBar) and the play bar's Play speed (PlaySpeeds: 1x, 1/2x, 1/4x:
 // each game picture shows that much longer, the free camera and the path still moving every display
 // frame, and slower than 1x plays silent), then Path, which puts the camera path on screen, + Key, and
 // the path's keys. A key's speed slows the stretch from it to the next key the same way, and a second
