@@ -24,7 +24,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import struct
 import sys
 from dataclasses import dataclass, replace
@@ -128,7 +127,8 @@ def check_game_matches(memory: GameMemory, image: SlotImage, build: Build) -> No
 
 
 def backups_folder() -> Path:
-    return Path(os.environ["LOCALAPPDATA"]) / "SM64Trainer" / "scene-lab" / "handoff-backups"
+    from sm64_events.core.paths import scene_lab_root
+    return scene_lab_root() / "handoff-backups"
 
 
 def save_backup(memory: GameMemory, build: Build, index: int, folder: Path, note: str) -> Path:

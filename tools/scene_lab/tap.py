@@ -106,7 +106,8 @@ IDENTITY_FIELDS = {"global_timer": 4, "curr_level": 2, "curr_area": 2}   # name:
 
 
 def lab_root() -> Path:
-    return Path(os.environ["LOCALAPPDATA"]) / "SM64Trainer" / "scene-lab"
+    from sm64_events.core.paths import scene_lab_root
+    return scene_lab_root()
 
 
 @dataclass

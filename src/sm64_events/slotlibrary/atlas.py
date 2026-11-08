@@ -20,6 +20,7 @@ import logging
 import os
 import subprocess
 import threading
+import time
 from collections import Counter, defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -163,6 +164,7 @@ class AtlasStore:
     def __init__(self, root: Path, builder: Builder | None):
         self.root, self.builder = Path(root), builder
         self._lock = threading.Lock()
+        self.built: dict[tuple[int, int], float] = {}     # (level, area) -> seconds its build took here
 
     def path(self, level: int, area: int) -> Path:
         return self.root / f"level{level:02d}-area{area}.json"
@@ -182,7 +184,10 @@ class AtlasStore:
             if self.builder is None:
                 raise Refusal("there is no map between the two game versions for this place yet")
             self.root.mkdir(parents=True, exist_ok=True)
+            started = time.perf_counter()
             self.builder(level, area, path)
+            self.built[(level, area)] = time.perf_counter() - started
+            log.info("Built the atlas for level %d area %d in %.1f s.", level, area, self.built[(level, area)])
             try:
                 return self._checked(path.read_bytes(), level, area)
             except (OSError, Damaged) as error:
@@ -231,6 +236,7 @@ def child_builder(register: Callable = lambda child: None) -> Builder:
         if child.returncode != 0 or "atlas" not in answer:
             log.warning("An atlas build ended with %s: %s", child.returncode, stderr[-800:])
             raise Refusal(answer.get("refused") or "the map between the two game versions could not be made")
+        log.info("The atlas child's own seconds: %s", answer.get("seconds"))
     return build
 
 

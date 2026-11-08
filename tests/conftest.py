@@ -455,6 +455,47 @@ def _isolate_ui_log(tmp_path, monkeypatch):
     monkeypatch.setattr(uilog, "data_root", lambda: tmp_path)
 
 
+_REAL_LOCAL_APP_DATA = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
+
+
+def _same_folder(a: Path, b: Path) -> bool:
+    return os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
+
+
+@pytest.fixture(autouse=True)
+def _fence_user_data(request, tmp_path, monkeypatch):
+    """No test may read or write his real user data under %LOCALAPPDATA% unless it says so.
+
+    Measured 2026-11-08: his Slot Library held a "captured" BoB state that was this suite's fake slot
+    (test_slot_relocate's world, fake fingerprint d3fca85f), kept there by a refit test that passed
+    library=None to a door that turned None into his real library. Every per-user root -- the app's user
+    data, the Slot Library, the scene lab (recordings, attempt scenes, slot backups, lab.json) and the
+    shared installation record -- joins its folder to `paths.local_app_data()`, so rebinding that one
+    seam reaches every caller, aliases included: an alias of `user_data_root` still calls the rebound
+    seam inside it (the KNOWN LIMIT of `_isolate_rank_standards` does not apply).
+
+    Only his real LocalAppData is fenced: a test that names its own LOCALAPPDATA keeps it. The isolated
+    profile overrides are cleared too, so an inherited SM64_PRACTICE_ROOT cannot aim a test at his
+    practice profile. Not fenced: a child process (it reads the environment, which still names his
+    folder, because Playwright's browsers, uv's cache and the shared build caches live there too) and
+    a module that reads LOCALAPPDATA itself. A test that must reach his real data carries
+    `@pytest.mark.real_user_data(reason=...)`. tests/test_user_data_fence.py proves the fence holds."""
+    marker = request.node.get_closest_marker("real_user_data")
+    if marker is not None:
+        if not (marker.kwargs.get("reason") or marker.args):
+            pytest.fail("real_user_data needs a reason: say what of his data this test reaches and why")
+        return
+    from sm64_events.core import paths
+    seam, fence = paths.local_app_data, tmp_path / "localappdata"
+
+    def fenced() -> Path:
+        found = seam()
+        return fence if _same_folder(found, _REAL_LOCAL_APP_DATA) else found
+    monkeypatch.setattr(paths, "local_app_data", fenced)
+    for name in ("SM64_PRACTICE_ROOT", "SM64_GHOST_POPULATION"):
+        monkeypatch.delenv(name, raising=False)
+
+
 @pytest.fixture(autouse=True)
 def _the_cursor_is_never_left_confined(request):
     """A browser-lane test leaves the operating system's cursor as free as it found it.
