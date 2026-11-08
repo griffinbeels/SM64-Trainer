@@ -41,8 +41,9 @@ A_BUTTON = 0x8000
 CASTLE = 6
 PLAY_MODE_CHANGE_LEVEL = 4
 SPAWN_ACTION = 0x00001924        # ACT_SPAWN_SPIN_AIRBORNE: a course entry's and a practice reset's first action
-MARIO_OBJECT, CURR_LEVEL, CURR_AREA = 0x80361158, 0x8032DDF8, 0x8033BACA
-LEVEL_TO_COURSE = 0x8032DD98     # gLevelToCourseNumTable: one byte per level from level 1
+# RAM by the symbol map's names (memory/layout.py owns addresses; the lab reads the map's): Mario's object,
+# the level and area, and gLevelToCourseNumTable (one byte per level from level 1).
+MARIO_OBJECT, CURR_LEVEL, CURR_AREA, LEVEL_TO_COURSE = "gMarioObject", "gCurrLevelNum", "gCurrAreaIndex", "gLevelToCourseNumTable"
 LEVEL_COUNT = 38
 SETTLE_FRAMES = 40               # after the spawn, before the reset is pressed
 MENU_FRAMES = 1500               # a warp and the act selector take ~130 frames; more means it is stuck
@@ -116,7 +117,7 @@ def find_painting(session: Path, symbols: sim.Symbols) -> int | None:
 
 class Stages:
     def __init__(self, lab_root: Path, cache: Path, *, rom_path: Path | None = None, symbols: sim.Symbols | None = None):
-        config = lab_config()
+        config = lab_config() if rom_path is None or symbols is None else {}
         self.lab_root, self.cache = Path(lab_root), Path(cache)
         self.rom_path = Path(rom_path or config["rom"])
         self.rom = self.rom_path.read_bytes()
@@ -188,7 +189,7 @@ class Stages:
     # ---------------------------------------------------------------- course and act
     def level_of_course(self, course: int) -> int:
         ram, _fcsr = self.boot()
-        table = ram[sim.phys(LEVEL_TO_COURSE):sim.phys(LEVEL_TO_COURSE) + LEVEL_COUNT]
+        table = ram[sim.phys(self.symbols[LEVEL_TO_COURSE]):sim.phys(self.symbols[LEVEL_TO_COURSE]) + LEVEL_COUNT]
         for level, value in enumerate(table.tolist(), start=1):
             if value == course:
                 return level
@@ -197,6 +198,13 @@ class Stages:
     def key(self, level: int, area: int, act: int) -> str:
         painting = self.painting()
         return f"v{STAGE_VERSION}-{painting.session}-{painting.frame}-{level}-{area}-{act}"
+
+    def has_reset(self, level: int, area: int, act: int) -> bool:
+        """Whether that reset is cached (made before), so asking for it costs a file read."""
+        try:
+            return (self.cache / f"reset-{self.key(level, area, act)}.npz").is_file()
+        except StageError:
+            return False
 
     def reset(self, level: int, area: int, act: int) -> np.ndarray:
         """The practice-reset state of that level, area and act (cached)."""
@@ -223,12 +231,12 @@ class Stages:
         spawned = None
         for n in range(MENU_FRAMES):
             ram = machine.ram
-            here = s16(ram, CURR_LEVEL) == level and s16(ram, CURR_AREA) == area
-            if here and u32(ram, MARIO_OBJECT) and u32(ram, self.symbols["gMarioStates"] + 0x0C) == SPAWN_ACTION:
+            here = s16(ram, self.symbols[CURR_LEVEL]) == level and s16(ram, self.symbols[CURR_AREA]) == area
+            if here and u32(ram, self.symbols[MARIO_OBJECT]) and u32(ram, self.symbols["gMarioStates"] + 0x0C) == SPAWN_ACTION:
                 spawned = n
                 break
             step = neutral
-            if s16(ram, CURR_LEVEL) == level and not u32(ram, MARIO_OBJECT) and ram[visible] and n % 16 == 0:
+            if s16(ram, self.symbols[CURR_LEVEL]) == level and not u32(ram, self.symbols[MARIO_OBJECT]) and ram[visible] and n % 16 == 0:
                 step = pads(0, 80, 0, template) if ram[selected] < act - 1 else pads(A_BUTTON, 0, 0, template)
             machine.step(step)
         if spawned is None:
@@ -237,10 +245,10 @@ class Stages:
             raise StageError(f"The act selector chose act {machine.ram[sim.phys(self.symbols['gCurrActNum']) + 1]}, not {act}.")
         for _ in range(SETTLE_FRAMES):
             machine.step(neutral)
-        before = u32(machine.ram, MARIO_OBJECT)
+        before = u32(machine.ram, self.symbols[MARIO_OBJECT])
         machine.step(pads(RESET_BUTTON, 0, 0, template))
         machine.step(pads(RESET_BUTTON, 0, 0, template))
-        if u32(machine.ram, self.symbols["gMarioStates"] + 0x0C) != SPAWN_ACTION or u32(machine.ram, MARIO_OBJECT) == before:
+        if u32(machine.ram, self.symbols["gMarioStates"] + 0x0C) != SPAWN_ACTION or u32(machine.ram, self.symbols[MARIO_OBJECT]) == before:
             raise StageError("Usamune's practice reset did not run in the simulated game.")
         return machine.ram.copy()
 

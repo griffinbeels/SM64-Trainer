@@ -54,7 +54,7 @@ STARTS = (GHOST_START, OWN_SCENE, ANOTHER_RESET, SIMULATED_RESET)
 # before the first parting frame only; False: none.
 SAVE_STATES = {GHOST_START: True, OWN_SCENE: True, ANOTHER_RESET: False, SIMULATED_RESET: False}
 EXACT = {GHOST_START: "bytes", OWN_SCENE: "bytes", ANOTHER_RESET: "mario", SIMULATED_RESET: "mario"}
-GAME_TIMER, AREA_COUNTER, MARIO_OBJECT = 0x8032D5D4, 0x8032DF08, 0x80361158
+GAME_TIMER, AREA_COUNTER, MARIO_OBJECT = "gGlobalTimer", "gAreaUpdateCounter", stage_sim.MARIO_OBJECT   # map names
 POSE_ACTION = POSE_AT + 40           # gc_pose: position[3], scale[3], angles[3], 3 animation s16, 2 u16, action
 GFX_POS = 0x20                       # an object's header.gfx.pos: where the game draws it
 
@@ -99,7 +99,7 @@ def pose_of(record) -> tuple[np.ndarray, int] | None:
 
 
 def sim_mario(ram: np.ndarray, symbols: sim.Symbols) -> tuple[np.ndarray, int]:
-    mario = struct.unpack_from(">I", ram, sim.phys(MARIO_OBJECT))[0]
+    mario = struct.unpack_from(">I", ram, sim.phys(symbols[MARIO_OBJECT]))[0]
     position = np.array(struct.unpack_from(">3f", ram, sim.phys(mario) + GFX_POS), np.float32) if mario else np.full(3, np.nan, np.float32)
     action = struct.unpack_from(">I", ram, sim.phys(symbols["gMarioStates"]) + 0x0C)[0]
     return position, action
@@ -128,8 +128,9 @@ def region_word(regions: list, address: int, size: int) -> bytes | None:
 
 def probe(regions: list, symbols: sim.Symbols) -> dict:
     """The first frame's words a start is chosen by (None where the regions lack one)."""
-    fields = {"timer": (GAME_TIMER, 4), "counter": (AREA_COUNTER, 2), "level": (stage_sim.CURR_LEVEL, 2),
-              "area": (stage_sim.CURR_AREA, 2), "action": (symbols["gMarioStates"] + 0x0C, 4),
+    fields = {"timer": (symbols[GAME_TIMER], 4), "counter": (symbols[AREA_COUNTER], 2),
+              "level": (symbols[stage_sim.CURR_LEVEL], 2), "area": (symbols[stage_sim.CURR_AREA], 2),
+              "action": (symbols["gMarioStates"] + 0x0C, 4),
               "buttons": (symbols["gControllerPads"], 2), "act": (symbols["gCurrActNum"], 2)}
     words = {}
     for name, (address, size) in fields.items():
@@ -257,8 +258,8 @@ class GhostScenes:
 
     def _with_clocks(self, ram: np.ndarray, first) -> np.ndarray:
         """The ghost carries both clocks on every record; a reset of another run gets this run's."""
-        struct.pack_into(">I", ram, sim.phys(GAME_TIMER), first.global_timer)
-        struct.pack_into(">H", ram, sim.phys(AREA_COUNTER), first.area_update_counter)
+        struct.pack_into(">I", ram, sim.phys(self.symbols[GAME_TIMER]), first.global_timer)
+        struct.pack_into(">H", ram, sim.phys(self.symbols[AREA_COUNTER]), first.area_update_counter)
         return ram
 
     # ---------------------------------------------------------------- the scene
@@ -271,6 +272,9 @@ class GhostScenes:
         clip_sha = _clip_sha(clip_bytes)
         if any(record.pad is None for record in clip.frames):
             raise ValueError("This ghost's inputs are not known on every frame, so it cannot be re-simulated.")
+        exact = self._cached_exact(clip_sha)
+        if exact is not None:
+            return exact
         refused = []
         for started in self.starts(clip, clip_sha, act):
             key = hashlib.sha256(f"{RESIM_VERSION}|{clip_sha}|{started.identity}".encode()).hexdigest()[:20]
@@ -285,10 +289,41 @@ class GhostScenes:
                     refused.append({"start": started.kind, **started.detail, "reason": str(error)})
                     continue
                 info["refused_starts"] = refused
+                if started.kind == OWN_SCENE and self.starts_dir is not None:
+                    info["start_saved"] = self._keep_start(clip, clip_bytes, started)
                 self.cache.mkdir(parents=True, exist_ok=True)
                 note.write_text(json.dumps(info, indent=1), encoding="utf-8")
                 return out, info
         raise stage_sim.StageError(f"No start could run this ghost: {refused}")
+
+    def _cached_exact(self, clip_sha: str) -> tuple[Path, dict] | None:
+        """A byte-exact scene of this ghost made before (its own scene or its start file): no start can do better."""
+        for note in sorted(self.cache.glob(f"ghost-{clip_sha[:16]}-*.json")):
+            try:
+                info = json.loads(note.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            out = note.with_suffix(".sm64scene")
+            if info.get("version") == RESIM_VERSION and info.get("ghost_sha256") == clip_sha \
+                    and info.get("exact") == "bytes" and out.is_file():
+                return out, info
+        return None
+
+    def _keep_start(self, clip, clip_bytes: bytes, started: Start) -> bool:
+        """His own scene will not stay (retention): save this ghost's start beside it, so it re-simulates
+        exactly without the scene. With the pool delta only when the simulated reset is made already (a
+        new one costs ~40 s); the regions alone keep Mario and every object exact."""
+        first = clip.frames[0]
+        scene = Path(self.scenes_dir) / started.detail["scene"]
+        act = None
+        for _path, stamp, words in self._scenes():
+            if stamp.startswith(scene.name + ":"):
+                act = words["act"] or 1
+        stages = self.stages if act is not None and self.stages.has_reset(first.level, first.area, act) else None
+        try:
+            return capture_start(scene, clip_bytes, self.starts_dir, stages, self.rom_path, self.symbols) is not None
+        except (OSError, ValueError, package.PackageError):
+            return False
 
     def _simulate(self, clip, clip_sha: str, started: Start, out: Path, progress) -> dict:
         _base, fcsr = self.stages.boot()
@@ -353,3 +388,52 @@ def capture_start(scene_path: Path, clip_bytes: bytes, starts_dir: Path, stages:
         except stage_sim.StageError:
             pass                                  # regions alone: Mario and objects exact
     return start_frame.write_start(starts_dir, saved)
+
+
+# ---------------------------------------------------------------- the server's child (scene_resim.py)
+def main(argv=None) -> int:
+    """One build in a child of its own, so the server's interpreter never runs the simulation: prints one
+    JSON line ({"path", "info"} | {"path"} | {"error"})."""
+    import argparse  # noqa: PLC0415
+
+    parser = argparse.ArgumentParser(description="Ghost Handoff re-simulation: one build, one JSON line.")
+    parser.add_argument("command", choices=("build", "stage", "capture"))
+    parser.add_argument("--lab-root", required=True)
+    parser.add_argument("--cache", required=True)
+    parser.add_argument("--rom", required=True)
+    parser.add_argument("--map", required=True)
+    parser.add_argument("--clip")
+    parser.add_argument("--scenes")
+    parser.add_argument("--starts")
+    parser.add_argument("--scene")
+    parser.add_argument("--act", type=int)
+    parser.add_argument("--course", type=int)
+    parser.add_argument("--area", type=int, default=1)
+    parser.add_argument("--frames", type=int, default=150)
+    args = parser.parse_args(argv)
+    symbols = sim.Symbols(Path(args.map))
+    stages = stage_sim.Stages(Path(args.lab_root), Path(args.cache) / "stages", rom_path=Path(args.rom), symbols=symbols)
+    try:
+        if args.command == "build":
+            scenes = GhostScenes(Path(args.lab_root), Path(args.cache), scenes_dir=Path(args.scenes) if args.scenes else None,
+                                 starts_dir=Path(args.starts) if args.starts else None, stages=stages)
+            path, info = scenes.build(Path(args.clip).read_bytes(), act=args.act)
+            answer = {"path": str(path), "info": info}
+        elif args.command == "stage":
+            act, level = args.act or 1, stages.level_of_course(args.course)
+            answer = {"path": str(stages.package(level, args.area, act, frames=args.frames)),
+                      "info": {"course": args.course, "level": level, "area": args.area, "act": act, "frames": args.frames,
+                               "start": SIMULATED_RESET, "first_record": 0, "parting_frame": None,
+                               "exact": EXACT[SIMULATED_RESET], "save_states": save_states(SIMULATED_RESET)}}
+        else:
+            written = capture_start(Path(args.scene), Path(args.clip).read_bytes(), Path(args.starts), stages,
+                                    Path(args.rom), symbols)
+            answer = {"path": str(written) if written else None}
+    except (stage_sim.StageError, sim_scene.SimSceneError, ValueError, OSError) as error:
+        answer = {"error": str(error)}
+    print(json.dumps(answer))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

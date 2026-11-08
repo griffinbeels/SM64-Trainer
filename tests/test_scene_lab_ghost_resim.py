@@ -14,8 +14,10 @@ sys.path.insert(0, str(ROOT / "tools" / "scene_lab"))
 import ghost_resim as gr  # noqa: E402
 import stage_sim  # noqa: E402
 
-MARIO, PADS, ACT = 0x8033B170, 0x8033AFF8, 0x8033BAC8
-SYMBOLS = {"gMarioStates": MARIO, "gControllerPads": PADS, "gCurrActNum": ACT}
+# Where the US map puts them (the module reads the map; these are the test's own copy of it).
+SYMBOLS = {"gMarioStates": 0x8033B170, "gControllerPads": 0x8033AFF8, "gCurrActNum": 0x8033BAC8,
+           "gGlobalTimer": 0x8032D5D4, "gAreaUpdateCounter": 0x8032DF08, "gCurrLevelNum": 0x8032DDF8,
+           "gCurrAreaIndex": 0x8033BACA}
 
 
 def regions(timer=3489, counter=2194, level=24, area=1, action=0x1924, buttons=0x20, act=1):
@@ -27,13 +29,13 @@ def regions(timer=3489, counter=2194, level=24, area=1, action=0x1924, buttons=0
         begin = max(low for low in spans if low <= at)
         struct.pack_into(fmt, spans[begin], at - begin, value)
 
-    put(gr.GAME_TIMER, ">I", timer)
-    put(stage_sim.CURR_LEVEL, ">h", level)
-    put(gr.AREA_COUNTER, ">H", counter)
-    put(PADS, ">H", buttons)
-    put(MARIO + 0x0C, ">I", action)
-    put(stage_sim.CURR_AREA, ">h", area)
-    put(ACT, ">h", act)
+    put(SYMBOLS[gr.GAME_TIMER], ">I", timer)
+    put(SYMBOLS[stage_sim.CURR_LEVEL], ">h", level)
+    put(SYMBOLS[gr.AREA_COUNTER], ">H", counter)
+    put(SYMBOLS["gControllerPads"], ">H", buttons)
+    put(SYMBOLS["gMarioStates"] + 0x0C, ">I", action)
+    put(SYMBOLS[stage_sim.CURR_AREA], ">h", area)
+    put(SYMBOLS["gCurrActNum"], ">h", act)
     return list(spans.items())
 
 
@@ -86,6 +88,24 @@ def test_save_states_follow_the_one_switch(monkeypatch):
     assert gr.save_states(gr.SIMULATED_RESET, frame=10, parting=20)["allowed"] is True
     assert gr.save_states(gr.SIMULATED_RESET, frame=20, parting=20)["allowed"] is False
     assert gr.save_states(gr.SIMULATED_RESET, frame=500, parting=None)["allowed"] is True
+
+
+def test_a_byte_exact_scene_already_made_is_the_answer(tmp_path):
+    """His own scene's build saves a start file; the next ask must not become a new build from it."""
+    import json
+    lab = gr.GhostScenes(tmp_path, tmp_path, scenes_dir=None, starts_dir=None,
+                         stages=SimpleNamespace(symbols=SYMBOLS, rom_path=tmp_path / "rom"))
+    sha = "ab" * 32
+    for start, exact in (("own_scene", "bytes"), ("simulated_reset", "mario")):
+        (tmp_path / f"ghost-{sha[:16]}-{start}-k.sm64scene").write_bytes(b"package")
+        (tmp_path / f"ghost-{sha[:16]}-{start}-k.json").write_text(json.dumps(
+            {"version": gr.RESIM_VERSION, "ghost_sha256": sha, "start": start, "exact": exact}), encoding="utf-8")
+    path, info = lab._cached_exact(sha)
+    assert info["start"] == "own_scene" and path.name.startswith(f"ghost-{sha[:16]}-own_scene")
+    assert lab._cached_exact("cd" * 32) is None
+    (tmp_path / f"ghost-{sha[:16]}-own_scene-k.json").write_text(json.dumps(
+        {"version": gr.RESIM_VERSION + 1, "ghost_sha256": sha, "exact": "bytes"}), encoding="utf-8")
+    assert lab._cached_exact(sha) is None                     # another version's scene is not this one's
 
 
 def test_every_start_has_a_switch_row_and_an_exactness():

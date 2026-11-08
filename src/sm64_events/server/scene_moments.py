@@ -1,6 +1,6 @@
 """Save this moment: one frame of a scene as a Usamune save state, into a slot of the running game (lab only).
 
-    POST /api/scene-lab/moment {package|attempt, frame}   -> the built state, or {refused, reason}
+    POST /api/scene-lab/moment {package|attempt|ghost, frame}   -> the built state, or {refused, reason}
     POST /api/scene-lab/moment/{id}/write {slot: 1..9}    -> {written, slot, ...}, or {refused, reason}
 
 Griffin's words: "Once we build out the infrastructure so that I can select an arbitrary game state and create a
@@ -56,12 +56,13 @@ GAME_WORDS = {
 class MomentBody(BaseModel):
     package: str | None = Field(default=None, min_length=1, max_length=255)
     attempt: int | None = Field(default=None, ge=0)
+    ghost: str | None = Field(default=None, min_length=1, max_length=512)   # its re-simulated scene (scene_resim.py)
     frame: int = Field(ge=0)
 
     @model_validator(mode="after")
     def one_of_them(self):
-        if (self.package is None) == (self.attempt is None):
-            raise ValueError("Name a package or an attempt.")
+        if sum(value is not None for value in (self.package, self.attempt, self.ghost)) != 1:
+            raise ValueError("Name a package, an attempt or a ghost.")
         return self
 
 
@@ -124,6 +125,8 @@ class SceneMoments:
     async def _source(self, body: MomentBody) -> tuple[Path, str]:
         api = importlib.import_module("sm64_events.server.scene_lab_api")   # the module in sys.modules, as the routes catch
         config = await asyncio.to_thread(api.LabConfig.load, self.lab.config_path)
+        if body.ghost is not None:
+            return await self._ghost_source(body)
         if body.attempt is None:
             return await asyncio.to_thread(config.package_path, body.package), body.package
         if self.lab.scenes is None:
@@ -135,6 +138,19 @@ class SceneMoments:
         if sidecar is not None:
             raise api.SceneRefused(GROWING)
         return path, f"Attempt {body.attempt}"
+
+    async def _ghost_source(self, body: MomentBody) -> tuple[Path, str]:
+        """A re-simulated ghost scene's package, when ghost_resim.SAVE_STATES lets this frame be a save state."""
+        api = importlib.import_module("sm64_events.server.scene_lab_api")
+        from sm64_events.server.scene_resim import ResimRefused
+        try:
+            path, info = await asyncio.to_thread(self.lab.resim.ghost_scene_blocking, body.ghost)
+        except ResimRefused as refused:
+            raise api.SceneRefused(str(refused)) from None
+        allowed = await asyncio.to_thread(self.lab.resim.allows, info, body.frame)
+        if not allowed["allowed"]:
+            raise api.SceneRefused(allowed["reason"])
+        return path, "Ghost"
 
     async def build(self, body: MomentBody) -> dict:
         """The built state with its level, area and Mario word, or {refused, reason}. LookupError: no such
