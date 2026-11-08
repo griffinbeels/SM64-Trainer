@@ -19,6 +19,11 @@ came from. Relocation and translation make new bytes, so a slot's own hash never
 Every pass runs on the slot refit's one worker thread with its one reader (refit.SlotRefitter), under `lock`; the
 Ghost Lab's write takes the same lock, so no two writers meet in a slot, and a spawn refit never races a context
 write.
+
+The strip also shows which slot he loaded last in this context: a `state_loaded` event marks a load, and the next
+watch reads the slot Usamune's load read (usamune.load_slot). That slot keeps the mark while it holds the state
+he loaded and the context stays. A state made from a Scene viewer frame shows that frame's picture (the Slot
+Library keeps it; server/scene_moments.py takes it at the write).
 """
 from __future__ import annotations
 
@@ -26,6 +31,7 @@ import logging
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 
 from sm64_events.memory.addresses import course_for_level, course_name, star_name
 from sm64_events.slotlibrary.atlas import AtlasStore
@@ -40,18 +46,49 @@ from sm64_events.slotlibrary.usamune import (
     empty_slot,
     is_occupied,
     live_facts,
+    load_slot,
 )
 from sm64_events.slotlibrary.watcher import keep, read_slot
 
 log = logging.getLogger("sm64.slotlibrary")
 
 STAR_SIGNALS = frozenset({"target_changed", "star_collected"})
+LOAD_SIGNAL = "state_loaded"
+PICTURE_ROUTE = "/api/scene-lab/slot-sets/pictures/{id}"     # server/scene_lab_api.py serves it
 
 
 @dataclass(frozen=True)
 class Context:
     course: int
     star: int | None             # None: the course default alone
+
+    @property
+    def entity_key(self) -> str | None:
+        """The practice target's key in the spelling the ghost and input layers use ("2-3"); None for no star."""
+        if self.star is None:
+            return None
+        from sm64_events.inputs.service import entity_key_of
+        return entity_key_of(SimpleNamespace(course_id=self.course, star_id=self.star, segment_id=None))[1]
+
+
+def picture_url(library: SlotLibrary, identity: str | None) -> str | None:
+    """Where the page reads a kept state's frame picture; None when it has none."""
+    if identity is None:
+        return None
+    try:
+        return PICTURE_ROUTE.format(id=identity) if library.picture_path(identity) is not None else None
+    except Refusal:
+        return None
+
+
+def empty_entry(slot: int) -> dict:
+    return {"slot": slot, "set": None, "state": None, "translated": None, "under": None, "picture": None,
+            "loaded_last": False}
+
+
+def empty_view(game: dict | None = None) -> dict:
+    """The strip's answer outside a course, and on a server that keeps no star sets."""
+    return {"context": None, "game": game, "slots": [empty_entry(slot) for slot in SLOTS]}
 
 
 class SlotLedger:
@@ -104,13 +141,19 @@ class SetKeeper:
         self._course: int | None = None
         self._hint: tuple[int, int] | None = None
         self._seen: dict[int, str | None] | None = None   # None: the next watch only takes stock
+        self._load_seen = False                            # a state_loaded came; the next watch reads the slot
+        self._loaded: tuple[Context, int, str | None] | None = None   # the context, slot (1-9) and state loaded
 
     # -- what decides the context ---------------------------------------------------------------------
 
     def observe(self, event) -> bool:
         """A star target pick or a star grab: remembered as the star to switch to. True when it may change the
-        context (the caller then schedules a pass)."""
+        context (the caller then schedules a pass). A load is only noted: the next watch reads which slot it was."""
         kind = getattr(event, "type", None)
+        if kind == LOAD_SIGNAL:
+            with self.lock:
+                self._load_seen = True
+            return False
         if kind not in STAR_SIGNALS:
             return False
         payload = getattr(event, "payload", None) or {}
@@ -220,7 +263,22 @@ class SetKeeper:
     def forget_game(self) -> None:
         """Another game, or none: the slots are unknown again, so the next watch takes stock before it assigns."""
         self._seen, self.applied, self.context, self._course = None, None, None, None
+        self._loaded, self._load_seen = None, False
         self.ledger = SlotLedger()
+
+    def _note_load(self, memory: GameMemory, build, context: Context | None) -> bool:
+        """After a state_loaded: the slot Usamune's load read, and the state the set names there. True when the
+        strip's answer changed."""
+        if not self._load_seen:
+            return False
+        self._load_seen = False
+        index = load_slot(memory, build)
+        if context is None or index is None:
+            return False
+        identity, _which = self.sets.resolved(context.course, context.star).get(index + 1, (None, None))
+        self._loaded = (context, index + 1, identity)
+        log.debug("Star sets: %s; he loaded slot %d.", self.words(context), index + 1)
+        return True
 
     def watch(self, memory: GameMemory) -> list[tuple[int, KeptState]]:
         """His new saves: a slot whose bytes changed and are not the Trainer's joins the library, and the current
@@ -229,6 +287,7 @@ class SetKeeper:
         build = check_cartridge(memory)
         self.build = build.version
         context = self.locate(memory, build)
+        loaded = self._note_load(memory, build, context)
         stock = self._seen is None
         seen = self._seen = self._seen or {}
         assigned = []
@@ -254,6 +313,7 @@ class SetKeeper:
                 assigned.append((index + 1, state))
         if assigned:
             log.info("Star sets: %s took his saves in slots %s.", self.words(context), [slot for slot, _ in assigned])
+        if assigned or loaded:
             self.on_change(self.view())
         return assigned
 
@@ -294,11 +354,10 @@ class SetKeeper:
         context, build = self.context, self.build
         game = None if build is None else {"build": build}
         if context is None:
-            return {"context": None, "game": game,
-                    "slots": [{"slot": slot, "set": None, "state": None, "translated": None, "under": None}
-                              for slot in SLOTS]}
+            return empty_view(game)
         resolved = self.sets.resolved(context.course, context.star)
         default = self.sets.slots(context.course, None)
+        loaded = self._loaded if self._loaded is not None and self._loaded[0] == context else None
         slots = []
         for slot in SLOTS:
             identity, which = resolved.get(slot, (None, None))
@@ -307,10 +366,13 @@ class SetKeeper:
             slots.append({"slot": slot, "set": which, "state": state,
                           "translated": None if state is None or build is None or state["build"] is None
                           else state["build"] != build,
-                          "under": self._state_json(under) if under else None})
+                          "under": self._state_json(under) if under else None,
+                          "picture": picture_url(self.library, identity) if state is not None else None,
+                          "loaded_last": loaded is not None and loaded[1:] == (slot, identity)})
         return {"context": {"course_id": context.course, "course": course_name(context.course),
                             "star_id": context.star,
-                            "star": None if context.star is None else star_name(context.course, context.star)},
+                            "star": None if context.star is None else star_name(context.course, context.star),
+                            "entity_key": context.entity_key},
                 "game": game, "slots": slots}
 
     # -- the page's edits ---------------------------------------------------------------------------------

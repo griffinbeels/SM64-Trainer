@@ -546,6 +546,26 @@ class SceneLab:
         """The star sets' keeper, or None on a server that does not follow spawns."""
         return None if self.refitter is None else self.refitter.keeper
 
+    async def frame_picture(self, path, package_frame: int) -> bytes | None:
+        """The open scene's picture of one of its package's frames, the recorded camera's, as a JPEG: the picture a
+        save state made from that frame keeps (server/scene_moments.py). None when that package is not the open
+        scene, the frame is not in it, or the renderer could not draw it. It goes through the session's worker and
+        delivery thread like any picture the page asks for, so it never meets one of the page's halfway."""
+        session, generation, delivery = self.session, self.generation, self.delivery
+        if session is None or delivery is None or self.open_path is None or Path(self.open_path) != Path(path):
+            return None
+        try:
+            position = list(session.frames).index(package_frame)
+        except (AttributeError, TypeError, ValueError):
+            return None
+        try:
+            pending = await self._run(generation, "begin", position, None, "jpeg", True, True)
+            header, payload = await asyncio.get_running_loop().run_in_executor(delivery, session.finish, pending)
+        except (SceneClosed, ValueError, RuntimeError) as failed:
+            log.info("A save state's frame picture was not drawn: %s", failed)
+            return None
+        return payload if header.get("encoding") == "jpeg" and payload else None
+
     # ------------------------------------------------------------ status, open, close
 
     def _status_blocking(self) -> dict:
@@ -1315,14 +1335,16 @@ def _mount_slot_set_routes(router: APIRouter, lab: SceneLab) -> None:
         GET    /slot-sets                     -> the current course and star, and Usamune's nine slots
         POST   /slot-sets/{slot}/move {to}    -> the slot's state into the star's set or the course default
         DELETE /slot-sets/{slot}?set=         -> the slot out of that set; the kept state and the game stay
+        GET    /slot-sets/pictures/{state}    -> the frame picture a kept state was made from (JPEG)
     Every answer is the GET body; `slot_sets_changed` carries it on the app's socket. Plain routes on the
     threadpool; an edit wakes the slot worker, which writes the resolved set when it changed."""
+    from fastapi.responses import FileResponse
+
+    from sm64_events.slotlibrary.keeper import empty_view
+    from sm64_events.slotlibrary.usamune import Refusal
 
     def empty() -> dict:
-        return {"context": None, "game": None, "slots": [
-            {"slot": slot, "set": None, "state": None, "translated": None, "under": None} for slot in range(1, 10)]}
-
-    from sm64_events.slotlibrary.usamune import Refusal
+        return empty_view()
 
     def edit(work):
         keeper = lab.slot_sets()
@@ -1350,6 +1372,17 @@ def _mount_slot_set_routes(router: APIRouter, lab: SceneLab) -> None:
     @router.delete("/slot-sets/{slot}")
     def remove_slot(slot: int = FastPath(ge=1, le=9), set: str = Query(pattern="^(star|course)$")):  # noqa: A002
         return edit(lambda keeper: keeper.remove(slot, set))
+
+    @router.get("/slot-sets/pictures/{state}")       # keeper.PICTURE_ROUTE names it to the page
+    def slot_picture(state: str):
+        keeper = lab.slot_sets()
+        try:
+            path = None if keeper is None else keeper.library.picture_path(state)
+        except Refusal:
+            path = None
+        if path is None:
+            raise HTTPException(404, "This save state has no picture.")
+        return FileResponse(path, media_type="image/jpeg")
 
 
 def _mount_preset_routes(router: APIRouter, lab: SceneLab) -> None:

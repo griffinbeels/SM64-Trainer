@@ -91,6 +91,10 @@ LEVEL_RANGE, AREA_RANGE = range(1, 39), range(1, 9)
 # usamune timer is messed up ... we shouldn't copy over the overall session timer clock", 2026-11-08). Every write
 # of the Trainer's keeps the running game's clocks in those words (`with_live_clocks`).
 SESSION_CLOCKS = ((0x90, BODY_BYTES + 0x100), (0x94, BODY_BYTES + 0x104), (0xEC, BODY_BYTES + 0x120))
+# The slot index (0-8) Usamune's load reads from its state block, and leaves there after the load. Simulation, both
+# builds (2026-11-08): with only this byte set, its load put Mario where that slot's bytes had him, 0.00 units off.
+# VERIFY live: that his own load (the button or the menu) sets this byte before it loads.
+LOAD_SLOT = 0x118
 # Where any build keeps the body, for checking a slot's own bytes before anyone says which build made them.
 _BODIES = tuple(layout_for(version).mario_struct for version in VERSIONS if layout_for(version).mario_struct)
 
@@ -206,6 +210,12 @@ def with_live_clocks(memory: GameMemory, build: Build, data: bytes) -> bytes:
     for field, at in SESSION_CLOCKS:
         out[at:at + 4] = memory.read(build.settings + field, 4)
     return bytes(out)
+
+
+def load_slot(memory: GameMemory, build: Build) -> int | None:
+    """The slot index (0-8) Usamune's load reads, so the one a load just read; None for a byte out of range."""
+    index = memory.read(build.settings + LOAD_SLOT, 1)[0]
+    return index if index < SLOT_COUNT else None
 
 
 def same_segments(live: bytes, recorded: bytes) -> bool:

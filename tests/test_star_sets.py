@@ -24,6 +24,8 @@ from sm64_events.slotlibrary.store import Damaged, SlotLibrary, state_id  # noqa
 
 BOB, WF = 1, 2                       # course numbers; the stand-in game stands in BoB (level 9)
 make_slot, keep = libfakes.make_slot, libfakes.keep
+JPEG = b"\xff\xd8\xff\xe0" + bytes(16) + b"\xff\xd9"
+LOADED = SimpleNamespace(type="state_loaded", payload={"load_signature": "igt_rewound"})
 
 
 @pytest.fixture
@@ -103,8 +105,9 @@ def test_a_star_pick_overrides_the_default_slot_by_slot(game, library, sets):
     assert report.context == Context(BOB, 3) and report.written == [1, 3]
     assert (game.slot(0), game.slot(2)) == (make_slot(0xB1), make_slot(0xA3))
     view = keeper.view()
-    assert view["context"] == {"course_id": BOB, "course": "Bob-omb Battlefield", "star_id": 3,
-                               "star": view["context"]["star"]} and view["context"]["star"]
+    context = view["context"]
+    assert (context["course_id"], context["course"], context["star_id"]) == (BOB, "Bob-omb Battlefield", 3)
+    assert context["star"]
     assert [entry["set"] for entry in view["slots"][:3]] == ["star", None, "course"]
     assert view["slots"][0]["state"]["id"] == star.id and view["slots"][0]["under"]["id"] == a.id
     assert view["slots"][0]["state"]["place"] == "Bob-omb Battlefield" and len(view["slots"]) == 9
@@ -217,6 +220,114 @@ def test_the_worker_wakes_for_a_star_pick_only_with_a_keeper(game, library, sets
     assert worker._due is not None
 
 
+# --- what the strip shows of each slot ----------------------------------------------------------------------
+
+def test_the_context_names_the_practice_targets_key(game, library, sets):
+    from sm64_events.server.scene_ghosts import Target as GhostTarget
+    keeper = stocked(game, library, sets)
+    keeper.apply(game)
+    assert keeper.view()["context"]["entity_key"] is None, "the course default is no star"
+    keeper.observe(pick(BOB, 3))
+    keeper.apply(game)
+    assert keeper.view()["context"]["entity_key"] == "1-3" == GhostTarget("star", course_id=1, star_id=3).entity_key
+
+
+def loaded_slots(keeper) -> list[int]:
+    return [entry["slot"] for entry in keeper.view()["slots"] if entry["loaded_last"]]
+
+
+def test_the_slot_he_loaded_last_is_marked_while_it_holds_that_state_in_this_context(game, library, sets):
+    a, b, star = (keep(library, game, make_slot(fill)) for fill in (0xA1, 0xA3, 0xB1))
+    sets.put(library, BOB, None, 1, a.id)
+    sets.put(library, BOB, None, 3, b.id)
+    sets.put(library, BOB, 5, 1, star.id)
+    told = []
+    keeper = SetKeeper(library, sets, None, target=Target(), on_change=told.append)
+    keeper.watch(game)
+    keeper.apply(game)
+    selector = usamune.US.settings + usamune.LOAD_SLOT
+    game.poke(selector, bytes([2]))                                 # Usamune's load read slot 3
+    assert keeper.observe(LOADED) is False, "a load wakes no pass: the next watch reads the slot"
+    assert loaded_slots(keeper) == []
+    told.clear()
+    keeper.watch(game)
+    assert loaded_slots(keeper) == [3] and told and loaded_slots_of(told[-1]) == [3]
+    game.poke(selector, bytes([0]))                                 # he moved the menu's slot, loaded nothing
+    keeper.watch(game)
+    assert loaded_slots(keeper) == [3]
+    keeper.observe(grab(BOB, 5))
+    keeper.apply(game)
+    assert loaded_slots(keeper) == [], "another context: he has loaded nothing here yet"
+    keeper.observe(LOADED)
+    game.poke(selector, bytes([0]))
+    keeper.watch(game)
+    assert loaded_slots(keeper) == [1]
+    game.save(0, make_slot(0xE1))                                   # his own save over the slot he loaded
+    keeper.watch(game)
+    assert sets.slots(BOB, 5)[1] == state_id(make_slot(0xE1)) and loaded_slots(keeper) == []
+
+
+def loaded_slots_of(view: dict) -> list[int]:
+    return [entry["slot"] for entry in view["slots"] if entry["loaded_last"]]
+
+
+def test_a_state_made_from_a_frame_shows_that_frames_picture(game, library, sets):
+    state = keep(library, game, make_slot(0xB1))
+    sets.put(library, BOB, None, 1, state.id)
+    keeper = stocked(game, library, sets)
+    keeper.apply(game)
+    assert [entry["picture"] for entry in keeper.view()["slots"]] == [None] * 9
+    library.put_picture(state.id, JPEG)
+    assert keeper.view()["slots"][0]["picture"] == f"/api/scene-lab/slot-sets/pictures/{state.id}"
+    assert library.picture_path(state.id).read_bytes() == JPEG
+    with pytest.raises(ValueError):
+        library.put_picture(state.id, b"\x89PNG\r\n")
+    with pytest.raises(usamune.Refusal):
+        library.put_picture("0" * 64, JPEG)
+
+
+def test_the_open_scenes_picture_of_a_package_frame(tmp_path):
+    """SceneLab.frame_picture: the open scene's row whose package frame it is, the recorded camera, a JPEG."""
+    import asyncio
+    from concurrent.futures import ThreadPoolExecutor
+
+    from fastapi import FastAPI
+
+    from sm64_events.server import scene_lab_api
+
+    class Session:
+        frames = [10, 11, 12]                     # the package frame of each row
+
+        def __init__(self):
+            self.begun = []
+
+        def begin(self, *request):
+            self.begun.append(request)
+            return "pending"
+
+        def finish(self, pending, share=None):
+            return {"encoding": "jpeg"}, JPEG
+
+    config = tmp_path / "lab.json"
+    config.write_text(json.dumps({"rom": str(tmp_path / "rom.z64"), "packages": str(tmp_path / "packages"),
+                                  "map": str(tmp_path / "map.txt"), "lab_root": str(tmp_path / "root")}),
+                      encoding="utf-8")
+    lab = scene_lab_api.mount_scene_lab(FastAPI(), config)
+    session, package = Session(), tmp_path / "packages" / "a.sm64scene"
+    lab.worker, lab.delivery = ThreadPoolExecutor(1), ThreadPoolExecutor(1)
+    lab.session, lab.open_path, lab.generation = session, package, 4
+    try:
+        assert asyncio.run(lab.frame_picture(package, 11)) == JPEG
+        assert session.begun == [(1, None, "jpeg", True, True)], "row 1 holds package frame 11"
+        assert asyncio.run(lab.frame_picture(package, 99)) is None
+        assert asyncio.run(lab.frame_picture(tmp_path / "packages" / "b.sm64scene", 11)) is None
+        assert len(session.begun) == 1
+    finally:
+        lab.session = lab.open_path = None
+        lab.worker.shutdown()
+        lab.delivery.shutdown()
+
+
 # --- the page's edits ---------------------------------------------------------------------------------------
 
 def test_a_slot_moves_between_the_star_and_the_course_default(game, library, sets):
@@ -266,8 +377,17 @@ def test_the_routes_answer_the_frozen_shape(game, library, sets, tmp_path):
     lab.refitter.run_once()
     body = client.get("/api/scene-lab/slot-sets").json()
     assert set(body) == {"context", "game", "slots"} and body["game"] == {"build": "us"}
-    assert set(body["slots"][0]) == {"slot", "set", "state", "translated", "under"}
+    assert set(body["context"]) == {"course_id", "course", "star_id", "star", "entity_key"}
+    assert body["context"]["entity_key"] == "1-3"
+    assert set(body["slots"][0]) == {"slot", "set", "state", "translated", "under", "picture", "loaded_last"}
     assert body["slots"][0]["set"] == "star" and body["slots"][0]["translated"] is None   # rom "test": no build
+    assert body["slots"][0]["picture"] is None and body["slots"][0]["loaded_last"] is False
+    library.put_picture(star.id, JPEG)
+    url = client.get("/api/scene-lab/slot-sets").json()["slots"][0]["picture"]
+    shown = client.get(url)
+    assert shown.status_code == 200 and shown.content == JPEG and shown.headers["content-type"] == "image/jpeg"
+    assert client.get("/api/scene-lab/slot-sets/pictures/" + "0" * 64).status_code == 404
+    assert client.get("/api/scene-lab/slot-sets/pictures/not-an-id").status_code == 404
     moved = client.post("/api/scene-lab/slot-sets/1/move", json={"to": "course"})
     assert moved.status_code == 200 and moved.json()["slots"][0]["set"] == "course"
     assert client.post("/api/scene-lab/slot-sets/1/move", json={"to": "sideways"}).status_code == 422
@@ -339,10 +459,20 @@ def test_a_ghost_lab_write_through_the_route_joins_the_named_star_set(tmp_path):
                       log_file=tmp_path / "refit.jsonl")
     lab.refitter.run_once()
     client = TestClient(app)
+    asked = []
+
+    async def drawn(path, frame):                 # the Scene viewer has this package open
+        asked.append((Path(path).name, frame))
+        return JPEG
+
+    lab.frame_picture = drawn
     built = client.post("/api/scene-lab/moment", json={"package": moments_test.PACKAGE, "frame": 7}).json()
     written = client.post(f"/api/scene-lab/moment/{built['id']}/write",
                           json={"slot": 3, "course_id": BOB, "star_id": 4}).json()
     assert written["written"] and written["set"] == "star"
+    assert asked == [(moments_test.PACKAGE, 7)]
+    assert written["picture"] == f"/api/scene-lab/slot-sets/pictures/{written['kept']}"
+    assert library.picture_path(written["kept"]).read_bytes() == JPEG
     sets = CourseSets(library.root / "course-sets.json")
     assert sets.slots(BOB, 4) == {3: written["kept"]}
     assert lab.refitter.watch_once() == [], "the slot worker does not take the Ghost Lab's write for his save"

@@ -62,6 +62,11 @@ Contracts the tests pin:
   stock. Every set starts empty, and nothing is written while none names anything. Simulation evidence
   (2026-11-08): Usamune's own save into slot 5 of a cold-booted US BoB joined the star set at slot 5 on the next
   watch (48 ms with the new state's compress; 0.2 ms idle).
+- **The strip's marks.** `loaded_last`: a `state_loaded` only sets a flag (no pass); the next watch reads
+  `usamune.load_slot` (state block +0x118, the slot Usamune's load reads; simulation, both builds: that byte alone
+  chose the slot, 0.00 units off). VERIFY live that his own load sets it. `picture`: the Ghost Lab write asks
+  `SceneLab.frame_picture` for the open scene's frame before it writes, and the library keeps it as
+  `pictures/<id>.jpg`; a state from anywhere else has none.
 - **The slot refit touches only this place's slots.** After a spawn it refits occupied slots whose trailer level and
   area match the game's; a slot already in place is not written; a slot whose bytes changed since its first read is
   skipped (he may have just saved); a Mario that moves during a write stops the pass. His save joins the library
