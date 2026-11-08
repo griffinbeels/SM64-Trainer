@@ -191,9 +191,10 @@ class GhostScenes:
         """(path, stamp, the first frame's identity words) of every readable scene in the attempt scenes
         folder; each scene is read once per file version (PROBE_WORDS), so a second build reads only the
         scene it starts from."""
-        if self.scenes_dir is None or not Path(self.scenes_dir).is_dir():
-            return
-        for path in sorted(Path(self.scenes_dir).glob("*.sm64scene")):
+        folders = self.scenes_dir if isinstance(self.scenes_dir, (list, tuple)) else [self.scenes_dir]
+        paths = sorted({path for folder in folders if folder is not None and Path(folder).is_dir()
+                        for path in Path(folder).glob("*.sm64scene")})
+        for path in paths:
             try:
                 stat = path.stat()
                 stamp = f"{path.name}:{stat.st_size}:{stat.st_mtime_ns}"
@@ -324,6 +325,8 @@ class GhostScenes:
         if exact is not None:
             return exact
         refused = self.refusals = []
+        if progress is not None:
+            progress("choosing a start", 0, 0)
         for started in self.starts(clip, clip_sha, act):
             key = hashlib.sha256(f"{RESIM_VERSION}|{clip_sha}|{started.identity}".encode()).hexdigest()[:20]
             out = self.cache / f"ghost-{clip_sha[:16]}-{started.kind}-{key}.sm64scene"
@@ -362,7 +365,9 @@ class GhostScenes:
         exactly without the scene. With the pool delta only when the simulated reset is made already (a
         new one costs ~40 s); the regions alone keep Mario and every object exact."""
         first = clip.frames[0]
-        scene = Path(self.scenes_dir) / started.detail["scene"]
+        scene = next((path for path, _stamp, _words in self._scenes() if path.name == started.detail["scene"]), None)
+        if scene is None:
+            return False
         act = None
         for _path, stamp, words in self._scenes():
             if stamp.startswith(scene.name + ":"):
@@ -394,7 +399,9 @@ class GhostScenes:
                         parting = index
                 writer.add(machine.ram)
                 if progress is not None:
-                    progress(index, len(clip.frames) - 1)
+                    progress("re-simulating", index, len(clip.frames) - 1)
+            if progress is not None:
+                progress("writing the scene", len(clip.frames) - 1, len(clip.frames) - 1)
             writer.finish()
         except BaseException:
             writer.abandon()
@@ -503,7 +510,7 @@ def main(argv=None) -> int:
     parser.add_argument("--rom", required=True)
     parser.add_argument("--map", required=True)
     parser.add_argument("--clip")
-    parser.add_argument("--scenes")
+    parser.add_argument("--scenes", action="append", default=[], help="a folder of his attempt scenes (repeatable)")
     parser.add_argument("--starts")
     parser.add_argument("--scene")
     parser.add_argument("--act", type=int)
@@ -516,16 +523,25 @@ def main(argv=None) -> int:
     parser.add_argument("--first-record", type=int, default=1)
     args = parser.parse_args(argv)
     symbols = sim.Symbols(Path(args.map))
+    shown = {"at": 0.0}
+
+    def progress(stage: str, done: int, total: int) -> None:
+        """One JSON line the server reads as it comes (scene_resim.py), at most ~5 a second."""
+        now = time.monotonic()
+        if done in (0, total) or now - shown["at"] > 0.2:
+            shown["at"] = now
+            print(json.dumps({"progress": {"stage": stage, "done": done, "total": total}}), flush=True)
     stages = stage_sim.Stages(Path(args.lab_root), Path(args.cache) / "stages", rom_path=Path(args.rom), symbols=symbols,
                               map_path=Path(args.map))
     try:
         if args.command == "build":
-            scenes = GhostScenes(Path(args.lab_root), Path(args.cache), scenes_dir=Path(args.scenes) if args.scenes else None,
+            scenes = GhostScenes(Path(args.lab_root), Path(args.cache), scenes_dir=[Path(folder) for folder in args.scenes],
                                  starts_dir=Path(args.starts) if args.starts else None, stages=stages)
-            path, info = scenes.build(Path(args.clip).read_bytes(), act=args.act)
+            path, info = scenes.build(Path(args.clip).read_bytes(), act=args.act, progress=progress)
             answer = {"path": str(path), "info": info}
         elif args.command == "stage":
             act, level = args.act or 1, stages.level_of_course(args.course)
+            progress("making the stage", 0, 0)
             answer = {"path": str(stages.package(level, args.area, act, frames=args.frames)),
                       "info": {"course": args.course, "level": level, "area": args.area, "act": act, "frames": args.frames,
                                "start": SIMULATED_RESET, "first_record": 0, "parting_frame": None,

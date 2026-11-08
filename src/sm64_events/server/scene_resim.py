@@ -46,6 +46,7 @@ class SceneResim:
         self._starts_root = starts_root
         self.runner = runner or self._run_child
         self.turn = threading.Lock()                  # one simulation at a time
+        self.progress: dict | None = None             # the running build, for /status: {what, stage, done, total}
         self.child: subprocess.Popen | None = None
         self.child_lock = threading.Lock()
         self.stopped = threading.Event()
@@ -69,6 +70,7 @@ class SceneResim:
 
     # ---------------------------------------------------------------- the child
     def _run_child(self, args: list[str]) -> dict:
+        """The child's answer (its last line); its progress lines go to self.progress as they come."""
         from sm64_events.core.childproc import python_child, quiet_spawn_kwargs
         tools = Path(__file__).resolve().parents[3] / "tools" / "scene_lab"
         spawn = quiet_spawn_kwargs()
@@ -82,23 +84,46 @@ class SceneResim:
                                      encoding="utf-8", errors="replace", env=env, **spawn)
             with self.child_lock:
                 self.child = child
+            watchdog = threading.Timer(CHILD_SECONDS, child.kill)
+            watchdog.start()
+            errors: list[str] = []
+            reader = threading.Thread(target=lambda: errors.append(child.stderr.read()), daemon=True)
+            reader.start()
+            last = None
+            self.progress = {"what": args[0], "stage": "starting", "done": 0, "total": 0}
             try:
-                stdout, stderr = child.communicate(timeout=CHILD_SECONDS)
-            except subprocess.TimeoutExpired:
-                child.kill()
-                child.communicate()
-                log.warning("A ghost re-simulation ran past %s s.", CHILD_SECONDS)
-                raise ResimRefused(NO_SIMULATION) from None
+                for line in child.stdout:
+                    line = line.strip()
+                    if line.startswith('{"progress"'):
+                        self.progress = {"what": args[0], **json.loads(line)["progress"]}
+                    elif line:
+                        last = line
+                child.wait()
             finally:
+                watchdog.cancel()
+                reader.join(timeout=5)
+                self.progress = None
                 with self.child_lock:
                     self.child = None
-        if child.returncode != 0 or not stdout.strip():
-            log.warning("A ghost re-simulation ended with %s: %s", child.returncode, stderr[-800:])
+        if child.returncode != 0 or last is None:
+            log.warning("A ghost re-simulation ended with %s: %s", child.returncode, "".join(errors)[-800:])
             raise ResimRefused(NO_SIMULATION)
-        answer = json.loads(stdout.strip().splitlines()[-1])
+        answer = json.loads(last)
         if "error" in answer:
             raise ResimRefused(answer["error"])
         return answer
+
+    def _scene_args(self) -> list[str]:
+        """His attempt scenes' folders: this journal's, and the one scenes lived in before they were per journal.
+        A server with no journal open has none (a build then starts from a start file or a reset)."""
+        folders = []
+        try:
+            folders.append(self.lab._scene_folder())
+        except Exception as error:  # noqa: BLE001 - attempt_scenes.NoJournal: no journal, no scenes of his
+            log.info("Re-simulating without this journal's attempt scenes: %s", error)
+        legacy = self.lab._lab_root() / "attempts"
+        folders += [legacy] if legacy not in folders else []
+        return [part for folder in folders for part in ("--scenes", str(folder))]
 
     def _common(self, config) -> list[str]:
         return ["--lab-root", str(self.lab._lab_root()), "--cache", str(self.cache()), "--rom", str(config.rom),
@@ -137,7 +162,7 @@ class SceneResim:
         with tempfile.TemporaryDirectory(prefix="sm64-resim-") as folder:
             clip_path = Path(folder) / "ghost.clip"
             clip_path.write_bytes(clip)
-            args = ["build", *self._common(config), "--clip", str(clip_path), "--scenes", str(self.lab._scene_folder()),
+            args = ["build", *self._common(config), "--clip", str(clip_path), *self._scene_args(),
                     "--starts", str(self.starts_root())]
             if act is not None:
                 args += ["--act", str(act)]

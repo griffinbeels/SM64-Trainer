@@ -762,6 +762,70 @@ class ReplayService:
         return with_track_pads(found, attempt, self.input_track,
                                self.cfg.save_root.resolve() / "native" / "inputs")
 
+    def _native_files(self, attempt_id: int) -> list[Path]:
+        """One run's committed clip and its playback copy (`native_with_inputs`), each with its
+        manifest, in the order a delete takes them: the copy the renderer plays first, then the
+        commit record before the bytes it vouches for (bytes without a record are never read)."""
+        native = self.cfg.save_root.resolve() / "native"
+        return [native / "inputs" / f"attempt_{attempt_id}.ghost", native / "inputs" / f"attempt_{attempt_id}.json",
+                native / f"attempt_{attempt_id}.json", native / f"attempt_{attempt_id}.ghost"]
+
+    def native_holdings(self) -> list[dict]:
+        """Every run with a committed clip under native/, for Settings' ghost files
+        (`ghost/storage.py`): {"attempt", "bytes", "paths"}. A saved video's own poses beside it
+        are the video's, never listed here."""
+        native = self.cfg.save_root.resolve() / "native"
+        found = []
+        for meta in sorted(native.glob("attempt_*.json")) if native.is_dir() else ():
+            match = re.fullmatch(r"attempt_([1-9][0-9]{0,18})\.json", meta.name)
+            if not match:
+                continue
+            paths = [path for path in self._native_files(int(match.group(1))) if path.is_file()]
+            try:
+                size = sum(path.stat().st_size for path in paths)
+            except OSError:
+                continue
+            found.append({"attempt": int(match.group(1)), "bytes": size, "paths": paths})
+        return found
+
+    def remove_native_many(self, attempt_ids) -> dict:
+        """Deletes these runs' committed clips and playback copies (Settings' ghost files):
+        {"deleted", "bytes", "skipped"}. Each run waits for a cut of it in progress
+        (`_cut_lock`); a file Windows will not let go of (the renderer reading it) skips that run
+        and puts its commit record back, so a skipped run stays a ghost."""
+        deleted, skipped, freed = [], [], 0
+        for attempt_id in attempt_ids:
+            with self._cut_lock(attempt_id):
+                files = [path for path in self._native_files(attempt_id) if path.is_file()]
+                record = next((path for path in files if path.parent.name == "native" and path.suffix == ".json"), None)
+                saved = record.read_bytes() if record is not None else None
+                gone = 0
+                try:
+                    for path in files:
+                        size = path.stat().st_size
+                        path.unlink()
+                        gone += size
+                except OSError:
+                    if record is not None and not record.exists() and record.with_suffix(".ghost").is_file():
+                        record.write_bytes(saved)
+                    skipped.append(attempt_id)
+                    freed += gone
+                    continue
+            deleted.append(attempt_id)
+            freed += gone
+        if deleted:
+            self._remember_purged(deleted)
+        return {"deleted": deleted, "bytes": freed, "skipped": skipped}
+
+    def _remember_purged(self, attempt_ids) -> None:
+        """A purged run's preservation answer no longer holds: forget each one's cached refusal."""
+        for attempt_id in attempt_ids:
+            try:
+                attempt = self._attempt(attempt_id)
+            except (LookupError, RuntimeError, ValueError):
+                continue
+            self._remember_native_preservation(self._native_preservation_key(attempt), None)
+
     def native_identity(self, attempt_id: int) -> dict:
         """Cheap projected ownership key; reprojected origins invalidate cached clips."""
         from sm64_events.ghost.clip import attempt_origin

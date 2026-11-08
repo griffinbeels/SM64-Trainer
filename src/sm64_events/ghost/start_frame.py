@@ -331,5 +331,43 @@ def remove_start(root: Path, clip_sha256: str) -> None:
         start_path(root, clip_sha256, downloaded=downloaded).unlink(missing_ok=True)
 
 
+def holdings(root: Path) -> list[dict]:
+    """GHOST FILES' owner listing (ghost/storage.py): every start file here, {"sha256": its clip's, "bytes",
+    "path", "downloaded"}. A start goes when the last clip of its sha goes; storage decides that."""
+    found = []
+    for downloaded in (False, True):
+        folder = Path(root) / "starts" / (DOWNLOADED if downloaded else "")
+        if not folder.is_dir():
+            continue
+        for path in folder.glob(f"*{SUFFIX}"):
+            name = path.name[:-len(SUFFIX)]
+            try:
+                _check_sha(name, "ghost name")
+                found.append({"sha256": name, "bytes": path.stat().st_size, "path": str(path), "downloaded": downloaded})
+            except (StartError, OSError):
+                continue
+    return found
+
+
+def remove_holdings(root: Path, shas) -> dict:
+    """Deletes the starts of these clips (both kinds); {"deleted": [sha], "bytes", "skipped": [sha]}. A file
+    Windows will not let go of is skipped, never retried in a loop."""
+    deleted, skipped, freed = [], [], 0
+    for sha in dict.fromkeys(shas):
+        gone = True
+        for downloaded in (False, True):
+            path = start_path(root, sha, downloaded=downloaded)
+            try:
+                size = path.stat().st_size
+                path.unlink()
+                freed += size
+            except FileNotFoundError:
+                continue
+            except OSError:
+                gone = False
+        (deleted if gone else skipped).append(sha)
+    return {"deleted": deleted, "bytes": freed, "skipped": skipped}
+
+
 def digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()

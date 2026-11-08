@@ -30,7 +30,7 @@ Explicit approval is required before resource/account changes. Keep R2 public
 access, r2.dev and custom-domain object access disabled. Only the default Worker
 gets a public route. MetadataCache and AssetCache are private loopback exports.
 Apply migrations in order to a new staging D1 database. Existing databases receive
-only their missing numbered migrations through `0007_player_recording_epoch.sql`;
+only their missing numbered migrations through `0008_ghost_start.sql`;
 never replace the initial schema or reapply completed migrations.
 Fill D1/R2 bindings and public
 vars in wrangler.jsonc for one owned HTTPS service origin. Supply actual operator
@@ -338,6 +338,20 @@ The trainer runs the same checks before it uploads and again on download
 Rows published before these checks are not re-read; the trainer's download check
 covers them.
 
+A ghost's start ([protocol](../../docs/community-protocol.md#a-ghosts-start)) is
+optional opaque bytes after the GHC1 bytes in the same PUT body. The grant binds
+its SHA-256 and size (at most `LIMITS.start_bytes`, 64 KiB), and both are checked
+before R2. The one multipart object holds the ghost then the start; its custom
+metadata names both hashes, and recovery checks the object's total size against
+both. Asset and start downloads read their range of that object, through the
+AssetCache export with a `range` prop. Objects without a start keep the exact
+whole-object read and cache identity they always had. Every byte budget charges
+`encoded_bytes + start_bytes`, and deleting the object refunds both. Apply
+additive migration `0008_ghost_start.sql` before this Worker. Rolling the Worker
+back past it is safe only while no start is stored: an older Worker reads whole
+objects without expecting a start after the ghost's bytes, and its collection
+refunds only the ghost's bytes.
+
 Multipart create, one part and complete reserve three Class A tickets; recovery
 abort uses another. Persist multipart intent before any part write. Abort fences
 expired receiving work before refund. A completed object instead becomes charged
@@ -373,7 +387,7 @@ deletion has a ten-second deadline per identity. Fixed cadence is 96 ticks/day
 even while idle. Alarms are at-least-once, so storage/state transitions remain
 idempotent. [Cloudflare alarm behavior](https://developers.cloudflare.com/durable-objects/api/alarms/).
 
-Limits in src/config.js: 64 MiB/account retained; 10,000,000,000 global physical+
+Limits in src/config.js: 64 KiB per ghost's start; 64 MiB/account retained; 10,000,000,000 global physical+
 reserved bytes; 24 MiB/account/day and 256 MiB/global/day uploads; 500 account and
 30,000 global operations/day; 20,000 global Class A and 200,000 Class B tickets/day.
 Downloads conservatively count Class B even when cached. Application limits do

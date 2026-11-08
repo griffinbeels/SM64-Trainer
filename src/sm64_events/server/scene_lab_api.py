@@ -16,6 +16,9 @@ one reader, and without it this module is never imported and no route is added. 
                                   save_states)
     GET  /api/scene-lab/stage?course=&star=&strat=   the stage for a target and strategy (scene_ghosts.py)
     GET  /api/scene-lab/ghosts?section=&...&page=    one page of the ghosts that could be drawn into it
+                                  (section=top&strategies=all: every strategy's top ghosts at once)
+    GET  /api/scene-lab/ghost?recording=&course=&star=   one recording by its id as a listed ghost
+                                  (the Library's ghost button)
     GET  /api/scene-lab/camera-presets?level=&area=  the saved cameras of that level and area (slots 1-9);
                                   PUT the same {slots} to replace them (tools/scene_lab/camera_presets.py)
     POST /api/scene-lab/close
@@ -312,9 +315,11 @@ class SceneLab:
         self.open_attempt: int | None = None
         self.open_resim: dict | None = None                # how a re-simulated scene was made (scene_resim.py)
         self.resim = None                                  # scene_resim.SceneResim, made by mount_scene_lab
+        self.tracker = None                                # follow_attempts': whose journal the scenes belong to
         try:
             self.scenes = _lab_module("attempt_scenes").AttemptScenes(
-                self._scene_folder, self._start_cutter, in_use=lambda: self.open_path, live_audio=live_audio)
+                self._scene_folder, self._start_cutter, in_use=lambda: self.open_path, live_audio=live_audio,
+                journal=self._journal, legacy=lambda: self._lab_root() / "attempts")
         except ConfigError as error:
             self.scenes, self.live_problem = None, str(error)
         self.page_gone_seconds, self.watch_seconds = page_gone_seconds, watch_seconds
@@ -368,8 +373,16 @@ class SceneLab:
         config = LabConfig.load(self.config_path)
         return config.lab_root or _lab_module("attempt_scenes").default_lab_root()
 
+    def _journal(self):
+        """The journal the attempt ids belong to: the followed tracker's database, else the one the
+        stage reads (main.py hands both the same tracker); None without one."""
+        if self.tracker is not None:
+            return getattr(self.tracker, "db", None)
+        return self.ghosts.db if self.ghosts is not None else None
+
     def _scene_folder(self) -> Path:
-        return self._lab_root() / "attempts"
+        """This journal's own folder of attempt scenes (attempt_scenes.journal_folder)."""
+        return _lab_module("attempt_scenes").journal_folder(self._lab_root() / "attempts", self._journal())
 
     def _start_cutter(self, folder: Path, on_event):
         resim = self.resim
@@ -466,6 +479,7 @@ class SceneLab:
         scenes = self.scenes
         if scenes is None:
             return
+        self.tracker = tracker
         previous = tracker.on_replay_history
 
         def observe(completed, active_start, **options):
@@ -516,6 +530,7 @@ class SceneLab:
         report = await asyncio.to_thread(self._status_blocking)
         report["session"] = self._scene(self.described) if self.session is not None and self.described else None
         report["ended"] = self.ended
+        report["resim"] = self.resim.progress if self.resim is not None else None   # a first build, while it runs
         if self.loop_probe is not None:
             report["loop"] = self.loop_probe.summary()
         return report
@@ -1134,21 +1149,45 @@ def _mount_ghost_routes(router: APIRouter, lab: SceneLab) -> None:
 
     @router.get("/stage")
     def stage(course: int | None = None, star: int | None = None, segment: int | None = None,
-              strat: str | None = Query(default=None, max_length=256)):
-        return lab.ghosts.stage(target_of(course, star, segment), strat or None)
+              strat: str | None = Query(default=None, max_length=256),
+              strategies: str = Query(default="one", pattern="^(one|all)$"),
+              ghost: str | None = Query(default=None, min_length=1, max_length=512)):
+        found = lab.ghosts.stage(target_of(course, star, segment), strat or None, every=strategies == "all")
+        return _stage_open(found, ghost)
 
     @router.get("/ghosts")
     async def ghosts(section: str = "yours", course: int | None = None, star: int | None = None,
                      segment: int | None = None, strat: str | None = Query(default=None, max_length=256),
                      sort: str = "fastest", page: int = Query(default=1, ge=1, le=100000),
-                     q: str = Query(default="", max_length=128), player: str = Query(default="", max_length=128)):
+                     q: str = Query(default="", max_length=128), player: str = Query(default="", max_length=128),
+                     strategies: str = Query(default="one", pattern="^(one|all)$")):
         target = await asyncio.to_thread(target_of, course, star, segment)
+        every = strategies == "all"
         try:
-            await lab.ghosts.fill(target, strat or None, section=section, page=page, query=q, player=player)
+            await lab.ghosts.fill(target, strat or None, section=section, page=page, query=q, player=player,
+                                  every=every)
             return await asyncio.to_thread(lambda: lab.ghosts.ghosts(
-                target, strat or None, section=section, page=page, sort=sort, query=q, player=player))
+                target, strat or None, section=section, page=page, sort=sort, query=q, player=player, every=every))
         except TargetError as error:
             raise HTTPException(422, str(error)) from None
+
+    # The Library's ghost button: one recording by its id, as a row of this target's list.
+    @router.get("/ghost")
+    async def ghost(recording: str = Query(min_length=1, max_length=128), course: int | None = None,
+                    star: int | None = None, segment: int | None = None):
+        target = await asyncio.to_thread(target_of, course, star, segment)
+        await lab.ghosts.fill_recording(recording)
+        return await asyncio.to_thread(lab.ghosts.recording_item, target, recording)
+
+
+def _stage_open(found: dict, ghost: str | None) -> dict:
+    """What POST /open takes for this stage: his scene of the target, else (with the Library ghost that asked)
+    that ghost re-simulated into a scene of its own (scene_resim.py), which needs no scene of his."""
+    if found.get("attempt") is not None:
+        return {**found, "open": {"attempt": found["attempt"]}, "resim": False}
+    if ghost is not None:
+        return {**found, "open": {"ghost": ghost}, "resim": True, "reason": None}
+    return {**found, "open": None, "resim": False}
 
 
 class PresetsBody(BaseModel):

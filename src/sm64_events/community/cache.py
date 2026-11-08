@@ -98,7 +98,7 @@ class CachedPopulation:
         self._kept = frozenset()
         # The index is deliberately memory-only. Reopening requires publication
         # gates again; stale private files cannot become an offline public roster.
-        for suffix in (".ghost", ".ghc1", ".part"):
+        for suffix in (".ghost", ".ghc1", ".start", ".part"):
             for path in self.root.glob("*" + suffix):
                 try:
                     pieces = path.stem.split('.')
@@ -291,6 +291,51 @@ class CachedPopulation:
                 return {"complete": False, "min_step": None, "max_step": None, "base_step": None, "generation": None}
             return dict(item[0]["coverage"])
 
+    def cached_holdings(self):
+        """Every downloaded community ghost on disk, for Settings' ghost files (`ghost/storage.py`):
+        {"id", "bytes", "paths", "in_use"}; `in_use` for one the lineup on screen races (`keep`)."""
+        with self._lock:
+            assets = [(identifier, identifier in self._kept) for identifier in self._assets]
+        found = []
+        for identifier, kept in assets:
+            paths = [path for path in (self.root / (identifier + ".ghost"), self.root / (identifier + ".ghc1"))
+                     if path.is_file()]
+            try:
+                size = sum(path.stat().st_size for path in paths)
+            except OSError:
+                continue
+            found.append({"id": identifier, "bytes": size, "paths": paths, "in_use": kept})
+        return found
+
+    def drop_cached(self, identifiers):
+        """Deletes these downloads (never one the lineup on screen races): {"deleted", "bytes",
+        "skipped"}. A deleted ghost downloads again the next time a lineup asks for it."""
+        wanted = set(identifiers)
+        deleted, skipped, freed = [], [], 0
+        with self._lock:
+            deleted += sorted(wanted - set(self._assets))       # gone already: evicted meanwhile
+            for identifier in [key for key in self._assets if key in wanted]:
+                if identifier in self._kept:
+                    skipped.append(identifier)
+                    continue
+                gone = 0
+                try:
+                    for suffix in (".ghost", ".ghc1"):
+                        path = self.root / (identifier + suffix)
+                        if path.is_file():
+                            size = path.stat().st_size
+                            path.unlink()
+                            gone += size
+                except OSError:
+                    skipped.append(identifier)
+                    freed += gone
+                    continue
+                self._assets.pop(identifier, None)
+                deleted.append(identifier)
+                freed += gone
+            self._generation += 1
+        return {"deleted": deleted, "bytes": freed, "skipped": skipped}
+
     def keep(self, identifiers):
         """The recordings the lineup on screen uses: a download never evicts them."""
         with self._lock:
@@ -350,9 +395,14 @@ class CachedPopulation:
                 self._trim_rows()
                 self._generation += 1
 
-    def store_asset(self, row, encoded, raw, *, owner=None):
-        """Prepare on the owned IO worker; lock only the final cache publication."""
+    def store_asset(self, row, encoded, raw, *, owner=None, start=None):
+        """Prepare on the owned IO worker; lock only the final cache publication.
+
+        `start` is the ghost's start downloaded with it, kept as `<id>.start`
+        beside the ghost and evicted with it. True when the cache kept them."""
         row = checked_metadata(row)
+        if start is not None and (not isinstance(start, bytes) or not start):
+            raise CommunityError("asset_mismatch")
         if (len(raw) != row["raw_bytes"] or len(encoded) != row["encoded_bytes"]
                 or hashlib.sha256(raw).hexdigest() != row["raw_sha256"]
                 or hashlib.sha256(encoded).hexdigest() != row["encoded_sha256"]):
@@ -365,47 +415,71 @@ class CachedPopulation:
         expected_owner = owner or (self.account.snapshot().get('uid') if self.account else None)
         staged = []
         try:
-            for suffix, content in ((".ghc1", encoded), (".ghost", raw)):
+            forms = ((".ghc1", encoded), (".ghost", raw)) + (((".start", start),) if start is not None else ())
+            for suffix, content in forms:
                 temporary = self.root / (row['id'] + '.' + uuid4().hex + '.part')
                 staged.append((temporary, self.root / (row['id'] + suffix)))
                 with temporary.open('xb') as stream:
                     stream.write(content)
                     stream.flush()
                     os.fsync(stream.fileno())
-            self._publish_asset(row, clip, blinks, staged, expected_owner)
+            return self._publish_asset(row, clip, blinks, staged, expected_owner,
+                                       None if start is None else hashlib.sha256(start).hexdigest())
         finally:
             for temporary, _ in staged:
                 temporary.unlink(missing_ok=True)
 
-    def _publish_asset(self, row, clip, blinks, staged, owner):
+    def _publish_asset(self, row, clip, blinks, staged, owner, start_sha256):
         with self._lock:
             if not self._active() or self._owner != owner:
-                return
+                return False
             identifier = row["id"]
             for temporary, destination in staged:
                 if destination.is_symlink():
                     raise CommunityError("unsafe_cache")
                 os.replace(temporary, destination)
+            if start_sha256 is None:
+                (self.root / (identifier + ".start")).unlink(missing_ok=True)  # an earlier copy's start
             path = self.root / (identifier + ".ghost")
             stamp = path.stat()
+            start_bytes = (self.root / (identifier + ".start")).stat().st_size if start_sha256 else 0
             self._assets[identifier] = {"raw": row['raw_bytes'], "encoded": row['encoded_bytes'], "stamp": (stamp.st_size, stamp.st_mtime_ns, stamp.st_ctime_ns),
                 "raw_sha256": row["raw_sha256"], "encoded_sha256": row["encoded_sha256"],
+                "start": start_bytes, "start_sha256": start_sha256,
                 "clip_id": clip.clip_id, "records": len(clip.frames), "blink_frames": blinks}
             self._assets.move_to_end(identifier)
             self._rows[identifier] = row, time.monotonic() + TTL
             self._rows.move_to_end(identifier)
             self._trim_rows()
             while (sum(item["raw"] for item in self._assets.values()) > CACHE_RAW or
-                   sum(item["encoded"] for item in self._assets.values()) > CACHE_ENCODED):
+                   sum(item["encoded"] + item["start"] for item in self._assets.values()) > CACHE_ENCODED):
                 # Oldest first, never a recording the lineup on screen uses (at
                 # most four seats, so the cap can be exceeded by that bound only).
                 oldest = next((key for key in self._assets if key not in self._kept and key != identifier), None)
                 if oldest is None:
                     break
                 self._assets.pop(oldest)
-                for suffix in (".ghost", ".ghc1"):
+                for suffix in (".ghost", ".ghc1", ".start"):
                     (self.root / (oldest + suffix)).unlink(missing_ok=True)
             self._generation += 1
+            return True
+
+    def start_of(self, identifier):
+        """The ghost's start kept beside a cached community ghost, as bytes, or
+        None. Untrusted: it came from another player's trainer."""
+        checked_hash(identifier)
+        with self._lock:
+            asset = self._assets.get(identifier) if self._active() else None
+            if not asset or not asset["start_sha256"]:
+                return None
+            path = self.root / (identifier + ".start")
+            try:
+                if path.is_symlink() or path.stat().st_size != asset["start"]:
+                    return None
+                start = path.read_bytes()
+            except OSError:
+                return None
+            return start if hashlib.sha256(start).hexdigest() == asset["start_sha256"] else None
 
     def resolve(self, ghost, target):
         with self._lock:

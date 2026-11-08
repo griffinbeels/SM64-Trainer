@@ -102,7 +102,8 @@ def test_a_ghost_opens_as_its_re_simulated_scene(recording, tmp_path, monkeypatc
         client.post("/api/scene-lab/close")
     (args,) = runner.calls
     assert args[0] == "build" and runner.clips == [CLIP]                     # the catalog's own clip bytes
-    assert Path(_value(args, "--scenes")) == tmp_path / "lab" / "attempts"
+    scenes = [Path(args[at + 1]) for at, part in enumerate(args) if part == "--scenes"]
+    assert scenes == [tmp_path / "lab" / "attempts"]          # no journal open here: the legacy folder only
     assert Path(_value(args, "--starts")) == tmp_path / "population"
     assert Path(_value(args, "--cache")) == tmp_path / "lab" / "resim"
 
@@ -181,3 +182,41 @@ def test_a_ready_scene_keeps_its_runs_start(recording, tmp_path, monkeypatch):
     (args,) = runner.calls
     assert args[0] == "capture" and Path(_value(args, "--scene")) == tmp_path / "take-1.sm64scene"
     assert runner.clips == [CLIP] and Path(_value(args, "--starts")) == tmp_path / "population"
+
+
+def test_the_stage_falls_through_to_the_ghost_when_he_has_no_scene_of_it(recording, tmp_path, monkeypatch):
+    """The Library's Ghost button: /stage names what POST /open takes, his scene first, else that ghost rebuilt."""
+    from sm64_events.server import scene_lab_api as api
+    found = {"target": {}, "attempt": None, "time": None, "reason": "He has no scene of this star yet.", "scenes": []}
+    assert api._stage_open(found, "ghost-7") == {**found, "open": {"ghost": "ghost-7"}, "resim": True, "reason": None}
+    assert api._stage_open(found, None)["open"] is None
+    his = {**found, "attempt": 12, "reason": None}
+    assert api._stage_open(his, "ghost-7")["open"] == {"attempt": 12}
+
+
+def test_a_first_build_shows_its_progress_on_status(recording, tmp_path, monkeypatch):
+    """The child's progress lines reach /status while it runs; its last line is the answer; then nothing shows."""
+    import sys as system
+    from sm64_events.core import childproc
+    from sm64_events.server.scene_resim import SceneResim
+    flag = tmp_path / "go"
+    script = ("import json, pathlib, time\n"
+              "print(json.dumps({'progress': {'stage': 're-simulating', 'done': 40, 'total': 396}}), flush=True)\n"
+              f"while not pathlib.Path({str(flag)!r}).exists(): time.sleep(0.02)\n"
+              "print(json.dumps({'path': 'scene.sm64scene', 'info': {'start': 'own_scene'}}), flush=True)\n")
+    monkeypatch.setattr(childproc, "python_child", lambda *args, **kwargs: ([system.executable, "-c", script], {}))
+    lab = type("Lab", (), {})()
+    resim = SceneResim(lab)
+    answer = {}
+    worker = threading.Thread(target=lambda: answer.update(resim._run_child(["build"])))
+    worker.start()
+    try:
+        for _ in range(500):
+            if resim.progress and resim.progress.get("done") == 40:
+                break
+            threading.Event().wait(0.02)
+        assert resim.progress == {"what": "build", "stage": "re-simulating", "done": 40, "total": 396}
+    finally:
+        flag.write_text("go", encoding="utf-8")
+        worker.join(30)
+    assert answer == {"path": "scene.sm64scene", "info": {"start": "own_scene"}} and resim.progress is None

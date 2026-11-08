@@ -4,6 +4,7 @@ import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { fmtIgtShort } from "../format.js";
 import { readCommunityLibrary, useUiLog } from "../uilog.js";
+import { GhostButton } from "./attemptscene.js";
 import { Icon } from "./icons.js";
 import { Modal } from "./modal.js";
 import { RegionFlag } from "./regionflag.js";
@@ -136,7 +137,24 @@ function useSavedRivals(onChanged, alive) {
   return { knownPins, busy, choice, actionError, message, clear, change };
 }
 
-function CommunityLibraryView({ entity, rom, onBrowseAll, onChanged, onOpenPlayer }) {
+// A recording's Ghost button (round 9, item 8, his words: "ghost buttons next to all library
+// entries that have a ghost, so that it loads directly into the scene viewer"): only with the
+// Scene viewer mounted (`onOpenGhost`, app.js's lab door) and only for a recording whose star or
+// segment this Trainer knows. The viewer finds the stage; the button only names the ghost.
+export function libraryGhost(row) {
+  return row.entity_key ? { recording: row.id, entity: row.entity_key, strat: row.strategy,
+    version: row.game_version, player: row.player_name } : null;
+}
+
+// Its words, so it never reads as Add ghost beside it (same glyph): it opens, it does not save.
+export const WATCH_IN_VIEWER = "Watch in Scene viewer";
+function WatchGhost({ row, onOpenGhost }) {
+  const ghost = onOpenGhost ? libraryGhost(row) : null;
+  return ghost ? html`<${GhostButton} open=${() => onOpenGhost(ghost)} title=${WATCH_IN_VIEWER}
+      label=${`${WATCH_IN_VIEWER}: ${row.player_name}`} />` : null;
+}
+
+function CommunityLibraryView({ entity, rom, onBrowseAll, onChanged, onOpenPlayer, onOpenGhost }) {
   const [summary, setSummary] = useState(() => ({ ...emptyPage(), loading: true }));
   const [selected, setSelected] = useState(null);
   const [recordings, setRecordings] = useState(emptyPage);
@@ -207,11 +225,12 @@ function CommunityLibraryView({ entity, rom, onBrowseAll, onChanged, onOpenPlaye
             <span class="community-library-provenance meta">Community recording</span></div>
           <div class="community-library-performance"><strong class="community-library-time">${fmtIgtShort(row.frames)}</strong>
             <span class="meta"><${Method} row=${row} /></span></div>
-          <div class="community-library-actions"><${GhostAction} row=${row} added=${added}
+          <div class="community-library-actions"><div class="community-library-buttons">
+            <${WatchGhost} row=${row} onOpenGhost=${onOpenGhost} /><${GhostAction} row=${row} added=${added}
               className=${added ? "quiet-button" : "primary primary-button"}
               disabled=${disabled} onClick=${() => change(row, added ? "remove" : "add")}>
             <${Icon} name=${added ? "minus" : "ghost"} />${busy === row.id ? "Saving…" : added ? "Remove" : "Add ghost"}
-          </${GhostAction}>
+          </${GhostAction}></div>
           ${added ? html`<span class="community-library-saved meta">Saved for this strategy</span>` : null}</div>
           <${GhostUnavailable} row=${row} added=${added} />
         </article>`;
@@ -234,10 +253,12 @@ function CommunityLibraryView({ entity, rom, onBrowseAll, onChanged, onOpenPlaye
   </section>`;
 }
 
-export function CommunityLibrary({ active, entity = null, versions, onBrowseAll, onChanged, onOpenPlayer }) {
+export function CommunityLibrary({ active, entity = null, versions, onBrowseAll, onChanged, onOpenPlayer,
+  onOpenGhost = null }) {
   if (!active) return null;
   const regions = [...new Set((Array.isArray(versions) ? versions : ["us"]).filter(value => value === "us" || value === "jp"))];
   const rom = regions.length === 1 ? regions[0] : null;
   return html`<${CommunityLibraryView} key=${JSON.stringify([entity, rom])}
-    entity=${entity} rom=${rom} onBrowseAll=${onBrowseAll} onChanged=${onChanged} onOpenPlayer=${onOpenPlayer} />`;
+    entity=${entity} rom=${rom} onBrowseAll=${onBrowseAll} onChanged=${onChanged} onOpenPlayer=${onOpenPlayer}
+    onOpenGhost=${onOpenGhost} />`;
 }

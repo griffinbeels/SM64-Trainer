@@ -360,6 +360,55 @@ class LocalPopulation:
                 self._verified.pop(digest, None)
         return removed
 
+    def holdings(self):
+        """Every row and its clip, for Settings' ghost files (`ghost/storage.py`): {"id", "sha256",
+        "bytes", "path", "source"}, `source` the run's local lineage or None. Rows sharing bytes
+        share one clip, so a caller counts a digest once."""
+        with self._lock:
+            rows = self._db.execute("SELECT id,sha256,bytes,json_extract(document,'$.source') AS source "
+                                    "FROM recordings ORDER BY id LIMIT ?", (MAX_RECORDINGS,)).fetchall()
+        found = []
+        for row in rows:
+            try:
+                source = json.loads(row["source"]) if row["source"] else None
+            except ValueError:
+                source = None
+            found.append({"id": row["id"], "sha256": row["sha256"], "bytes": row["bytes"],
+                          "path": self.root / "clips" / f"{checked_hash(row['sha256'])}.ghost",
+                          "source": source if isinstance(source, dict) else None})
+        return found
+
+    def remove_holdings(self, ids):
+        """`remove`, answered as Settings' purge reads it: {"deleted", "bytes", "skipped"}, the
+        bytes those clips no remaining row shares."""
+        ids = tuple(dict.fromkeys(checked_hash(identity) for identity in ids))
+        if not ids:
+            return {"deleted": [], "bytes": 0, "skipped": []}
+        marks = ",".join("?" * len(ids))
+        with self._lock:
+            present = {row[0]: row[1] for row in self._db.execute(
+                f"SELECT id,sha256 FROM recordings WHERE id IN ({marks})", ids)}
+            sizes = {}
+            for digest in set(present.values()):
+                clip = self.root / "clips" / f"{checked_hash(digest)}.ghost"
+                shared = self._db.execute(f"SELECT 1 FROM recordings WHERE sha256=? AND id NOT IN ({marks})",
+                                          (digest, *ids)).fetchone()
+                sizes[digest] = 0 if shared or not clip.is_file() else clip.stat().st_size
+            try:
+                self.remove(present)
+                held = set()
+            except OSError:          # a clip Windows will not let go of (being read): one at a time
+                held = set()
+                for identity in present:
+                    try:
+                        self.remove([identity])
+                    except OSError:
+                        held.add(identity)
+        gone = set(present) - held
+        freed = sum(size for digest, size in sizes.items()
+                    if not any(present[identity] == digest for identity in held))
+        return {"deleted": sorted(gone), "bytes": freed, "skipped": sorted(set(ids) - gone)}
+
     def get(self, identity):
         with self._lock:
             row = self._db.execute("SELECT document FROM recordings WHERE id=?", (checked_hash(identity),)).fetchone()
