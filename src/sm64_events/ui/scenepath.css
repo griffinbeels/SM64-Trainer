@@ -1,7 +1,10 @@
 /* The Scene viewer's camera path block (components/scenepathbar.js links this sheet when it loads, so
    with the lab switched off the browser never fetches it). One block under the Cameras strip: the
-   Path row, then one row per key. It lays out by wrapping, never by the viewport. */
+   Play speed row, the Path row, then one row per key. It lays out by wrapping, never by the viewport. */
+.scene-lab-path-panel { display: grid; gap: 8px; min-width: 0; }
+.scene-lab-path-play button { min-width: 44px; justify-content: center; }
 .scene-lab-path { display: grid; gap: 6px; min-width: 0; }
+.scene-lab-path-speed { min-height: 28px; padding: 0 6px; background: var(--surface-2); font-size: .82rem; }
 .scene-lab-path > .scene-lab-bar .scene-lab-hint { flex: 1 1 260px; min-width: 0; }
 .scene-lab-path-keys { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
 .scene-lab-path-keys li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0;

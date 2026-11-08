@@ -1557,7 +1557,8 @@ viewer) leaves the game's on-screen counters and timer out of every picture, the
 once. The **Cinematic** row's [[cinematic camera]]s (Front, Side, Orbit, Chase, Overhead, Tripod)
 follow Mario or a [[stage ghost]] along his path. The [[tilt and lens]] row turns and zooms whichever
 camera is on screen. Under the camera controls, the **Cameras** strip keeps [[camera preset]]s in
-slots 1-9, and the **Path** block under it keeps the [[camera path]] of the course and area on screen.
+slots 1-9, and the block under it holds the [[Play speed]] and the [[camera path]] of the course and
+area on screen.
 The page takes the keyboard when you arrive (the sidebar or the [[ghost button]])
 and after a mouse click on its controls; a field that types keeps its keys, and
 Esc, leaving the window or the page lets go of every key.
@@ -1785,7 +1786,9 @@ stops the game on that [[frame]], silent, for the hold's length (2 s unless its
 row says otherwise) while the camera travels from the key before to it, then
 the game and its sound go on ("bullet time"). It is Orbit while paused for any
 camera move: a held [[frame]] that the camera circles or flies past, kept by
-Record. **Path** puts it on
+Record. A key's speed (1x, ½x, ¼x) plays the stretch from it to the next key
+that much slower, the camera slowing with the game, as [[Play speed]] does for
+the whole play. **Path** puts it on
 screen, and Play, a step, a seek and Record all draw the same camera at the
 same time in the scene, because the viewer works the path out from its own
 clock alone. Each key's row jumps to it (the scene pauses on its [[frame]]),
@@ -1801,6 +1804,22 @@ SM64Scripts camera tools (credited in the app).
   camera (`tools/scene_lab/scene_session.py`)
 - **Not** -- a [[cinematic camera]], which follows Mario or a [[stage ghost]];
   a camera path goes where its keys say, whoever moves
+
+### Play speed
+
+How fast the [[scene viewer]]'s Play goes: 1x (the recording's own pace), ½x
+or ¼x. Slower, each recorded picture stays on screen two or four times as
+long; Mario still moves in the game's own steps, but the free camera and a
+[[camera path]] move every screen refresh, so Record makes slow motion of
+both. Slower than 1x plays silent, music and sound effects alike, and the
+sound comes back at 1x (one switch in the code, so this can change later).
+A [[cinematic camera]] still moves once a recorded picture.
+
+- **Lives** -- the speed's clock and the sound's rule
+  (`src/sm64_events/ui/components/scenepath.js`); the row
+  (`src/sm64_events/ui/components/scenepathbar.js`)
+- **Not** -- the flight speed, which sets how fast W A S D move the free
+  camera; nor a key's speed, which slows one stretch of a [[camera path]]
 
 ### Ghost button
 

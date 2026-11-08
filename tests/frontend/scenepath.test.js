@@ -114,6 +114,41 @@ test("a hold stops the game on its frame, silent, while the camera travels to th
   expect(p.clock.at(display[12]).frame).toBe(12);
 });
 
+test("Play speed shows every picture longer, and slower than 1x is silent", () => {
+  const frameMs = 1000 / 30;
+  for (const speed of [0.5, 0.25]) {
+    const slow = pathClock(TIMES, [], { speed });
+    expect(slow.plain).toBe(false);
+    expect(slow.display[10]).toBeCloseTo(TIMES[10] / speed, 9);
+    expect(slow.length).toBeCloseTo((TIMES[30] + frameMs) / speed, 9);
+    const at = slow.at(slow.display[10] + 10);
+    expect([at.frame, at.heardMs]).toEqual([10, null]);
+    expect(at.sceneMs).toBeCloseTo(TIMES[10] + 10 * speed, 9);
+  }
+  const full = pathClock(TIMES, []);
+  expect(full.plain).toBe(true);
+  expect([...full.display]).toEqual([...TIMES]);
+  expect(full.at(TIMES[10] + 10).heardMs).toBeCloseTo(TIMES[10] + 10, 9);
+});
+
+test("a key's speed slows the stretch to the next key, the camera with it, and the sound comes back after", () => {
+  const frameMs = 1000 / 30;
+  const p = path({ frame: 10, camera: A, speed: 0.25 }, { frame: 20, camera: B });
+  const { display } = p.clock;
+  expect(display[10]).toBeCloseTo(TIMES[10], 9);                         // 1x up to the key
+  expect(display[20]).toBeCloseTo(TIMES[10] + (TIMES[20] - TIMES[10]) * 4, 9);
+  expect(display[21] - display[20]).toBeCloseTo(frameMs, 9);              // 1x again from the next key
+  expect(p.clock.at(display[15]).heardMs).toBe(null);
+  expect(p.clock.at(display[20] + 5).heardMs).toBeCloseTo(TIMES[20] + 5, 9);
+  expect(same(p.at(p.clock.qOf(display[20])), B)).toBe(true);           // B as picture 20 shows
+  // On screen the camera moves a quarter as fast as the same path at 1x, at the same place on it.
+  const fast = path({ frame: 10, camera: A }, { frame: 20, camera: B });
+  const moved = (q, w) => Math.hypot(...q(w + 1).map((value, i) => value - q(w)[i]));
+  const slowAt = (w) => p.at(p.clock.qOf(w)).position, fastAt = (w) => fast.at(fast.clock.qOf(w)).position;
+  const middle = (TIMES[10] + TIMES[20]) / 2;
+  expect(moved(slowAt, p.clock.wOf(middle)) / moved(fastAt, fast.clock.wOf(middle))).toBeCloseTo(0.25, 2);
+});
+
 test("the first key on a frame holds nothing; a later one holds at least the shortest hold", () => {
   const keys = orderedKeys([makeKey({ frame: 5, camera: A, hold: 900 }), makeKey({ frame: 5, camera: B }),
     makeKey({ frame: 5, camera: C, hold: 10 })], TIMES.length);
@@ -337,6 +372,64 @@ test("Play holds the picture while the camera moves, and the recording keeps it 
   expect(after.length && after.every((entry) => entry.play_ms != null)).toBe(true);
   expect(after[0].play_ms).toBeGreaterThanOrEqual(TIMES[4] - 1);     // the sound comes back where it stopped
   expect(after[0].play_ms).toBeLessThan(TIMES[4] + 40);
+});
+
+test("Play speed ½x: pictures half as often, the path still asked every display frame, silent", async () => {
+  saved.set("9:1", [makeKey({ frame: 0, camera: A }), makeKey({ frame: 30, camera: B })]);
+  const { page, socket, block } = await openScene();
+  await until(() => expect(block.getByRole("button", { name: "Path" }).disabled).toBe(false));
+  fireEvent.click(block.getByRole("button", { name: "Path" }));
+  const speeds = within(page.getByRole("group", { name: "Play speed" }));
+  fireEvent.click(speeds.getByRole("button", { name: "½x" }));
+  expect(speeds.getByRole("button", { name: "½x" }).getAttribute("aria-pressed")).toBe("true");
+  await answerAll(socket);
+  const sounds = [];
+  vi.spyOn(SceneSound.prototype, "play").mockImplementation((from) => sounds.push(["play", from]));
+  vi.spyOn(SceneSound.prototype, "stop").mockImplementation(() => sounds.push(["stop"]));
+  fireEvent.click(page.getByRole("button", { name: "Record" }));
+  fireEvent.click(page.getByRole("button", { name: "Play" }));
+  await answerAll(socket);
+  const before = socket.pictures().length;
+  await displayFrames(socket, 30);                                     // 500 ms on screen: 250 ms of the scene
+  const moved = socket.pictures().slice(before);
+  expect(moved.length).toBeGreaterThanOrEqual(29);                     // a new camera every display frame
+  expect(Math.max(...moved.map((message) => message.frame))).toBeLessThanOrEqual(8);   // ~7, not ~15
+  expect(sounds.some(([what]) => what === "play")).toBe(false);
+  fireEvent.click(page.getByRole("button", { name: "Stop" }));
+  const sent = await until(() => {
+    const found = fetches.find(([url, method]) => url === "/api/scene-lab/export" && method === "POST");
+    expect(found).toBeTruthy();
+    return JSON.parse(found[2]);
+  });
+  const playing = sent.timeline.filter((entry) => entry.camera && entry.camera.position[0] > 1e-6);
+  expect(playing.length).toBeGreaterThanOrEqual(25);
+  expect(playing.every((entry) => entry.play_ms === null)).toBe(true);
+  // Each display frame's camera is the path's, the path's clock running at half the screen's.
+  const p = path({ frame: 0, camera: A }, { frame: 30, camera: B });
+  const q0 = momentOf(p, playing[0].camera.position[0], 0, TIMES[30]);
+  for (const entry of playing) {
+    const camera = p.at(q0 + (entry.t_ms - playing[0].t_ms) / 2);
+    expect(near(entry.camera.position, camera.position, 1e-3)).toBe(true);
+  }
+});
+
+test("Play speed without a path: each picture shows longer and the play stays silent", async () => {
+  const { page, socket } = await openScene();
+  fireEvent.click(within(page.getByRole("group", { name: "Play speed" })).getByRole("button", { name: "¼x" }));
+  const sounds = [];
+  vi.spyOn(SceneSound.prototype, "play").mockImplementation((from) => sounds.push(["play", from]));
+  vi.spyOn(SceneSound.prototype, "stop").mockImplementation(() => sounds.push(["stop"]));
+  fireEvent.click(page.getByRole("button", { name: "Play" }));
+  await answerAll(socket);
+  await displayFrames(socket, 30);                                     // 500 ms on screen: 125 ms of the scene
+  expect(Math.max(...socket.pictures().map((message) => message.frame))).toBeLessThanOrEqual(4);
+  expect(sounds.some(([what]) => what === "play")).toBe(false);
+  fireEvent.click(within(page.getByRole("group", { name: "Play speed" })).getByRole("button", { name: "1x" }));
+  await answerAll(socket);
+  expect(sounds.filter(([what]) => what === "play").length).toBe(1);   // 1x again: the sound with it
+  const reached = Math.max(...socket.pictures().map((message) => message.frame));
+  await displayFrames(socket, 30);
+  expect(Math.max(...socket.pictures().map((message) => message.frame)) - reached).toBeGreaterThanOrEqual(13);
 });
 
 // The moment on the path's clock whose camera stands at `x` (A to B moves x one way only).

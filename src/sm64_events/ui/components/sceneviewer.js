@@ -98,7 +98,7 @@ import { RecordingSwitch } from "./scenerecording.js";
 import { heardInto, pictureAt, recordedTimes } from "./sceneclock.js";
 import { CinematicBar, orbitFolded, orbitPhase, rigChanged, rigHint, rigName, rigRequest, seenOnScreen,
   startRig } from "./scenerigs.js";
-import { CameraPaths, PathBar, pathCameraNow, pathPlayTick, pathStopped, playSound, playTiming } from "./scenepathbar.js";
+import { CameraPaths, PathPanel, pathCameraNow, pathPlayTick, pathStopped, playSound, playTiming } from "./scenepathbar.js";
 
 const html = htm.bind(h);
 const ROOT = "/api/scene-lab";
@@ -1692,7 +1692,7 @@ function Player({ link, canvas, surface, ghosts }) {
     <${RecordBar} link=${link} />
     <${CameraBar} link=${link} tuning=${tuning} setTuning=${setTuning} />
     <${CameraSlots} link=${link} />
-    <${PathBar} link=${link} />
+    <${PathPanel} link=${link} />
     <${SaveStates} link=${link} />
     <${Readout} link=${link} />
   </section>

@@ -1,7 +1,10 @@
 // src/sm64_events/ui/components/scenepathbar.js -- the Scene viewer's camera path controls (lab only).
 //
-// One block under the Cameras strip (sceneviewer.js draws it): Path, which puts the camera path on
-// screen, + Key, and the path's keys. + Key keeps the frame on screen and its camera: the free
+// One block under the Cameras strip (sceneviewer.js draws PathPanel): the Play speed (1x, 1/2x, 1/4x:
+// each game picture shows that much longer, the free camera and the path still moving every display
+// frame, and slower than 1x plays silent), then Path, which puts the camera path on screen, + Key, and
+// the path's keys. A key's speed slows the stretch from it to the next key the same way, and a second
+// key on a frame holds the game there. + Key keeps the frame on screen and its camera: the free
 // camera's, a cinematic camera's or a ghost's view as the lab drew it, the path's own, or, from the
 // Recorded camera, the recorded camera itself, which the path then eases out of and back into
 // (scenepath.js owns what a key means). Each key can be jumped to (the scene pauses on its frame
@@ -23,7 +26,7 @@ import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { Icon } from "./icons.js";
 import { recordedTimes } from "./sceneclock.js";
-import { HOLD, MAX_KEYS, makeKey, orderedKeys, pathCamera, pathClock } from "./scenepath.js";
+import { HOLD, MAX_KEYS, PLAY_SPEEDS, makeKey, orderedKeys, pathCamera, pathClock } from "./scenepath.js";
 
 const html = htm.bind(h);
 const ROOT = "/api/scene-lab/camera-paths";
@@ -122,24 +125,37 @@ export function pathCameraNow(link, frame, now = performance.now()) {
   return pathCamera(keys, clock.keyQ, q);
 }
 
-// What a Play from now keeps as its clock: with the path on screen, the path's (`path`: its keys and
-// clock, which the play keeps to its end), else the recorded times. `display` is when each picture
-// shows, ms after the first; `lengthFrom(from)` how long a play from `from` lasts.
+// What a Play from now keeps as its clock: at 1x with no path on screen, the recorded times, exactly as
+// before paths; else a path clock (`path`: its keys, [] with no path on screen, and its clock at the
+// Play speed, which the play keeps to its end). `times` is when each picture shows, ms after the
+// first; `lengthFrom(from)` how long a play from `from` lasts.
 export function playTiming(link, scene) {
-  if (!link.pathOn || !playedKeys(link).length) {
+  const speed = link.playSpeed || 1, keys = link.pathOn ? playedKeys(link) : [];
+  if (speed === 1 && !keys.length) {
     const times = recordedTimes(scene), frameMs = 1000 / (scene.fps || 30);
     return { times, path: null, lengthFrom: (from) => times[times.length - 1] - times[from] + frameMs };
   }
-  const keys = playedKeys(link), clock = clockOf(link, keys);
+  const clock = keys.length ? clockOf(link, keys, speed)
+    : pathClock(recordedTimes(scene), [], { speed, fps: scene.fps || 30 });
   return { times: clock.display, path: { keys, clock }, lengthFrom: (from) => clock.length - clock.display[from] };
 }
 
-// Every display frame of a Play with the path on screen: the picture on screen is asked for again
-// with the path's camera when that camera moved since the last one asked, and the sound follows the
-// path's clock (pathSound).
+// The Play speed (scenepath.js PLAY_SPEEDS): every picture held that much longer, the free camera and
+// the path still moving every display frame. A Play going on takes it from where it is.
+export function setPlaySpeed(link, speed) {
+  if (!PLAY_SPEEDS.includes(speed) || speed === (link.playSpeed || 1)) return;
+  link.playSpeed = speed;
+  if (link.playing) { link.pause(); link.play(); }
+  link.changed();
+}
+
+// Every display frame of a Play on a path clock: the sound follows the clock (pathSound), and with
+// the path on screen the picture on screen is asked for again with the path's camera when that camera
+// moved since the last one asked.
 export function pathPlayTick(link, play, frameTime) {
   if (!play.path) return;
   pathSound(link, play, frameTime);
+  if (!link.pathOn || !play.path.keys.length) return;
   const camera = JSON.stringify(link.cameraNow(play.asked, frameTime + link.readyMs()));
   if (camera !== play.path.sent) {
     play.path.sent = camera;
@@ -235,7 +251,6 @@ export function PathBar({ link }) {
     const held = stored.some((one) => one.frame === frame);     // a second key on a frame is a hold
     save([...stored, makeKey({ frame, camera: got.camera, hold: held ? HOLD.ms : 0 })]);
   }
-  const holdMs = (value) => Math.round(Math.min(HOLD.maxMs, Math.max(HOLD.minMs, (Number(value) || 0) * 1000)));
   async function replace(index) {
     const got = await cameraForKey(link);
     if (got && paths.of(key) === path) save(stored.map((one, at) => (at === index ? { ...one, camera: got.camera } : one)));
@@ -263,30 +278,64 @@ export function PathBar({ link }) {
       <p class=${`scene-lab-hint${note.bad ? " is-bad" : ""}`} role=${note.bad ? "status" : null}>${note.text}</p>
     </div>
     ${stored.length > 0 && html`<ol class="scene-lab-path-keys">
-      ${stored.map((one, index) => {
-        const outside = one.frame >= count, here = !outside && one.frame === link.frame;
-        const held = index > 0 && stored[index - 1].frame === one.frame;
-        return html`<li key=${index} class=${[here && "is-here", outside && "is-outside"].filter(Boolean).join(" ")}>
-          <button type="button" class="scene-lab-path-jump" disabled=${!usable || outside}
-              title=${outside ? "This key is after the end of this scene" : "Go to this key"}
-              onclick=${(event) => jump(index, event.timeStamp)}>Frame ${one.frame + 1}</button>
-          <span class="scene-lab-path-what">${one.camera ? "Camera" : "Recorded camera"}</span>
-          ${held && html`<label class="scene-lab-path-hold"
-              title="The game stops on this frame while the camera moves here from the key before">Hold
-            <input type="number" min=${HOLD.minMs / 1000} max=${HOLD.maxMs / 1000} step="0.1" disabled=${!usable}
-              value=${(one.hold || HOLD.ms) / 1000} aria-label=${`Hold on frame ${one.frame + 1}, in seconds`}
-              onchange=${(event) => change(index, { hold: holdMs(event.currentTarget.value) })} /> s</label>`}
-          <button type="button" aria-pressed=${one.ease} disabled=${!usable}
-              title=${one.ease ? "The camera slows into and out of this key. Turn off to pass through it"
-                : "The camera passes through this key. Turn on to slow into and out of it"}
-              onclick=${() => change(index, { ease: !one.ease })}>Ease</button>
-          <button type="button" disabled=${!usable} onclick=${() => replace(index)}
-              title="Use the camera on screen for this key">Replace</button>
-          <button type="button" class="scene-lab-path-delete" disabled=${!usable} aria-label=${`Delete the key on frame ${one.frame + 1}`}
-              title="Delete" onclick=${() => save(stored.filter((_, at) => at !== index))}>
-            <${Icon} name="trash" size=${13} /></button>
-        </li>`;
-      })}
+      ${stored.map((one, index) => html`<${KeyRow} key=${index} link=${link} one=${one} index=${index}
+        held=${index > 0 && stored[index - 1].frame === one.frame} usable=${usable} count=${count}
+        jump=${jump} change=${change} replace=${replace}
+        remove=${() => save(stored.filter((_, at) => at !== index))} />`)}
     </ol>`}
+  </div>`;
+}
+
+const SPEED_WORDS = { 1: "1x", 0.5: "½x", 0.25: "¼x" };
+const holdMs = (value) => Math.round(Math.min(HOLD.maxMs, Math.max(HOLD.minMs, (Number(value) || 0) * 1000)));
+
+// One key's row: its frame (a jump to it), what it is, its hold, Ease, the speed from it to the next
+// key (a slow stretch), Replace and Delete.
+function KeyRow({ link, one, index, held, usable, count, jump, change, replace, remove }) {
+  const outside = one.frame >= count, here = !outside && one.frame === link.frame;
+  return html`<li class=${[here && "is-here", outside && "is-outside"].filter(Boolean).join(" ")}>
+    <button type="button" class="scene-lab-path-jump" disabled=${!usable || outside}
+        title=${outside ? "This key is after the end of this scene" : "Go to this key"}
+        onclick=${(event) => jump(index, event.timeStamp)}>Frame ${one.frame + 1}</button>
+    <span class="scene-lab-path-what">${one.camera ? "Camera" : "Recorded camera"}</span>
+    ${held && html`<label class="scene-lab-path-hold"
+        title="The game stops on this frame while the camera moves here from the key before">Hold
+      <input type="number" min=${HOLD.minMs / 1000} max=${HOLD.maxMs / 1000} step="0.1" disabled=${!usable}
+        value=${(one.hold || HOLD.ms) / 1000} aria-label=${`Hold on frame ${one.frame + 1}, in seconds`}
+        onchange=${(event) => change(index, { hold: holdMs(event.currentTarget.value) })} /> s</label>`}
+    <button type="button" aria-pressed=${one.ease} disabled=${!usable}
+        title=${one.ease ? "The camera slows into and out of this key. Turn off to pass through it"
+          : "The camera passes through this key. Turn on to slow into and out of it"}
+        onclick=${() => change(index, { ease: !one.ease })}>Ease</button>
+    <select class="scene-lab-path-speed" value=${String(one.speed)} disabled=${!usable}
+        title="How fast the game plays from this key to the next one (slower plays without sound)"
+        aria-label=${`Speed after the key on frame ${one.frame + 1}`}
+        onchange=${(event) => change(index, { speed: Number(event.currentTarget.value) })}>
+      ${PLAY_SPEEDS.map((speed) => html`<option key=${speed} value=${String(speed)}>${SPEED_WORDS[speed]}</option>`)}
+    </select>
+    <button type="button" disabled=${!usable} onclick=${() => replace(index)}
+        title="Use the camera on screen for this key">Replace</button>
+    <button type="button" class="scene-lab-path-delete" disabled=${!usable} aria-label=${`Delete the key on frame ${one.frame + 1}`}
+        title="Delete" onclick=${remove}><${Icon} name="trash" size=${13} /></button>
+  </li>`;
+}
+
+// The Play speed: each game picture shows two or four times as long; slower than 1x plays silent
+// (scenepath.js soundPlays).
+function SpeedRow({ link }) {
+  const speed = link.playSpeed || 1;
+  return html`<div class="scene-lab-bar scene-lab-path-play" role="group" aria-label="Play speed">
+    <span class="scene-lab-rigs-name">Play speed</span>
+    ${PLAY_SPEEDS.map((value) => html`<button type="button" key=${value} aria-pressed=${speed === value}
+        title=${value === 1 ? "Play at the recording's own speed, with its sound" : "Play slower, without sound"}
+        onclick=${() => setPlaySpeed(link, value)}>${SPEED_WORDS[value]}</button>`)}
+  </div>`;
+}
+
+// The block under the Cameras strip, which moves as one: the Play speed, then the camera path.
+export function PathPanel({ link }) {
+  return html`<div class="scene-lab-path-panel">
+    <${SpeedRow} link=${link} />
+    <${PathBar} link=${link} />
   </div>`;
 }
