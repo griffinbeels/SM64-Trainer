@@ -291,6 +291,51 @@ class CachedPopulation:
                 return {"complete": False, "min_step": None, "max_step": None, "base_step": None, "generation": None}
             return dict(item[0]["coverage"])
 
+    def cached_holdings(self):
+        """Every downloaded community ghost on disk, for Settings' ghost files (`ghost/storage.py`):
+        {"id", "bytes", "paths", "in_use"}; `in_use` for one the lineup on screen races (`keep`)."""
+        with self._lock:
+            assets = [(identifier, identifier in self._kept) for identifier in self._assets]
+        found = []
+        for identifier, kept in assets:
+            paths = [path for path in (self.root / (identifier + ".ghost"), self.root / (identifier + ".ghc1"))
+                     if path.is_file()]
+            try:
+                size = sum(path.stat().st_size for path in paths)
+            except OSError:
+                continue
+            found.append({"id": identifier, "bytes": size, "paths": paths, "in_use": kept})
+        return found
+
+    def drop_cached(self, identifiers):
+        """Deletes these downloads (never one the lineup on screen races): {"deleted", "bytes",
+        "skipped"}. A deleted ghost downloads again the next time a lineup asks for it."""
+        wanted = set(identifiers)
+        deleted, skipped, freed = [], [], 0
+        with self._lock:
+            deleted += sorted(wanted - set(self._assets))       # gone already: evicted meanwhile
+            for identifier in [key for key in self._assets if key in wanted]:
+                if identifier in self._kept:
+                    skipped.append(identifier)
+                    continue
+                gone = 0
+                try:
+                    for suffix in (".ghost", ".ghc1"):
+                        path = self.root / (identifier + suffix)
+                        if path.is_file():
+                            size = path.stat().st_size
+                            path.unlink()
+                            gone += size
+                except OSError:
+                    skipped.append(identifier)
+                    freed += gone
+                    continue
+                self._assets.pop(identifier, None)
+                deleted.append(identifier)
+                freed += gone
+            self._generation += 1
+        return {"deleted": deleted, "bytes": freed, "skipped": skipped}
+
     def keep(self, identifiers):
         """The recordings the lineup on screen uses: a download never evicts them."""
         with self._lock:

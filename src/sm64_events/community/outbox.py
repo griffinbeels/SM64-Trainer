@@ -219,6 +219,15 @@ class SourceOutbox:
             self.load()
             return {row["raw_sha256"] for row in self._rows.values() if row["owner"] != owner}
 
+    def named(self):
+        """(paths, raw digests) every unsent offer of every account names: the files Settings'
+        ghost purge must leave for the upload (`ghost/storage.py`)."""
+        with self._lock:
+            self.load()
+            rows = list(self._rows.values())
+        return ({Path(row["path"]) for row in rows if row.get("path")},
+                {row["raw_sha256"] for row in rows if row.get("raw_sha256")})
+
     def contains(self, source):
         with self._lock:
             return source_id(source) in self._rows

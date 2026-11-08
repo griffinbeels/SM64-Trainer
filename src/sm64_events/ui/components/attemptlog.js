@@ -27,6 +27,7 @@ import { EmptyState } from "./emptystate.js";
 import { caveatOf, cardBadge } from "./marks.js";
 import { PbAction, PbReplayNotice, usePbReplay } from "./pbreplay.js";
 import { AttemptScenes, SceneButton, useAttemptScenes } from "./attemptscene.js";
+import { newestGhostFilesChange } from "./ghoststorage.js";
 
 const html = htm.bind(h);
 
@@ -426,7 +427,7 @@ export function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, s
 // rows: the filtered/sorted subset to actually render.
 export function AttemptTable({ attempts, rows, t, focus, clearFocus, freshIds, openCompare, sec,
                               rankKind = "strategy" }) {
-  const scenes = useAttemptScenes(rows.map((a) => a.id), Boolean(t.sceneLab));
+  const scenes = useAttemptScenes(rows.map((a) => a.id), Boolean(t.sceneLab), newestGhostFilesChange(t.feed));
   return html`<${RowRankKind.Provider} value=${rankKind}><table class="attempt-table"><${AttemptScenes.Provider} value=${scenes}>
     ${rows.map((a) => {
       const idx = attempts.indexOf(a);

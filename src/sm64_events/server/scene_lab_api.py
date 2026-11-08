@@ -307,9 +307,11 @@ class SceneLab:
         self.switch_lock = threading.Lock()
         self.open_path: Path | None = None             # the package the open scene reads (retention spares it)
         self.open_attempt: int | None = None
+        self.tracker = None                                # follow_attempts': whose journal the scenes belong to
         try:
             self.scenes = _lab_module("attempt_scenes").AttemptScenes(
-                self._scene_folder, self._start_cutter, in_use=lambda: self.open_path, live_audio=live_audio)
+                self._scene_folder, self._start_cutter, in_use=lambda: self.open_path, live_audio=live_audio,
+                journal=self._journal, legacy=lambda: self._lab_root() / "attempts")
         except ConfigError as error:
             self.scenes, self.live_problem = None, str(error)
         self.page_gone_seconds, self.watch_seconds = page_gone_seconds, watch_seconds
@@ -362,8 +364,16 @@ class SceneLab:
         config = LabConfig.load(self.config_path)
         return config.lab_root or _lab_module("attempt_scenes").default_lab_root()
 
+    def _journal(self):
+        """The journal the attempt ids belong to: the followed tracker's database, else the one the
+        stage reads (main.py hands both the same tracker); None without one."""
+        if self.tracker is not None:
+            return getattr(self.tracker, "db", None)
+        return self.ghosts.db if self.ghosts is not None else None
+
     def _scene_folder(self) -> Path:
-        return self._lab_root() / "attempts"
+        """This journal's own folder of attempt scenes (attempt_scenes.journal_folder)."""
+        return _lab_module("attempt_scenes").journal_folder(self._lab_root() / "attempts", self._journal())
 
     def _start_cutter(self, folder: Path, on_event):
         if self.cutter_factory is not None:
@@ -450,6 +460,7 @@ class SceneLab:
         scenes = self.scenes
         if scenes is None:
             return
+        self.tracker = tracker
         previous = tracker.on_replay_history
 
         def observe(completed, active_start, **options):

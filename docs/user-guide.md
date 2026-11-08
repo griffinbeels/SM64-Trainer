@@ -143,6 +143,17 @@ the first account that shares from this computer gets them. You can turn sharing
 in your account settings. If you press **Remove shared ghosts**, your older ghosts
 will not upload again by themselves.
 
+**Free up space from ghosts.** Settings shows how much space ghost files use on
+this computer under **Ghost files**. **Delete ghosts, keep PBs** deletes every
+ghost except your PB ghosts, the ghosts you saved and the ghosts you imported.
+**Delete all ghosts** deletes those too. Each button says how many ghosts and how
+many MB it frees, and asks before it deletes. Neither one touches your times, your
+saved replays and their videos, your scene clips, your save states, or the ghosts
+you shared online. A ghost that is waiting to upload, or that keeps a run with no
+strategy in your practice log, stays. A ghost the game is racing right now stays
+too, and the app tells you how many stayed. Downloaded community ghosts download
+again the next time you race them.
+
 **Share ghosts.** Open **Ghost Library · Import / Export** from a star or segment.
 Export that target's overall best, each strategy's best, all your personal bests,
 or a custom selection. The app remembers your player name and can save a search
