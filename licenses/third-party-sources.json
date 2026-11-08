@@ -201,7 +201,7 @@
         }
       ],
       "not_attached": {
-        "why": "The compiler's runtime, which the linker puts into ffmpeg.exe and which PyAV's wheel carries as DLLs: libgcc and libstdc++ (GCC), winpthreads and the MinGW-w64 C runtime start-up code. Each is part of the normal packaging of the compiler, a Major Component, and serves only to let the work run with it, so it is a System Library, which GPL v3 section 1 leaves out of the Corresponding Source. libgcc and libstdc++ are also under the GCC Runtime Library Exception, and winpthreads and the C runtime are under MIT- and BSD-style licenses, which ask for their notices, not their source. Their license texts ship in the app (each entry's notices). Lead decision 2026-11-08; the quotes are from the tracked texts.",
+        "why": "The compiler's runtime, which the linker puts into ffmpeg.exe and which PyAV's wheel carries as DLLs: libgcc and libstdc++ (GCC), winpthreads and the MinGW-w64 C runtime start-up code. Each is part of the normal packaging of the compiler, a Major Component, and serves only to let the work run with it, so it is a System Library, which GPL v3 section 1 leaves out of the Corresponding Source. libgcc and libstdc++ are also under the GCC Runtime Library Exception, and winpthreads and the C runtime are under MIT- and BSD-style licenses, which ask for their notices, not their source. Their license texts ship in the app (each entry's notices). The C runtime's own text (licenses/ffmpeg/mingw-w64-runtime) lists BSD-, MIT- and Sun-style notices, public-domain parts, and one copyleft part: headers and IDL files imported from Wine under the LGPL 2.1. Those are Windows API declarations, which put no library code into a program, and LGPL 2.1 section 5 leaves such use unrestricted. Lead decision 2026-11-08; the quotes are from the tracked texts.",
         "quotes": {
           "GPL v3 section 1 (licenses/ffmpeg/FFmpeg/COPYING.GPLv3)": [
             "The \"System Libraries\" of an executable work include anything, other than the work as a whole, that (a) is included in the normal form of packaging a Major Component, but which is not part of that Major Component, and (b) serves only to enable use of the work with that Major Component, or to implement a Standard Interface for which an implementation is available to the public in source code form.",
@@ -213,6 +213,13 @@
           ],
           "winpthreads (licenses/ffmpeg/winpthreads/COPYING)": [
             "The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software."
+          ],
+          "LGPL 2.1 section 5 (licenses/ffmpeg/FFmpeg/COPYING.LGPLv2.1)": [
+            "If such an object file uses only numerical parameters, data structure layouts and accessors, and small macros and small inline functions (ten lines or less in length), then the use of the object file is unrestricted, regardless of whether it is legally a derivative work."
+          ],
+          "MinGW-w64 runtime (licenses/ffmpeg/mingw-w64-runtime/COPYING.MinGW-w64-runtime.txt)": [
+            "Some parts of the runtime are under licenses which require that the copyright and license notices are included when distributing the code in binary form.",
+            "Some header and IDL files were imported from the Wine project."
           ]
         },
         "sources": [
