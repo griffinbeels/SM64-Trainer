@@ -5,6 +5,7 @@
  * same record format, same timings measured on this machine.
  *
  *   tap_offline_host <lab_root> [vi:]<frame_dir>...
+ *   tap_offline_host <lab_root> --stdin                 the same frames, one command per stdin line
  *   tap_offline_host <lab_root> --live [--stdin] [command]...
  *
  * <lab_root> stands in for %LOCALAPPDATA%: the arming file must already be at
@@ -16,7 +17,10 @@
  * prefixed vi: is one UpdateScreen instead (a VI with no new task), which is
  * where the tap's VI regions are copied. Exit 0 when
  * every frame was offered to an armed tap; the session's summary.txt says
- * what it recorded.
+ * what it recorded. With --stdin the first line is "header <dir>", then one
+ * frame command per line ("frame <dir>", "vi <dir>", quit), each answered
+ * "ok" once fed: a writer can delete a folder after its answer, but a folder
+ * name is read once (the cache below), so each frame needs its own name.
  *
  * --live runs the live spool instead: no armed.txt, the producer's tap
  * thread watches <lab_root>\SM64Trainer\scene-lab\live\lease.txt (written by
@@ -230,8 +234,9 @@ int main(int argc, char **argv) {
     }
     if (!SetEnvironmentVariableA("LOCALAPPDATA", argv[1])) return 2;
     const bool live = !strcmp(argv[2], "--live");
-    const bool interactive = live && argc > 3 && !strcmp(argv[3], "--stdin");
-    const int commands = live ? (interactive ? 4 : 3) : 2;
+    const int stdin_at = live ? 3 : 2;   // one-shot frames can come from stdin too: a long scene outgrows a command line
+    const bool interactive = argc > stdin_at && !strcmp(argv[stdin_at], "--stdin");
+    const int commands = stdin_at + (interactive ? 1 : 0);
     static uint8_t dmem[0x1000], imem[0x1000], header[0x40];
     static unsigned int regs[32];
     uint8_t *rdram = (uint8_t *)VirtualAlloc(nullptr, 8u << 20, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
