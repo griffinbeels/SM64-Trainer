@@ -102,6 +102,7 @@ def refit_slots(memory: GameMemory, ledger: SlotLedger | None = None) -> RefitRe
         build = check_cartridge(memory)
     except Refusal as refused:
         return RefitReport(not_ready=str(refused))
+    ledger.use_build(build.version)
     live = live_facts(memory, build)
     if live.mario_object == 0:
         return RefitReport(live.level, live.area, not_ready="Mario is not in a level")
