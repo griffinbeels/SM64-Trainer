@@ -1528,8 +1528,10 @@ recorded pads play SM64's own code from a start, in the simulation, and the
 real [[scene tap]] producer records each simulated [[frame]]. The start, best
 first: the [[ghost's start]]; his own [[attempt scene]] that begins at the
 [[ghost]]'s first record; another take's practice [[reset]] in that level; or a
-practice [[reset]] the simulation makes from his boot recording for any course
-and act, even one he never played (a stage). The lab compares every simulated
+practice [[reset]] the simulation makes from the cartridge alone for any course
+and act, even one he never played (a stage). That last [[reset]] needs no
+recording, and every machine with the same ROM makes the same bytes, so the
+lab also measures a [[ghost's start]] against it. The lab compares every simulated
 [[frame]]'s Mario with the [[ghost]]'s recorded pose, and the scene names the
 first record where they part. From his own [[attempt scene]] or a start file
 the scene matches to the byte; from a [[reset]] Mario stays exact, but moving

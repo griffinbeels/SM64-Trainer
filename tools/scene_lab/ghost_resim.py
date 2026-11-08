@@ -12,7 +12,8 @@ The start, best first (measured on his Whomp's Fortress takes, 2026-11-08):
     own_scene        his attempt scene whose first frame is this ghost's first record (same clock,
                      level, area and Mario): 0 bytes off over 351-403 frames with only the ghost's pads
     another_reset    another of his scenes' practice-reset frame in that level and area
-    simulated_reset  stage_sim's practice reset of that level, area and act, made from his boot session
+    simulated_reset  stage_sim's practice reset of that level, area and act, made from the cartridge alone
+                     (the cold boot; no recording of his is needed)
 For the last two the ghost's own clocks are set; its seed is not known (a ghost carries none). Mario
 stayed exact from both (0 units over 351-403 frames); objects whose phase comes from before a reset
 (the sliding platforms, the Bomps) stood elsewhere, 100-340 units.
@@ -52,6 +53,7 @@ from sm64_events.ghost import start_frame  # noqa: E402
 from sm64_events.ghost.clip import decode_clip  # noqa: E402
 from sm64_events.ghost.native_layout import POSE_AT, VALID_POSE  # noqa: E402
 from sm64_events.memory.ghost_layout import ROM_LAYOUTS  # noqa: E402
+from sm64_events.memory.version_probe import version_from_header  # noqa: E402
 
 REGION_OF_LAYOUT = {layout: region for region, layout in ROM_LAYOUTS.items()}   # a clip's rom_layout: "us" | "jp"
 
@@ -370,26 +372,18 @@ class GhostScenes:
 
     def _keep_start(self, clip, clip_bytes: bytes, started: Start) -> bool:
         """His own scene will not stay (retention): save this ghost's start beside it, so it re-simulates
-        exactly without the scene. With the pool delta only when the simulated reset is made already (a
-        new one costs ~40 s); the regions alone keep Mario and every object exact."""
-        first = clip.frames[0]
+        exactly without the scene, with the main pool's delta against the cold reset (a new one costs ~6 s)."""
         scene = next((path for path, _stamp, _words in self._scenes() if path.name == started.detail["scene"]), None)
         if scene is None:
             return False
-        act = None
-        for _path, stamp, words in self._scenes():
-            if stamp.startswith(scene.name + ":"):
-                act = words["act"] or 1
-        stages = self.stages if act is not None and self.stages.has_reset(first.level, first.area, act) else None
         try:
-            return capture_start(scene, clip_bytes, self.starts_dir, stages, self.rom_path, self.symbols) is not None
-        except (OSError, ValueError, package.PackageError):
+            return capture_start(scene, clip_bytes, self.starts_dir, self.stages, self.rom_path, self.symbols) is not None
+        except (OSError, ValueError, package.PackageError, stage_sim.StageError):
             return False
 
     def _simulate(self, clip, clip_sha: str, started: Start, out: Path, progress) -> dict:
-        _base, fcsr = self.stages.boot()
         template = started.ram[sim.phys(self.symbols["gControllerPads"]):sim.phys(self.symbols["gControllerPads"]) + 24].tobytes()
-        machine = stage_sim.Machine(started.ram.copy(), self.stages.rom, self.symbols, fcsr)
+        machine = self.stages.machine(started.ram.copy())
         writer = sim_scene.SimScene(out, self.cache / f"work-{time.monotonic_ns()}", self.rom_path, self.symbols,
                                     self.stages.vi())
         parting = farthest = None
@@ -435,9 +429,10 @@ def capture_start(scene_path: Path, clip_bytes: bytes, starts_dir: Path, stages:
         return None
     act = act_of(regions, symbols) or 1
     first = clip.frames[0]
-    saved = start_frame.StartFrame(clip_sha, "us", first.global_timer, first.area_update_counter, first.level,
-                                   first.area, act, [(begin, data.tobytes()) for begin, data in regions],
-                                   hashlib.sha256(Path(rom_path).read_bytes()).hexdigest(),
+    rom = Path(rom_path).read_bytes()
+    saved = start_frame.StartFrame(clip_sha, version_from_header(rom[:0x40]) or "us", first.global_timer,
+                                   first.area_update_counter, first.level, first.area, act,
+                                   [(begin, data.tobytes()) for begin, data in regions], hashlib.sha256(rom).hexdigest(),
                                    stages.fingerprint() if stages is not None else "0" * 64)
     if stages is not None:
         try:
@@ -467,6 +462,9 @@ def check_slot_load(package_path: Path, frame: int, slot: bytes, clip, stages: s
     {"ok": bool, "reason": sentence or None, "frames": played, "compared": poses compared}."""
     import handoff_slot  # noqa: PLC0415 - Usamune's own load at its own site
     from sm64_events.slotlibrary.usamune import BODY_BYTES, slot_address  # noqa: PLC0415
+    if stages.region() != "us":                    # handoff_slot's call site and frame_sim's frames are the US build's
+        return {"ok": False, "frames": 0, "compared": 0,
+                "reason": "Save states from a JP scene cannot be checked yet, so none is offered."}
     reasons = start_check.check_slot(slot, stages.reference_for_slot(slot), BODY_BYTES)
     if reasons:
         return {"ok": False, "reason": reasons[0], "frames": 0, "compared": 0}

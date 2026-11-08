@@ -8,7 +8,8 @@
 
 The work is tools/scene_lab/ghost_resim.py and stage_sim.py (their docstrings carry the measurements),
 run in a below-normal child of its own (one at a time) so the server's interpreter never runs the
-simulation: a build is ~30 s of CPU, a new stage ~40 s more, and a cached one answers in ~0.01 s.
+simulation: a build is ~25-30 s of CPU, a new stage ~20 s (made from the cartridge alone, stage_sim.py), and a
+cached one answers in ~2 s (the child's own start).
 Packages and stages are cached under the lab root's `resim` folder; a ghost's start frame is saved
 beside the ghost recordings (sm64_events/ghost/start_frame.py, the ghost population's `starts`
 folder), never in a clip and never uploaded.

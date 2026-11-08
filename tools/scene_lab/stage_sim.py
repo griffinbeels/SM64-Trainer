@@ -5,18 +5,25 @@ Handoff re-simulation). Simulation only: nothing here touches Project64 or the r
     ram = stages.reset(level, area, act)        # the practice-reset state, as Usamune's own reset leaves it
     path = stages.package(level, area, act)     # that state played on with no input, as a scene package
 
-How a reset is made, measured on his Whomp's Fortress takes (2026-11-08): a recorded scene-tap session
-that boots and walks into a castle painting supplies the boot record and the frame where the painting's
-warp is set (sWarpDest a course, play mode 4). frame_sim plays the session's own pads to that frame; the
-painting's destination byte becomes the asked level (the one write, and it is to the simulation's copy);
-the act selector runs with simulated A presses and stick pushes until the asked act is chosen; Mario
-spawns; then a simulated L press (RESET_BUTTON, his takes begin with it) runs Usamune's practice reset,
-and the state after its second frame is the reset. His ghosts started from that state kept Mario exact
-(0 units over 351-403 frames); objects whose phase comes from before a reset (WF's sliding platforms, the
-Bomps) stand elsewhere, which is why a ghost's own start (start_frame.py) wins when it has one.
+A reset is made from the ROM alone, with no recorded session (cold_boot.py boots the cartridge in the
+simulation), so every machine with the same ROM makes the same bytes: that is what lets a start file's
+main-pool delta, and start_check's reference, mean the same thing on another player's trainer. The recipe
+(STAGE_VERSION 2, measured 2026-11-08 on US and JP):
+  1. cold_boot.boot_into_castle: save file A exists, Mario stands in the castle grounds (~3 s, once).
+  2. That course's six star flags are set in the simulation's own save, so the act selector offers every act.
+  3. The painting warp (sWarpDest, written at Usamune's call site), then the act selector: MENU_WAIT frames,
+     one stick push per wanted act after the first, A until Mario spawns; gCurrActNum must read the act.
+  4. sTransitionTimer back at 0 (cold_boot.arrived), settle, SETTLE_FRAMES with no input.
+  5. USAMUNE_RESET_WORD into Usamune's state block, then L for two frames: Usamune's practice reset.
+     The state after it is the reset. US and JP both fire; ~2-4 s per reset after the boot.
+His recorded scenes re-run the same over the cold boot's RAM as over his session's boot record (two
+scenes, every frame, Mario 0.000 units, the same single differing word), so the cold boot is also what a
+start lies over (boot()).
 
-Every state is cached under the cache folder by its recipe (STAGE_VERSION, session, painting frame,
-level, area, act), so a second ask costs a file read.
+Every reset is cached under the cache folder by its recipe (STAGE_VERSION, build, ROM, level, area, act),
+so a second ask costs a file read. Scenes on the JP cartridge are not made yet: the slot tools and frame_sim's
+fixed thread frames are the US build's, so machine() refuses JP with a sentence; a JP reset and its
+reference are made all the same (start files captured there need them).
 """
 from __future__ import annotations
 
@@ -26,7 +33,6 @@ import struct
 import sys
 import threading
 import time
-from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -34,20 +40,30 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import frame_sim as sim  # noqa: E402
 
-STAGE_VERSION = 1                # the reset's recipe: a change makes every reset (and start-file base) anew
+STAGE_VERSION = 2                # the reset's recipe: a change makes every reset (and start-file base) anew
 PACKAGE_VERSION = 2              # a stage scene's own form: 2 shows every frame at the game's 30 fps
 RESET_BUTTON = 0x0020            # L: Usamune's practice reset
 ENTRY_NODE = 0x0A                # a course's painting entry
 A_BUTTON = 0x8000
-CASTLE = 6
-PLAY_MODE_CHANGE_LEVEL = 4
 SPAWN_ACTION = 0x00001924        # ACT_SPAWN_SPIN_AIRBORNE: a course entry's and a practice reset's first action
+COLD_FCSR = 0x01000800           # thread 5's FCSR: what every recorded boot record holds, and what cold_boot runs with
+# Usamune's state block's first word as his game holds it (2026-11-08). With it zero, L does nothing; it is the
+# only word of the block a reset needs (a bisection of the block against his game).
+USAMUNE_RESET_WORD = 0x01030300
+COURSE_STARS = 0x0C              # files[0][0].courseStars in gSaveBuffer, one byte per course from course 1
+ALL_ACTS = 0x3F                  # stars 1-6: the act selector offers every act
 # RAM by the symbol map's names (memory/layout.py owns addresses; the lab reads the map's): Mario's object,
 # the level and area, and gLevelToCourseNumTable (one byte per level from level 1).
 MARIO_OBJECT, CURR_LEVEL, CURR_AREA, LEVEL_TO_COURSE = "gMarioObject", "gCurrLevelNum", "gCurrAreaIndex", "gLevelToCourseNumTable"
 LEVEL_COUNT = 38
+MENU_WAIT, MENU_PERIOD = 30, 16  # frames in the act selector before the first input, then between inputs
 SETTLE_FRAMES = 40               # after the spawn, before the reset is pressed
-MENU_FRAMES = 1500               # a warp and the act selector take ~130 frames; more means it is stuck
+MENU_FRAMES = 1500               # a warp and the act selector take 50-130 frames; more means it is stuck
+NTSC_LAN1 = 2                    # osViModeTable's entry SM64 runs (OS_VI_NTSC_LAN1)
+VI_MODE_BYTES = 0x50             # sizeof(OSViMode): type, 9 common registers, 2 fields of 5
+# SM64 turns gamma off and the dither filter on (libultra's osViSetSpecialFeatures, which also clears the
+# anti-alias mode bits): the mode's ctrl 0x311E becomes 0x13016, the status his recordings show.
+VI_GAMMA, VI_ANTIALIAS, VI_DITHER_FILTER = 0x0008, 0x0300, 0x10000
 
 
 class StageError(RuntimeError):
@@ -60,7 +76,7 @@ def lab_config() -> dict:
 
 class Machine:
     """frame_sim's thread 5 over one RAM image; step(pads) runs a game frame to the scene tap's moment,
-    two VIs a frame (a ghost records no VI count; only Usamune's lag counter can tell)."""
+    two VIs a frame (a ghost records no VI count; only Usamune's lag counter can tell). The US build's."""
 
     def __init__(self, ram: np.ndarray, rom: bytes, symbols: sim.Symbols, fcsr: int, cpu_class=None):
         self.cpu = (cpu_class or sim.GameCpu)(ram, rom, symbols, fcsr)
@@ -95,25 +111,29 @@ def u32(ram: np.ndarray, address: int) -> int:
     return struct.unpack_from(">I", ram, sim.phys(address))[0]
 
 
-@dataclass(frozen=True)
-class Painting:
-    session: str
-    frame: int                   # the session's frame index where the painting's warp is set
+def menu_input(frames_in_menu: int, pushes: int, act: int) -> tuple[int, tuple[int, int], int]:
+    """The act selector's input on its n-th frame: (buttons, stick, pushes so far). Nothing for MENU_WAIT
+    frames, then every MENU_PERIOD frames one stick push right until act - 1 were made, then A."""
+    if frames_in_menu < MENU_WAIT or (frames_in_menu - MENU_WAIT) % MENU_PERIOD:
+        return 0, (0, 0), pushes
+    if pushes < act - 1:
+        return 0, (80, 0), pushes + 1
+    return A_BUTTON, (0, 0), pushes
 
 
-def find_painting(session: Path, symbols: sim.Symbols) -> int | None:
-    """The first frame of a recorded session in the castle with a course warp set (play mode 4)."""
-    _ram, stream = sim.boot_state(session)
-    bss = sim.phys(sim.SCENE_BSS)
-    warp = sim.phys(symbols["sWarpDest"]) - bss
-    mode = sim.phys(symbols["sCurrPlayMode"]) - bss
-    for frame in stream:
-        if frame.level != CASTLE:
-            continue
-        span = next(data for begin, data in frame.spans if begin == bss)
-        if span[warp] == 1 and struct.unpack_from(">h", span, mode)[0] == PLAY_MODE_CHANGE_LEVEL:
-            return frame.index
-    return None
+def vi_of_mode(ram: np.ndarray, symbols: sim.Symbols) -> dict:
+    """The VI registers a simulated frame is shown with, from the ROM's own NTSC mode (osViModeTable, as the
+    cold boot's RAM holds it) and SM64's special features; the origin is field 0's offset into the first
+    frame buffer (sim_scene.SimScene moves it to the buffer each frame shows). Equal to his recording's
+    first picture of play, register for register (2026-11-08, US and JP the same)."""
+    at = sim.phys(symbols["osViModeTable"]) + NTSC_LAN1 * VI_MODE_BYTES
+    entry = ram[at:at + VI_MODE_BYTES].tobytes()
+    ctrl, width, burst, v_sync, h_sync, leap, h_start, x_scale, v_current = struct.unpack_from(">9I", entry, 4)
+    origin, y_scale, v_start, v_burst, v_intr = struct.unpack_from(">5I", entry, 40)
+    return {"status": (ctrl & ~(VI_GAMMA | VI_ANTIALIAS)) | VI_DITHER_FILTER,
+            "origin": sim.phys(symbols["gFrameBuffer0"]) + origin, "width": width, "intr": v_intr,
+            "v_current": v_current, "burst": burst, "v_sync": v_sync, "h_sync": h_sync, "leap": leap,
+            "h_start": h_start, "v_start": v_start, "v_burst": v_burst, "x_scale": x_scale, "y_scale": y_scale}
 
 
 class Stages:
@@ -124,86 +144,58 @@ class Stages:
         self.lab_root, self.cache = Path(lab_root), Path(cache)
         self.rom_path = Path(rom_path or config["rom"])
         self.rom = self.rom_path.read_bytes()
-        self.symbols = symbols or sim.Symbols(Path(config["map"]))
+        self.symbols = symbols or sim.Symbols(self.map_path)
         self.lock = threading.Lock()
-        self._painting: Painting | None = None
-        self._boot: tuple[np.ndarray, int] | None = None
-        self._vi: dict | None = None
+        self._game = None                   # cold_boot.ColdGame, booted once
+        self._castle_snap = None            # its snapshot in the castle grounds, at the resume point
+        self._boot: np.ndarray | None = None
         self._references: dict = {}
 
-    # ---------------------------------------------------------------- the castle and its painting
-    def sessions(self) -> list[Path]:
-        return sorted((path for path in self.lab_root.glob("tap-*") if (path / "tap.bin").is_file()),
-                      key=lambda path: path.name)
+    # ---------------------------------------------------------------- the cold boot
+    def region(self) -> str | None:
+        """The cartridge this lab simulates, from its ROM header ("us" | "jp"; None: neither)."""
+        from sm64_events.memory.version_probe import version_from_header  # noqa: PLC0415
+        return version_from_header(self.rom[:0x40])
 
-    def painting(self) -> Painting:
-        """The recorded session and frame a stage starts from; found once, remembered in the cache."""
-        if self._painting is not None:
-            return self._painting
-        note = self.cache / "painting.json"
-        if note.is_file():
-            known = json.loads(note.read_text(encoding="utf-8"))
-            if (self.lab_root / known["session"] / "tap.bin").is_file():
-                self._painting = Painting(known["session"], known["frame"])
-                return self._painting
-        for session in self.sessions():
-            frame = find_painting(session, self.symbols)
-            if frame is not None:
-                self._painting = Painting(session.name, frame)
-                self.cache.mkdir(parents=True, exist_ok=True)
-                note.write_text(json.dumps({"session": session.name, "frame": frame}), encoding="utf-8")
-                return self._painting
-        raise StageError("No recorded scene session walks into a castle painting, so no new stage can be made.")
+    def version(self) -> str:
+        version = self.region()
+        if version is None:
+            raise StageError("The lab's ROM is not a Usamune US or JP cartridge, so no stage can be made.")
+        return version
+
+    def _cold(self):
+        """The cold boot in the castle grounds: (game, its snapshot). Booted once (~3 s), then restored."""
+        if self._game is None:
+            import cold_boot  # noqa: PLC0415
+            try:
+                game, _frames = cold_boot.boot_into_castle(self.version(), {"rom": str(self.rom_path)})
+            except SystemExit as stopped:                    # cold_boot's own sentences
+                raise StageError(f"The simulated cartridge did not boot: {stopped}") from None
+            self._game, self._castle_snap = game, game.snapshot()
+        return self._game, self._castle_snap
 
     def boot(self) -> tuple[np.ndarray, int]:
-        """A recorded session's boot record and thread 5's FCSR: the RAM a start lies over (code, threads,
-        everything a scene's regions do not hold). The painting session's, else the first one recorded.
-        Read once."""
+        """The RAM a start lies over (code, threads, everything a scene's regions do not hold): the cold boot's
+        castle grounds, cached on disk by build and ROM; and thread 5's FCSR."""
         if self._boot is None:
-            try:
-                session = self.lab_root / self.painting().session
-            except StageError:
-                sessions = self.sessions()
-                if not sessions:
-                    raise StageError("No recorded scene session holds a boot record, so no ghost can be "
-                                     "re-simulated here.") from None
-                session = sessions[0]
-            ram, _stream = sim.boot_state(session)
-            fcsr = struct.unpack_from(">I", ram, sim.phys(self.symbols["gGameLoopThread"]) + sim.THREAD_FPCSR)[0]
-            self._boot = (ram, fcsr)
-        return self._boot
+            path = self.cache / f"boot-{self._recipe()}.npz"
+            if path.is_file():
+                self._boot = np.load(path)["ram"]
+            else:
+                _game, snap = self._cold()
+                self._boot = snap[0].copy()
+                self.cache.mkdir(parents=True, exist_ok=True)
+                np.savez_compressed(path, ram=self._boot)
+        return self._boot, COLD_FCSR
 
     def vi(self) -> dict:
-        """The VI registers a simulated frame is shown with: the boot session's first picture's."""
-        if self._vi is None:
-            import sim_scene  # noqa: PLC0415
-            try:
-                session = self.lab_root / self.painting().session
-            except StageError:
-                sessions = self.sessions()
-                if not sessions:
-                    raise StageError("No recorded scene session shows a picture to take the VI registers from.") from None
-                session = sessions[0]
-            self._vi = sim_scene.vi_template(session, self.symbols)
-        return self._vi
+        return vi_of_mode(self.boot()[0], self.symbols)
 
-    def _castle(self) -> tuple[np.ndarray, bytes]:
-        painting = self.painting()
-        path = self.cache / f"castle-v{STAGE_VERSION}-{painting.session}-{painting.frame}.npz"
-        if path.is_file():
-            data = np.load(path)
-            return data["ram"], data["pads"].tobytes()
-        import handoff_slot  # noqa: PLC0415 - its replay is the boot session played closed
-        replay = handoff_slot.start_replay(self.lab_root / painting.session)
-        for frame in replay.stream:
-            replay.absorb(frame)
-            replay.step(frame)
-            if frame.index == painting.frame:
-                ram, template = replay.cpu.ram.copy(), replay.cpu.pads
-                self.cache.mkdir(parents=True, exist_ok=True)
-                np.savez_compressed(path, ram=ram, pads=np.frombuffer(template, np.uint8))
-                return ram, template
-        raise StageError("The painting session ended before its painting.")
+    def machine(self, ram: np.ndarray):
+        """A machine that steps this build's thread 5 from `ram`."""
+        if self.version() != "us":
+            raise StageError("Scenes on the JP cartridge cannot be simulated yet; the lab simulates the US one.")
+        return Machine(ram, self.rom, self.symbols, COLD_FCSR)
 
     # ---------------------------------------------------------------- course and act
     def level_of_course(self, course: int) -> int:
@@ -214,9 +206,17 @@ class Stages:
                 return level
         raise StageError(f"No level belongs to course {course}.")
 
+    def course_of_level(self, level: int) -> int:
+        ram, _fcsr = self.boot()
+        if not 1 <= level <= LEVEL_COUNT:
+            raise StageError(f"There is no level {level}.")
+        return int(ram[sim.phys(self.symbols[LEVEL_TO_COURSE]) + level - 1])
+
+    def _recipe(self) -> str:
+        return f"v{STAGE_VERSION}-{self.version()}-{hashlib.sha256(self.rom).hexdigest()[:12]}"
+
     def key(self, level: int, area: int, act: int) -> str:
-        painting = self.painting()
-        return f"v{STAGE_VERSION}-{painting.session}-{painting.frame}-{level}-{area}-{act}"
+        return f"{self._recipe()}-{level}-{area}-{act}"
 
     def reference(self, level: int, area: int, act: int):
         """What a start someone else made is checked against: this machine's own reset of that place
@@ -237,27 +237,18 @@ class Stages:
 
     def fingerprint(self) -> str:
         """The Usamune build this lab runs, as its slots name it (slotlibrary/usamune.py)."""
-        import inspect  # noqa: PLC0415
+        from sm64_events.memory.layout import LayoutIncomplete  # noqa: PLC0415
         from sm64_events.slotlibrary import usamune  # noqa: PLC0415
         ram = self.boot()[0]
 
         def read(address: int, size: int) -> bytes:
             return ram[sim.phys(address):sim.phys(address) + size].tobytes()
-        if len(inspect.signature(usamune.routine_fingerprint).parameters) > 1:    # the build-aware form
-            return usamune.routine_fingerprint(read, usamune.build_for("us"))
-        return usamune.routine_fingerprint(read)
-
-    def region(self) -> str | None:
-        """The cartridge this lab simulates, from its ROM header ("us" | "jp"; None: neither)."""
-        from sm64_events.memory.version_probe import version_from_header  # noqa: PLC0415
-        return version_from_header(self.rom[:0x40])
-
-    def has_reset(self, level: int, area: int, act: int) -> bool:
-        """Whether that reset is cached (made before), so asking for it costs a file read."""
         try:
-            return (self.cache / f"reset-{self.key(level, area, act)}.npz").is_file()
-        except StageError:
-            return False
+            build = usamune.build_for(self.version())
+        except LayoutIncomplete:                          # memory/layout.py: JP's slot addresses are not verified yet
+            raise StageError(f"The {self.version().upper()} Usamune build's save state addresses are not "
+                             "verified yet, so its save states cannot be named.") from None
+        return usamune.routine_fingerprint(read, build)
 
     def reset(self, level: int, area: int, act: int) -> np.ndarray:
         """The practice-reset state of that level, area and act (cached)."""
@@ -266,6 +257,7 @@ class Stages:
             if path.is_file():
                 return np.load(path)["ram"]
             ram = self._make_reset(level, area, act)
+            self.cache.mkdir(parents=True, exist_ok=True)
             np.savez_compressed(path, ram=ram)
             return ram
 
@@ -275,35 +267,47 @@ class Stages:
         return hashlib.sha256(ram[sim.POOL_BEGIN:sim.POOL_BEGIN + sim.POOL_BYTES].tobytes()).hexdigest()
 
     def _make_reset(self, level: int, area: int, act: int) -> np.ndarray:
-        castle, template = self._castle()
-        _base, fcsr = self.boot()
-        machine = Machine(castle.copy(), self.rom, self.symbols, fcsr)
-        struct.pack_into(">BBBB", machine.ram, sim.phys(self.symbols["sWarpDest"]), 1, level, area, ENTRY_NODE)
-        neutral = pads(0, 0, 0, template)
-        visible, selected = sim.phys(self.symbols["sVisibleStars"]), sim.phys(self.symbols["sSelectedActIndex"])
-        spawned = None
-        for n in range(MENU_FRAMES):
-            ram = machine.ram
-            here = s16(ram, self.symbols[CURR_LEVEL]) == level and s16(ram, self.symbols[CURR_AREA]) == area
-            if here and u32(ram, self.symbols[MARIO_OBJECT]) and u32(ram, self.symbols["gMarioStates"] + 0x0C) == SPAWN_ACTION:
-                spawned = n
+        """The recipe in the module docstring, on the cold boot restored to the castle grounds."""
+        import cold_boot  # noqa: PLC0415
+        course = self.course_of_level(level)
+        game, snap = self._cold()
+        game.restore(snap)
+        syms, ram = self.symbols, game.cpu.ram
+        if 1 <= course <= 25:
+            ram[sim.phys(syms["gSaveBuffer"]) + COURSE_STARS + course - 1] = ALL_ACTS
+        warp = sim.phys(syms["sWarpDest"])
+        game.pending = lambda: struct.pack_into(">BBBBI", game.cpu.ram, warp, 1, level, area, ENTRY_NODE, 0)
+        in_menu = pushes = 0
+        for _ in range(MENU_FRAMES):
+            if s16(ram, syms[CURR_LEVEL]) == level and s16(ram, syms[CURR_AREA]) == area \
+                    and u32(ram, syms[MARIO_OBJECT]) and u32(ram, syms["gMarioStates"] + 0x0C) == SPAWN_ACTION:
                 break
-            step = neutral
-            if s16(ram, self.symbols[CURR_LEVEL]) == level and not u32(ram, self.symbols[MARIO_OBJECT]) and ram[visible] and n % 16 == 0:
-                step = pads(0, 80, 0, template) if ram[selected] < act - 1 else pads(A_BUTTON, 0, 0, template)
-            machine.step(step)
-        if spawned is None:
+            buttons, stick = 0, (0, 0)
+            if s16(ram, syms[CURR_LEVEL]) == level and not u32(ram, syms[MARIO_OBJECT]):
+                buttons, stick, pushes = menu_input(in_menu, pushes, act)
+                in_menu += 1
+            if not game.step(buttons, stick):
+                raise StageError(f"The simulated game stopped on its way to level {level}: {game.cpu.violations[:2]}")
+        else:
             raise StageError(f"The simulated game never reached level {level} area {area} act {act}.")
-        if machine.ram[sim.phys(self.symbols["gCurrActNum"]) + 1] != act:
-            raise StageError(f"The act selector chose act {machine.ram[sim.phys(self.symbols['gCurrActNum']) + 1]}, not {act}.")
+        if ram[sim.phys(syms["gCurrActNum"]) + 1] != act:
+            raise StageError(f"The act selector chose act {ram[sim.phys(syms['gCurrActNum']) + 1]}, not {act}.")
+        try:
+            cold_boot.arrived(game)
+            cold_boot.settle(game)
+        except SystemExit as stopped:
+            raise StageError(f"The simulated game did not settle in level {level}: {stopped}") from None
         for _ in range(SETTLE_FRAMES):
-            machine.step(neutral)
-        before = u32(machine.ram, self.symbols[MARIO_OBJECT])
-        machine.step(pads(RESET_BUTTON, 0, 0, template))
-        machine.step(pads(RESET_BUTTON, 0, 0, template))
-        if u32(machine.ram, self.symbols["gMarioStates"] + 0x0C) != SPAWN_ACTION or u32(machine.ram, self.symbols[MARIO_OBJECT]) == before:
+            game.step(0)
+        struct.pack_into(">I", ram, sim.phys(cold_boot.USAMUNE[self.version()]["settings"]), USAMUNE_RESET_WORD)
+        game.cpu.put_u32(syms["sTransitionTimer"], 0)
+        before = u32(ram, syms[MARIO_OBJECT])
+        game.step(RESET_BUTTON)
+        game.step(RESET_BUTTON)
+        if u32(ram, syms["gMarioStates"] + 0x0C) != SPAWN_ACTION or u32(ram, syms[MARIO_OBJECT]) == before \
+                or game.cpu.violations:
             raise StageError("Usamune's practice reset did not run in the simulated game.")
-        return machine.ram.copy()
+        return ram.copy()
 
     # ---------------------------------------------------------------- as a scene
     def package(self, level: int, area: int, act: int, frames: int = 150) -> Path:
@@ -313,13 +317,12 @@ class Stages:
         if out.is_file():
             return out
         start = self.reset(level, area, act)
-        _base, fcsr = self.boot()
-        castle_pads = self._castle()[1]
-        machine = Machine(start.copy(), self.rom, self.symbols, fcsr)
+        template = start[sim.phys(self.symbols["gControllerPads"]):sim.phys(self.symbols["gControllerPads"]) + 24].tobytes()
+        machine = self.machine(start.copy())
         writer = sim_scene.SimScene(out, self.cache / f"work-{time.monotonic_ns()}", self.rom_path, self.symbols, self.vi())
         try:
             for _ in range(frames):
-                machine.step(pads(0, 0, 0, castle_pads))
+                machine.step(pads(0, 0, 0, template))
                 writer.add(machine.ram)
             writer.finish()
         except BaseException:
