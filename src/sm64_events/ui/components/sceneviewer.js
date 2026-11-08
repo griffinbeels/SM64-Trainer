@@ -75,6 +75,8 @@ import { h } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { Icon } from "./icons.js";
+import { RegionFlag } from "./regionflag.js";
+import { SteadyText } from "./steadytext.js";
 import { getJSON, send } from "../api.js";
 import { displayName } from "../entitysection.js";
 import { GhostPanel, viewName } from "./sceneghosts.js";
@@ -86,13 +88,13 @@ import { SCENE_CAMERA_DEFAULTS, SCENE_CAMERA_GROUPS, SCENE_CAMERA_TUNABLES, scen
 import { cameraOf, dollied, flightSpeed, flown, flyToTarget, focusedOn, glideAt, lensed, lookingAt, looked,
   orbitFromPose, slid, speedStepped, tiltAndLens, tilted, turned, wheelLens, worldPoint } from "./scenecamera.js";
 import { LensBar } from "./scenelens.js";
-import { SceneSound, SoundBar } from "./sceneaudio.js";
+import { SceneSound, SoundBar, syncWords } from "./sceneaudio.js";
 import { RecordBar } from "./scenerecord.js";
 import { CameraPresets, CameraSlots, placeKey, placeOf, presetCamera } from "./scenepresets.js";
 import { SaveStates } from "./scenemoment.js";
 import { RecordingSwitch } from "./scenerecording.js";
 import { heardInto, pictureAt, playLength, recordedTimes } from "./sceneclock.js";
-import { CinematicBar, orbitFolded, orbitPhase, rigChanged, rigHint, rigName, rigRequest, seenOnScreen,
+import { CinematicBar, RIG_KINDS, orbitFolded, orbitPhase, rigChanged, rigHint, rigName, rigRequest, seenOnScreen,
   startRig } from "./scenerigs.js";
 
 const html = htm.bind(h);
@@ -1489,6 +1491,14 @@ function frameWords(frame) {
     frame.game_frame != null && `game frame ${frame.game_frame}`].filter(Boolean).join(", ");
 }
 
+// Round 9, item 3 (his words: "the play bar is getting longer and shorter ... The UI should not be
+// bouncing around like that when we go between playing / paused"): every word in the Playback row
+// that changes sits in a SteadyText as wide as its widest form, so nothing in the row, and no row
+// under it, moves. The readout's widest form is five-digit frame counts and an eight-digit game frame.
+const PLAY_WORDS = ["Play", "Pause"];
+const FRAME_SIZE = ["Frame 00000 of 00000 so far"];
+const WHERE_SIZE = ["level 00, area 0, game frame 00000000"];
+
 function Transport({ link }) {
   const frames = link.scene.frames;
   return html`<div class="scene-lab-bar" aria-label="Playback">
@@ -1498,28 +1508,50 @@ function Transport({ link }) {
     <button type="button" onclick=${(event) => link.step(-1, event.timeStamp)} title="Back one frame (Left arrow or ,)">
       <${Icon} name="stepBack" size=${15} /> Back 1</button>
     <button type="button" class="primary" onclick=${() => link.toggle()} title="Play or pause (Space)">
-      <${Icon} name=${link.playing ? "pause" : "play"} size=${16} /> ${link.playing ? "Pause" : "Play"}</button>
+      <${Icon} name=${link.playing ? "pause" : "play"} size=${16} />
+      <${SteadyText} text=${link.playing ? "Pause" : "Play"} sizes=${PLAY_WORDS} /></button>
     <button type="button" onclick=${(event) => link.step(1, event.timeStamp)} title="Forward one frame (Right arrow or .)">
       <${Icon} name="stepForward" size=${15} /> Forward 1</button>
     <button type="button" aria-pressed=${link.loop} onclick=${() => link.setLoop(!link.loop)}
         title="When on, Play goes on from the first frame after the last">
       <${Icon} name="loop" size=${15} /> Loop</button>
-    <input type="range" min="0" max=${Math.max(0, frames.length - 1)} value=${link.frame} aria-label="Frame"
-      oninput=${(event) => { link.pause(); link.seek(Number(event.currentTarget.value), "input", event.timeStamp); }} />
-    <span class="scene-lab-frame">Frame ${link.frame + 1} of ${frames.length}${link.scene.growing ? " so far" : ""}
-      <small>${frameWords(frames[link.frame])}</small></span>
+    <div class="scene-lab-scrub">
+      <input type="range" min="0" max=${Math.max(0, frames.length - 1)} value=${link.frame} aria-label="Frame"
+        oninput=${(event) => { link.pause(); link.seek(Number(event.currentTarget.value), "input", event.timeStamp); }} />
+      <span class="scene-lab-frame">
+        <${SteadyText} text=${`Frame ${link.frame + 1} of ${frames.length}${link.scene.growing ? " so far" : ""}`}
+          sizes=${FRAME_SIZE} />
+        <small><${SteadyText} text=${frameWords(frames[link.frame])} sizes=${WHERE_SIZE} /></small></span>
+    </div>
   </div>`;
 }
+
+const HINTS = {
+  picking: "Click a surface in the picture to turn around it. Esc cancels.",
+  looking: "Move the mouse to look around. W A S D move, Q and E go down and up, Shift is faster, Alt slower, the wheel sets the speed. Let go of the right button to stop looking.",
+  free: "W A S D move, Q and E go down and up, Shift is faster, Alt slower; hold the right button to look around. Drag to turn around the focus point, Shift-drag or middle-drag to slide, the wheel moves closer, double-click a surface to fly there. Z and C tilt, X levels, - and = (or Ctrl and the wheel) change the lens. F looks at Mario, R returns to the recorded camera.",
+  view: "The stage seen from this ghost's own camera as it plays. Moving the camera starts Free camera from here; R returns to the recorded camera.",
+  recorded: "W A S D move the camera from this picture, Q and E go down and up; dragging, scrolling, double-clicking or holding the right button move it too. Left and Right (or , and .) step one frame, Space plays.",
+};
 
 // The hint teaches only what applies right now.
 export function hintFor(link) {
   if (!link.freeAvailable) return `Only the recorded camera is available: ${link.scene.free_camera.reason}`;
-  if (link.picking) return "Click a surface in the picture to turn around it. Esc cancels.";
-  if (link.looking) return "Move the mouse to look around. W A S D move, Q and E go down and up, Shift is faster, Alt slower, the wheel sets the speed. Let go of the right button to stop looking.";
-  if (link.free) return "W A S D move, Q and E go down and up, Shift is faster, Alt slower; hold the right button to look around. Drag to turn around the focus point, Shift-drag or middle-drag to slide, the wheel moves closer, double-click a surface to fly there. Z and C tilt, X levels, - and = (or Ctrl and the wheel) change the lens. F looks at Mario, R returns to the recorded camera.";
+  if (link.picking) return HINTS.picking;
+  if (link.looking) return HINTS.looking;
+  if (link.free) return HINTS.free;
   if (link.rig) return rigHint(link.rig, link.ghosts);
-  if (link.view) return "The stage seen from this ghost's own camera as it plays. Moving the camera starts Free camera from here; R returns to the recorded camera.";
-  return "W A S D move the camera from this picture, Q and E go down and up; dragging, scrolling, double-clicking or holding the right button move it too. Left and Right (or , and .) step one frame, Space plays.";
+  if (link.view) return HINTS.view;
+  return HINTS.recorded;
+}
+
+// Every hint this scene can show with its ghosts: the hint is as tall as the tallest of them at its
+// width, so changing the camera never moves the rows under it.
+function hintSizes(link) {
+  if (!link.freeAvailable) return [hintFor(link)];
+  const runners = ["stage", ...link.ghosts.map((ghost) => ghost.ref)];
+  return [...Object.values(HINTS),
+    ...RIG_KINDS.flatMap(([kind]) => runners.map((target) => rigHint({ kind, target }, link.ghosts)))];
 }
 
 // The same lesson on the picture itself while it is what you are acting on:
@@ -1530,19 +1562,26 @@ export function cueFor(link) {
   return null;
 }
 
+// speedWords' widest: three figures and a point.
+const SPEED_SIZE = ["00.0x"];
+
 function SpeedControl({ link }) {
   const tuning = sceneCameraTuning(), unitsPerSecond = Math.round(flightSpeed(link.speed, {}, tuning));
   return html`<div class="scene-lab-speed" role="group" aria-label="Flight speed"
       title=${`W A S D move ${unitsPerSecond} units a second; the wheel changes it while you hold the right button`}>
     <span>Flight speed</span>
     <button type="button" aria-label="Slower" onclick=${() => link.stepSpeed(-1)}>−</button>
-    <output aria-live="polite">${speedWords(link.speed)}</output>
+    <output aria-live="polite"><${SteadyText} text=${speedWords(link.speed)} sizes=${SPEED_SIZE} /></output>
     <button type="button" aria-label="Faster" onclick=${() => link.stepSpeed(1)}>+</button>
     <button type="button" disabled=${link.speed === 1} onclick=${() => link.resetSpeed()}
       title="Back to the flight speed at 1x">Reset</button>
   </div>`;
 }
 
+const FOCUS_WORDS = ["Set focus", "Finding..."];
+const KNOWN_REGION = new Set(["us", "jp"]);
+
+// A ghost's view button wears its game's flag when its region is known, and none when it is not.
 function CameraBar({ link, tuning, setTuning }) {
   const available = link.freeAvailable, reason = link.scene.free_camera.reason;
   return html`<div class="scene-lab-bar" aria-label="Camera">
@@ -1551,7 +1590,9 @@ function CameraBar({ link, tuning, setTuning }) {
     ${link.ghosts.map((ghost) => html`<button type="button" key=${ghost.ref} class="scene-lab-view"
         aria-pressed=${!link.free && link.view === ghost.ref} disabled=${!available}
         title=${available ? "See the stage from this ghost's own camera, following it as the scene plays" : reason}
-        onclick=${(event) => link.theirView(ghost.ref, event.timeStamp)}>${viewName(link.ghosts, ghost.ref)}</button>`)}
+        onclick=${(event) => link.theirView(ghost.ref, event.timeStamp)}>
+      ${KNOWN_REGION.has(ghost.version) && html`<${RegionFlag} version=${ghost.version} size=${16} />`}
+      ${viewName(link.ghosts, ghost.ref)}</button>`)}
     <button type="button" aria-pressed=${link.free} disabled=${!available}
         title=${available ? "Move the camera yourself, starting from the picture on screen" : reason}
         onclick=${() => link.enterFree()}>Free camera</button>
@@ -1560,7 +1601,7 @@ function CameraBar({ link, tuning, setTuning }) {
     <button type="button" aria-pressed=${link.picking} disabled=${!available || link.finding}
         onclick=${() => link.armPick()}
         title=${available ? "Then click a surface in the picture: the camera turns around that point" : reason}>
-      ${link.finding ? "Finding..." : "Set focus"}</button>
+      <${SteadyText} text=${link.finding ? "Finding..." : "Set focus"} sizes=${FOCUS_WORDS} /></button>
     <button type="button" disabled=${!link.moved} onclick=${(event) => link.resetView(event.timeStamp)}
         title=${link.free ? "Back to where Free camera began" : "Available once you move the free camera"}>
       Reset view</button>
@@ -1581,26 +1622,35 @@ function CameraBar({ link, tuning, setTuning }) {
     ${available && html`<button type="button" aria-pressed=${tuning} onclick=${() => setTuning(!tuning)}
         title="Adjust how the free camera feels, and save the numbers as the defaults">Tune controls</button>`}
   </div>
-  <p class="scene-lab-hint">${hintFor(link)}</p>`;
+  <p class="scene-lab-hint"><${SteadyText} block text=${hintFor(link)} sizes=${hintSizes(link)} /></p>`;
 }
 
 const ENCODING_WORDS = { jpeg: "JPEG", raw: "exact pixels", shared: "exact pixels through shared memory" };
+
+// The two lines at their widest, three-digit times: each line is as tall as that at its width (a
+// slower time than that may add a line), and the second keeps its place before the camera first
+// moves, so the ghost panel under them stays put.
+const DRAWN_SIZE = [`0000x0000 ${ENCODING_WORDS.shared}, input to picture 000 ms (p95 000 ms), server 000 ms: `
+  + "game code 000 ms, renderer 000 ms, encode 000 ms, sound to picture 000 ms (p95 000 ms)"];
+const MOVING_SIZE = ["Last time the camera moved: 000 pictures a second, input to picture 000 ms (p95 000 ms), "
+  + "decode 000 ms, server 000 ms"];
 
 function Readout({ link }) {
   const shown = link.shown, timings = shown?.timings || {}, moving = link.moving;
   if (!shown) return null;
   const rate = moving && (moving.pictures_per_second == null ? `${moving.pictures} picture`
     : `${Math.round(moving.pictures_per_second)} pictures a second`);
-  return html`<p class="scene-lab-readout">
-    ${shown.width}x${shown.height} ${ENCODING_WORDS[shown.encoding] || shown.encoding},
-    ${" "}input to picture ${ms(percentile(link.latencies, 0.5))} (p95 ${ms(percentile(link.latencies, 0.95))}),
-    ${" "}server ${ms(shown.server_ms)}: game code ${ms(timings.evaluate_ms)}, renderer ${ms(timings.host_ms)},
-    ${" "}encode ${ms(timings.encode_ms)}
-  </p>
-  ${moving && html`<p class="scene-lab-readout scene-lab-moving" data-summary=${JSON.stringify(moving)}>
-    Last time the camera moved: ${rate}, input to picture ${ms(moving.input_to_drawn_ms?.p50)}
-    ${" "}(p95 ${ms(moving.input_to_drawn_ms?.p95)}), decode ${ms(moving.decode_ms?.p50)},
-    ${" "}server ${ms(moving.server_ms?.p50)}</p>`}`;
+  const sync = syncWords(link.sound);
+  const drawn = `${shown.width}x${shown.height} ${ENCODING_WORDS[shown.encoding] || shown.encoding}, `
+    + `input to picture ${ms(percentile(link.latencies, 0.5))} (p95 ${ms(percentile(link.latencies, 0.95))}), `
+    + `server ${ms(shown.server_ms)}: game code ${ms(timings.evaluate_ms)}, renderer ${ms(timings.host_ms)}, `
+    + `encode ${ms(timings.encode_ms)}${sync ? `, ${sync}` : ""}`;
+  const moved = moving ? `Last time the camera moved: ${rate}, input to picture ${ms(moving.input_to_drawn_ms?.p50)} `
+    + `(p95 ${ms(moving.input_to_drawn_ms?.p95)}), decode ${ms(moving.decode_ms?.p50)}, `
+    + `server ${ms(moving.server_ms?.p50)}` : "";
+  return html`<p class="scene-lab-readout"><${SteadyText} block text=${drawn} sizes=${DRAWN_SIZE} /></p>
+  <p class=${`scene-lab-readout${moving ? " scene-lab-moving" : ""}`} data-summary=${moving ? JSON.stringify(moving) : undefined}>
+    <${SteadyText} block text=${moved} sizes=${MOVING_SIZE} /></p>`;
 }
 
 // The UI observation log's reader for this page (ui/uilog.js posts it; core/uilog.py keeps the
@@ -1663,9 +1713,11 @@ function Player({ link, canvas, surface, ghosts }) {
         ? "Free camera" : link.rig ? rigName(link.rig, link.ghosts) : link.view ? viewName(link.ghosts, link.view)
         : "Recorded camera"}</span>
       ${link.drawing && html`<span class="scene-lab-busy">Drawing...</span>`}
-      ${cueFor(link) && html`<p class="scene-lab-cue" aria-hidden="true">${cueFor(link)}</p>`}
+      ${(link.notice || cueFor(link)) && html`<div class="scene-lab-overlay">
+        ${link.notice && html`<p class="scene-lab-reason scene-lab-notice" role="status">${link.notice}</p>`}
+        ${cueFor(link) && html`<p class="scene-lab-cue" aria-hidden="true">${cueFor(link)}</p>`}
+      </div>`}
     </div>
-    ${link.notice && html`<p class="scene-lab-reason" role="status">${link.notice}</p>`}
     <${Transport} link=${link} />
     <${SoundBar} sound=${link.sound} frame=${link.frame} />
     <${RecordBar} link=${link} />

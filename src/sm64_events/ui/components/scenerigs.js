@@ -26,6 +26,7 @@
 import { h } from "preact";
 import htm from "htm";
 import { ghostName } from "./sceneghosts.js";
+import { SteadyText } from "./steadytext.js";
 import { SCENE_CAMERA_DEFAULTS } from "../scenecameratuning.js";
 
 const html = htm.bind(h);
@@ -136,16 +137,46 @@ export function rigHint(rig, ghosts) {
 
 const heightWords = (rig) => (rig.height != null ? `${Math.round(rig.height)}`
   : rig.kind === "overhead" ? "Default" : "Eye level");
+// Each setting's readout at its widest (round 9, item 3: a value changing never moves the row).
+const SPEED_SIZES = ["-000°/s"], RADIUS_SIZES = ["0000"], HEIGHT_SIZES = ["0000", "Default", "Eye level"];
+
+// One camera's settings: its shot size, side, speed, radius, height and orbit-while-paused.
+function rigSettings(rig, link, tuning) {
+  const range = (label, value, [min, max], step, set, words, sizes) => html`<label class="scene-lab-rig-range">${label}
+    <input type="range" min=${min} max=${max} step=${step} value=${value} aria-label=${label}
+      oninput=${(event) => set(Number(event.currentTarget.value), event.timeStamp)} />
+    <output><${SteadyText} text=${words} sizes=${sizes} /></output></label>`;
+  return html`
+    ${SHOT_KINDS.has(rig.kind) && html`<div class="scene-lab-rig-shots" role="group" aria-label="Shot size">
+      ${SHOT_SIZES.map(([shot, words]) => html`<button type="button" key=${shot} aria-pressed=${rig.shot === shot}
+          onclick=${(event) => link.setRig({ shot }, event.timeStamp)}>${words}</button>`)}</div>`}
+    ${rig.kind === "side" && html`<label>Side
+      <select value=${rig.side} onchange=${(event) => link.setRig({ side: event.currentTarget.value }, event.timeStamp)}>
+        ${SIDE_CHOICES.map(([side, words]) => html`<option key=${side} value=${side}>${words}</option>`)}
+      </select></label>`}
+    ${rig.kind === "orbit" && range("Speed", rig.speed, SPEED_RANGE, 1, (speed, time) => link.setRig({ speed }, time),
+      `${Math.round(rig.speed)}°/s`, SPEED_SIZES)}
+    ${rig.kind === "orbit" && range("Radius", rig.radius, RADIUS_RANGE, 10, (radius, time) => link.setRig({ radius }, time),
+      `${Math.round(rig.radius)}`, RADIUS_SIZES)}
+    ${rig.kind !== "tripod" && range("Height", heightOf(rig, tuning), rig.kind === "overhead" ? OVERHEAD_RANGE : HEIGHT_RANGE,
+      5, (height, time) => link.setRig({ height }, time), heightWords(rig), HEIGHT_SIZES)}
+    ${rig.kind !== "tripod" && html`<button type="button" disabled=${rig.height == null}
+      onclick=${(event) => link.setRig({ height: null }, event.timeStamp)}
+      title=${rig.kind === "overhead" ? "Back to the height it starts at" : "Back to his eye level"}>${rig.kind === "overhead"
+        ? "Default height" : "Eye level"}</button>`}
+    ${rig.kind === "orbit" && html`<button type="button" aria-pressed=${rig.whilePaused}
+      onclick=${(event) => link.setRig({ whilePaused: !rig.whilePaused }, event.timeStamp)}
+      title="Keep circling him while the scene is paused">Orbit while paused</button>`}
+    ${rig.kind === "tripod" && html`<span class="scene-lab-rig-note">To move it, fly the free camera somewhere, then choose Tripod again.</span>`}`;
+}
 
 // The Cinematic row: the cameras and whom they follow; with one on, its settings under it (its tilt
-// and lens are the row below, scenelens.js).
+// and lens are the row below, scenelens.js). The settings' place is there with none on, as tall as
+// the tallest camera's settings at its width (each camera's, hidden and inert, in one grid cell), so
+// choosing a camera, another or none never moves the rows under it (round 9, item 3).
 export function CinematicBar({ link, tuning }) {
   const available = link.freeAvailable, reason = link.scene.free_camera.reason, rig = link.rig;
   const runners = [["stage", "Mario"], ...link.ghosts.map((ghost) => [ghost.ref, ghostName(link.ghosts, ghost.ref)])];
-  const range = (label, value, [min, max], step, set, words) => html`<label class="scene-lab-rig-range">${label}
-    <input type="range" min=${min} max=${max} step=${step} value=${value} aria-label=${label}
-      oninput=${(event) => set(Number(event.currentTarget.value), event.timeStamp)} />
-    <output>${words}</output></label>`;
   return html`<div class="scene-lab-bar scene-lab-rigs" aria-label="Cinematic cameras">
     <span class="scene-lab-rigs-name">Cinematic</span>
     ${RIG_KINDS.map(([kind, words, what]) => html`<button type="button" key=${kind} disabled=${!available}
@@ -157,27 +188,10 @@ export function CinematicBar({ link, tuning }) {
         ${runners.map(([ref, name]) => html`<option key=${ref} value=${ref}>${name}</option>`)}
       </select></label>
   </div>
-  ${rig && html`<div class="scene-lab-bar scene-lab-rig-options" aria-label="Cinematic camera settings">
-    ${SHOT_KINDS.has(rig.kind) && html`<div class="scene-lab-rig-shots" role="group" aria-label="Shot size">
-      ${SHOT_SIZES.map(([shot, words]) => html`<button type="button" key=${shot} aria-pressed=${rig.shot === shot}
-          onclick=${(event) => link.setRig({ shot }, event.timeStamp)}>${words}</button>`)}</div>`}
-    ${rig.kind === "side" && html`<label>Side
-      <select value=${rig.side} onchange=${(event) => link.setRig({ side: event.currentTarget.value }, event.timeStamp)}>
-        ${SIDE_CHOICES.map(([side, words]) => html`<option key=${side} value=${side}>${words}</option>`)}
-      </select></label>`}
-    ${rig.kind === "orbit" && range("Speed", rig.speed, SPEED_RANGE, 1, (speed, time) => link.setRig({ speed }, time),
-      `${Math.round(rig.speed)}°/s`)}
-    ${rig.kind === "orbit" && range("Radius", rig.radius, RADIUS_RANGE, 10, (radius, time) => link.setRig({ radius }, time),
-      `${Math.round(rig.radius)}`)}
-    ${rig.kind !== "tripod" && range("Height", heightOf(rig, tuning), rig.kind === "overhead" ? OVERHEAD_RANGE : HEIGHT_RANGE,
-      5, (height, time) => link.setRig({ height }, time), heightWords(rig))}
-    ${rig.kind !== "tripod" && html`<button type="button" disabled=${rig.height == null}
-      onclick=${(event) => link.setRig({ height: null }, event.timeStamp)}
-      title=${rig.kind === "overhead" ? "Back to the height it starts at" : "Back to his eye level"}>${rig.kind === "overhead"
-        ? "Default height" : "Eye level"}</button>`}
-    ${rig.kind === "orbit" && html`<button type="button" aria-pressed=${rig.whilePaused}
-      onclick=${(event) => link.setRig({ whilePaused: !rig.whilePaused }, event.timeStamp)}
-      title="Keep circling him while the scene is paused">Orbit while paused</button>`}
-    ${rig.kind === "tripod" && html`<span class="scene-lab-rig-note">To move it, fly the free camera somewhere, then choose Tripod again.</span>`}
-  </div>`}`;
+  <div class="scene-lab-rig-place">
+    ${RIG_KINDS.map(([kind]) => html`<div key=${kind} class="scene-lab-bar scene-lab-rig-size" aria-hidden="true" inert>
+      ${rigSettings(startRig(kind, null, tuning), link, tuning)}</div>`)}
+    ${rig && html`<div class="scene-lab-bar scene-lab-rig-options" aria-label="Cinematic camera settings">
+      ${rigSettings(rig, link, tuning)}</div>`}
+  </div>`;
 }

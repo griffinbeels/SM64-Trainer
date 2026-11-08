@@ -13,9 +13,12 @@
 import { h } from "preact";
 import htm from "htm";
 import { GAME_FOV, LENS_RANGE, TILT_RANGE, lensOf, tiltOf } from "./scenecamera.js";
+import { SteadyText } from "./steadytext.js";
 
 const html = htm.bind(h);
 const STEPS = 1000;                                          // the Lens slider's positions
+// The readouts at their widest, so a turn of a slider never moves the row (round 9, item 3).
+const TILT_SIZES = ["-000°"], LENS_SIZES = ["000 mm · game's"];
 const [SHORTEST, LONGEST] = LENS_RANGE;
 export const lensPosition = (mm) => Math.round(STEPS * Math.log(mm / SHORTEST) / Math.log(LONGEST / SHORTEST));
 export const lensAt = (position) => SHORTEST * (LONGEST / SHORTEST) ** (position / STEPS);
@@ -37,13 +40,13 @@ export function LensBar({ link, tuning }) {
     <label class="scene-lab-rig-range" title="Turns the picture: right is clockwise (hold Z or C)">Tilt
       <input type="range" min=${TILT_RANGE[0]} max=${TILT_RANGE[1]} step="1" value=${tilt} aria-label="Tilt"
         oninput=${(event) => link.setTilt(Number(event.currentTarget.value), event.timeStamp)} />
-      <output>${tilt}°</output></label>
+      <output><${SteadyText} text=${`${tilt}°`} sizes=${TILT_SIZES} /></output></label>
     <button type="button" disabled=${!tilt} onclick=${(event) => link.setTilt(0, event.timeStamp)}
       title="Back to level (X)">Level</button>
     <label class="scene-lab-rig-range" title="Wider to the left, closer in to the right (hold - or =, or Ctrl with the wheel)">Lens
       <input type="range" min="0" max=${STEPS} step="1" value=${lensPosition(mm)} aria-label="Lens"
         oninput=${(event) => link.setLens(lensAt(Number(event.currentTarget.value)), event.timeStamp)} />
-      <output>${Math.round(mm)} mm${game ? " · game's" : ""}</output></label>
+      <output><${SteadyText} text=${`${Math.round(mm)} mm${game ? " · game's" : ""}`} sizes=${LENS_SIZES} /></output></label>
     <button type="button" disabled=${game} onclick=${(event) => link.setLens(GAME_LENS, event.timeStamp)}
       title=${`Back to the game's own lens (${Math.round(GAME_LENS)} mm, ${GAME_FOV}° tall)`}>Game's lens</button>
   </div>`;
