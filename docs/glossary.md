@@ -1779,7 +1779,13 @@ the path then eases out of and back into, blending with the game's own moving
 camera. Between two keys the camera follows a smooth curve and meets each key
 exactly on its [[frame]]; it slows into and out of a key (**Ease**, on by
 default), or with Ease off passes through it without slowing. Before the
-first key and after the last it stays on that key. **Path** puts it on
+first key and after the last it stays on that key. A **hold** is a second key
+on the [[frame]] of the key before it (+ Key again on the same [[frame]]): Play
+stops the game on that [[frame]], silent, for the hold's length (2 s unless its
+row says otherwise) while the camera travels from the key before to it, then
+the game and its sound go on ("bullet time"). It is Orbit while paused for any
+camera move: a held [[frame]] that the camera circles or flies past, kept by
+Record. **Path** puts it on
 screen, and Play, a step, a seek and Record all draw the same camera at the
 same time in the scene, because the viewer works the path out from its own
 clock alone. Each key's row jumps to it (the scene pauses on its [[frame]]),

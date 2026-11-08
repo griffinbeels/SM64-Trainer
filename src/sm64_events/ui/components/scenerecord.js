@@ -36,12 +36,15 @@ const samePose = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 // The recorded time a play's sound is at on the display frame that began at `frameTime`, and the
 // picture it shows then (a play's picture shows on the display frame it is due: SceneLink.holdUntil);
 // null before the play's sound starts (its lead, or a resumed play's point: what was heard before
-// Pause is never heard again) or after its last picture.
+// Pause is never heard again) or after its last picture. A play on a camera path keeps the path's
+// clock (scenepathbar.js playTiming): its recorded time heard then is the clock's, null where that is
+// silent (a hold, a slower stretch).
 export function playPosition(play, frameTime) {
   if (!play) return null;
   const elapsed = frameTime - play.start + (play.frameMs || 0);
   if (elapsed < (play.resumeMs || 0) || elapsed >= play.length) return null;
-  return { frame: pictureAt(play.times, play.from, elapsed), playMs: play.times[play.from] + elapsed };
+  const shown = play.times[play.from] + elapsed;
+  return { frame: pictureAt(play.times, play.from, elapsed), playMs: play.path ? play.path.clock.at(shown).heardMs : shown };
 }
 
 // The camera the server drew for the picture on screen, when that picture answers `camera` at

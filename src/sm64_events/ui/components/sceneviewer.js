@@ -98,7 +98,7 @@ import { RecordingSwitch } from "./scenerecording.js";
 import { heardInto, pictureAt, recordedTimes } from "./sceneclock.js";
 import { CinematicBar, orbitFolded, orbitPhase, rigChanged, rigHint, rigName, rigRequest, seenOnScreen,
   startRig } from "./scenerigs.js";
-import { CameraPaths, PathBar, pathCameraNow, pathPlayTick, pathStopped, playTiming } from "./scenepathbar.js";
+import { CameraPaths, PathBar, pathCameraNow, pathPlayTick, pathStopped, playSound, playTiming } from "./scenepathbar.js";
 
 const html = htm.bind(h);
 const ROOT = "/api/scene-lab";
@@ -1283,7 +1283,7 @@ export class SceneLink {
         if (play.heldAt != null && play.times.length > play.asked + 1) {
           play.start += performance.now() - play.heldAt;
           play.heldAt = null;
-          if (this.playback === play) this.sound.play(from, play.start);   // the sound follows the wait
+          if (this.playback === play) playSound(this, play);   // the sound follows the wait
         }
       } };
     Object.assign(this, { playback: play, playing: true, frame: from });
@@ -1313,7 +1313,7 @@ export class SceneLink {
     };
     this.want("play", performance.now(), from);
     this.changed();
-    this.sound.play(from, play.start);
+    playSound(this, play);
     requestAnimationFrame(tick);
   }
 

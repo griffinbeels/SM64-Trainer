@@ -115,7 +115,15 @@ export function pathClock(times, keys = [], { speed = 1, fps = 30 } = {}) {
   const qs = knots.map((knot) => knot.q), ws = knots.map((knot) => knot.w);
   const wOf = (q) => { const knot = knots[lastAtOrBefore(qs, q)]; return knot.w + (q - knot.q) / knot.rate; };
   const qOf = (w) => { const knot = knots[lastAtOrBefore(ws, w)]; return knot.q + (w - knot.w) * knot.rate; };
-  const sOf = (q) => q - holds.reduce((sum, { q0, q1 }) => sum + clamp(q - q0, 0, q1 - q0), 0);
+  const sOf = (q) => {                                  // the scene's own time: it stands still in a hold
+    let removed = 0;
+    for (const { q0, q1, frame } of holds) {
+      if (q < q0) break;
+      if (q < q1) return times[frame];
+      removed += q1 - q0;
+    }
+    return q - removed;
+  };
   const rateAt = (q) => knots[lastAtOrBefore(qs, q)].rate;
   const holding = (q) => holds.some(({ q0, q1 }) => q >= q0 && q < q1);
   const display = Float64Array.from({ length: n }, (_, k) => wOf(qStart(k)));
@@ -123,9 +131,12 @@ export function pathClock(times, keys = [], { speed = 1, fps = 30 } = {}) {
   return {
     keyQ, holds, display, plain, qStart, qEnd, wOf, qOf, sOf,
     length: wOf(qEnd),
+    // The picture is the one Play shows then (the last whose display time has come), and the scene's
+    // time stays inside it, so rounding never puts a moment on the picture before.
     at(w) {
-      const q = clamp(qOf(Math.max(0, w)), 0, qEnd), sceneMs = sOf(q);
-      const frame = n ? lastAtOrBefore(times, Math.min(sceneMs, times[n - 1])) : 0;
+      const shown = Math.max(0, w), q = clamp(qOf(shown), 0, qEnd);
+      const frame = n ? lastAtOrBefore(display, shown) : 0;
+      const sceneMs = n ? clamp(sOf(q), times[frame], frame + 1 < n ? times[frame + 1] : Infinity) : 0;
       return { q, frame, sceneMs, heardMs: soundPlays(holding(q) ? 0 : rateAt(q)) ? sceneMs : null };
     },
   };

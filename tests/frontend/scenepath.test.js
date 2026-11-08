@@ -10,6 +10,7 @@ import { render, cleanup, fireEvent, within } from "@testing-library/preact";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { HOLD, makeKey, orderedKeys, pathCamera, pathClock } from "../../src/sm64_events/ui/components/scenepath.js";
 import { SceneViewer } from "../../src/sm64_events/ui/components/sceneviewer.js";
+import { SceneSound } from "../../src/sm64_events/ui/components/sceneaudio.js";
 import { setSceneCameraTuning } from "../../src/sm64_events/ui/scenecameratuning.js";
 
 const A = { focus: [0, 0, 0], position: [0, 0, 1000], roll: 0, fov: 45 };
@@ -89,6 +90,34 @@ test("a tilt turns the short way round, and the lens zooms evenly", () => {
   const lens = path({ frame: 0, camera: wide, ease: false }, { frame: 30, camera: tight, ease: false });
   const half = lens.at(TIMES[30] / 2).fov, tan = (fov) => Math.tan(fov * Math.PI / 360);
   expect(tan(half) ** 2).toBeCloseTo(tan(90) * tan(10), 6);         // halfway in log(tan): the geometric mean
+});
+
+test("a hold stops the game on its frame, silent, while the camera travels to the next key", () => {
+  const p = path({ frame: 10, camera: A }, { frame: 10, camera: B, hold: 2000 }, { frame: 20, camera: C });
+  const { keyQ, display } = p.clock, frameMs = 1000 / 30;
+  expect(keyQ).toEqual([TIMES[10], TIMES[10] + 2000, TIMES[20] + 2000]);
+  expect(display[9]).toBeCloseTo(TIMES[9], 9);                       // nothing before the hold moves
+  expect(display[11] - display[10]).toBeCloseTo(2000 + frameMs, 9);  // frame 10 shows two seconds longer
+  expect(display[20]).toBeCloseTo(TIMES[20] + 2000, 9);
+  expect(p.clock.length).toBeCloseTo(TIMES[30] + frameMs + 2000, 9);
+  for (const into of [0, 1, 500, 1000, 1999]) {
+    const at = p.clock.at(display[10] + into);
+    expect([at.frame, at.sceneMs, at.heardMs]).toEqual([10, TIMES[10], null]);
+  }
+  expect(same(p.at(keyQ[0]), A) && same(p.at(keyQ[1]), B)).toBe(true);   // A as it begins, B as it ends
+  const middle = p.at((keyQ[0] + keyQ[1]) / 2).position;
+  expect(middle[0]).toBeGreaterThan(100);
+  expect(middle[0]).toBeLessThan(900);
+  const after = p.clock.at(display[10] + 2010);                      // the game goes on, and its sound
+  expect(after.frame).toBe(10);
+  expect(after.heardMs).toBeCloseTo(TIMES[10] + 10, 9);
+  expect(p.clock.at(display[12]).frame).toBe(12);
+});
+
+test("the first key on a frame holds nothing; a later one holds at least the shortest hold", () => {
+  const keys = orderedKeys([makeKey({ frame: 5, camera: A, hold: 900 }), makeKey({ frame: 5, camera: B }),
+    makeKey({ frame: 5, camera: C, hold: 10 })], TIMES.length);
+  expect(keys.map((key) => key.hold)).toEqual([0, HOLD.ms, HOLD.minMs]);
 });
 
 test("keys play in frame order; keys past the scene's end stay out", () => {
@@ -250,6 +279,64 @@ test("the path on screen draws each frame from the path's camera; a key's button
   await answerAll(socket);
   expect(socket.pictures().at(-1).camera).toBe(null);
   expect(block.getByRole("button", { name: "Path" }).getAttribute("aria-pressed")).toBe("false");
+});
+
+test("+ Key on a frame that has a key makes a hold, whose length its row sets", async () => {
+  saved.set("9:1", [makeKey({ frame: 0, camera: A })]);
+  const { page, socket, block } = await openScene();
+  await until(() => expect(block.getByRole("button", { name: "Frame 1" })).toBeTruthy());
+  fireEvent.click(page.getByRole("button", { name: "Free camera" }));
+  await answerAll(socket);
+  fireEvent.click(block.getByRole("button", { name: "Key" }));
+  await until(() => expect(puts().length).toBe(1));
+  expect(puts()[0].map((one) => [one.frame, one.hold])).toEqual([[0, 0], [0, HOLD.ms]]);
+  const field = await until(() => block.getByRole("spinbutton", { name: "Hold on frame 1, in seconds" }));
+  expect(field.value).toBe(String(HOLD.ms / 1000));
+  fireEvent.change(field, { target: { value: "1.5" } });
+  await until(() => expect(puts().length).toBe(2));
+  expect(puts()[1][1].hold).toBe(1500);
+});
+
+test("Play holds the picture while the camera moves, and the recording keeps it silent there", async () => {
+  saved.set("9:1", [makeKey({ frame: 3, camera: A }), makeKey({ frame: 3, camera: B, hold: 300 }),
+    makeKey({ frame: 30, camera: C })]);
+  const { page, socket, block } = await openScene();
+  await until(() => expect(block.getByRole("button", { name: "Path" }).disabled).toBe(false));
+  fireEvent.click(block.getByRole("button", { name: "Path" }));
+  await answerAll(socket);
+  fireEvent.click(page.getByRole("button", { name: "Record" }));
+  const sounds = [];
+  vi.spyOn(SceneSound.prototype, "play").mockImplementation((from, start) => sounds.push(["play", from, start]));
+  vi.spyOn(SceneSound.prototype, "stop").mockImplementation(() => sounds.push(["stop"]));
+  const started = clock.now;
+  fireEvent.click(page.getByRole("button", { name: "Play" }));
+  await answerAll(socket);
+  await displayFrames(socket, 45);                                    // 750 ms: frames 0-3, the hold, on
+  // The sound: from the first picture, stopped as the hold begins, back on frame 3 as it ends, its
+  // recorded time then heard as the hold's end shows.
+  const plays = sounds.filter(([what]) => what === "play"), stops = sounds.filter(([what]) => what === "stop");
+  expect(plays.length).toBe(2);
+  expect(plays[0].slice(0, 2)).toEqual(["play", 0]);
+  expect(plays[1][1]).toBe(3);
+  expect(Math.abs(plays[1][2] - (started + TIMES[3] + 300))).toBeLessThan(1000 / 60 + 1);
+  expect(stops.length).toBeGreaterThanOrEqual(1);
+  expect(sounds.findIndex(([what]) => what === "stop")).toBeLessThan(sounds.indexOf(plays[1]));
+  fireEvent.click(page.getByRole("button", { name: "Stop" }));
+  const sent = await until(() => {
+    const found = fetches.find(([url, method]) => url === "/api/scene-lab/export" && method === "POST");
+    expect(found).toBeTruthy();
+    return JSON.parse(found[2]);
+  });
+  const timeline = sent.timeline.filter((entry, k) => k > 0);
+  const held = timeline.filter((entry) => entry.scene_frame === 3 && entry.play_ms === null);
+  expect(held.length).toBeGreaterThanOrEqual(17);                    // 300 ms at 60 a second, give or take one
+  expect(new Set(held.map((entry) => JSON.stringify(entry.camera))).size).toBe(held.length);   // the camera moves
+  const before = timeline.filter((entry) => entry.scene_frame < 3 && entry.scene_frame > 0);
+  const after = timeline.filter((entry) => entry.scene_frame > 3);
+  expect(before.length && before.every((entry) => entry.play_ms != null)).toBe(true);
+  expect(after.length && after.every((entry) => entry.play_ms != null)).toBe(true);
+  expect(after[0].play_ms).toBeGreaterThanOrEqual(TIMES[4] - 1);     // the sound comes back where it stopped
+  expect(after[0].play_ms).toBeLessThan(TIMES[4] + 40);
 });
 
 // The moment on the path's clock whose camera stands at `x` (A to B moves x one way only).
