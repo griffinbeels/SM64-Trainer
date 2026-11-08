@@ -93,7 +93,7 @@ import { CameraPresets, CameraSlots, placeKey, placeOf, presetCamera } from "./s
 import { SaveStates } from "./scenemoment.js";
 import { RecordingSwitch } from "./scenerecording.js";
 import { heardInto, pictureAt, playLength, recordedTimes } from "./sceneclock.js";
-import { CinematicBar, RIG_KINDS, orbitFolded, orbitPhase, rigChanged, rigHint, rigName, rigRequest, seenOnScreen,
+import { CinematicBar, CinematicSettings, RIG_KINDS, orbitFolded, orbitPhase, rigChanged, rigHint, rigName, rigRequest, seenOnScreen,
   startRig } from "./scenerigs.js";
 
 const html = htm.bind(h);
@@ -1717,16 +1717,19 @@ export function TunePanel({ link = null } = {}) {
   </section>`;
 }
 
-// What the picture wears over it: whose camera it is, Drawing..., and the notice and cue.
+// What the picture wears over it: whose camera it is, Drawing..., and at its foot the notice, the
+// cue and, while a cinematic camera is on, that camera's settings (none of them takes a row, so
+// none moves the controls under the picture).
 function StageOverlays({ link }) {
   const cue = cueFor(link);
   return html`<span class=${`scene-lab-tag ${link.free ? "is-free" : link.view || link.rig ? "is-view" : ""}`}>${link.free
       ? "Free camera" : link.rig ? rigName(link.rig, link.ghosts) : link.view ? viewName(link.ghosts, link.view)
       : "Recorded camera"}</span>
     ${link.drawing && html`<span class="scene-lab-busy">Drawing...</span>`}
-    ${(link.notice || cue) && html`<div class="scene-lab-overlay">
+    ${(link.notice || cue || link.rig) && html`<div class="scene-lab-overlay">
       ${link.notice && html`<p class="scene-lab-reason scene-lab-notice" role="status">${link.notice}</p>`}
       ${cue && html`<p class="scene-lab-cue" aria-hidden="true">${cue}</p>`}
+      <${CinematicSettings} link=${link} tuning=${sceneCameraTuning()} />
     </div>`}`;
 }
 

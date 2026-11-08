@@ -54,17 +54,17 @@
 .scene-lab-quality select { background: var(--surface-2); }
 .scene-lab-hint, .scene-lab-readout { margin: 0; color: var(--muted); font-size: .8rem; line-height: 1.5; }
 .scene-lab-hint.is-bad { color: var(--coral); }
-/* The Cinematic rows (components/scenerigs.js): the cameras and Follow, then the one on screen's
-   settings in a place as tall as the tallest camera's (each one's settings hidden in the same cell),
-   there with none on too, so choosing a camera never moves the rows under it. */
+/* The Cinematic row (components/scenerigs.js): the cameras and Follow. The camera on screen's settings
+   sit on the picture's foot, under its notice, while one is on: a row of them that came and went moved
+   every row under it, and a row kept for them stood empty with no camera on (round 9). */
 .scene-lab-rigs-name { color: var(--muted); }
-.scene-lab-rigs label, .scene-lab-rig-place label, .scene-lab-lens label { display: inline-flex; align-items: center;
+.scene-lab-rigs label, .scene-lab-rig-options label, .scene-lab-lens label { display: inline-flex; align-items: center;
   gap: 8px; min-width: 0; color: var(--muted); }
 .scene-lab-rig-note { color: var(--muted); font-size: .8rem; }
-.scene-lab-rigs select, .scene-lab-rig-place select { min-width: 0; max-width: 220px; background: var(--surface-2); }
-.scene-lab-rig-place { display: grid; min-width: 0; }
-.scene-lab-rig-place > * { grid-area: 1 / 1; }
-.scene-lab-rig-size { visibility: hidden; }
+.scene-lab-rigs select, .scene-lab-rig-options select { min-width: 0; max-width: 220px; background: var(--surface-2); }
+.scene-lab-overlay .scene-lab-rig-options { justify-content: center; padding: 6px 8px; border-radius: 8px;
+  background: rgba(0,0,0,.72); pointer-events: auto; }
+.scene-lab-overlay .scene-lab-rig-options label { color: var(--text); }
 .scene-lab-rig-shots { display: inline-flex; gap: 6px; }
 .scene-lab-bar .scene-lab-rig-range input[type=range] { flex: 0 1 120px; width: 120px; }
 .scene-lab-rig-range output { color: var(--text); font-variant-numeric: tabular-nums; }

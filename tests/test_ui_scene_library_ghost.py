@@ -85,10 +85,11 @@ def shoot_library_rows(page, folder: Path, name: str) -> None:
     page.set_viewport_size({"width": 1280, "height": 1000})
 
 
-# Each recording row: its player, whether it has the Ghost button (its accessible name), and its ROM flag.
+# Each recording row: its player, whether it has the Ghost button (its accessible name and tooltip,
+# which say it opens the Scene viewer, unlike Add ghost beside it), and its ROM flag.
 ROWS = """[...document.querySelectorAll('.community-library-recording')].map((row) => ({
   id: row.dataset.recordingId, watch: row.querySelector('.attempt-scene')?.getAttribute('aria-label') ?? null,
-  flag: row.querySelector('.region-flag')?.alt ?? null }))"""
+  tip: row.querySelector('.attempt-scene')?.title ?? null, flag: row.querySelector('.region-flag')?.alt ?? null }))"""
 
 
 def test_a_library_ghost_opens_in_the_scene_viewer_with_that_ghost_added(tmp_path, monkeypatch):
@@ -100,8 +101,11 @@ def test_a_library_ghost_opens_in_the_scene_viewer_with_that_ghost_added(tmp_pat
             page.locator(".log-list-card").wait_for(timeout=20000)
             open_library_ghosts(page)
             assert page.evaluate(ROWS) == [
-                {"id": KNOWN, "watch": "Watch Kz_Speedruns_Backwards_Long's ghost in the Scene viewer", "flag": "JP"},
-                {"id": UNKNOWN, "watch": None, "flag": "JP"}]
+                {"id": KNOWN, "watch": "Watch in Scene viewer: Kz_Speedruns_Backwards_Long",
+                 "tip": "Watch in Scene viewer", "flag": "JP"},
+                {"id": UNKNOWN, "watch": None, "tip": None, "flag": "JP"}]
+            add = page.locator(".community-library-recording").first.locator(".attempt-scene ~ button")
+            assert add.inner_text().strip() == "Add ghost" and "Scene viewer" not in (add.get_attribute("title") or "")
             for width in (850, 1200, 1600):                     # the button sits in the row, left of Add ghost
                 page.set_viewport_size({"width": width, "height": 1000})
                 page.wait_for_timeout(100)

@@ -1558,7 +1558,8 @@ from the next picture, and a [[ghost]] the lab cannot draw shows its reason. Eve
 its record names none. A Library community [[ghost]]'s [[ghost button]] opens the viewer on that
 [[ghost]]'s [[star]] or [[segment]] with it added. No control moves another when its words or state
 change (Play and Pause, Record and Stop, the [[frame]] numbers): each changing label or readout keeps the
-size of its widest form, and notices show on the picture. **HUD** (kept per
+size of its widest form, and notices and the [[cinematic camera]] on screen's settings show on the
+picture's foot. **HUD** (kept per
 viewer) leaves the game's on-screen counters and timer out of every picture, the one on screen at
 once. The **Cinematic** row's [[cinematic camera]]s (Front, Side, Orbit, Chase, Overhead, Tripod)
 follow Mario or a [[stage ghost]] along his path. The [[tilt and lens]] row turns and zooms whichever

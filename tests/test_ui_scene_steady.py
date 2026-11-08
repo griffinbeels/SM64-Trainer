@@ -55,6 +55,37 @@ MEASURE = r"""(() => {
   return boxes;
 })()"""
 
+# Each block of the player card (its rows, and every SteadyText paragraph) that stands emptier than
+# one of its own lines: its height inside its padding less the height its visible content spans. A
+# place kept for words or controls that are not there yet must not leave a hole (the lead's review,
+# 2026-11-08: the cinematic settings' kept place stood ~100 px empty under the Cinematic row).
+HOLES = r"""(() => {
+  const player = document.querySelector('.scene-lab-player');
+  const DRAWS = ['INPUT', 'SELECT', 'BUTTON', 'CANVAS', 'IMG', 'PROGRESS', 'OUTPUT', 'svg'];
+  const drawn = (root) => {
+    let top = Infinity, bottom = -Infinity;
+    const visit = (el) => {
+      const style = getComputedStyle(el);
+      if (style.display === 'none') return;
+      const r = el.getBoundingClientRect();
+      const own = style.visibility === 'visible' && r.height > 0 && (DRAWS.includes(el.tagName)
+        || [...el.childNodes].some((node) => node.nodeType === Node.TEXT_NODE && node.data.trim()));
+      if (own) { top = Math.min(top, r.top); bottom = Math.max(bottom, r.bottom); }
+      if (!DRAWS.includes(el.tagName)) [...el.children].forEach(visit);
+    };
+    [...root.children].forEach(visit);
+    return bottom > top ? bottom - top : 0;
+  };
+  return [...player.children, ...player.querySelectorAll('.steady-text.is-block')].map((block) => {
+    const style = getComputedStyle(block), r = block.getBoundingClientRect();
+    const inside = r.height - ['paddingTop', 'paddingBottom', 'borderTopWidth', 'borderBottomWidth']
+      .reduce((sum, side) => sum + parseFloat(style[side]), 0);
+    const line = parseFloat(style.lineHeight) || parseFloat(style.fontSize) * 1.5;
+    return { block: block.getAttribute('aria-label') || block.className, empty: Math.round(inside - drawn(block)),
+      line: Math.round(line) };
+  }).filter((hole) => hole.empty > hole.line);
+})()"""
+
 # The readouts at their widest: every frame-count digit run five digits and the game frame eight,
 # written into the text nodes the page drew (its next change writes them back).
 PLANT = r"""(() => {
@@ -115,9 +146,12 @@ def _states(page, shots: Path, width: int) -> dict:
 
 
 def _playback_states(page, shots: Path, width: int, seen: dict) -> None:
-    """Frame 1 and the last, Loop, Play and Pause, Mute."""
+    """Frame 1 and the last, Loop, Play and Pause, Mute. In the first (the page as it opens) no block
+    stands emptier than a line."""
     page.keyboard.press("Home")
     seen["frame 1"] = _settle(page)
+    holes = page.evaluate(HOLES)
+    assert not holes, (width, holes)
     page.locator(".scene-lab-player").screenshot(path=str(shots / f"steady-paused-{width}.png"))
     page.keyboard.press("End")
     page.wait_for_function(f"{FRAME}.includes('Frame 40 of 40')")

@@ -170,10 +170,8 @@ function rigSettings(rig, link, tuning) {
     ${rig.kind === "tripod" && html`<span class="scene-lab-rig-note">To move it, fly the free camera somewhere, then choose Tripod again.</span>`}`;
 }
 
-// The Cinematic row: the cameras and whom they follow; with one on, its settings under it (its tilt
-// and lens are the row below, scenelens.js). The settings' place is there with none on, as tall as
-// the tallest camera's settings at its width (each camera's, hidden and inert, in one grid cell), so
-// choosing a camera, another or none never moves the rows under it (round 9, item 3).
+// The Cinematic row: the cameras and whom they follow (their tilt and lens are the row below,
+// scenelens.js). The camera on screen's settings are CinematicSettings, on the picture.
 export function CinematicBar({ link, tuning }) {
   const available = link.freeAvailable, reason = link.scene.free_camera.reason, rig = link.rig;
   const runners = [["stage", "Mario"], ...link.ghosts.map((ghost) => [ghost.ref, ghostName(link.ghosts, ghost.ref)])];
@@ -187,11 +185,15 @@ export function CinematicBar({ link, tuning }) {
           onchange=${(event) => link.followWith(event.currentTarget.value, event.timeStamp)}>
         ${runners.map(([ref, name]) => html`<option key=${ref} value=${ref}>${name}</option>`)}
       </select></label>
-  </div>
-  <div class="scene-lab-rig-place">
-    ${RIG_KINDS.map(([kind]) => html`<div key=${kind} class="scene-lab-bar scene-lab-rig-size" aria-hidden="true" inert>
-      ${rigSettings(startRig(kind, null, tuning), link, tuning)}</div>`)}
-    ${rig && html`<div class="scene-lab-bar scene-lab-rig-options" aria-label="Cinematic camera settings">
-      ${rigSettings(rig, link, tuning)}</div>`}
   </div>`;
+}
+
+// The cinematic camera on screen's settings (shot size, side, speed, radius, height), on the picture
+// with its notices (sceneviewer.js's StageOverlays) while one is on, none otherwise. On the picture so
+// they take no row: a row of settings that came and went moved everything under it, and one kept for
+// them stood empty with no camera on (round 9, item 3, and the lead's review of it).
+export function CinematicSettings({ link, tuning }) {
+  const rig = link.rig;
+  return rig ? html`<div class="scene-lab-bar scene-lab-rig-options" aria-label="Cinematic camera settings">
+    ${rigSettings(rig, link, tuning)}</div>` : null;
 }

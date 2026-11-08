@@ -146,10 +146,12 @@ export function libraryGhost(row) {
     version: row.game_version, player: row.player_name } : null;
 }
 
+// Its words, so it never reads as Add ghost beside it (same glyph): it opens, it does not save.
+export const WATCH_IN_VIEWER = "Watch in Scene viewer";
 function WatchGhost({ row, onOpenGhost }) {
   const ghost = onOpenGhost ? libraryGhost(row) : null;
-  return ghost ? html`<${GhostButton} open=${() => onOpenGhost(ghost)} title="Watch this ghost in the Scene viewer"
-      label=${`Watch ${row.player_name}'s ghost in the Scene viewer`} />` : null;
+  return ghost ? html`<${GhostButton} open=${() => onOpenGhost(ghost)} title=${WATCH_IN_VIEWER}
+      label=${`${WATCH_IN_VIEWER}: ${row.player_name}`} />` : null;
 }
 
 function CommunityLibraryView({ entity, rom, onBrowseAll, onChanged, onOpenPlayer, onOpenGhost }) {
