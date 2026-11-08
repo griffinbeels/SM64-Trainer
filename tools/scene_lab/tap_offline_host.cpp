@@ -90,7 +90,14 @@ unsigned json_number(const std::string &json, const char *key) {
     return at == std::string::npos ? 0u : (unsigned)strtoul(json.c_str() + json.find(':', at) + 1, nullptr, 10);
 }
 
-struct Frame { std::vector<uint8_t> ram, sp; unsigned origin; };
+// frame.json's "vi" keys, in GFX_INFO's VI register order (tap.py's VI_NAMES); origin is regs[10].
+const char *const VI_KEYS[] = {"status", "origin", "width", "intr", "v_current", "burst", "v_sync", "h_sync",
+                               "leap", "h_start", "v_start", "v_burst", "x_scale", "y_scale"};
+const int VI_FIRST_REG = 9;
+
+// vi: every VI register the frame names (a simulated frame names them all; a savestate's names them too),
+// so the present the producer records carries the VI a picture is drawn with.
+struct Frame { std::vector<uint8_t> ram, sp; unsigned origin; std::vector<std::pair<int, unsigned>> vi; };
 
 // Frames by folder, read once: a 30 Hz run must not wait on the disk.
 const Frame *load(std::map<std::string, Frame> &cache, const std::string &dir) {
@@ -105,7 +112,11 @@ const Frame *load(std::map<std::string, Frame> &cache, const std::string &dir) {
         fprintf(stderr, "%s: needs an 8 MiB rdram.bin, a 4 KiB dmem.bin and frame.json\n", dir.c_str());
         return nullptr;
     }
-    frame.origin = json_number(std::string(json.begin(), json.end()), "origin");
+    const std::string text(json.begin(), json.end());
+    frame.origin = json_number(text, "origin");
+    for (int i = 0; i < (int)(sizeof VI_KEYS / sizeof VI_KEYS[0]); ++i)
+        if (i != 1 && text.find(std::string("\"") + VI_KEYS[i] + "\":") != std::string::npos)
+            frame.vi.emplace_back(VI_FIRST_REG + i, json_number(text, VI_KEYS[i]));
     return &cache.emplace(dir, std::move(frame)).first->second;
 }
 
@@ -299,6 +310,7 @@ int main(int argc, char **argv) {
         if (!frame) return false;
         memcpy(rdram, frame->ram.data(), frame->ram.size());
         memcpy(dmem, frame->sp.data(), frame->sp.size());
+        for (const auto &reg : frame->vi) regs[reg.first] = reg.second;
         *info.VI_ORIGIN_REG = origin >= 0 ? (unsigned)origin : frame->origin;
         const int64_t begin = now_qpc();
         if (vi_only) st_update_screen(nullptr);

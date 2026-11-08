@@ -46,7 +46,7 @@ from sm64_events.ghost import start_frame  # noqa: E402
 from sm64_events.ghost.clip import decode_clip  # noqa: E402
 from sm64_events.ghost.native_layout import POSE_AT, VALID_POSE  # noqa: E402
 
-RESIM_VERSION = 1
+RESIM_VERSION = 2                    # 2: every frame shown (VI registers) at the game's 30 fps
 GHOST_START, OWN_SCENE, ANOTHER_RESET, SIMULATED_RESET = "ghost_start", "own_scene", "another_reset", "simulated_reset"
 STARTS = (GHOST_START, OWN_SCENE, ANOTHER_RESET, SIMULATED_RESET)
 # THE switch for the Save states row of a re-simulated scene. Griffin decides (2026-11-08: Mario is exact
@@ -329,7 +329,8 @@ class GhostScenes:
         _base, fcsr = self.stages.boot()
         template = started.ram[sim.phys(self.symbols["gControllerPads"]):sim.phys(self.symbols["gControllerPads"]) + 24].tobytes()
         machine = stage_sim.Machine(started.ram.copy(), self.stages.rom, self.symbols, fcsr)
-        writer = sim_scene.SimScene(out, self.cache / f"work-{time.monotonic_ns()}", self.rom_path, self.symbols)
+        writer = sim_scene.SimScene(out, self.cache / f"work-{time.monotonic_ns()}", self.rom_path, self.symbols,
+                                    self.stages.vi())
         parting = farthest = None
         compared, began = 0, time.perf_counter()
         try:

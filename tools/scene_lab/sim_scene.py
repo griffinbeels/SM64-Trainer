@@ -8,9 +8,12 @@ A simulated frame becomes a frame input (savestate_frames.py's format: rdram.bin
 order, dmem.bin with the frame's OSTask at 0xFC0, frame.json), the offline host feeds it through the
 wrapper's own producer (plugin/gfxwrap/scene_tap.cpp) one ProcessDList at a time over its stdin, and
 the frame folder is deleted once the host has read it, so a long scene never needs its frames on
-disk at once. The session that producer writes becomes the package through package.py's own
-writer: the same records, regions and checks as a recorded attempt's scene. No sound and no
-presents: the viewer then plays at its FPS.
+disk at once. Each frame is then shown: one VI with the recording's own VI registers (`vi`, a
+present of the session the stage came from), its origin turning over the three frame buffers as
+the game's does, so the producer records a present and the viewer lists the frame. The host's
+clock is not the game's, so the session's record times are rewritten (retime) to the game's 30
+frames a second before package.py's own writer makes the package: the same records, regions and
+checks as a recorded attempt's scene, played at the game's speed. No sound.
 """
 from __future__ import annotations
 
@@ -33,7 +36,8 @@ from savestate_frames import TASK_NAMES  # noqa: E402
 from sm64_events.core.childproc import quiet_spawn_kwargs  # noqa: E402
 
 PHYSICAL = {"ucode", "ucode_data", "dram_stack", "output_buff", "output_buff_size", "data_ptr", "yield_data_ptr"}
-FRAMEBUFFERS = (0x0038F800, 0x003B5000, 0x003DA800)   # gFrameBuffer0..2: the VI origin a frame shows
+FRAME_BUFFER_NAMES = ("gFrameBuffer0", "gFrameBuffer1", "gFrameBuffer2")   # the VI origin turns over these
+NTSC_FRAME = 1001 / 30000                             # seconds a game frame shows (two NTSC VIs)
 
 
 class SimSceneError(RuntimeError):
@@ -45,9 +49,41 @@ def rom_header_hex(rom: bytes) -> str:
     return sim.be32(rom[:0x40]).tobytes().hex()
 
 
+def vi_template(session: Path, symbols: sim.Symbols) -> dict:
+    """The VI registers of a recorded session's first picture of play (its origin inside a frame buffer,
+    the screen started): what a simulated frame is shown with. The boot's first VIs show nothing."""
+    buffers = [sim.phys(symbols[name]) for name in FRAME_BUFFER_NAMES]
+    low, high = min(buffers), max(buffers) + (buffers[1] - buffers[0])
+    for record in tap.read_records(session / "tap.bin"):
+        if isinstance(record, tap.Present) and low <= record.vi["origin"] < high and record.vi["h_start"] \
+                and record.vi["width"]:
+            return dict(record.vi)
+    raise SimSceneError(f"{session.name} has no picture of play to take the VI registers from")
+
+
+def retime(session: Path) -> None:
+    """Every record of a simulated session at the game's clock: task k at k frames, its present half a
+    frame later, every other record with the task before it."""
+    frequency = int(tap.session_header(session).get("qpc_frequency") or 10_000_000)
+    period = round(frequency * NTSC_FRAME)
+    path = session / "tap.bin"
+    data = bytearray(path.read_bytes())
+    task, at_task = -1, 0
+    for at, kind, _size, _sequence, _qpc, _flags in list(tap._walk(data, torn_ok=False)):
+        if kind == tap.REC_TASK:
+            task += 1
+            at_task = task * period
+        when = at_task + (period // 2 if kind == tap.REC_PRESENT else 0)
+        struct.pack_into("<q", data, at + 16, when)
+    path.write_bytes(bytes(data))
+
+
 class SimScene:
-    def __init__(self, out: Path, work: Path, rom_path: Path, symbols: sim.Symbols, version: str = "us"):
+    def __init__(self, out: Path, work: Path, rom_path: Path, symbols: sim.Symbols, vi: dict, version: str = "us"):
         self.out, self.work, self.rom_path, self.symbols = Path(out), Path(work), Path(rom_path), symbols
+        buffers = [sim.phys(symbols[name]) for name in FRAME_BUFFER_NAMES]
+        offset = (vi["origin"] - min(buffers)) % (buffers[1] - buffers[0])    # the line the VI starts at
+        self.vi, self.origins = dict(vi), [buffer + offset for buffer in buffers]
         self.rom = self.rom_path.read_bytes()
         self.header = rom_header_hex(self.rom)
         self.lab = self.work / "lab"
@@ -77,7 +113,7 @@ class SimScene:
         timer = struct.unpack_from(">I", ram, sim.phys(self.symbols["gGlobalTimer"]))[0]
         (folder / "frame.json").write_text(json.dumps({
             "schema": "scene-lab-frame/1", "source": {"kind": "frame-sim", "global_timer": timer},
-            "vi": {"origin": FRAMEBUFFERS[self.count % 3]}, "rom_header": self.header, "task": task}) + "\n",
+            "vi": {**self.vi, "origin": self.origins[self.count % 3]}, "rom_header": self.header, "task": task}) + "\n",
             encoding="utf-8")
         return folder
 
@@ -96,6 +132,7 @@ class SimScene:
                                          text=True, **quiet_spawn_kwargs())
             self._say(f"header {folder}")
         self._say(f"frame {folder}")
+        self._say(f"vi {folder}")
         shutil.rmtree(folder)
         self.count += 1
 
@@ -121,6 +158,7 @@ class SimScene:
     def finish(self) -> dict:
         try:
             session = self.close()
+            retime(session)
             source = package.load_source(session, "next", states=True)
             self.out.parent.mkdir(parents=True, exist_ok=True)
             return package.write_package(source, self.rom, self.out)   # <out>.partial until whole

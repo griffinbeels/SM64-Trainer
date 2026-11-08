@@ -34,7 +34,8 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import frame_sim as sim  # noqa: E402
 
-STAGE_VERSION = 1
+STAGE_VERSION = 1                # the reset's recipe: a change makes every reset (and start-file base) anew
+PACKAGE_VERSION = 2              # a stage scene's own form: 2 shows every frame at the game's 30 fps
 RESET_BUTTON = 0x0020            # L: Usamune's practice reset
 ENTRY_NODE = 0x0A                # a course's painting entry
 A_BUTTON = 0x8000
@@ -125,6 +126,7 @@ class Stages:
         self.lock = threading.Lock()
         self._painting: Painting | None = None
         self._boot: tuple[np.ndarray, int] | None = None
+        self._vi: dict | None = None
 
     # ---------------------------------------------------------------- the castle and its painting
     def sessions(self) -> list[Path]:
@@ -167,6 +169,20 @@ class Stages:
             fcsr = struct.unpack_from(">I", ram, sim.phys(self.symbols["gGameLoopThread"]) + sim.THREAD_FPCSR)[0]
             self._boot = (ram, fcsr)
         return self._boot
+
+    def vi(self) -> dict:
+        """The VI registers a simulated frame is shown with: the boot session's first picture's."""
+        if self._vi is None:
+            import sim_scene  # noqa: PLC0415
+            try:
+                session = self.lab_root / self.painting().session
+            except StageError:
+                sessions = self.sessions()
+                if not sessions:
+                    raise StageError("No recorded scene session shows a picture to take the VI registers from.") from None
+                session = sessions[0]
+            self._vi = sim_scene.vi_template(session, self.symbols)
+        return self._vi
 
     def _castle(self) -> tuple[np.ndarray, bytes]:
         painting = self.painting()
@@ -256,14 +272,14 @@ class Stages:
     def package(self, level: int, area: int, act: int, frames: int = 150) -> Path:
         """That reset played on with no input, as a scene package the viewer opens (cached)."""
         import sim_scene  # noqa: PLC0415
-        out = self.cache / f"stage-{self.key(level, area, act)}-{frames}.sm64scene"
+        out = self.cache / f"stage-{self.key(level, area, act)}-p{PACKAGE_VERSION}-{frames}.sm64scene"
         if out.is_file():
             return out
         start = self.reset(level, area, act)
         _base, fcsr = self.boot()
         castle_pads = self._castle()[1]
         machine = Machine(start.copy(), self.rom, self.symbols, fcsr)
-        writer = sim_scene.SimScene(out, self.cache / f"work-{time.monotonic_ns()}", self.rom_path, self.symbols)
+        writer = sim_scene.SimScene(out, self.cache / f"work-{time.monotonic_ns()}", self.rom_path, self.symbols, self.vi())
         try:
             for _ in range(frames):
                 machine.step(pads(0, 0, 0, castle_pads))

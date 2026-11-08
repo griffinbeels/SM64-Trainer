@@ -1498,6 +1498,44 @@ The reader refuses a version or layer it does not know.
 - **Not** -- what the [[scene tap]] itself writes, which holds raw memory
   images and pictures and stays private on the machine that recorded it
 
+### Re-simulated scene
+
+A [[scene package]] the lab makes from a [[ghost]] alone: the [[ghost]]'s
+recorded pads play SM64's own code from a start, in the simulation, and the
+real [[scene tap]] producer records each simulated [[frame]]. The start, best
+first: the [[ghost start frame]]; his own [[attempt scene]] that begins at the
+[[ghost]]'s first record; another take's practice [[reset]] in that level; or a
+practice [[reset]] the simulation makes from his boot recording for any course
+and act, even one he never played (a stage). The lab compares every simulated
+[[frame]]'s Mario with the [[ghost]]'s recorded pose, and the scene names the
+first record where they part. From his own [[attempt scene]] or a start file
+the scene matches to the byte; from a [[reset]] Mario stays exact, but moving
+platforms and enemies may stand at another point in their cycle, so such a
+scene makes no save state until Griffin decides (one switch: `SAVE_STATES` in
+`tools/scene_lab/ghost_resim.py`). Three of his Whomp's Fortress [[ghost]]s
+(2026-11-08): no parting record from any start, about 30-45 s to make, a cache
+read after that.
+
+- **Lives** -- `tools/scene_lab/ghost_resim.py` (from a ghost),
+  `tools/scene_lab/stage_sim.py` (a stage), `tools/scene_lab/sim_scene.py`
+  (the producer feed); `src/sm64_events/server/scene_resim.py` runs them in a
+  child process; lab only
+- **Not** -- an [[attempt scene]], which the cutter cuts from the live recording
+
+### Ghost start frame
+
+The game state a [[ghost]]'s recording began from, kept beside the [[ghost]] so
+its [[re-simulated scene]] stays exact after retention deletes the [[attempt
+scene]]: the [[scene state]] regions of that first record, and the main pool's
+difference from the simulated practice [[reset]] of that level and act. About
+25 KB each. The lab saves one when an [[attempt scene]] becomes ready while its
+recording's clip exists, and when it re-simulates a [[ghost]] from his own
+[[attempt scene]]. It never goes into a clip and never leaves his machine.
+
+- **Lives** -- `src/sm64_events/ghost/start_frame.py` (the versioned file),
+  in the ghost population folder's starts folder, named by the clip's sha256
+- **Not** -- the clip, whose format the race and the community exchange
+
 ### Scene evaluator
 
 An M4 experiment that redraws a recorded task from a free camera by executing
