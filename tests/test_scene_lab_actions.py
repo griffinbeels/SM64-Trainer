@@ -104,7 +104,7 @@ def test_the_stage_and_a_ghost_answer_every_frames_action_in_plain_words(config,
         session.close()
 
 
-def test_the_socket_answers_the_actions_question_once_his_path_is_read(config, recording, tmp_path):
+def test_the_route_answers_every_frames_action_once_his_path_is_read(config, recording, tmp_path):
     (tmp_path / "packages").mkdir()
     (tmp_path / "packages" / "scene.sm64scene").write_bytes(recording["package"].read_bytes())
     lab = tmp_path / "lab.json"
@@ -117,10 +117,9 @@ def test_the_socket_answers_the_actions_question_once_his_path_is_read(config, r
         "evaluator_factory": Evaluators(recording["map"]), "path_reader_factory": rig_path.InProcessReader})
     with TestClient(app) as client:
         opened = client.post("/api/scene-lab/open", json={"package": "scene.sm64scene"}).json()
-        with client.websocket_connect("/api/scene-lab/ws") as socket:
-            socket.send_json({"id": 3, "session": opened["session"], "kind": "actions", "target": "stage"})
-            answer = socket.receive_json()
-            assert answer["id"] == 3 and answer["kind"] == "actions" and answer["target"] == "stage"
-            assert answer["actions"] == MOVES and answer["names"][str(ACT_JUMP)] == "jump"
-            socket.send_json({"id": 4, "session": opened["session"], "kind": "actions", "target": ""})
-            assert "error" in socket.receive_json()
+        answer = client.get(f"/api/scene-lab/actions?session={opened['session']}&target=stage").json()
+        assert answer["target"] == "stage" and answer["reason"] is None
+        assert answer["actions"] == MOVES and answer["names"][str(ACT_JUMP)] == "jump"
+        assert client.get(f"/api/scene-lab/actions?session={opened['session']}&target=").status_code == 422
+        closed = client.get(f"/api/scene-lab/actions?session={opened['session'] + 1}&target=stage")
+        assert closed.status_code == 409                                    # not the open scene

@@ -17,6 +17,8 @@ one reader, and without it this module is never imported and no route is added. 
                                   PUT the same {slots} to replace them (tools/scene_lab/camera_presets.py)
     GET  /api/scene-lab/camera-paths?level=&area=    the camera path of that level and area ({keys});
                                   PUT the same {keys} to replace it (tools/scene_lab/camera_paths.py)
+    GET  /api/scene-lab/actions?session=N&target=stage   every frame's action of the stage's Mario or a
+                                  scene ghost (its ref), for the step to the next action change
     POST /api/scene-lab/close
     WS   /api/scene-lab/ws        pictures and poses of the open scene (protocol below)
     GET  /api/scene-lab/audio/{block}?session=N[&track=music|effects|ghost:<ref>]   one block of the open scene's sound
@@ -85,9 +87,7 @@ them), answered {"id", "kind": "ghosts", "shown": [refs], "refused": [{"ref", "r
 each new ghost's recording is in the renderer, and {"id", "session", "kind": "rig-path"} for the
 cinematic cameras' path of the stage's Mario, read in a child process and answered {"id", "kind":
 "rig-path", "ready", "reason"} once it is (a rig picture asked before then shows the recorded
-camera and says so), and {"id", "session", "kind": "actions", "target": "stage" or a ghost's ref}
-for every frame's action, answered {"id", "kind": "actions", "target", "actions", "names", "reason"}
-(scene_session.actions) (scene_session.set_ghosts; clips come from the
+camera and says so) (scene_session.set_ghosts; clips come from the
 ghost catalog's load_ghost, server/scene_ghosts.py, unless `ghost_loader` replaces it). A set never
 holds up the page's pictures: its clips load on threads of their own (a community ghost may
 download for up to a minute) and sets apply in the order they came. A picture of a scene
@@ -786,23 +786,16 @@ class SceneLab:
             ready, reason = False, str(error)
         return {"id": message.get("id"), "kind": "rig-path", "ready": ready, "reason": reason}
 
-    async def actions_reply(self, message: dict) -> dict:
+    async def actions(self, generation, target: str) -> dict:
         """Each frame's action of the stage's Mario or a scene ghost (scene_session.actions), for the
-        step to the next action change: answered {"kind": "actions", "target", "actions", "names",
-        "reason"} on a task of its own, once Mario's path (which carries his actions) is read."""
-        target = message.get("target", "stage")
-        if not isinstance(target, str) or not target or len(target) > 512:
-            return {"id": message.get("id"), "error": "the actions are the stage's or a ghost's in the scene"}
-        try:
-            if target == "stage":
-                try:
-                    await asyncio.wrap_future(await self._run(message.get("session"), "prepare_path"))
-                except (LookupError, RuntimeError, OSError, ValueError):
-                    pass                                  # actions() says why there are none
-            answer = await self._run(message.get("session"), "actions", target)
-        except SceneClosed as closed:
-            return {"id": message.get("id"), "error": str(closed), "closed": True}
-        return {"id": message.get("id"), "kind": "actions", "target": target, **answer}
+        step to the next action change, once Mario's path (which carries his actions) is read. Over
+        HTTP, not the socket, so the socket's messages stay the pictures' and their questions."""
+        if target == "stage":
+            try:
+                await asyncio.wrap_future(await self._run(generation, "prepare_path"))
+            except (LookupError, RuntimeError, OSError, ValueError):
+                pass                                      # actions() says why there are none
+        return {"target": target, **await self._run(generation, "actions", target)}
 
     async def ghosts_reply(self, message: dict) -> dict:
         """The open scene's ghosts become the page's set (scene_session.set_ghosts), drawn with the
@@ -1020,7 +1013,7 @@ class _PageSocket:
             if not isinstance(message, dict):
                 await self.send({"id": None, "error": "a request is one JSON object"})
                 continue
-            if message.get("kind") in ("pose", "pick", "ghosts", "rig-path", "actions"):
+            if message.get("kind") in ("pose", "pick", "ghosts", "rig-path"):
                 if len(self.questions) >= MAX_QUESTIONS_WAITING:
                     await self.send({"id": self.questions.popleft().get("id"), "superseded": True})
                 self.questions.append(message)
@@ -1038,7 +1031,7 @@ class _PageSocket:
             while self.questions or (self.picture is not None and len(self.drawing) < PICTURES_IN_FLIGHT):
                 if self.questions:
                     question = self.questions.popleft()
-                    if question.get("kind") in ("ghosts", "rig-path", "actions"):
+                    if question.get("kind") in ("ghosts", "rig-path"):
                         self._on_own_task(question)
                         continue
                     reply = self.lab.pick_reply if question.get("kind") == "pick" else self.lab.pose_reply
@@ -1052,8 +1045,7 @@ class _PageSocket:
         """A ghost set or a path to read answered on its own task: a set's clips may take a community
         download's minute to load (scene_ghosts.load_ghost), Mario's path a second or two to read
         (scene_session.prepare_path), and the page's pictures go on meanwhile."""
-        reply = {"ghosts": self.lab.ghosts_reply, "actions": self.lab.actions_reply}.get(question.get("kind"),
-                                                                                     self.lab.rig_path_reply)
+        reply = self.lab.ghosts_reply if question.get("kind") == "ghosts" else self.lab.rig_path_reply
 
         async def answer():
             await self.send(await reply(question))
@@ -1253,6 +1245,13 @@ def mount_scene_lab(app, config_path, **options) -> SceneLab:
             raise HTTPException(404, str(missing)) from None
         except (ConfigError, SceneRefused) as refused:
             raise HTTPException(409, str(refused)) from None
+
+    @router.get("/actions")
+    async def actions(session: int, target: str = Query(default="stage", min_length=1, max_length=512)):
+        try:
+            return await lab.actions(session, target)
+        except SceneClosed as closed:
+            raise HTTPException(409, str(closed)) from None
 
     @router.post("/close")
     async def close_scene():

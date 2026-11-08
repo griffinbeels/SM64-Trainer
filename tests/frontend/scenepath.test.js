@@ -221,6 +221,10 @@ beforeEach(() => {
     }
     if (url.startsWith(ROUTE)) return respond({ keys: saved.get("9:1") || [], problem: null });
     if (url.startsWith("/api/scene-lab/camera-presets")) return respond({ slots: [], problem: null });
+    if (url.startsWith("/api/scene-lab/actions?")) {
+      const target = new URL(url, "http://lab").searchParams.get("target");
+      return respond({ target, reason: null, names: NAMES, actions: target === "stage" ? ACTIONS : ACTIONS.map(() => JUMP) });
+    }
     return respond({}, 404);
   });
   HTMLCanvasElement.prototype.getContext = () => ({
@@ -243,7 +247,7 @@ async function until(check, turns = 200) {
 }
 
 // Answers every picture the page asks for (and every pose, with POSE) until none waits.
-// Each frame's action, as the lab answers the "actions" question: walking, a jump, a load, then a dive.
+// Each frame's action, as GET /api/scene-lab/actions answers: walking, a jump, a load, then a dive.
 const WALK = 0x04000440, JUMP = 0x03000880, DIVE = 0x0188088A;
 const ACTIONS = [...Array(5).fill(WALK), ...Array(5).fill(JUMP), null, null, null, ...Array(18).fill(DIVE)];
 const NAMES = { [WALK]: "walking", [JUMP]: "jump", [DIVE]: "dive" };
@@ -256,10 +260,7 @@ async function answerAll(socket) {
     for (const message of waiting) {
       message.answered = true;
       if (message.kind === "pose") socket.text({ id: message.id, kind: "pose", pose: POSE, reason: null });
-      else if (message.kind === "actions") {
-        socket.text({ id: message.id, kind: "actions", target: message.target, reason: null, names: NAMES,
-          actions: message.target === "stage" ? ACTIONS : ACTIONS.map(() => JUMP) });
-      } else if (!message.kind) socket.picture(message);
+      else if (!message.kind) socket.picture(message);
     }
     await new Promise((resolve) => { setTimeout(resolve, 0); });
   }
@@ -512,10 +513,10 @@ test("an action change is a frame whose action differs from the last known one",
 test("the action row names the action on screen; its buttons and [ ] jump to the changes, paused", async () => {
   const { page, socket } = await openScene();
   const row = within(page.getByRole("group", { name: "Action" }));
-  await until(() => expect(socket.sent.some((message) => message.kind === "actions")).toBe(true));
-  await answerAll(socket);
   await until(() => expect(row.getByRole("button", { name: "On to the next action change" }).disabled).toBe(false));
-  expect(socket.sent.find((message) => message.kind === "actions").target).toBe("stage");
+  const asked = fetches.filter(([url]) => url.startsWith("/api/scene-lab/actions?")).map(([url]) => url);
+  expect(asked).toEqual(["/api/scene-lab/actions?session=1&target=stage"]);       // once, over HTTP
+  expect(socket.sent.every((message) => message.kind !== "actions")).toBe(true);
   expect(page.container.querySelector(".scene-lab-action-name").textContent).toBe("Mario: Walking");
   fireEvent.click(row.getByRole("button", { name: "On to the next action change" }));
   await answerAll(socket);

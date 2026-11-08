@@ -8,12 +8,14 @@
 // ("Mario: Dive slide"), the name the rest of the Trainer gives it (memory/addresses.py action_label,
 // sent by the lab).
 //
-// The lab reads every frame's action once (the socket's "actions" question: the stage's Mario from his
+// The lab reads every frame's action once (GET /api/scene-lab/actions: the stage's Mario from his
 // path's reads, gMarioStates.action; a ghost from its clip's live_action; scene_session.actions) and
-// the page keeps the answer for that scene, runner and length of scene.
+// the page keeps the answer for that scene, runner and length of scene. It goes over HTTP, so the
+// socket's messages stay the pictures' and their questions.
 import { h } from "preact";
 import { useEffect } from "preact/hooks";
 import htm from "htm";
+import { getJSON } from "../api.js";
 import { Icon } from "./icons.js";
 import { ghostName } from "./sceneghosts.js";
 
@@ -43,17 +45,16 @@ export const actionWords = (name) => (name ? name.charAt(0).toUpperCase() + name
 
 const actionsKey = (link) => `${link.scene?.session}|${link.follow}|${link.scene?.frames.length}`;
 
-// The actions of whoever Follow names in the open scene: asked once for each scene, runner and length,
-// once the scene's socket is open.
+// The actions of whoever Follow names in the open scene: asked once for each scene, runner and length.
 export function loadActions(link) {
   const key = actionsKey(link);
-  if (!link.scene || link.ws?.readyState !== WebSocket.OPEN || link.actionsAsked?.key === key) return;
+  if (!link.scene || link.actionsAsked?.key === key) return;
   const asked = link.actionsAsked = { key, answer: null };
-  link.ask("actions", { target: link.follow }).then((answer) => {
-    if (link.actionsAsked !== asked) return;
-    asked.answer = answer.kind === "actions" ? answer : { actions: [], names: {}, reason: answer.reason };
-    link.changed();
-  });
+  const query = `session=${link.scene.session}&target=${encodeURIComponent(link.follow)}`;
+  getJSON(`/api/scene-lab/actions?${query}`).then(
+    (answer) => { asked.answer = answer; },
+    (problem) => { asked.answer = { actions: [], names: {}, reason: problem.message }; },
+  ).finally(() => { if (link.actionsAsked === asked) link.changed(); });
 }
 
 const answerOf = (link) => (link.actionsAsked?.key === actionsKey(link) ? link.actionsAsked.answer : null);
@@ -75,8 +76,10 @@ function actionLine(link, answer) {
   return { text: `${who}: ${action ? actionWords(answer.names[String(action)]) : "no action here"}`, title: null };
 }
 
+// An effect only when what it asks about changes: Preact runs effects after an animation frame, and
+// this page draws for every picture.
 export function ActionStep({ link }) {
-  useEffect(() => { loadActions(link); });
+  useEffect(() => { loadActions(link); }, [link.scene, link.follow, link.scene?.frames.length]);
   const answer = answerOf(link), line = actionLine(link, answer), usable = !!answer?.actions.length;
   return html`<div class="scene-lab-action" role="group" aria-label="Action">
     <button type="button" disabled=${!usable} onclick=${(event) => stepAction(link, -1, event.timeStamp)}
