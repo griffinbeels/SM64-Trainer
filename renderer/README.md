@@ -72,9 +72,9 @@ combine with the GPL v2. The complete corresponding source is:
   upstream's Zilmar functions to `GLideN64_<name>` and its `DllMain` to
   `GLideN64_DllMain` (`stage_renderer_entries`), so the capture layer
   exports those names and calls the renderer's; their bodies are unchanged;
-- the libraries it links that are not in this repository: Qt 5.15.2 (the
-  qtbase source, configured as "The three prebuilt libraries" below says),
-  and FreeType 2.5.3, libpng 1.6.32 and zlib 1.2.8, which the upstream tree
+- the libraries it links that are not in this repository: Qt 5.12.12 (the
+  qtbase source, which `tools/build_renderer_ui.py` builds as "The three
+  prebuilt libraries" below says), and FreeType 2.5.3, libpng 1.6.32 and zlib 1.2.8, which the upstream tree
   carries only as prebuilt `projects/msvc/lib/rel/*.lib` files, without the
   scripts that built them. `licenses/README.md` points to each source.
 
@@ -108,22 +108,43 @@ into a test `sm64_trainer_gfx.dll` that never enters the bundle.
 
 The upstream project links three static libraries it builds itself:
 `osal.lib`, `libGLideNHQ.lib` and `GLideNUI.lib` (the settings dialog, which
-needs a static Qt 5.15.2). The tool takes them from the build cache and
-refuses any file whose hash is not the one in `build-inputs.json`. They are
-not in git (`GLideNUI.lib` alone is 85 MB).
+needs a static Qt). The tool takes each from the build cache by its hash,
+`prebuilt/<sha256>/<name>` (or the cache root, where the first builds were
+kept), and refuses any file whose hash is not the one in `build-inputs.json`,
+so checkouts pinned to different builds share one cache. They are not in git
+(`GLideNUI.lib` alone is 85 MB).
 
-They were produced once (2026-09) from the same pinned tree with MSVC 14.51,
-Windows SDK 10.0.26100, `/MT`, and a Qt 5.15.2 built from the official
-`qtbase-everywhere-src-5.15.2.tar.xz` with:
+`GLideNUI.lib` is built by `tools/build_renderer_ui.py` (since 2026-11-07),
+against Qt 5.12.12: qtbase from the official
+`qtbase-everywhere-src-5.12.12.tar.xz` (its md5 and SHA-256 are pinned in
+`build-inputs.json` with jom), built static with:
 
-    configure -static -static-runtime -release -opensource -confirm-license
+    configure -prefix C:/Qt/Qt-5.12.12 -extprefix <cache>/../qt512/prefix
+              -static -static-runtime -release -opensource -confirm-license
               -platform win32-msvc -nomake examples -nomake tests
               -opengl desktop -no-icu -no-openssl -no-dbus -no-freetype
 
-`-no-freetype` keeps the renderer's own FreeType 2.5.3; Qt's newer backend
-needed a symbol that library lacks. Only QtBase and jom were required.
-`GLideNUI.vcxproj` was pointed at that Qt prefix and built as a static
-library that merges the Qt libraries it links, which is why the final DLL
-has no Qt or VC runtime DLL dependency. Rebuilding them is only needed when
-the pinned upstream tree or the Qt version changes; the pin in
-`build-inputs.json` changes with them.
+Why 5.12 and not the 5.15.2 used until then: from Qt 5.14 on, QtCore's
+`src/corelib/time/qcalendar.cpp` is licensed GPL v3 or later only, with no
+LGPL or GPL v2 option, and GLideN64 is GPL v2 only, so the two cannot be
+combined (the 5.15.2 plugin carried that file's code). Every qtbase 5.12.12
+file the settings window links offers the GPL v2, and 5.12 has no
+`qcalendar.cpp` (QCalendar arrived in 5.14). `-prefix` is the path compiled
+into QtCore, Qt's neutral default; `-extprefix` is where it installs, so no
+local folder name enters the plugin. `-no-freetype` keeps the renderer's own
+FreeType 2.5.3; Qt's newer backend needed a symbol that library lacks.
+
+Then upstream's `GLideNUI.vcxproj` is built from the pinned tree against
+that Qt, as a static library that merges the Qt libraries it links (which is
+why the final DLL has no Qt or VC runtime DLL dependency), with three staging
+edits and no code change: `AboutDialog.h` and `ConfigDialog.h` get their own
+include guards (each used the macro uic writes into its generated header, so
+whichever came second was skipped), the project also links
+`Qt5AccessibilitySupport.lib` (5.12's Windows platform plugin needs it), and
+the library is built repeatable (`/Brepro`, fixed resource file times, and
+`/pathmap` instead of local paths). Two builds give the same bytes.
+
+`osal.lib` and `libGLideNHQ.lib` were produced once (2026-09) from the same
+pinned tree with MSVC, Windows SDK 10.0.26100 and `/MT`. Rebuilding any of
+them is only needed when the pinned upstream tree or the Qt version changes;
+the pin in `build-inputs.json` changes with them.

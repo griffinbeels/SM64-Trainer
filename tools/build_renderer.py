@@ -20,8 +20,9 @@ Inputs, all pinned in renderer/build-inputs.json:
   * the capture layer: plugin/gfxwrap files staged here, each compiled as
     tools/build_plugin.py compiled the old wrapper (`CAPTURE_SETTINGS`);
   * three static libraries the upstream project links (GLideNUI needs a
-    static Qt 5.15.2; renderer/README.md records how they were produced).
-    They live in the build cache, verified by hash, never in git.
+    static Qt 5.12.12 and tools/build_renderer_ui.py builds it;
+    renderer/README.md records how all three were produced). They live in
+    the build cache by hash, never in git.
 
 The build cache is %LOCALAPPDATA%/SM64Trainer/build-cache/renderer so it
 survives worktrees. Intermediates stay in a scratch folder that is removed;
@@ -211,17 +212,26 @@ def pristine_source(cache: Path, scratch: Path, source: Path | None) -> Path:
     return roots[0]
 
 
+def prebuilt_path(cache: Path, name: str, digest: str) -> Path:
+    """Where a prebuilt library lives in the shared build cache: by its hash, so
+    checkouts pinned to different builds of it never overwrite each other's."""
+    return cache / "prebuilt" / digest / name
+
+
 def prebuilt_libraries(cache: Path) -> dict[str, Path]:
+    """The pinned prebuilt libraries: `prebuilt/<sha256>/<name>`, or `<name>` at
+    the cache root where the first builds were kept, whichever holds the pinned
+    bytes."""
     found = {}
     for name, expected in inputs()["prebuilt_libraries"].items():
-        path = cache / name
-        if not path.is_file():
+        for path in (prebuilt_path(cache, name, expected), cache / name):
+            if path.is_file() and _sha256(path) == expected:
+                found[name] = path
+                break
+        else:
             raise FileNotFoundError(
-                f"{name} is not in the build cache {cache}; renderer/README.md says how it is produced")
-        actual = _sha256(path)
-        if actual != expected:
-            raise ValueError(f"{name} in the build cache ({actual}) is not the pinned library ({expected})")
-        found[name] = path
+                f"{name} {expected} is not in the build cache {cache}; renderer/README.md says how it is "
+                "produced (GLideNUI.lib: tools/build_renderer_ui.py)")
     return found
 
 

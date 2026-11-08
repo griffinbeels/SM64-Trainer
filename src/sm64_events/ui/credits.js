@@ -80,7 +80,7 @@ export const CREDIT_GROUPS = [
         covers: ["native:sm64_trainer_gfx.dll"],
         notices: "licenses/renderer" },
       { name: "Qt", by: "The Qt Company Ltd and other contributors", url: "https://www.qt.io",
-        what: "The replay renderer's settings window. LGPL-3.0.",
+        what: "The replay renderer's settings window. Qt 5.12, used here under the GPL-2.0.",
         notices: "licenses/renderer" },
       { name: "FreeType", by: "The FreeType Project", url: "https://freetype.org",
         what: "Text inside the replay renderer. Portions of this software are copyright © 2014 and 2019 The FreeType Project (www.freetype.org). All rights reserved.",
