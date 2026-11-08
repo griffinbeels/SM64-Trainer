@@ -15,6 +15,8 @@ one reader, and without it this module is never imported and no route is added. 
     GET  /api/scene-lab/ghosts?section=&...&page=    one page of the ghosts that could be drawn into it
     GET  /api/scene-lab/camera-presets?level=&area=  the saved cameras of that level and area (slots 1-9);
                                   PUT the same {slots} to replace them (tools/scene_lab/camera_presets.py)
+    GET  /api/scene-lab/camera-paths?level=&area=    the camera path of that level and area ({keys});
+                                  PUT the same {keys} to replace it (tools/scene_lab/camera_paths.py)
     POST /api/scene-lab/close
     WS   /api/scene-lab/ws        pictures and poses of the open scene (protocol below)
     GET  /api/scene-lab/audio/{block}?session=N[&track=music|effects|ghost:<ref>]   one block of the open scene's sound
@@ -63,7 +65,8 @@ sound late. 404 for no sound or no such block, 409 for a scene no longer open, 4
 that fails its hash.
 
 Socket protocol. The page sends JSON: {"id", "session", "frame", "camera": null or {"focus":
-xyz, "position": xyz[, "roll", "fov"]} or {"ghost": ref} or {"rig": {...}}, "encoding":
+xyz, "position": xyz[, "roll", "fov"][, "recorded": weight]} (a camera path's blend toward the
+recorded camera, scene_session.recorded_blend) or {"ghost": ref} or {"rig": {...}}, "encoding":
 "jpeg"|"raw"|"shared"[, "hud": false]} for a picture ({"ghost": ref}: that scene ghost's own
 recorded camera at this picture, its header's "view" {"ghost", "camera"} the camera drawn; {"rig":
 {"kind", "target", "shot", "height", "radius", "speed", "phase", "side", "tuning"}}: a cinematic
@@ -1114,6 +1117,10 @@ class PresetsBody(BaseModel):
     slots: list = Field(max_length=9)
 
 
+class PathBody(BaseModel):
+    keys: list = Field(max_length=64)
+
+
 def _mount_preset_routes(router: APIRouter, lab: SceneLab) -> None:
     """GET and PUT /camera-presets?level=&area=: the camera presets of one level and area, in the lab
     folder's camera-presets.json (tools/scene_lab/camera_presets.py owns the file and its checks).
@@ -1139,6 +1146,27 @@ def _mount_preset_routes(router: APIRouter, lab: SceneLab) -> None:
         try:
             return presets().replace(*where, body.slots)
         except ValueError as refused:            # camera_presets.PresetError
+            raise HTTPException(422, str(refused)) from None
+
+    paths_store = None
+
+    def paths():
+        nonlocal paths_store
+        if paths_store is None:
+            paths_module = _lab_module("camera_paths")
+            paths_store = paths_module.CameraPaths(lab._lab_root() / paths_module.FILE_NAME)
+        return paths_store
+
+    # The camera path of one level and area (tools/scene_lab/camera_paths.py owns the file and its checks).
+    @router.get("/camera-paths")
+    def camera_paths(where: tuple[int, int] = Depends(place)):
+        return paths().keys(*where)
+
+    @router.put("/camera-paths")
+    def replace_camera_paths(body: PathBody, where: tuple[int, int] = Depends(place)):
+        try:
+            return paths().replace(*where, body.keys)
+        except ValueError as refused:            # camera_paths.PathError
             raise HTTPException(422, str(refused)) from None
 
 

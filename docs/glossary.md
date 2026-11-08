@@ -1557,7 +1557,7 @@ viewer) leaves the game's on-screen counters and timer out of every picture, the
 once. The **Cinematic** row's [[cinematic camera]]s (Front, Side, Orbit, Chase, Overhead, Tripod)
 follow Mario or a [[stage ghost]] along his path. The [[tilt and lens]] row turns and zooms whichever
 camera is on screen. Under the camera controls, the **Cameras** strip keeps [[camera preset]]s in
-slots 1-9.
+slots 1-9, and the **Path** block under it keeps the [[camera path]] of the course and area on screen.
 The page takes the keyboard when you arrive (the sidebar or the [[ghost button]])
 and after a mouse click on its controls; a field that types keeps its keys, and
 Esc, leaving the window or the page lets go of every key.
@@ -1768,6 +1768,33 @@ restarts; a file it cannot read shows an empty strip and says so.
   (`src/sm64_events/ui/components/sceneviewer.js`)
 - **Not** -- a [[ghost's view]], which follows a [[stage ghost]]'s own camera
   as it moves; a camera preset stands still where you saved it
+
+### Camera path
+
+A [[scene viewer]] camera that moves through **keys** you set: each key is a
+camera on a [[frame]] of the scene (its place, aim, [[tilt and lens]]), or the
+**recorded camera** itself. **+ Key** keeps the [[frame]] on screen and the
+camera on screen; from the Recorded camera it keeps the recorded camera, which
+the path then eases out of and back into, blending with the game's own moving
+camera. Between two keys the camera follows a smooth curve and meets each key
+exactly on its [[frame]]; it slows into and out of a key (**Ease**, on by
+default), or with Ease off passes through it without slowing. Before the
+first key and after the last it stays on that key. **Path** puts it on
+screen, and Play, a step, a seek and Record all draw the same camera at the
+same time in the scene, because the viewer works the path out from its own
+clock alone. Each key's row jumps to it (the scene pauses on its [[frame]]),
+replaces it with the camera on screen, or deletes it. Each course and area keeps one
+path, as it keeps its [[camera preset]]s; a key's [[frame]] counts from the
+first [[frame]] of the scene that plays it. The idea came from Xander's
+SM64Scripts camera tools (credited in the app).
+
+- **Lives** -- the math (`src/sm64_events/ui/components/scenepath.js`); the
+  block and the viewer's side of it (`src/sm64_events/ui/components/scenepathbar.js`);
+  the file (`tools/scene_lab/camera_paths.py`, served by
+  `src/sm64_events/server/scene_lab_api.py`); the blend with the recorded
+  camera (`tools/scene_lab/scene_session.py`)
+- **Not** -- a [[cinematic camera]], which follows Mario or a [[stage ghost]];
+  a camera path goes where its keys say, whoever moves
 
 ### Ghost button
 

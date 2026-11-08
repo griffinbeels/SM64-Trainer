@@ -20,7 +20,9 @@ coordinates, optionally with its own "roll" (the game's s16 angle the screen tur
 "fov" (degrees); without them the frame's own apply. The scene evaluator re-runs SM64's own
 scene-graph code for that camera and the host draws the whole rebuilt RDRAM with the new list.
 The pose's camera (focus, position, roll, fov) redraws the recorded picture exactly, which is
-what lets a free camera start from the picture on screen.
+what lets a free camera start from the picture on screen. A free camera with "recorded": weight
+(a camera path easing into or out of the recorded camera, ui/components/scenepath.js) is drawn
+that share of the way to the frame's recorded camera (recorded_blend).
 
 A picture without the HUD (begin's hud=False) sends either list with the 2D overlay the game
 draws after the world turned into no-ops (hud.py: lives, coins, stars, the timer, Usamune's
@@ -164,6 +166,29 @@ def world_camera(camera) -> tuple:
     if roll is None and fov is None:
         return vectors[0], vectors[1]
     return vectors[0], vectors[1], roll, None if fov is None else float(fov)
+
+
+def blend_cameras(camera: dict, toward: dict, weight: float) -> dict:
+    """`camera` moved `weight` (0 to 1) of the way to `toward` (both {"focus", "position", "roll",
+    "fov"}; a roll or fov of None counts as the other's): place and aim along straight lines, the
+    roll (the game's s16) the short way round, the field of view evenly in log(tan(fov / 2)), as a
+    camera path moves its lens (scenepath.js)."""
+    def mix(a, b):
+        return [x + (y - x) * weight for x, y in zip(a, b, strict=True)]
+    roll, other = camera.get("roll"), toward.get("roll")
+    roll = other if roll is None else roll
+    if roll is not None and other is not None:
+        turn = (other - roll + 32768) % 65536 - 32768
+        roll = (round(roll + turn * weight) + 32768) % 65536 - 32768
+    fov, aim = camera.get("fov"), toward.get("fov")
+    fov = aim if fov is None else fov
+    if fov is not None and aim is not None:
+        low, high = (math.log(math.tan(math.radians(value) / 2)) for value in (fov, aim))
+        fov = math.degrees(2 * math.atan(math.exp(low + (high - low) * weight)))
+    focus, position = mix(camera["focus"], toward["focus"]), mix(camera["position"], toward["position"])
+    if math.dist(focus, position) < 1.0:                  # never on its own aim
+        position[2] += 1.5
+    return {"focus": focus, "position": position, "roll": roll, "fov": fov}
 
 
 @dataclass
@@ -820,6 +845,7 @@ class SceneSession:
         view, camera = self._ghost_view(index, camera)
         rig_started = time.perf_counter()
         rig, camera = self._rig_view(frame, camera)
+        camera, blend_reason = self.recorded_blend(frame, camera)
         free = None if camera is None else world_camera(camera)
         if free is not None:
             self._ahead_generation += 1          # the look-ahead stops before its next frame
@@ -833,6 +859,7 @@ class SceneSession:
         if rig is not None:                  # the recorded camera when the rig had none or it could not be drawn
             own = rig.pop("reason")
             reason = reason or own
+        reason = reason or blend_reason
         used =None if not drawn_free else {"focus": camera["focus"], "position": camera["position"],
                                             "roll": camera.get("roll"), "fov": camera.get("fov")}
         if drawn_free:
@@ -1282,6 +1309,28 @@ class SceneSession:
                 self._walls_at(place)
         except Exception as error:  # noqa: BLE001 - the first camera that needs it says why
             log.warning("scene viewer: warming the free camera failed: %s", error)
+
+    def recorded_blend(self, frame: int, camera) -> tuple[dict | None, str | None]:
+        """A camera path's camera on its way into or out of the recorded camera (ui/components/
+        scenepath.js): {"focus", "position", "roll", "fov", "recorded": weight} is drawn `weight` (0
+        to 1) of the way from that camera to frame `frame`'s recorded one (pose): place and aim in
+        straight lines, the roll the short way round, the lens evenly (blend_cameras). Returns the
+        camera to draw and None; any other camera comes back as it is. Where the frame has no
+        recorded camera to blend with, the path's own camera and the reason. ValueError for a weight
+        that is not 0 to 1."""
+        if not (isinstance(camera, dict) and "recorded" in camera):
+            return camera, None
+        weight = camera["recorded"]
+        if not (_number(weight) and 0 <= weight <= 1):
+            raise ValueError("a camera's recorded weight is a number from 0 to 1")
+        own = {key: value for key, value in camera.items() if key != "recorded"}
+        world_camera(own)
+        if weight == 0:
+            return own, None
+        answer = self.pose(frame)
+        if answer["pose"] is None:
+            return own, answer["reason"]
+        return blend_cameras(own, answer["pose"], float(weight)), None
 
     def pose(self, frame: int) -> dict:
         """The frame's recorded camera and Mario's position, or None and the reason."""

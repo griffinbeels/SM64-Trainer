@@ -1,0 +1,15 @@
+/* The Scene viewer's camera path block (components/scenepathbar.js links this sheet when it loads, so
+   with the lab switched off the browser never fetches it). One block under the Cameras strip: the
+   Path row, then one row per key. It lays out by wrapping, never by the viewport. */
+.scene-lab-path { display: grid; gap: 6px; min-width: 0; }
+.scene-lab-path > .scene-lab-bar .scene-lab-hint { flex: 1 1 260px; min-width: 0; }
+.scene-lab-path-keys { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.scene-lab-path-keys li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0;
+  padding: 3px 6px; border: 1px solid var(--border-soft); border-radius: 6px; }
+.scene-lab-path-keys li.is-here { border-color: var(--gold); }
+.scene-lab-path-keys li.is-outside { opacity: .55; }
+.scene-lab-path-keys button { min-height: 28px; padding: 0 9px; font-size: .82rem; }
+.scene-lab-path-keys button[aria-pressed="true"] { border-color: var(--gold); color: var(--gold-soft); }
+.scene-lab-path-jump { font-variant-numeric: tabular-nums; }
+.scene-lab-path-what { flex: 1 1 120px; min-width: 0; color: var(--muted); font-size: .82rem; }
+.scene-lab-path-delete { width: 30px; justify-content: center; padding: 0; }

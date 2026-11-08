@@ -69,13 +69,19 @@ def _pose(value) -> dict:
 
 
 def _camera(value):
-    """A camera as the page sent it (interface D): null, a pose, {"ghost": ref} or {"rig": {...}}."""
+    """A camera as the page sent it (interface D): null, a pose (a camera path's may carry "recorded",
+    its blend toward the recorded camera: scene_session.recorded_blend), {"ghost": ref} or {"rig": {...}}."""
     if value is None:
         return None
     if isinstance(value, dict) and set(value) == {"ghost"} and isinstance(value["ghost"], str) and value["ghost"]:
         return {"ghost": value["ghost"][:512]}
     if isinstance(value, dict) and set(value) == {"rig"} and isinstance(value["rig"], dict) and len(json.dumps(value)) < 4096:
         return {"rig": value["rig"]}
+    if isinstance(value, dict) and "recorded" in value:
+        weight = value["recorded"]
+        if not (_number(weight) and 0 <= weight <= 1):
+            raise ValueError("a camera's recorded weight is a number from 0 to 1")
+        return {**_pose({key: part for key, part in value.items() if key != "recorded"}), "recorded": float(weight)}
     return _pose(value)
 
 

@@ -63,7 +63,11 @@
 // for the course and area on screen: keys 1-9 or a click cut to one as a free camera (cutTo), and
 // Play keeps playing.
 //
-// Under the Cameras strip, the Save states row (scenemoment.js) puts the frame on screen in a Usamune slot of the
+// Under the Cameras strip, the camera path block (scenepathbar.js, its math scenepath.js) keeps keys
+// the camera moves through; with Path on screen, Play keeps the path's own clock and every display
+// frame asks the picture from the path's camera then.
+//
+// Under those, the Save states row (scenemoment.js) puts the frame on screen in a Usamune slot of the
 // running game, one press, numbered as Usamune's menu numbers them.
 //
 // Play stops only when the person pauses (Pause, Space, a step, the slider):
@@ -91,9 +95,10 @@ import { RecordBar } from "./scenerecord.js";
 import { CameraPresets, CameraSlots, placeKey, placeOf, presetCamera } from "./scenepresets.js";
 import { SaveStates } from "./scenemoment.js";
 import { RecordingSwitch } from "./scenerecording.js";
-import { heardInto, pictureAt, playLength, recordedTimes } from "./sceneclock.js";
+import { heardInto, pictureAt, recordedTimes } from "./sceneclock.js";
 import { CinematicBar, orbitFolded, orbitPhase, rigChanged, rigHint, rigName, rigRequest, seenOnScreen,
   startRig } from "./scenerigs.js";
+import { CameraPaths, PathBar, pathCameraNow, pathPlayTick, pathStopped, playTiming } from "./scenepathbar.js";
 
 const html = htm.bind(h);
 const ROOT = "/api/scene-lab";
@@ -331,7 +336,8 @@ export class SceneLink {
       view: null, rig: null, lastRig: null, follow: "stage", rigPath: null, orbitSince: null,
       asked: null, ghostPages: new Map(), ghostNote: null, ghostSerial: 0,
       sound: new SceneSound({ changed: () => this.changed(), observe: (note) => this.observe(note) }),
-      presets: new CameraPresets({ changed: () => this.changed() }) });
+      presets: new CameraPresets({ changed: () => this.changed() }),
+      paths: new CameraPaths({ changed: () => this.changed() }), pathOn: false, pathHeld: null });
     this.timings = new MovingTimings((summary) => { this.moving = summary; this.changed(); });
     this.onShared = (event) => this.sharedArrived(event);
   }
@@ -365,10 +371,11 @@ export class SceneLink {
     Object.assign(this, { ws, scene, frame: 0, free: false, orbit: null, entry: null, inFlight: new Map(),
       wanted: null, notice: null, error: null, speed: 1, moving: null, readies: [], coldId: this.sequence + 1,
       ghosts: keptFor(scene).ghosts, asked: null, refusedGhosts: new Map(), ghostNote: null, view: null, rig: null,
-      follow: "stage", orbitSince: null });
+      follow: "stage", orbitSince: null, pathOn: false, pathHeld: null });
     keep(scene, {});
     this.ghostPages = kept.pages;
     this.presets.forget();
+    this.paths.forget();
     if (this.sharedAvailable) {
       webview().addEventListener("sharedbufferreceived", this.onShared);
       this.encoding = "shared";
@@ -456,7 +463,7 @@ export class SceneLink {
     const ready = this.ws && this.ws.readyState === WebSocket.OPEN && this.scene;
     if (this.inFlight.size >= PICTURES_IN_FLIGHT || !this.wanted || !ready) return;
     const play = this.playback, frame = this.wanted.frame ?? (play ? play.asked : this.frame);
-    const id = ++this.sequence, camera = this.cameraNow(frame);
+    const id = ++this.sequence, camera = this.cameraNow(frame, performance.now() + (play ? this.readyMs() : 0));
     this.inFlight.set(id, { ...this.wanted, id, frame, camera, free: !!camera, sent: performance.now(), play,
       due: play ? play.dueOf(frame) : null });
     if (play && this.wanted.kind !== "play") play.moved = true;
@@ -472,6 +479,7 @@ export class SceneLink {
   // display frame. An orbit circling a paused scene carries its clock at `now` (interface H's clock_ms).
   cameraNow(frame = this.frame, now = performance.now()) {
     if (this.free && this.orbit) return cameraOf(this.orbit);
+    if (this.pathOn) return pathCameraNow(this, frame, now);
     if (this.rig) return rigRequest(this.rig, sceneCameraTuning(), this.orbitSince == null ? null : this.orbitMs(frame, now));
     return this.view ? { ghost: this.view } : null;
   }
@@ -503,6 +511,7 @@ export class SceneLink {
   stopPlay() {
     const play = this.playback;
     if (!play) return;
+    pathStopped(this, play);
     this.pausedOn = heardInto(play, this.frame, performance.now(), this.scene?.session);
     Object.assign(this, { playback: null, playing: false });
     this.holdOrbit();
@@ -670,14 +679,14 @@ export class SceneLink {
   }
 
   async readEntry() {
-    const seen = this.viewOnScreen(), chosen = !!seen && !!this.rig;     // a cinematic camera's tilt was set
+    const seen = this.viewOnScreen(), chosen = !!seen && (!!this.rig || this.pathOn);   // a tilt someone set
     const answer = seen ? { pose: seen } : await this.pose(this.frame);
     if (this.free) return;                  // a cut to a saved camera got there first
     const pose = answer.pose, orbit = pose && orbitFromPose(pose.focus, pose.position, { roll: pose.roll ?? 0,
       fov: pose.fov ?? null, levels: !chosen });
     if (!orbit) return this.say(answer.reason || "The free camera is unavailable for this frame.");
     const [dx, dy, sliding] = this.pending, tuning = sceneCameraTuning();
-    Object.assign(this, { pending: [0, 0, false], free: true, view: null, rig: null, entry: orbit,
+    Object.assign(this, { pending: [0, 0, false], free: true, view: null, rig: null, pathOn: false, entry: orbit,
       orbit: dx || dy ? (sliding ? slid : turned)(orbit, dx, dy, tuning) : orbit });
     this.want(dx || dy ? "move" : "input");
     this.flightOn(performance.now());       // a movement key held through the entry moves from here
@@ -686,6 +695,7 @@ export class SceneLink {
   // The camera of the ghost's view or the cinematic camera on screen (its picture's header names the
   // camera it was drawn from), or null when neither is.
   viewOnScreen() {
+    if (this.pathOn) return this.shown?.camera === "free" ? this.shown.camera_used ?? null : null;
     if (this.rig) return this.shown?.rig ? this.shown.camera_used : null;
     return this.view && this.shown?.view?.ghost === this.view ? this.shown.view.camera : null;
   }
@@ -694,7 +704,7 @@ export class SceneLink {
     this.interrupt();
     this.stopLook("recorded camera");
     this.releaseKeys();
-    Object.assign(this, { free: false, view: null, rig: null, notice: null, picking: false });
+    Object.assign(this, { free: false, view: null, rig: null, pathOn: false, notice: null, picking: false });
     this.want("input", time);
   }
 
@@ -716,7 +726,7 @@ export class SceneLink {
       Object.assign(next, { position: stand.camera.position, roll: stand.camera.roll ?? 0, fov: stand.camera.fov ?? null });
     }
     if (serial !== this.serial) return;               // another input came first
-    Object.assign(this, { free: false, view: null, rig: next, lastRig: next, notice: null, picking: false });
+    Object.assign(this, { free: false, view: null, rig: next, lastRig: next, pathOn: false, notice: null, picking: false });
     this.holdOrbit();
     this.want("input", time);
     this.changed();
@@ -849,7 +859,7 @@ export class SceneLink {
     this.interrupt();
     this.stopLook("a ghost's view");
     this.releaseKeys();
-    Object.assign(this, { free: false, view: ref, rig: null, notice: null, picking: false });
+    Object.assign(this, { free: false, view: ref, rig: null, pathOn: false, notice: null, picking: false });
     this.want("input", time);
     this.changed();
   }
@@ -862,7 +872,7 @@ export class SceneLink {
       fov: camera.fov ?? null, levels: false });
     if (!orbit) return;
     this.interrupt();
-    Object.assign(this, { free: true, view: null, rig: null, orbit, entry: orbit, pending: [0, 0, false], picking: false,
+    Object.assign(this, { free: true, view: null, rig: null, pathOn: false, orbit, entry: orbit, pending: [0, 0, false], picking: false,
       notice: null });
     this.want("input", time);
     this.flightOn(performance.now());
@@ -1257,16 +1267,19 @@ export class SceneLink {
     this.autoplay = false;
     if (!scene) return;
     this.sound.arm();
-    const from = this.frame >= scene.frames.length - 1 && !scene.growing ? 0 : this.frame, times = recordedTimes(scene);
+    const from = this.frame >= scene.frames.length - 1 && !scene.growing ? 0 : this.frame, timing = playTiming(this, scene);
+    const times = timing.times;
     const held = this.pausedOn, resumeMs = held?.session === scene.session && held.frame === from ? held.ms : 0;
     this.pausedOn = null;
     const play = { from, start: performance.now() + this.sound.lead() - resumeMs, resumeMs, times,
-      length: playLength(times, from, scene.fps), asked: from, frameAt: null, frameMs: 1000 / 60, gaps: [], holds: [],
-      heldAt: null,
+      length: timing.lengthFrom(from), asked: from, frameAt: null, frameMs: 1000 / 60, gaps: [], holds: [],
+      heldAt: null, path: timing.path,
       dueOf: (frame) => play.start + play.times[frame] - play.times[from],
       grew: (grown) => {
-        play.times = recordedTimes(grown);
-        play.length = playLength(play.times, from, grown.fps);
+        const grownTiming = playTiming(this, grown);
+        if (!play.path === !grownTiming.path) {
+          Object.assign(play, { times: grownTiming.times, path: grownTiming.path, length: grownTiming.lengthFrom(from) });
+        }
         if (play.heldAt != null && play.times.length > play.asked + 1) {
           play.start += performance.now() - play.heldAt;
           play.heldAt = null;
@@ -1295,6 +1308,7 @@ export class SceneLink {
         play.asked = ahead;
         this.want("play", performance.now(), ahead);
       }
+      pathPlayTick(this, play, frameTime);
       requestAnimationFrame(tick);
     };
     this.want("play", performance.now(), from);
@@ -1517,6 +1531,7 @@ export function hintFor(link) {
   if (link.picking) return "Click a surface in the picture to turn around it. Esc cancels.";
   if (link.looking) return "Move the mouse to look around. W A S D move, Q and E go down and up, Shift is faster, Alt slower, the wheel sets the speed. Let go of the right button to stop looking.";
   if (link.free) return "W A S D move, Q and E go down and up, Shift is faster, Alt slower; hold the right button to look around. Drag to turn around the focus point, Shift-drag or middle-drag to slide, the wheel moves closer, double-click a surface to fly there. Z and C tilt, X levels, - and = (or Ctrl and the wheel) change the lens. F looks at Mario, R returns to the recorded camera.";
+  if (link.pathOn) return "The camera follows the camera path as the scene plays, steps and seeks. Moving the camera starts Free camera from here; R returns to the recorded camera.";
   if (link.rig) return rigHint(link.rig, link.ghosts);
   if (link.view) return "The stage seen from this ghost's own camera as it plays. Moving the camera starts Free camera from here; R returns to the recorded camera.";
   return "W A S D move the camera from this picture, Q and E go down and up; dragging, scrolling, double-clicking or holding the right button move it too. Left and Right (or , and .) step one frame, Space plays.";
@@ -1546,7 +1561,7 @@ function SpeedControl({ link }) {
 function CameraBar({ link, tuning, setTuning }) {
   const available = link.freeAvailable, reason = link.scene.free_camera.reason;
   return html`<div class="scene-lab-bar" aria-label="Camera">
-    <button type="button" aria-pressed=${!link.free && !link.view && !link.rig} onclick=${(event) => link.recorded(event.timeStamp)}
+    <button type="button" aria-pressed=${!link.free && !link.view && !link.rig && !link.pathOn} onclick=${(event) => link.recorded(event.timeStamp)}
         title="Show what the player saw (R)">Recorded camera</button>
     ${link.ghosts.map((ghost) => html`<button type="button" key=${ghost.ref} class="scene-lab-view"
         aria-pressed=${!link.free && link.view === ghost.ref} disabled=${!available}
@@ -1651,6 +1666,14 @@ export function TunePanel({ link = null } = {}) {
   </section>`;
 }
 
+// The picture's corner: which camera it is drawn from.
+function cameraTag(link) {
+  if (link.free) return "Free camera";
+  if (link.pathOn) return "Camera path";
+  if (link.rig) return rigName(link.rig, link.ghosts);
+  return link.view ? viewName(link.ghosts, link.view) : "Recorded camera";
+}
+
 // `ghosts`: the ghost panel, right under the player card.
 function Player({ link, canvas, surface, ghosts }) {
   const [tuning, setTuning] = useState(false);
@@ -1659,9 +1682,7 @@ function Player({ link, canvas, surface, ghosts }) {
     <div class="scene-lab-stage">
       <canvas ref=${canvas} width="640" height="480" class=${classes.filter(Boolean).join(" ")}
         aria-label="The recording's picture" ...${pointerHandlers(link, surface)}></canvas>
-      <span class=${`scene-lab-tag ${link.free ? "is-free" : link.view || link.rig ? "is-view" : ""}`}>${link.free
-        ? "Free camera" : link.rig ? rigName(link.rig, link.ghosts) : link.view ? viewName(link.ghosts, link.view)
-        : "Recorded camera"}</span>
+      <span class=${`scene-lab-tag ${link.free ? "is-free" : link.view || link.rig || link.pathOn ? "is-view" : ""}`}>${cameraTag(link)}</span>
       ${link.drawing && html`<span class="scene-lab-busy">Drawing...</span>`}
       ${cueFor(link) && html`<p class="scene-lab-cue" aria-hidden="true">${cueFor(link)}</p>`}
     </div>
@@ -1671,6 +1692,7 @@ function Player({ link, canvas, surface, ghosts }) {
     <${RecordBar} link=${link} />
     <${CameraBar} link=${link} tuning=${tuning} setTuning=${setTuning} />
     <${CameraSlots} link=${link} />
+    <${PathBar} link=${link} />
     <${SaveStates} link=${link} />
     <${Readout} link=${link} />
   </section>
