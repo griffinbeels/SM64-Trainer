@@ -18,6 +18,13 @@ test and `tools/find_uilab.py` for every tool that goes through uilab; a tool th
 imports Playwright itself calls it. `tests/test_browser_guard.py` holds both
 guards: the source scan of every launch path, and the cursor clip read after
 every browser-lane test (`cursor_clip`, `left_clipped`).
+
+The same door gives every page RESOURCE_TIMING_BUFFER, also before any script of
+its own. Chromium keeps 250 resource-timing entries per page and silently drops
+the rest; the app loads about 260 at startup once a database has attempts
+(measured 2026-11-08). A probe waiting for one request's entry then waits
+forever although the server answered it: three special-stage tests did, for a
+late `/api/marelo`. Raising the buffer after load cannot recover a dropped entry.
 """
 from __future__ import annotations
 
@@ -56,8 +63,11 @@ POINTER_LOCK_STAND_IN = r"""
 })()
 """
 
+RESOURCE_TIMING_BUFFER = "performance.setResourceTimingBufferSize(100000)"
+
+
 def install() -> None:
-    """Every browser context Playwright makes in this process runs the stand-in first. Idempotent
+    """Every browser context Playwright makes in this process runs both scripts first. Idempotent
     (the mark is on Playwright's own class, so this module imported under two names patches once);
     nothing to do where Playwright is not installed."""
     try:
@@ -69,9 +79,10 @@ def install() -> None:
         return
 
     async def armed(context):
-        await context.add_init_script(script=POINTER_LOCK_STAND_IN)
-        for page in context.pages:              # the page a persistent launch opens with
-            await page.evaluate(POINTER_LOCK_STAND_IN)
+        for script in (POINTER_LOCK_STAND_IN, RESOURCE_TIMING_BUFFER):
+            await context.add_init_script(script=script)
+            for page in context.pages:          # the page a persistent launch opens with
+                await page.evaluate(script)
         return context
 
     new_context = Browser.new_context
