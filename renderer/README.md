@@ -72,12 +72,12 @@ combine with the GPL v2. The complete corresponding source is:
   upstream's Zilmar functions to `GLideN64_<name>` and its `DllMain` to
   `GLideN64_DllMain` (`stage_renderer_entries`), so the capture layer
   exports those names and calls the renderer's; their bodies are unchanged;
-- the libraries it links that are not in this repository: Qt 5.12.12 (the
-  qtbase source, which `tools/build_renderer_libs.py` builds as "The three
-  prebuilt libraries" below says, with `renderer/patches/no-xbrz.json`), and
-  FreeType 2.5.3, libpng 1.6.32 and zlib 1.2.8, which the upstream tree
-  carries only as prebuilt `projects/msvc/lib/rel/*.lib` files, without the
-  scripts that built them. `licenses/README.md` points to each source.
+- the libraries it links that are not in this repository: Qt 5.12.12, and
+  FreeType 2.5.3, libpng 1.6.32 and zlib 1.2.8, each built from its
+  project's release archive by `tools/build_renderer_libs.py` as "The
+  prebuilt libraries" below says. Every one of those archives is attached to
+  each release (`SM64Trainer-third-party-source-plugin.tar`, written by
+  `tools/corresponding_source.py`).
 
 Project64 shows the plugin's own About box (the credits and the build id).
 The renderer's About dialog is not reachable from Project64.
@@ -105,19 +105,31 @@ The host tests never need MSBuild: `tools/build_plugin.py`
 `build_test_plugin` links the same capture layer with a stand-in renderer
 into a test `sm64_trainer_gfx.dll` that never enters the bundle.
 
-### The three prebuilt libraries
+### The prebuilt libraries
 
-The upstream project links three static libraries it builds itself:
-`osal.lib`, `libGLideNHQ.lib` and `GLideNUI.lib` (the settings dialog, which
-needs a static Qt). The tool takes each from the build cache by its hash,
-`prebuilt/<sha256>/<name>` (or the cache root, where the first builds were
-kept), and refuses any file whose hash is not the one in `build-inputs.json`,
-so checkouts pinned to different builds share one cache. They are not in git
-(`GLideNUI.lib` alone is 85 MB).
+The plugin links four static libraries: three the upstream project builds
+itself, `osal.lib`, `libGLideNHQ.lib` and `GLideNUI.lib` (the settings
+dialog, which needs a static Qt), and FreeType's `freetype253MT.lib`. The tool
+takes each from the build cache by its hash, `prebuilt/<sha256>/<name>` (or
+the cache root, where the first builds were kept), and refuses any file whose
+hash is not the one in `build-inputs.json`, so checkouts pinned to different
+builds share one cache. They are not in git (`GLideNUI.lib` alone is 85 MB).
 
-`tools/build_renderer_libs.py` (since 2026-11-07) builds `libGLideNHQ.lib`
-and `GLideNUI.lib` from one staged copy of the pinned tree. Two licenses
-decide what is in them, because GLideN64 is GPL v2 only: Qt is 5.12.12, and
+`tools/build_renderer_libs.py` builds all four from pinned sources: upstream's
+three projects from one staged copy of the pinned tree (since 2026-11-07),
+and, since 2026-11-08, FreeType 2.5.3, libpng 1.6.32 and zlib 1.2.8 from
+their release archives (`build-inputs.json` `libraries`). Upstream's tree
+carries those three only as prebuilt `projects/msvc/lib` files without their
+build files, so the plugin no longer uses any of them: the staging removes
+that folder, `libGLideNHQ.lib` merges the libpng and zlib built here, and the
+plugin links the FreeType built here. Each is built with its project's own
+MSVC build files and release settings (zlib's `win32/Makefile.msc`, libpng's
+`scripts/makefile.vcwin32`, FreeType's `builds/windows/vc2010` "Release
+Multithreaded"), with the static CRT (`/MT`) that upstream's binaries used,
+and repeatable (`/Brepro`, `/pathmap`). The versions are the ones upstream's
+binaries are: their version strings read zlib 1.2.8 and libpng 1.6.32, and
+GLideN64 compiles against FreeType 2.5.3's headers. Two licenses decide what
+is in the upstream three, because GLideN64 is GPL v2 only: Qt is 5.12.12, and
 xBRZ is left out.
 
 `GLideNUI.lib` is built against Qt 5.12.12: qtbase from the official
@@ -163,8 +175,8 @@ upstream tree stops the build instead of patching the wrong place:
 - a `GLideN64.ini` or per-game setting that names an xBRZ mode (9 to 13)
   loads as None (0).
 
-Nothing in the trainer selects an xBRZ mode. `libGLideNHQ.lib` is built
-repeatable the same way. `osal.lib` was produced once (2026-09) from the same
-pinned tree with MSVC, Windows SDK 10.0.26100 and `/MT`. Rebuilding any of
-them is only needed when the pinned upstream tree, the Qt version or a patch
-changes; the pin in `build-inputs.json` changes with them.
+Nothing in the trainer selects an xBRZ mode. `libGLideNHQ.lib` and
+`osal.lib` are built repeatable the same way (`osal.lib` without a program
+database, whose path `/pathmap` would rewrite). Rebuilding any of them is only
+needed when the pinned upstream tree, the Qt version, a library source or a
+patch changes; the pin in `build-inputs.json` changes with them.

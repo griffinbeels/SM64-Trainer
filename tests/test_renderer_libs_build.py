@@ -131,9 +131,53 @@ def test_the_settings_window_headers_get_their_own_include_guards(staged_tree):
     assert {int(os.stat(path).st_mtime) for path in folder.iterdir()} == {libs.FIXED_MTIME}
 
 
-def test_both_library_projects_build_repeatable_and_link_what_5_12_needs(staged_tree):
+def test_the_library_projects_build_repeatable_and_link_what_5_12_needs(staged_tree):
     msvc = staged_tree / "projects" / "msvc"
     ui = (msvc / "GLideNUI.vcxproj").read_bytes()
     assert ui.count(libs.LIB_ANCHOR + b"Qt5AccessibilitySupport.lib;") == 1
-    for project in libs.LIBRARIES.values():
+    for project in ("GLideNUI.vcxproj", "libGLideNHQ.vcxproj"):
         assert (msvc / project).read_bytes().count(libs.BREPRO) == 1, project
+    # osal and FreeType get /Brepro from a property sheet (no librarian options
+    # of their own to anchor on); osal also writes no program database.
+    for props in (libs.REPRO_PROPS, libs.OSAL_PROPS):
+        assert b"<AdditionalOptions>/Brepro %(AdditionalOptions)</AdditionalOptions>" in props
+    assert b"<DebugInformationFormat>None</DebugInformationFormat>" in libs.OSAL_PROPS
+
+
+def test_every_prebuilt_library_has_a_build_from_pinned_sources():
+    """Each library the plugin links is built by tools/build_renderer_libs.py:
+    upstream's three projects, and FreeType, libpng and zlib, whose sources
+    upstream's tree does not carry (it ships their .lib files alone)."""
+    inputs = renderer.inputs()
+    built = set(libs.LIBRARIES) | {"freetype253MT.lib"}
+    assert set(inputs["prebuilt_libraries"]) == built
+    assert {name: spec["version"] for name, spec in inputs["libraries"].items()} == {
+        "zlib": "1.2.8", "libpng": "1.6.32", "freetype": "2.5.3"}
+    for spec in inputs["libraries"].values():
+        assert spec["version"] in spec["url"] and spec["folder"].endswith(spec["version"])
+        assert re.fullmatch(r"[0-9a-f]{64}", spec["sha256"])
+
+
+def test_the_plugin_links_none_of_upstreams_prebuilt_binaries(tmp_path):
+    """Upstream's projects/msvc/lib holds FreeType, libpng and zlib builds
+    without their build files. The staged plugin tree keeps none of them: its
+    one library there is the FreeType built from source, where
+    GLideN64.vcxproj looks for it."""
+    cache = renderer.default_cache()
+    archive = cache / f"GLideN64-{renderer.inputs()['upstream']['commit']}.zip"
+    if not archive.is_file():
+        pytest.skip(f"the pinned upstream archive is not in the build cache ({archive})")
+    pristine = renderer.pristine_source(cache, tmp_path / "upstream", None)
+    libraries = {}
+    for name in renderer.inputs()["prebuilt_libraries"]:
+        libraries[name] = tmp_path / "built" / name
+        libraries[name].parent.mkdir(exist_ok=True)
+        libraries[name].write_bytes(b"built from source: " + name.encode())
+    staged = tmp_path / "staged"
+    renderer.stage(pristine, staged, libraries, "0" * 64 + "-gpu-runtime")
+    msvc = staged / "projects" / "msvc"
+    linked = sorted(p.relative_to(msvc).as_posix() for p in (msvc / "lib").rglob("*") if p.is_file())
+    assert linked == ["lib/rel/freetype253MT.lib"]
+    assert (msvc / "lib" / "rel" / "freetype253MT.lib").read_bytes() == b"built from source: freetype253MT.lib"
+    project = (msvc / "GLideN64.vcxproj").read_text(encoding="utf-8")
+    assert "<AdditionalLibraryDirectories Condition=\"'$(MSBuildAssemblyVersion)'!='12.0'\">lib/rel" in project

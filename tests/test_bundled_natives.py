@@ -73,11 +73,11 @@ def test_the_packaged_exe_carries_both():
 def test_renderer_inputs_are_pinned_by_hash():
     """The renderer's build inputs are named in one tracked file that the build
     tool refuses to deviate from: the upstream archive, its tree, and the
-    three prebuilt libraries."""
+    four prebuilt libraries."""
     build = _tool("build_renderer")
     inputs = build.inputs()
     assert inputs["upstream"]["commit"] == build.witness.PIN
     assert inputs["upstream"]["tree_sha256"] == build.witness.TREE_HASH
     assert len(inputs["upstream"]["archive_sha256"]) == 64
-    assert set(inputs["prebuilt_libraries"]) == {"GLideNUI.lib", "libGLideNHQ.lib", "osal.lib"}
+    assert set(inputs["prebuilt_libraries"]) == {"GLideNUI.lib", "libGLideNHQ.lib", "osal.lib", "freetype253MT.lib"}
     assert all(len(digest) == 64 for digest in inputs["prebuilt_libraries"].values())

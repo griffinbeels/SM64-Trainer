@@ -9,8 +9,9 @@
   },
   "prebuilt_libraries": {
     "GLideNUI.lib": "c6520683570bb6e3cd857945ef2151de9da8c58e4f83a156784643da5973684e",
-    "libGLideNHQ.lib": "81729b8c8307fd18f1ae2d571ddd9babaa3c4edd945a419de5bb0a0e611c6db8",
-    "osal.lib": "89ad6c9b8e6a1e5a36aeb56c549f9f9867ef5dd6de5329c6ebbc5ee213e1b7f9"
+    "libGLideNHQ.lib": "90d1eae567042622f674c32dc5062e6c7d0ab73dbe6c3ea1b0b8d0c1a07582b8",
+    "osal.lib": "d48e1e78edefe97ecf655ddddcea6afd83e60eaa272cb44e0614a61f686a9fde",
+    "freetype253MT.lib": "7b034451e783cf7016f0c743492b3b28fe1a195bb33d90b59e88af7f3e92f9b2"
   },
   "qt": {
     "project": "qtbase 5.12.12, static, linked into GLideNUI.lib (tools/build_renderer_libs.py)",
@@ -26,5 +27,28 @@
   "jom": {
     "url": "https://download.qt.io/official_releases/jom/jom_1_1_4.zip",
     "sha256": "d533c1ef49214229681e90196ed2094691e8c4a0a0bef0b2c901debcb562682b"
+  },
+  "libraries": {
+    "zlib": {
+      "version": "1.2.8",
+      "url": "https://zlib.net/fossils/zlib-1.2.8.tar.gz",
+      "sha256": "36658cb768a54c1d4dec43c3116c27ed893e88b02ecfcb44f2166f9c0b7f2a0d",
+      "folder": "zlib-1.2.8",
+      "license": "Zlib"
+    },
+    "libpng": {
+      "version": "1.6.32",
+      "url": "https://downloads.sourceforge.net/project/libpng/libpng16/older-releases/1.6.32/libpng-1.6.32.tar.xz",
+      "sha256": "c918c3113de74a692f0a1526ce881dc26067763eb3915c57ef3a0f7b6886f59b",
+      "folder": "libpng-1.6.32",
+      "license": "Libpng"
+    },
+    "freetype": {
+      "version": "2.5.3",
+      "url": "https://download-mirror.savannah.gnu.org/releases/freetype/freetype-old/freetype-2.5.3.tar.bz2",
+      "sha256": "c0848b29d52ef3ca27ad92e08351f023c5e24ce8cea7d8fe69fc96358e65f75e",
+      "folder": "freetype-2.5.3",
+      "license": "FTL OR GPL-2.0-or-later"
+    }
   }
 }
