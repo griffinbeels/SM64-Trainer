@@ -73,8 +73,9 @@ combine with the GPL v2. The complete corresponding source is:
   `GLideN64_DllMain` (`stage_renderer_entries`), so the capture layer
   exports those names and calls the renderer's; their bodies are unchanged;
 - the libraries it links that are not in this repository: Qt 5.12.12 (the
-  qtbase source, which `tools/build_renderer_ui.py` builds as "The three
-  prebuilt libraries" below says), and FreeType 2.5.3, libpng 1.6.32 and zlib 1.2.8, which the upstream tree
+  qtbase source, which `tools/build_renderer_libs.py` builds as "The three
+  prebuilt libraries" below says, with `renderer/patches/no-xbrz.json`), and
+  FreeType 2.5.3, libpng 1.6.32 and zlib 1.2.8, which the upstream tree
   carries only as prebuilt `projects/msvc/lib/rel/*.lib` files, without the
   scripts that built them. `licenses/README.md` points to each source.
 
@@ -114,8 +115,12 @@ kept), and refuses any file whose hash is not the one in `build-inputs.json`,
 so checkouts pinned to different builds share one cache. They are not in git
 (`GLideNUI.lib` alone is 85 MB).
 
-`GLideNUI.lib` is built by `tools/build_renderer_ui.py` (since 2026-11-07),
-against Qt 5.12.12: qtbase from the official
+`tools/build_renderer_libs.py` (since 2026-11-07) builds `libGLideNHQ.lib`
+and `GLideNUI.lib` from one staged copy of the pinned tree. Two licenses
+decide what is in them, because GLideN64 is GPL v2 only: Qt is 5.12.12, and
+xBRZ is left out.
+
+`GLideNUI.lib` is built against Qt 5.12.12: qtbase from the official
 `qtbase-everywhere-src-5.12.12.tar.xz` (its md5 and SHA-256 are pinned in
 `build-inputs.json` with jom), built static with:
 
@@ -136,15 +141,30 @@ FreeType 2.5.3; Qt's newer backend needed a symbol that library lacks.
 
 Then upstream's `GLideNUI.vcxproj` is built from the pinned tree against
 that Qt, as a static library that merges the Qt libraries it links (which is
-why the final DLL has no Qt or VC runtime DLL dependency), with three staging
-edits and no code change: `AboutDialog.h` and `ConfigDialog.h` get their own
+why the final DLL has no Qt or VC runtime DLL dependency). Besides the xBRZ
+patch below, it gets three staging edits that change no code: `AboutDialog.h` and `ConfigDialog.h` get their own
 include guards (each used the macro uic writes into its generated header, so
 whichever came second was skipped), the project also links
 `Qt5AccessibilitySupport.lib` (5.12's Windows platform plugin needs it), and
 the library is built repeatable (`/Brepro`, fixed resource file times, and
 `/pathmap` instead of local paths). Two builds give the same bytes.
 
-`osal.lib` and `libGLideNHQ.lib` were produced once (2026-09) from the same
+xBRZ, the texture upscaler in GLideNHQ (`src/GLideNHQ/TextureFilters_xbrz.*`,
+by Zenju), is licensed GPL v3 only, so it cannot be combined with GLideN64
+either. `renderer/patches/no-xbrz.json` leaves it out of both libraries. Each
+edit names text that must occur exactly once in its file, so a changed
+upstream tree stops the build instead of patching the wrong place:
+
+- `libGLideNHQ.lib` no longer compiles `TextureFilters_xbrz.cpp`, and its
+  five xBRZ modes enhance nothing, as None does;
+- the settings window no longer lists the five xBRZ modes (they were the
+  last five entries, so the others keep their numbers), and the
+  "Decrease color banding" option no longer recommends xBRZ;
+- a `GLideN64.ini` or per-game setting that names an xBRZ mode (9 to 13)
+  loads as None (0).
+
+Nothing in the trainer selects an xBRZ mode. `libGLideNHQ.lib` is built
+repeatable the same way. `osal.lib` was produced once (2026-09) from the same
 pinned tree with MSVC, Windows SDK 10.0.26100 and `/MT`. Rebuilding any of
-them is only needed when the pinned upstream tree or the Qt version changes;
-the pin in `build-inputs.json` changes with them.
+them is only needed when the pinned upstream tree, the Qt version or a patch
+changes; the pin in `build-inputs.json` changes with them.

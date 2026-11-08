@@ -8,12 +8,12 @@
     "license": "GPL-2.0"
   },
   "prebuilt_libraries": {
-    "GLideNUI.lib": "fc51a2e7efdda236d58d27b629bd706ea391b09d294ecb4228e01e69319d6e3b",
-    "libGLideNHQ.lib": "637a6429e01a384e496e0f0e67829ecffe88240b06976ef03ba3c1b393c3263d",
+    "GLideNUI.lib": "c6520683570bb6e3cd857945ef2151de9da8c58e4f83a156784643da5973684e",
+    "libGLideNHQ.lib": "81729b8c8307fd18f1ae2d571ddd9babaa3c4edd945a419de5bb0a0e611c6db8",
     "osal.lib": "89ad6c9b8e6a1e5a36aeb56c549f9f9867ef5dd6de5329c6ebbc5ee213e1b7f9"
   },
   "qt": {
-    "project": "qtbase 5.12.12, static, linked into GLideNUI.lib (tools/build_renderer_ui.py)",
+    "project": "qtbase 5.12.12, static, linked into GLideNUI.lib (tools/build_renderer_libs.py)",
     "version": "5.12.12",
     "url": "https://download.qt.io/archive/qt/5.12/5.12.12/submodules/qtbase-everywhere-src-5.12.12.tar.xz",
     "md5": "d29462524b32e0e5192a48432242b745",

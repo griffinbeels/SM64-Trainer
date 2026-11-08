@@ -19,10 +19,10 @@ Inputs, all pinned in renderer/build-inputs.json:
   * the overlay: plugin/gfxwrap files staged by tools/stage_link_witness.py;
   * the capture layer: plugin/gfxwrap files staged here, each compiled as
     tools/build_plugin.py compiled the old wrapper (`CAPTURE_SETTINGS`);
-  * three static libraries the upstream project links (GLideNUI needs a
-    static Qt 5.12.12 and tools/build_renderer_ui.py builds it;
-    renderer/README.md records how all three were produced). They live in
-    the build cache by hash, never in git.
+  * three static libraries the upstream project links (tools/build_renderer_libs.py
+    builds two of them: libGLideNHQ without xBRZ, GLideNUI with a static
+    Qt 5.12.12; renderer/README.md records how all three were produced).
+    They live in the build cache by hash, never in git.
 
 The build cache is %LOCALAPPDATA%/SM64Trainer/build-cache/renderer so it
 survives worktrees. Intermediates stay in a scratch folder that is removed;
@@ -231,7 +231,7 @@ def prebuilt_libraries(cache: Path) -> dict[str, Path]:
         else:
             raise FileNotFoundError(
                 f"{name} {expected} is not in the build cache {cache}; renderer/README.md says how it is "
-                "produced (GLideNUI.lib: tools/build_renderer_ui.py)")
+                "produced (GLideNUI.lib and libGLideNHQ.lib: tools/build_renderer_libs.py)")
     return found
 
 
