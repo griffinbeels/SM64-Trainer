@@ -66,6 +66,9 @@ export const CREDIT_GROUPS = [
       { name: "SM64 emulator guide", by: "wermipls",
         url: "https://wermi.neocities.org/emuguide/",
         what: "The Project64 setup steps the trainer's own setup links to." },
+      { name: "SM64Scripts", by: "Xander (MikeXander)",
+        url: "https://github.com/MikeXander/SM64Scripts",
+        what: "His camera paths, freeze frames and slow motion gave the Scene viewer its camera path ideas." },
     ],
   },
   {
