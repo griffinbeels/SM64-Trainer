@@ -87,14 +87,16 @@ const NAME_SIZES = ["Mario: reading automatic dialog"];
 export function ActionStep({ link }) {
   useEffect(() => { loadActions(link); }, [link.scene, link.follow, link.scene?.frames.length]);
   const answer = answerOf(link), line = actionLine(link, answer), usable = !!answer?.actions.length;
+  // The buttons come first, so the name's kept place trails at the row's end instead of opening a gap
+  // between them.
   return html`<div class="scene-lab-action" role="group" aria-label="Action">
     <button type="button" disabled=${!usable} onclick=${(event) => stepAction(link, -1, event.timeStamp)}
         aria-label="Back to the last action change" title="Back to the frame this action began, or the one before ([)">
       <${Icon} name="stepBack" size=${14} /></button>
-    <output class="scene-lab-action-name" title=${line.title || line.text}>
-      <${SteadyText} text=${line.text} sizes=${NAME_SIZES} /></output>
     <button type="button" disabled=${!usable} onclick=${(event) => stepAction(link, 1, event.timeStamp)}
         aria-label="On to the next action change" title="On to the frame the next action begins (])">
       <${Icon} name="stepForward" size=${14} /></button>
+    <output class="scene-lab-action-name" title=${line.title || line.text}>
+      <${SteadyText} text=${line.text} sizes=${NAME_SIZES} /></output>
   </div>`;
 }
