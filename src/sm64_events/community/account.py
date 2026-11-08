@@ -321,7 +321,10 @@ class CommunityAccount:
             raise CommunityError("invalid_response")
         return value
 
-    async def request_bytes(self, method, path, *, authenticated=True, http=None, limit=2 << 20, **kwargs):
+    async def request_bytes(self, method, path, *, authenticated=True, http=None, limit=2 << 20,
+                            response_headers=None, **kwargs):
+        """The response body. A dict passed as `response_headers` receives the
+        response's headers, with lowercase names."""
         self._enabled()
         if not isinstance(path, str) or not path.startswith(("/v1/", "/v2/")) or "?" in path or "#" in path or ".." in path:
             raise CommunityError("invalid_route")
@@ -344,6 +347,8 @@ class CommunityAccount:
                     if status in ("rename_required", "consent_required", "suspended", "deleted", "not_invited") and self._profile:
                         self._profile = {**self._profile, "status": status}
             raise
+        if response_headers is not None:
+            response_headers.update((name.lower(), value) for name, value in result.headers.items())
         return result.content
 
     async def refresh(self):

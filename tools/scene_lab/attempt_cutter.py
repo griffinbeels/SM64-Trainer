@@ -60,6 +60,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 from collections import deque
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -85,6 +86,9 @@ TAKE_ZLIB_LEVEL = 6            # package.compress: about 6x faster than level 9 
 SAME_START = timedelta(seconds=1 / attempt_span.FPS)   # an attempt still open began no later than this one
 _BELOW_NORMAL = getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0)
 _SERIAL = itertools.count(1)   # takes from one start (a behind take, an abandoned one) never share a file
+# This child's own mark in every package name: kept scenes outlive the server (attempt_scenes.py),
+# and the next child counts its takes from 1 again, so its names must never meet theirs.
+_RUN = uuid.uuid4().hex[:8]
 TASK_INDEX = tap.TASK_FIELDS.index("task_index")   # a capture's task index (a live_spool.TaskRef's index)
 
 
@@ -228,7 +232,7 @@ class Take(threading.Thread):
         self.seats.append(self._new_seat())
 
     def _new_seat(self) -> Seat:
-        return Seat(Path(self.brain.folder) / f"take-{self.first.index}-{next(_SERIAL)}{PACKAGE_SUFFIX}",
+        return Seat(Path(self.brain.folder) / f"take-{_RUN}-{self.first.index}-{next(_SERIAL)}{PACKAGE_SUFFIX}",
                     len(self.seats))
 
     def _seat(self) -> Seat:

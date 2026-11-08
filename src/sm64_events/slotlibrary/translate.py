@@ -113,13 +113,14 @@ class Translation:
     unmapped: tuple[tuple[int, int, str], ...] = ()   # (slot offset, value, kind): pointers with no place there
 
     def words(self) -> str:
-        """What the page says about it, in plain words."""
+        """What the page says about it, in plain words. The first sentence is short on purpose: the Save states row
+        shows one line (round 9) and the rest on hover."""
         source, target = self.source.upper(), self.target.upper()
-        said = [f"This save state is from the {source} version. The Trainer changed it to work in your {target} game."]
+        said = [f"The Trainer changed it from the {source} version to your {target} game."]
         for gone in self.removed:
             instead = (f"Your {target} game has {_a(gone.instead)} there instead."
                        if gone.instead else "Nothing is there instead.")
-            said.append(f"It left out one thing the {target} game does not have: {_a(gone.behaviour)}. {instead}")
+            said.append(f"It left out {_a(gone.behaviour)}, which the {target} game does not have. {instead}")
         return " ".join(said)
 
 

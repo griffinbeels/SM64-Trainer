@@ -59,7 +59,19 @@ def lab(tmp_path, recording, monkeypatch):
               "pj64_plugin": str(tmp_path / "Plugin"), "map": str(tmp_path / "MappingUS.map"), "lab_root": str(root)}
     path = tmp_path / "lab.json"
     path.write_text(json.dumps(config), encoding="utf-8")
-    return {"config": path, "root": root, "folder": root / "attempts"}
+    journal = FakeJournal(tmp_path / "data" / "tracker.db")
+    return {"config": path, "root": root, "journal": journal,
+            "folder": attempt_scenes.journal_folder(root / "attempts", journal)}
+
+
+class FakeJournal:
+    """storage/db.py Database as the attempt scenes read it: its file and one attempt by id."""
+
+    def __init__(self, path: Path):
+        self.path, self.rows = path, {}
+
+    def attempt(self, attempt_id: int):
+        return self.rows.get(attempt_id)
 
 
 class FakeLease:
@@ -99,10 +111,11 @@ def _attempt(attempt_id: int, ended_seconds: float, *, anchor=5020, closed=5150,
                            ended_utc=(T0 + timedelta(seconds=ended_seconds)).isoformat())
 
 
-def _tracker():
+def _tracker(lab=None, journal=None):
     calls = []
     return SimpleNamespace(on_replay_history=lambda *args, **options: calls.append((args, options)),
-                           broadcaster=Broadcaster(), calls=calls)
+                           broadcaster=Broadcaster(), calls=calls,
+                           db=journal or (lab["journal"] if lab is not None else None))
 
 
 def _app(lab, **options):
@@ -127,6 +140,7 @@ def _scenes(client, *ids) -> dict:
 
 def test_the_probe_says_whether_the_live_recording_runs(lab):
     app, server, cutters = _app(lab)
+    server.follow_attempts(_tracker(lab))
     with TestClient(app) as client:
         assert client.get("/api/scene-lab").json() == {
             "lab": "scene-viewer", "live": {"recording": False, "reason": attempt_scenes.STARTING, "on": True,
@@ -149,6 +163,7 @@ def test_the_switch_stops_and_starts_the_recording_and_the_next_server_keeps_it_
     """The Scene viewer's switch: off deletes the lease (the wrapper stops within a second), on
     renews it again; the cutter keeps running for the scenes already cut; off survives a restart."""
     app, server, cutters = _app(lab)
+    server.follow_attempts(_tracker(lab))
     with TestClient(app) as client:
         lease = FakeLease.made[-1]
         cutters[0].on_event({"live": {"recording": True, "reason": None}})
@@ -168,7 +183,7 @@ def test_the_switch_stops_and_starts_the_recording_and_the_next_server_keeps_it_
 
 def test_each_completed_attempt_is_cutting_at_once_and_the_replay_still_gets_its_call(lab, recording):
     app, server, cutters = _app(lab)
-    tracker = _tracker()
+    tracker = _tracker(lab)
     replay_hook = tracker.on_replay_history
     server.follow_attempts(tracker)
     with TestClient(app) as client:
@@ -193,7 +208,7 @@ def test_each_completed_attempt_is_cutting_at_once_and_the_replay_still_gets_its
 
 def test_an_attempt_opens_by_its_id_and_every_refusal_says_why(lab, recording):
     app, server, cutters = _app(lab)
-    tracker = _tracker()
+    tracker = _tracker(lab)
     server.follow_attempts(tracker)
     with TestClient(app) as client:
         tracker.on_replay_history([_attempt(12, 10), _attempt(13, 20), _attempt(14, 30)], None)
@@ -219,7 +234,7 @@ def test_an_attempt_opens_by_its_id_and_every_refusal_says_why(lab, recording):
 
 def test_the_event_stream_announces_where_attempts_may_start(lab):
     app, server, cutters = _app(lab)
-    tracker = _tracker()
+    tracker = _tracker(lab)
     server.follow_attempts(tracker)
     with TestClient(app):
         # Shaped as tracking/service.py drains the tracker's notices: the arm's frame is the
@@ -236,39 +251,99 @@ def test_the_event_stream_announces_where_attempts_may_start(lab):
         {"op": "stop", "segment_id": 4}]
 
 
-def test_the_newest_twenty_attempts_keep_their_scenes_and_the_open_one_is_spared(lab, recording):
+def _server(lab, journal=None):
     app, server, cutters = _app(lab)
-    tracker = _tracker()
+    tracker = _tracker(lab, journal)
     server.follow_attempts(tracker)
+    return app, server, cutters, tracker
+
+
+def test_finished_scenes_survive_a_restart_and_only_for_the_attempt_the_journal_still_holds(lab, recording, tmp_path):
+    """His ask, 2026-11-08: "we should be able to keep ghosts after restarts." The next server
+    serves each finished scene again when the journal still holds that attempt id with the same
+    start and end; a take cut short by the stop is deleted, and so is a scene whose id now names
+    another attempt (a journal restored from a backup at the same path)."""
+    app, server, cutters, tracker = _server(lab)
+    kept, renamed, cut_short = _attempt(12, 10), _attempt(13, 20), _attempt(14, 30)
+    lab["journal"].rows.update({12: kept, 13: renamed, 14: cut_short})
     with TestClient(app) as client:
-        tracker.on_replay_history([_attempt(1, 1)], None)
-        oldest = cutters[0].ready(1, recording["scene"])
-        assert client.post("/api/scene-lab/open", json={"attempt": 1}).status_code == 200
-        for attempt_id in range(2, 22):                                  # 20 newer attempts
-            tracker.on_replay_history([_attempt(attempt_id, attempt_id)], None)
-            cutters[0].ready(attempt_id, recording["scene"])
-        assert _scenes(client, 1) == {} and oldest.is_file()             # dropped, but the viewer reads it
-        assert {"op": "forget", "id": 1} in cutters[0].notes
-        assert len(_scenes(client, *range(1, 23))) == attempt_scenes.RETAIN_ATTEMPTS
+        tracker.on_replay_history([kept, renamed, cut_short], None)
+        cutters[0].ready(12, recording["scene"])
+        cutters[0].ready(13, recording["scene"])
+        (lab["folder"] / "take-0a1b2c3d-20-1.sm64scene").write_bytes(b"14's take, still writing")
+        (lab["folder"] / "take-0a1b2c3d-20-1.grow").write_bytes(b"its publication")
+        assert _scenes(client, 12, 13, 14)["14"] == {"state": "cutting"}
+    lab["journal"].rows[13] = _attempt(13, 99)
+    again, _later, cutters, _tracked = _server(lab)
+    with TestClient(again) as client:
+        assert _scenes(client, 12, 13, 14) == {"12": {"state": "ready", "seconds": 9.7, "growing": False}}
+        opened = client.post("/api/scene-lab/open", json={"attempt": 12})
+        assert opened.status_code == 200 and opened.json()["attempt"] == 12
         client.post("/api/scene-lab/close")
-        tracker.on_replay_history([_attempt(22, 22)], None)
-        assert not oldest.exists() and not (lab["folder"] / "2.sm64scene").exists()
-        assert len(list(lab["folder"].glob("*.sm64scene"))) == attempt_scenes.RETAIN_ATTEMPTS - 1
+    assert sorted(path.name for path in lab["folder"].iterdir()) == [".owner.lock", "12.sm64scene",
+                                                                    attempt_scenes.INDEX_NAME]
+    other = FakeJournal(tmp_path / "other checkout" / "data" / "tracker.db")
+    other.rows.update(lab["journal"].rows)                      # the same ids, in another journal
+    elsewhere, _server_3, _cutters_3, _tracker_3 = _server(lab, other)
+    with TestClient(elsewhere) as client:
+        assert _scenes(client, 12) == {}
+    assert (lab["folder"] / "12.sm64scene").is_file()           # and that server never touched them
 
 
-def test_one_server_owns_the_folder_and_clears_what_a_previous_one_left(lab):
-    lab["folder"].mkdir(parents=True)
-    (lab["folder"] / "7.sm64scene").write_bytes(b"from a previous server")
-    (lab["folder"] / "take-3-1.sm64scene.partial").write_bytes(b"half")
-    first = attempt_scenes.AttemptScenes(lambda: lab["folder"], lambda folder, on_event: FakeCutter(folder, on_event))
+def test_a_purge_deletes_finished_scenes_skips_the_open_one_and_never_cuts_them_again(lab, recording):
+    app, server, cutters, tracker = _server(lab)
+    first, second = _attempt(21, 10), _attempt(22, 20)
+    lab["journal"].rows.update({21: first, 22: second})
+    with TestClient(app) as client:
+        tracker.on_replay_history([first, second], None)
+        open_one, other = cutters[0].ready(21, recording["scene"]), cutters[0].ready(22, recording["scene"])
+        assert client.post("/api/scene-lab/open", json={"attempt": 21}).status_code == 200
+        size = len(recording["scene"])
+        assert sorted((row["attempt"], row["bytes"], row["in_use"]) for row in server.scenes.holdings()) == [
+            (21, size, True), (22, size, False)]
+        assert server.scenes.purge([21, 22]) == {"deleted": [22], "bytes": size, "skipped": [21]}
+        assert open_one.is_file() and not other.exists()
+        assert _scenes(client, 21, 22) == {"21": {"state": "ready", "seconds": 9.7, "growing": False}}
+        assert {"op": "forget", "id": 22} in cutters[0].notes
+        notes = len(cutters[0].notes)
+        tracker.on_replay_history([first, second], None, replace=True)     # a re-projection hands both over again
+        assert len(cutters[0].notes) == notes and _scenes(client, 22) == {}
+        client.post("/api/scene-lab/close")
+    index = json.loads((lab["folder"] / attempt_scenes.INDEX_NAME).read_text(encoding="utf-8"))
+    assert [row["attempt"] for row in index["scenes"]] == [21]
+
+
+def test_one_server_owns_a_journal_folder_and_the_flat_layout_is_cleared_once(lab):
+    flat = lab["root"] / "attempts"
+    flat.mkdir(parents=True)
+    (flat / "7.sm64scene").write_bytes(b"from the flat layout")
+    (flat / "take-3-1.sm64scene.partial").write_bytes(b"half")
+
+    def scenes(journal=lambda: lab["journal"]):
+        return attempt_scenes.AttemptScenes(lambda: lab["folder"], lambda folder, on_event: FakeCutter(folder, on_event),
+                                            journal=journal, legacy=lambda: flat)
+    first = scenes()
     first.start()
-    assert first.problem is None and sorted(path.name for path in lab["folder"].iterdir()) == [".owner.lock"]
-    second = attempt_scenes.AttemptScenes(lambda: lab["folder"], lambda folder, on_event: FakeCutter(folder, on_event))
+    assert first.problem is None and first.cutter is not None
+    assert sorted(path.name for path in flat.iterdir()) == [".owner.lock", lab["folder"].name]
+    assert sorted(path.name for path in lab["folder"].iterdir()) == [".owner.lock", attempt_scenes.INDEX_NAME]
+    second = scenes()
     second.start()
     assert second.cutter is None and second.live() == {
         "recording": False, "reason": "Another Trainer server is cutting attempt scenes into this lab folder."}
     first.stop()
     second.stop()
+    older = attempt_scenes._lock(flat)                          # a server from before 2026-11-08 still cutting
+    (flat / "8.sm64scene").write_bytes(b"an older server's")
+    third = scenes()
+    third.start()
+    assert (flat / "8.sm64scene").is_file() and third.problem is None
+    third.stop()
+    older.close()
+    closed = scenes(journal=lambda: None)                       # a broadcast-only server has no journal open
+    closed.start()
+    assert closed.cutter is None and closed.problem == attempt_scenes.NO_JOURNAL
+    closed.stop()
 
 
 def test_a_cutter_that_exits_marks_its_attempts_and_starts_again(lab):
@@ -295,7 +370,7 @@ def test_a_cutter_that_exits_marks_its_attempts_and_starts_again(lab):
 def test_main_feeds_the_lab_from_its_own_tracker_only(monkeypatch, lab):
     import sm64_events.main as main
     monkeypatch.setenv("SM64_SCENE_LAB", str(lab["config"]))
-    tracker = _tracker()
+    tracker = _tracker(lab)
     replay_hook = tracker.on_replay_history
     app = main._mount_scene_lab(FastAPI(), tracker=tracker)
     assert app.state.scene_lab.live_on and tracker.on_replay_history is not replay_hook
@@ -317,7 +392,7 @@ def test_a_published_spawn_refits_the_slots_while_the_app_runs_and_the_thread_en
     world.live_world(game)
     game.save(0, world.make_slot())
     app, server, _cutters = _app(lab)
-    tracker = _tracker()
+    tracker = _tracker(lab)
     server.follow_spawns(tracker, game=lambda: game, library=None, log_file=tmp_path / refit.LOG_NAME)
     with TestClient(app):
         asyncio.run(tracker.broadcaster.publish(Event("spawned", 700, T0, {"level": 9, "area": 1})))
@@ -337,7 +412,7 @@ def test_end_to_end_the_real_cutter_child_cuts_a_completed_attempt_that_then_ope
     refs = RecordedSpool(recording["session"]).refs
     app, server, _cutters = _app(lab, cutter_factory=None, cutter_options={
         "spool_factory": "scene_spool_double:open_recorded", "extra_path": (ROOT / "tests",)})
-    tracker = _tracker()
+    tracker = _tracker(lab)
     server.follow_attempts(tracker)
     with TestClient(app) as client:
         attempt = SimpleNamespace(id=31, anchor_frame=5020, closed_frame=5150, outcome="success",
@@ -367,7 +442,7 @@ def test_a_completed_attempt_with_a_take_answers_ready_in_the_same_call(lab, rec
     broadcast that follows the hook): the answer must already be ready, growing, never omitted."""
     refs = RecordedSpool(recording["session"]).refs
     app, server, cutters = _app(lab)
-    tracker = _tracker()
+    tracker = _tracker(lab)
     server.follow_attempts(tracker)
     with TestClient(app) as client:
         cutters[0].on_event(_take_event(lab["folder"], refs, 20))
@@ -391,7 +466,7 @@ def test_two_attempts_from_one_start_are_both_ready_in_the_call_that_completes_t
     tracker's oldest open start, so the child keeps a take going for an attempt still open."""
     refs = RecordedSpool(recording["session"]).refs
     app, server, cutters = _app(lab)
-    tracker = _tracker()
+    tracker = _tracker(lab)
     server.follow_attempts(tracker)
     folder = lab["folder"]
     with TestClient(app) as client:
@@ -430,7 +505,7 @@ def test_a_growing_scene_opens_at_once_and_its_page_gets_each_new_stretch(lab, r
     refs = RecordedSpool(recording["session"]).refs
     lab["folder"].mkdir(parents=True, exist_ok=True)
     app, server, cutters = _app(lab, grow_seconds=0.05)
-    tracker = _tracker()
+    tracker = _tracker(lab)
     server.follow_attempts(tracker)
     with TestClient(app) as client:
         path, grow = lab["folder"] / "take-20-1.sm64scene", lab["folder"] / "take-20-1.grow"
@@ -488,7 +563,7 @@ def test_a_finished_scene_takes_the_recorders_sound_after_ready_and_says_why_whe
     for written, expect in (({"written": False, "reason": silent}, silent), ({"written": True, "reason": None}, None)):
         live = StubLive(written)
         app, server, cutters = _app(lab, live_audio=live)
-        tracker = _tracker()
+        tracker = _tracker(lab)
         server.follow_attempts(tracker)
         with TestClient(app) as client:
             assert client.get("/api/scene-lab").json()["live"]["sound"] == {

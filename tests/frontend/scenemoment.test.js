@@ -93,7 +93,7 @@ test("a server error shows in place", async () => {
   await waitFor(() => expect(container.querySelector(".is-bad")?.textContent).toMatch(/scene is gone/));
 });
 
-const CROSSED = "This save state is from the US version. The Trainer changed it to work in your JP game.";
+const CROSSED = "The Trainer changed it from the US version to your JP game.";
 
 test("a save state written into the other version's game shows its own flag and says so", async () => {
   answers = [{ id: "abc", exact: true, build: "us" },

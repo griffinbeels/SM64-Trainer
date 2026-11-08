@@ -2,7 +2,7 @@ import {authenticate,authenticateAdmin} from './auth.js';
 import {config,ready,LIMITS} from './config.js';
 import {ServiceError,requireThat,json,readJSON,exactQuery,boundedBody,hex64,uuid,integer,canonical,sha256,fail} from './errors.js';
 import {catalogFor,lookup,grade,targetKey,aboveCeiling} from './catalog.js';
-import {Store} from './store.js';
+import {Store,storedBytes} from './store.js';
 import {validateGHC1} from './codec.js';
 import {checkedName,prefixRange} from './names.js';
 import {encodeCursor,decodeCursor} from './cursors.js';
@@ -156,20 +156,47 @@ async function candidates({url,env,ctx,s,a,model}){
   const more=found.more,rows=found.rows.slice(0,query.pageSize),next=more&&page<3?await encodeCursor(env.CURSOR_SECRET,identity,search?found.after:[rows.at(-1).response_step,rows.at(-1).frames,rows.at(-1).id],page+1):null;
   return json({recordings:rows.map(r=>s.metadata(r)),coverage:{complete:!more,min_step:minStep,max_step:maxStep,base_step:baseStep,generation:model.generation},next_cursor:next});
 }
+// One stored range of a recording's object. A ghost's start follows the ghost's
+// encoded bytes in the same object, so an object with a start is read by range.
+async function objectBytes(env,ctx,key,sha256,range){
+  if(ctx?.exports?.AssetCache)return ctx.exports.AssetCache({props:{key,encoded_sha256:sha256,...(range?{range}:{})}}).fetch(new Request('https://internal.community/asset'));
+  const object=await (range?env.GHOSTS.get(key,{range}):env.GHOSTS.get(key));requireThat(object,'asset_missing','Recording unavailable.',404);return new Response(object.body);
+}
+const BINARY={'Content-Type':'application/octet-stream','Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff'};
 async function recording({url,env,ctx,s,a},rm){
-  exactQuery(url,[]);const r=await s.recording(a,rm[1]);if(!rm[2])return json(s.metadata(r));let response;
-  if(ctx?.exports?.AssetCache)response=await ctx.exports.AssetCache({props:{key:r.asset_key,encoded_sha256:r.encoded_sha256}}).fetch(new Request('https://internal.community/asset'));
-  else{const object=await env.GHOSTS.get(r.asset_key);requireThat(object,'asset_missing','Recording unavailable.',404);response=new Response(object.body);}
-  requireThat(response.ok,'asset_missing','Recording unavailable.',404);return new Response(response.body,{headers:{'Content-Type':'application/octet-stream','Content-Length':String(r.encoded_bytes),'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff','ETag':'"'+r.encoded_sha256+'"'}});
+  exactQuery(url,[]);const r=await s.recording(a,rm[1]);if(!rm[2])return json(s.metadata(r));
+  if(rm[2]==='/start'){
+    requireThat(r.start_bytes>0,'start_missing','This ghost has no start.',404);
+    const response=await objectBytes(env,ctx,r.asset_key,r.start_sha256,{offset:r.encoded_bytes,length:r.start_bytes});
+    requireThat(response.ok,'asset_missing','Recording unavailable.',404);return new Response(response.body,{headers:{...BINARY,'Content-Length':String(r.start_bytes),'ETag':'"'+r.start_sha256+'"'}});
+  }
+  // The ghost's bytes are unchanged for every client; a trainer that knows
+  // about starts reads these two headers, and older ones ignore them.
+  const response=await objectBytes(env,ctx,r.asset_key,r.encoded_sha256,r.start_bytes>0?{offset:0,length:r.encoded_bytes}:null);
+  requireThat(response.ok,'asset_missing','Recording unavailable.',404);return new Response(response.body,{headers:{...BINARY,'Content-Length':String(r.encoded_bytes),'ETag':'"'+r.encoded_sha256+'"',
+    ...(r.start_bytes>0?{'Ghost-Start-SHA256':r.start_sha256,'Ghost-Start-Bytes':String(r.start_bytes)}:{})}});
+}
+const UPLOAD_FIELDS=['target','clock','rom','strategy','frames','raw_sha256','raw_bytes','encoded_sha256','encoded_bytes','codec','generation'];
+// A ghost's start is optional and opaque: both fields or neither. Trainers
+// that predate it send neither, and their uploads are unchanged.
+function startClaim(b){
+  const sha=Object.hasOwn(b,'start_sha256'),bytes=Object.hasOwn(b,'start_bytes');
+  requireThat(sha===bytes&&(!sha||hex64(b.start_sha256)&&integer(b.start_bytes,1,Number.MAX_SAFE_INTEGER)));
+  requireThat(!bytes||b.start_bytes<=LIMITS.start_bytes,'start_limit','The ghost start exceeds its limit.',413);
 }
 async function admitUpload({request,url,s,a,model}){
-  exactQuery(url,[]);const b=await readJSON(request,['target','clock','rom','strategy','frames','raw_sha256','raw_bytes','encoded_sha256','encoded_bytes','codec','generation']);requireThat(integer(b.frames,1,2592000)&&hex64(b.raw_sha256)&&hex64(b.encoded_sha256)&&integer(b.raw_bytes,812,LIMITS.raw_bytes)&&integer(b.encoded_bytes,189,LIMITS.encoded_bytes)&&b.codec==='ghc1'&&hex64(b.generation));requireThat(b.generation===model.generation,'generation_changed','Catalog changed.',409);
+  exactQuery(url,[]);const b=await readJSON(request,[...UPLOAD_FIELDS,'start_sha256','start_bytes'],UPLOAD_FIELDS);requireThat(integer(b.frames,1,2592000)&&hex64(b.raw_sha256)&&hex64(b.encoded_sha256)&&integer(b.raw_bytes,812,LIMITS.raw_bytes)&&integer(b.encoded_bytes,189,LIMITS.encoded_bytes)&&b.codec==='ghc1'&&hex64(b.generation));startClaim(b);requireThat(b.generation===model.generation,'generation_changed','Catalog changed.',409);
   const found=lookup(model,b.target,b.clock,b.rom,b.strategy),key=request.headers.get('idempotency-key');requireThat(uuid(key),'idempotency_required','Use a UUID Idempotency-Key.');return json(await s.admit(a,b,model,key,await sha256(canonical(b)),{...found,step:grade(found.strat.cutoffs,b.frames),overallStep:grade(found.entry.overall_cutoffs,b.frames),aboveCeiling:aboveCeiling(found.strat.cutoffs,b.frames)}));
 }
+// The body is the ghost's GHC1 bytes, then the start bytes its grant declared.
+// Both are checked before any write, and one multipart object stores both.
 async function receiveUpload({request,url,env,s,a},um){
   exactQuery(url,[]);requireThat(request.headers.get('content-type')==='application/octet-stream','content_type','Expected binary GHC1.');const g=await s.beginUpload(a,um[1]);if(g.state==='complete')return json(s.grantResponse(g));if(g.state==='stored')return json(await s.publish(g));let bytes;
-  try{bytes=await boundedBody(request,LIMITS.encoded_bytes,g.encoded_bytes);validateGHC1(bytes,g);}catch(error){await s.release(g);throw error;}
-  const multipart=await env.GHOSTS.createMultipartUpload(g.asset_key,{httpMetadata:{contentType:'application/octet-stream'},customMetadata:{encoded_sha256:g.encoded_sha256}});
+  try{
+    bytes=await boundedBody(request,LIMITS.encoded_bytes+LIMITS.start_bytes,storedBytes(g));validateGHC1(bytes.subarray(0,g.encoded_bytes),g);
+    if(g.start_bytes>0)requireThat(await sha256(bytes.subarray(g.encoded_bytes))===g.start_sha256,'start_mismatch','The ghost start disagrees with its grant.',422);
+  }catch(error){await s.release(g);throw error;}
+  const multipart=await env.GHOSTS.createMultipartUpload(g.asset_key,{httpMetadata:{contentType:'application/octet-stream'},customMetadata:{encoded_sha256:g.encoded_sha256,...(g.start_bytes>0?{start_sha256:g.start_sha256}:{})}});
   try{
   await s.tx("EXISTS(SELECT 1 FROM grants WHERE id=? AND state='receiving' AND expires_at>?)",[g.id,now()],[s.sql('UPDATE grants SET multipart_id=? WHERE id=?',multipart.uploadId,g.id)]);
   }catch(error){await multipart.abort();throw error;}
@@ -185,7 +212,7 @@ const LIBRARY_ROUTES=[
   ['POST','/v1/recordings/metadata',renewMetadata],
   ['GET','/v1/library',librarySummary],['GET','/v1/library/recordings',libraryRecordings],
   ['GET','/v1/pool',candidates],['GET','/v1/search',candidates],
-  ['GET',/^\/v1\/recordings\/([a-f0-9]{64})(\/asset)?$/,recording],
+  ['GET',/^\/v1\/recordings\/([a-f0-9]{64})(\/asset|\/start)?$/,recording],
   ['POST','/v1/uploads',admitUpload],
   ['PUT',/^\/v1\/uploads\/([0-9a-f-]{36})$/,receiveUpload],
   ['PUT','/v1/pins',setPins],
@@ -211,7 +238,7 @@ async function member(c,{auth,adminAuth,catalog}){
   // Eligible first-time players have no quota identity until valid profile
   // creation commits. That mutation charges its first ticket atomically.
   if(!a.ephemeral){
-    await s.ticket(a.uid,{classB:url.pathname.endsWith('/asset')?1:0});
+    await s.ticket(a.uid,{classB:/\/(asset|start)$/.test(url.pathname)?1:0});
     armMaintenance(env,ctx);
   }
   const own=findRoute(ACCOUNT_ROUTES,request,url);if(own)return own(signed);

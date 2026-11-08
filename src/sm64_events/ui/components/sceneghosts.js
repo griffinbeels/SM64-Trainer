@@ -7,9 +7,11 @@
 //
 // Three lists of ghosts for the stage's star or segment, a page at a time from GET
 // /api/scene-lab/ghosts (only complete recordings are listed): Your ghosts (fastest first, or
-// newest first), Top ghosts (each player's best for a strategy, with its rank; its own strategy
-// dropdown looks at another strategy of the same star), and Find a player (each matching player's
-// best ghost; "N more" opens that player's slower ones, fastest first). Add and Remove change the
+// newest first), Top ghosts (each player's best, with its rank: first across All strategies, each
+// row naming its strategy -- round 9, item 7: "a list of all of the top ghosts for that star (across
+// all strategies)" -- or, picked in its own dropdown, one strategy), and Find a player (each matching
+// player's best ghost; "N more" opens that player's slower ones, fastest first). Every row wears the
+// flag of the ROM its recording names (item 11), none where its record names none. Add and Remove change the
 // scene's ghosts: the page sends the whole list over the scene socket (SceneLink.setGhosts) and the
 // lab draws them into every picture after its answer; each ghost in the scene plays its own sound
 // effects (never music: ghost_sound.py) with a Mute of its own. A ghost the lab cannot draw stays unselected
@@ -20,6 +22,7 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON } from "../api.js";
 import { Icon } from "./icons.js";
+import { RegionFlag } from "./regionflag.js";
 import { StratPicker } from "./stratpicker.js";
 import { targetKey, targetQuery } from "./scenestage.js";
 
@@ -101,6 +104,19 @@ export function ghostName(ghosts, ref) {
 }
 
 const nameOf = (ghost) => ghost.player || ghost.label || "Ghost";
+
+// The flag of the ROM a ghost's recording names ("us" or "jp", the lab's "version"), drawn by the
+// app's one RegionFlag; nothing at all where its record names none (never a guess).
+export function GhostFlag({ version, size = 16 }) {
+  return version === "us" || version === "jp"
+    ? html`<${RegionFlag} version=${version} size=${size} className="scene-lab-ghost-flag" />` : null;
+}
+
+// A listed row as the scene's ghost list holds it (SceneLink.setGhosts sends only ref and label).
+export function sceneGhost(item) {
+  return { ref: item.ref, label: item.player, player: item.player, time: item.time,
+    version: item.version ?? null, strat: item.strat ?? null };
+}
 const timed = (ghosts, ghost) => !!ghost.time
   && (nameOf(ghost) === "You" || ghosts.filter((each) => nameOf(each) === nameOf(ghost)).length > 1);
 
@@ -114,26 +130,41 @@ function TheirView({ link, ghostRef }) {
       onclick=${(event) => link.theirView(ghostRef, event.timeStamp)}>Their view</button>`;
 }
 
-// One ghost: rank where known, player (with the day, for one of yours), time, and Add or Remove;
-// once it is in the scene, a strip under it: Their view shows the stage from its own camera, Mute
-// silences its sound. `children` go under it (a player's slower ghosts).
-function GhostRow({ item, link, stage, more = null, children = null }) {
+// A row's player cell: the flag of its recording's ROM, then the name (with the day, for one of yours).
+function RowWho({ item }) {
+  const day = item.yours ? recordedDay(item.recorded_utc) : null;
+  return html`<span class="scene-lab-ghost-who"><${GhostFlag} version=${item.version} />
+    <span class="scene-lab-ghost-player" title=${item.player}>${item.player}${day && html`<small> · ${day}</small>`}</span></span>`;
+}
+
+// A row's last cell: "The stage" for the stage's own run, else Add or Remove (or Adding... and
+// Removing... until the lab answers).
+function RowAction({ item, link, name, isStage, shown, wanted }) {
+  if (isStage) return html`<span class="scene-lab-ghost-stage" title="This run is the scene you are watching">The stage</span>`;
+  const action = rowAction(shown, wanted);
+  const toggle = () => link.setGhosts(wanted ? link.wantedGhosts.filter((ghost) => ghost.ref !== item.ref)
+    : [...link.wantedGhosts, sceneGhost(item)]);
+  return html`<button type="button" disabled=${wanted !== shown} aria-label=${`${action.replace("...", "")} ${name}`}
+      onclick=${toggle}>${action}</button>`;
+}
+
+// One ghost: rank where known, its ROM's flag, player (with the day, for one of yours), time, and
+// Add or Remove; `strat` (All strategies) names its strategy on a line under the player. Once it is
+// in the scene, a strip under it: Their view shows the stage from its own camera, Mute silences its
+// sound. `children` go under it (a player's slower ghosts).
+function GhostRow({ item, link, stage, more = null, children = null, strat = false }) {
   const shown = link.ghosts.some((ghost) => ghost.ref === item.ref);
   const wanted = link.wantedGhosts.some((ghost) => ghost.ref === item.ref);
   const isStage = stage != null && item.attempt === stage;
   const refused = link.refusedGhosts.get(item.ref);
-  const toggle = () => link.setGhosts(wanted ? link.wantedGhosts.filter((ghost) => ghost.ref !== item.ref)
-    : [...link.wantedGhosts, { ref: item.ref, label: item.player, player: item.player, time: item.time }]);
-  const name = `${item.player} ${item.time}`, day = item.yours ? recordedDay(item.recorded_utc) : null;
-  const action = rowAction(shown, wanted), waiting = wanted !== shown;
-  return html`<li class=${`scene-lab-ghost${shown ? " is-shown" : ""}${waiting ? " is-waiting" : ""}${isStage ? " is-stage" : ""}`}
-      data-ref=${item.ref}>
+  const name = `${item.player} ${item.time}`;
+  const marks = [shown && "is-shown", wanted !== shown && "is-waiting", isStage && "is-stage"].filter(Boolean);
+  return html`<li class=${["scene-lab-ghost", ...marks].join(" ")} data-ref=${item.ref}>
     <span class="scene-lab-ghost-rank">${item.rank != null ? `#${item.rank}` : ""}</span>
-    <span class="scene-lab-ghost-player" title=${item.player}>${item.player}${day && html`<small> · ${day}</small>`}</span>
+    <${RowWho} item=${item} />
     <span class="scene-lab-ghost-time">${item.time}</span>
-    ${isStage ? html`<span class="scene-lab-ghost-stage" title="This run is the scene you are watching">The stage</span>`
-      : html`<button type="button" disabled=${waiting} aria-label=${`${action.replace("...", "")} ${name}`}
-          onclick=${toggle}>${action}</button>`}
+    <${RowAction} item=${item} link=${link} name=${name} isStage=${isStage} shown=${shown} wanted=${wanted} />
+    ${strat && item.strat && html`<span class="scene-lab-ghost-strat" title=${item.strat}>${item.strat}</span>`}
     ${shown && html`<${InScene} link=${link} ghostRef=${item.ref} name=${name} isStage=${isStage} />`}
     ${more}
     ${refused && !shown && html`<span class="scene-lab-ghost-reason" role="status">${refused}</span>`}
@@ -164,7 +195,7 @@ function GhostMute({ link, ghostRef, name }) {
 
 // A section's rows, or why there are none. The lab's "note" (why other players' ghosts are missing:
 // signed out, offline, a source checkout) is one quiet line above them.
-function GhostList({ pages, link, stage, empty, label, row = null }) {
+function GhostList({ pages, link, stage, empty, label, row = null, strat = false }) {
   const { answer, error } = pages;
   if (error) return html`<p class="scene-lab-ghost-note is-bad" role="status">${error}</p>`;
   if (!answer) return html`<p class="scene-lab-ghost-note" role="status">Loading...</p>`;
@@ -172,7 +203,7 @@ function GhostList({ pages, link, stage, empty, label, row = null }) {
   if (!answer.items?.length) return html`${note}<p class="scene-lab-ghost-note">${answer.reason || empty}</p>`;
   return html`${note}<ol class="scene-lab-ghost-list" aria-label=${label}>
       ${answer.items.map((item) => (row ? row(item)
-        : html`<${GhostRow} key=${item.ref} item=${item} link=${link} stage=${stage} />`))}
+        : html`<${GhostRow} key=${item.ref} item=${item} link=${link} stage=${stage} strat=${strat} />`))}
     </ol>
     <${Pager} pages=${pages} label=${label} />`;
 }
@@ -192,21 +223,29 @@ function YourGhosts({ link, target, stage }) {
   </section>`;
 }
 
-// Top ghosts look at the stage's strategy until another is picked here; a new target or stage
-// strategy starts it over.
+// The lab's question for Top ghosts: one strategy, or (null) every strategy at once. All strategies
+// leaves the stage's strategy out, so changing the stage's strategy asks nothing new.
+export function topQuery(target, strat) {
+  return strat ? `section=top&${targetQuery({ ...target, strat })}`
+    : `section=top&strategies=all&${targetQuery({ ...target, strat: null })}`;
+}
+
+// Top ghosts start on All strategies (his words, item 7: "across all strategies"); the dropdown's
+// first choice is All strategies, then each strategy. A new target starts it over.
+export const ALL_STRATEGIES = "All strategies";
 function TopGhosts({ link, target, stage, strategies }) {
   const [strat, setStrat] = useState({ from: null, value: null });
-  const from = `${targetKey(target)}|${target.strat ?? ""}`;
-  const chosen = strat.from === from ? strat.value : target.strat ?? null;
-  const pages = useGhostPages(`section=top&${targetQuery({ ...target, strat: chosen })}`, link.ghostPages);
+  const from = targetKey(target);
+  const chosen = strat.from === from ? strat.value : null;
+  const pages = useGhostPages(topQuery(target, chosen), link.ghostPages);
   return html`<section class="scene-lab-ghost-section" aria-label="Top ghosts">
     <header><h4>Top ghosts</h4>
-      ${strategies?.length ? html`<${StratPicker} key=${from} entity=${targetKey(target)} strategies=${strategies}
+      ${strategies?.length ? html`<${StratPicker} key=${from} entity=${from} strategies=${strategies}
           active=${chosen} allowNew=${false} highlightUnset=${false} label="Strategy for top ghosts"
-          blankLabel="— no strategy —" submit=${(tag) => { setStrat({ from, value: tag || null }); return Promise.resolve(null); }}
+          blankLabel=${ALL_STRATEGIES} submit=${(tag) => { setStrat({ from, value: tag || null }); return Promise.resolve(null); }}
           onChanged=${() => Promise.resolve()} />` : null}</header>
-    <${GhostList} pages=${pages} link=${link} stage=${stage} label="Top ghosts"
-      empty="No shared ghosts for this strategy yet." />
+    <${GhostList} pages=${pages} link=${link} stage=${stage} label="Top ghosts" strat=${!chosen}
+      empty=${chosen ? "No shared ghosts for this strategy yet." : "No ghosts here yet."} />
   </section>`;
 }
 

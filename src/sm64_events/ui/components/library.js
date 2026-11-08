@@ -576,7 +576,8 @@ function LibraryPage({
     ${hasGhost
       ? html`<${CommunityLibrary} key=${ghostRevision} active=${active}
           entity=${stage === "target" ? entry?.entityKey : null} versions=${versions}
-          onBrowseAll=${navigation.back} onOpenPlayer=${openPlayer} />`
+          onBrowseAll=${navigation.back} onOpenPlayer=${openPlayer}
+          onOpenGhost=${t?.sceneLab?.openGhost ?? null} />`
       : stage === "target"
       ? html`<${LibraryTargetPage} ...${{navigation, setHasGhost, t, entry, version, versions, effectiveVersion,
   addToTray, trayKeys, openRunner, reloadRows, active}} />`

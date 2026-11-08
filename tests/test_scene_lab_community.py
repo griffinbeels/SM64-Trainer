@@ -174,6 +174,39 @@ def test_one_library_page_serves_two_viewer_pages_and_a_reopen_inside_the_lease_
     assert world.service.count("/v1/library") == 3
 
 
+def test_all_strategies_asks_each_strategy_once_and_nothing_inside_the_lease(world):
+    """Round 9, item 7: All strategies (Top ghosts' first choice) fills each strategy's top list exactly
+    as the one-strategy list does: one library page for the first look, then nothing inside the lease,
+    and the one-strategy list it filled answers with no call of its own. A strategy the service does
+    not list ("Single Jump" is in his journal, not in the catalog) costs nothing."""
+    world.journal.rows[60] = run(60, igt=None, outcome="reset", strat="Single Jump")
+    world.service.library = [(ordered(world, *range(1, 6)), None)]
+    every = page(world, section="top", strategies="all")
+    assert [(row["player"], row["strat"], row["version"]) for row in every["items"]] == [
+        (f"Runner{number}", "Standard", "us") for number in range(1, 6)]
+    assert world.service.count("/v1/library") == 1
+    for params in ({"strategies": "all"}, {"strategies": "all", "page": 2}, {"strat": "Standard"}, {}):
+        page(world, section="top", **params)
+    assert world.service.count("/v1/library") == 1
+    assert world.service.count("/v1/recordings") == 0                         # listing never downloads
+
+
+def test_the_library_ghost_button_reads_a_lapsed_row_once_and_a_held_one_never(world):
+    """Round 9, item 8: the Library's own page left the recording with the race, so the button's lookup
+    costs nothing inside the lease; after it, one metadata read renews it."""
+    identifier = f"{3:064x}"
+    world.population.renew_metadata(world.rows[identifier])
+    ask = {"recording": identifier, **STAR}
+    item = world.client.get("/api/scene-lab/ghost", params=ask).json()["item"]
+    assert (item["player"], item["strat"], item["version"]) == ("Runner3", "Standard", "us")
+    assert world.service.calls == []
+    lapsed = f"{4:064x}"
+    item = world.client.get("/api/scene-lab/ghost", params={**ask, "recording": lapsed}).json()["item"]
+    assert item["player"] == "Runner4"
+    assert world.service.count(f"/v1/recordings/{lapsed}") == 1
+    assert world.lab.ghosts.load_ghost(item["ref"])["player"] == "Runner4"
+
+
 def test_search_asks_only_for_what_the_held_lists_cannot_answer(world):
     world.service.library = [(ordered(world, *range(1, 21)), "next-page")]
     page(world, section="top")

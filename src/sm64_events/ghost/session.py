@@ -38,6 +38,9 @@ state_log = logging.getLogger(GHOST_STATE_LOGGER)
 #: Broadcaster, never through `TrackerService.publish`, so there is no journal
 #: behind it at all -- this is live UI state, like the segment notices.
 EVENT_TYPE = "ghost_changed"
+#: Broadcast the same way after a Settings ghost-file purge (`purge_files`), {deleted, bytes,
+#: skipped}: pages re-read the Practice log's ghost buttons and the sizes Settings shows.
+FILES_EVENT = "ghost_files_changed"
 
 #: How often the watch re-reads the world. Slow on purpose: everything it
 #: catches is human-paced; the renderer independently owns each game frame.
@@ -620,6 +623,30 @@ class GhostSession:
         await asyncio.to_thread(forget)
         body = await self.refresh(resolve=True)
         return {"attempt_id": attempt_id, "saved": False, "session": body}
+
+    def storage(self, scenes=lambda: None):
+        """Settings' ghost files over this session's owners (`ghost/storage.py`); `scenes` the
+        lab's attempt scenes, when the lab runs."""
+        from sm64_events.ghost.storage import GhostStorage
+        native = self._native
+        return GhostStorage(database=self._db, replay=self._replay, population=self._population,
+                            sharing=self._sharing, scenes=scenes, community=self._community,
+                            in_use=lambda: native.asset_paths() if hasattr(native, "asset_paths") else ())
+
+    async def purge_files(self, storage, *, keep_pbs: bool) -> dict:
+        """One Settings purge, off the loop, then every surface that showed a deleted ghost
+        re-reads: the lineup forgets what it prepared and the card's session is published."""
+        result = await asyncio.to_thread(storage.purge, keep_pbs=keep_pbs)
+        if result["deleted"]:
+            with self._lifecycle_lock:
+                if self._rivals is not None:
+                    self._rivals.files_changed()
+            await self.refresh(resolve=True)
+        # Broadcast only, like ghost_changed: every open page re-reads its ghost buttons and sizes.
+        await self._broadcaster.publish(Event(
+            type=FILES_EVENT, frame=0, timestamp_utc=datetime.now(timezone.utc),
+            payload={key: result[key] for key in ("deleted", "bytes", "skipped")}))
+        return result
 
     async def pb_changed(self, attempt, saved: bool) -> None:
         """A PB was just saved or undone: the ghost follows it NOW, not on

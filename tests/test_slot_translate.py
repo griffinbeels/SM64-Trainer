@@ -167,8 +167,8 @@ def test_an_object_the_jp_game_lacks_is_unloaded_the_way_the_game_unloads_one():
     assert word(data, R.FREE_LIST_IN_BODY + 0x60) == obj(JP, 5)
     assert word(data, at(5, 0x60)) == obj(JP, 9), "it heads the free list, before what headed it"
     assert out.removed == (T.Removed(5, MUSIC, "bhvYellowCoin"),)
-    assert out.words() == ("This save state is from the US version. The Trainer changed it to work in your JP game. "
-                           "It left out one thing the JP game does not have: a music trigger. "
+    assert out.words() == ("The Trainer changed it from the US version to your JP game. "
+                           "It left out a music trigger, which the JP game does not have. "
                            "Your JP game has a yellow coin there instead.")
 
 
@@ -288,7 +288,7 @@ def test_a_us_state_placed_in_a_jp_game_is_translated_and_says_so(tmp_path, monk
     game, atlases = jp_game(), A.AtlasStore(tmp_path / "atlases", lambda l, a, p: p.write_bytes(A.to_json(make_atlas())))
     report = place_states(game, library, {2: clean_state.id}, atlases=atlases)
     placed, = report.placements
-    assert placed.translated_from == "us" and placed.words.startswith("This save state is from the US version.")
+    assert placed.translated_from == "us" and placed.words.startswith("The Trainer changed it from the US version")
     assert word(game.slot(2), usamune.TRAILER_MARIO) == obj(JP, 0)
     with pytest.raises(usamune.Refusal, match="no place in the JP game"):
         place_states(game, library, {3: state.id}, atlases=atlases)
@@ -351,7 +351,7 @@ def test_the_save_states_row_writes_a_us_frame_into_a_jp_game_and_says_so(tmp_pa
         assert written["written"] and written["build"] == "us"
         assert written["translated"]["to"] == "jp"
         assert written["translated"]["words"].startswith(
-            "This save state is from the US version. The Trainer changed it to work in your JP game.")
+            "The Trainer changed it from the US version to your JP game.")
         assert word(game.slot(2), usamune.TRAILER_MARIO) == obj(JP, 0)
         kept, = library.scan().states
         assert kept.build == "us", "the library keeps the US state it was given, not the JP bytes"

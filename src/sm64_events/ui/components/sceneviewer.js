@@ -75,10 +75,11 @@ import { h } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { Icon } from "./icons.js";
+import { SteadyText } from "./steadytext.js";
 import { getJSON, send } from "../api.js";
 import { displayName } from "../entitysection.js";
-import { GhostPanel, viewName } from "./sceneghosts.js";
-import { StagePicker, attemptIn, stageDefault, targetKey, targetQuery, useStrategies } from "./scenestage.js";
+import { GhostFlag, GhostPanel, sceneGhost, viewName } from "./sceneghosts.js";
+import { StagePicker, attemptIn, entityTarget, stageDefault, targetKey, targetQuery, useStrategies } from "./scenestage.js";
 import { ControlGroups } from "../tunecontrols.js";
 import { postObservation } from "../uilog.js";
 import { SCENE_CAMERA_DEFAULTS, SCENE_CAMERA_GROUPS, SCENE_CAMERA_TUNABLES, sceneCameraTuning,
@@ -86,13 +87,13 @@ import { SCENE_CAMERA_DEFAULTS, SCENE_CAMERA_GROUPS, SCENE_CAMERA_TUNABLES, scen
 import { cameraOf, dollied, flightSpeed, flown, flyToTarget, focusedOn, glideAt, lensed, lookingAt, looked,
   orbitFromPose, slid, speedStepped, tiltAndLens, tilted, turned, wheelLens, worldPoint } from "./scenecamera.js";
 import { LensBar } from "./scenelens.js";
-import { SceneSound, SoundBar } from "./sceneaudio.js";
+import { SceneSound, SoundBar, syncWords } from "./sceneaudio.js";
 import { RecordBar } from "./scenerecord.js";
 import { CameraPresets, CameraSlots, placeKey, placeOf, presetCamera } from "./scenepresets.js";
 import { SaveStates } from "./scenemoment.js";
 import { RecordingSwitch } from "./scenerecording.js";
 import { heardInto, pictureAt, playLength, recordedTimes } from "./sceneclock.js";
-import { CinematicBar, orbitFolded, orbitPhase, rigChanged, rigHint, rigName, rigRequest, seenOnScreen,
+import { CinematicBar, CinematicSettings, RIG_KINDS, orbitFolded, orbitPhase, rigChanged, rigHint, rigName, rigRequest, seenOnScreen,
   startRig } from "./scenerigs.js";
 
 const html = htm.bind(h);
@@ -329,7 +330,7 @@ export class SceneLink {
       finding: false, glide: null, serial: 0, noticeTimer: null, moving: null, shared: new Map(), playback: null,
       readies: [], coldId: 0, autoplay: false, loop: savedLoop(), hud: savedHud(), ghosts: [], refusedGhosts: new Map(),
       view: null, rig: null, lastRig: null, follow: "stage", rigPath: null, orbitSince: null,
-      asked: null, ghostPages: new Map(), ghostNote: null, ghostSerial: 0,
+      asked: null, ghostPages: new Map(), ghostNote: null, ghostSerial: 0, waiting: [],
       sound: new SceneSound({ changed: () => this.changed(), observe: (note) => this.observe(note) }),
       presets: new CameraPresets({ changed: () => this.changed() }) });
     this.timings = new MovingTimings((summary) => { this.moving = summary; this.changed(); });
@@ -356,7 +357,11 @@ export class SceneLink {
       ? this.onText(JSON.parse(event.data)) : this.onPicture(event.data));
     ws.onopen = () => {
       this.want("input");
-      if (this.ghosts.length) this.setGhosts(this.ghosts);    // the same scene again: its ghosts again
+      // The same scene again: its ghosts again; and a ghost added before the socket opened (a
+      // Library row's Ghost button), after them.
+      const list = [...this.ghosts, ...this.waiting.filter((ghost) => !this.ghosts.some((had) => had.ref === ghost.ref))];
+      this.waiting = [];
+      if (list.length) this.setGhosts(list);
     };
     ws.onclose = () => { if (this.ws === ws) this.end("The connection to the scene viewer closed."); };
     // A scene's first picture carries the session's cold start (a seek from nothing), so it never
@@ -365,7 +370,7 @@ export class SceneLink {
     Object.assign(this, { ws, scene, frame: 0, free: false, orbit: null, entry: null, inFlight: new Map(),
       wanted: null, notice: null, error: null, speed: 1, moving: null, readies: [], coldId: this.sequence + 1,
       ghosts: keptFor(scene).ghosts, asked: null, refusedGhosts: new Map(), ghostNote: null, view: null, rig: null,
-      follow: "stage", orbitSince: null });
+      follow: "stage", orbitSince: null, waiting: [] });
     keep(scene, {});
     this.ghostPages = kept.pages;
     this.presets.forget();
@@ -639,6 +644,20 @@ export class SceneLink {
     this.sound.setGhosts(this.ghosts.map((ghost) => ghost.ref));    // each plays its own sound effects
     keep(this.scene, { ghosts: this.ghosts });
     this.want("input");
+    this.changed();
+  }
+
+  // One more ghost (a Library row's Ghost button): added to the list now, or, while the scene's
+  // socket is still opening, the moment it opens.
+  addGhost(entry) {
+    if (this.wantedGhosts.some((ghost) => ghost.ref === entry.ref)) return;
+    if (this.ws?.readyState === WebSocket.OPEN) this.setGhosts([...this.wantedGhosts, entry]);
+    else this.waiting = [...this.waiting, entry];
+  }
+
+  // Why a ghost could not be added, on the ghost panel.
+  noteGhost(reason) {
+    this.ghostNote = reason || null;
     this.changed();
   }
 
@@ -1489,6 +1508,14 @@ function frameWords(frame) {
     frame.game_frame != null && `game frame ${frame.game_frame}`].filter(Boolean).join(", ");
 }
 
+// Round 9, item 3 (his words: "the play bar is getting longer and shorter ... The UI should not be
+// bouncing around like that when we go between playing / paused"): every word in the Playback row
+// that changes sits in a SteadyText as wide as its widest form, so nothing in the row, and no row
+// under it, moves. The readout's widest form is five-digit frame counts and an eight-digit game frame.
+const PLAY_WORDS = ["Play", "Pause"];
+const FRAME_SIZE = ["Frame 00000 of 00000 so far"];
+const WHERE_SIZE = ["level 00, area 0, game frame 00000000"];
+
 function Transport({ link }) {
   const frames = link.scene.frames;
   return html`<div class="scene-lab-bar" aria-label="Playback">
@@ -1498,28 +1525,50 @@ function Transport({ link }) {
     <button type="button" onclick=${(event) => link.step(-1, event.timeStamp)} title="Back one frame (Left arrow or ,)">
       <${Icon} name="stepBack" size=${15} /> Back 1</button>
     <button type="button" class="primary" onclick=${() => link.toggle()} title="Play or pause (Space)">
-      <${Icon} name=${link.playing ? "pause" : "play"} size=${16} /> ${link.playing ? "Pause" : "Play"}</button>
+      <${Icon} name=${link.playing ? "pause" : "play"} size=${16} />
+      <${SteadyText} text=${link.playing ? "Pause" : "Play"} sizes=${PLAY_WORDS} /></button>
     <button type="button" onclick=${(event) => link.step(1, event.timeStamp)} title="Forward one frame (Right arrow or .)">
       <${Icon} name="stepForward" size=${15} /> Forward 1</button>
     <button type="button" aria-pressed=${link.loop} onclick=${() => link.setLoop(!link.loop)}
         title="When on, Play goes on from the first frame after the last">
       <${Icon} name="loop" size=${15} /> Loop</button>
-    <input type="range" min="0" max=${Math.max(0, frames.length - 1)} value=${link.frame} aria-label="Frame"
-      oninput=${(event) => { link.pause(); link.seek(Number(event.currentTarget.value), "input", event.timeStamp); }} />
-    <span class="scene-lab-frame">Frame ${link.frame + 1} of ${frames.length}${link.scene.growing ? " so far" : ""}
-      <small>${frameWords(frames[link.frame])}</small></span>
+    <div class="scene-lab-scrub">
+      <input type="range" min="0" max=${Math.max(0, frames.length - 1)} value=${link.frame} aria-label="Frame"
+        oninput=${(event) => { link.pause(); link.seek(Number(event.currentTarget.value), "input", event.timeStamp); }} />
+      <span class="scene-lab-frame">
+        <${SteadyText} text=${`Frame ${link.frame + 1} of ${frames.length}${link.scene.growing ? " so far" : ""}`}
+          sizes=${FRAME_SIZE} />
+        <small><${SteadyText} text=${frameWords(frames[link.frame])} sizes=${WHERE_SIZE} /></small></span>
+    </div>
   </div>`;
 }
+
+const HINTS = {
+  picking: "Click a surface in the picture to turn around it. Esc cancels.",
+  looking: "Move the mouse to look around. W A S D move, Q and E go down and up, Shift is faster, Alt slower, the wheel sets the speed. Let go of the right button to stop looking.",
+  free: "W A S D move, Q and E go down and up, Shift is faster, Alt slower; hold the right button to look around. Drag to turn around the focus point, Shift-drag or middle-drag to slide, the wheel moves closer, double-click a surface to fly there. Z and C tilt, X levels, - and = (or Ctrl and the wheel) change the lens. F looks at Mario, R returns to the recorded camera.",
+  view: "The stage seen from this ghost's own camera as it plays. Moving the camera starts Free camera from here; R returns to the recorded camera.",
+  recorded: "W A S D move the camera from this picture, Q and E go down and up; dragging, scrolling, double-clicking or holding the right button move it too. Left and Right (or , and .) step one frame, Space plays.",
+};
 
 // The hint teaches only what applies right now.
 export function hintFor(link) {
   if (!link.freeAvailable) return `Only the recorded camera is available: ${link.scene.free_camera.reason}`;
-  if (link.picking) return "Click a surface in the picture to turn around it. Esc cancels.";
-  if (link.looking) return "Move the mouse to look around. W A S D move, Q and E go down and up, Shift is faster, Alt slower, the wheel sets the speed. Let go of the right button to stop looking.";
-  if (link.free) return "W A S D move, Q and E go down and up, Shift is faster, Alt slower; hold the right button to look around. Drag to turn around the focus point, Shift-drag or middle-drag to slide, the wheel moves closer, double-click a surface to fly there. Z and C tilt, X levels, - and = (or Ctrl and the wheel) change the lens. F looks at Mario, R returns to the recorded camera.";
+  if (link.picking) return HINTS.picking;
+  if (link.looking) return HINTS.looking;
+  if (link.free) return HINTS.free;
   if (link.rig) return rigHint(link.rig, link.ghosts);
-  if (link.view) return "The stage seen from this ghost's own camera as it plays. Moving the camera starts Free camera from here; R returns to the recorded camera.";
-  return "W A S D move the camera from this picture, Q and E go down and up; dragging, scrolling, double-clicking or holding the right button move it too. Left and Right (or , and .) step one frame, Space plays.";
+  if (link.view) return HINTS.view;
+  return HINTS.recorded;
+}
+
+// Every hint this scene can show with its ghosts: the hint is as tall as the tallest of them at its
+// width, so changing the camera never moves the rows under it.
+function hintSizes(link) {
+  if (!link.freeAvailable) return [hintFor(link)];
+  const runners = ["stage", ...link.ghosts.map((ghost) => ghost.ref)];
+  return [...Object.values(HINTS),
+    ...RIG_KINDS.flatMap(([kind]) => runners.map((target) => rigHint({ kind, target }, link.ghosts)))];
 }
 
 // The same lesson on the picture itself while it is what you are acting on:
@@ -1530,19 +1579,25 @@ export function cueFor(link) {
   return null;
 }
 
+// speedWords' widest: three figures and a point.
+const SPEED_SIZE = ["00.0x"];
+
 function SpeedControl({ link }) {
   const tuning = sceneCameraTuning(), unitsPerSecond = Math.round(flightSpeed(link.speed, {}, tuning));
   return html`<div class="scene-lab-speed" role="group" aria-label="Flight speed"
       title=${`W A S D move ${unitsPerSecond} units a second; the wheel changes it while you hold the right button`}>
     <span>Flight speed</span>
     <button type="button" aria-label="Slower" onclick=${() => link.stepSpeed(-1)}>−</button>
-    <output aria-live="polite">${speedWords(link.speed)}</output>
+    <output aria-live="polite"><${SteadyText} text=${speedWords(link.speed)} sizes=${SPEED_SIZE} /></output>
     <button type="button" aria-label="Faster" onclick=${() => link.stepSpeed(1)}>+</button>
     <button type="button" disabled=${link.speed === 1} onclick=${() => link.resetSpeed()}
       title="Back to the flight speed at 1x">Reset</button>
   </div>`;
 }
 
+const FOCUS_WORDS = ["Set focus", "Finding..."];
+
+// A ghost's view button wears its game's flag when its region is known, and none when it is not.
 function CameraBar({ link, tuning, setTuning }) {
   const available = link.freeAvailable, reason = link.scene.free_camera.reason;
   return html`<div class="scene-lab-bar" aria-label="Camera">
@@ -1551,7 +1606,9 @@ function CameraBar({ link, tuning, setTuning }) {
     ${link.ghosts.map((ghost) => html`<button type="button" key=${ghost.ref} class="scene-lab-view"
         aria-pressed=${!link.free && link.view === ghost.ref} disabled=${!available}
         title=${available ? "See the stage from this ghost's own camera, following it as the scene plays" : reason}
-        onclick=${(event) => link.theirView(ghost.ref, event.timeStamp)}>${viewName(link.ghosts, ghost.ref)}</button>`)}
+        onclick=${(event) => link.theirView(ghost.ref, event.timeStamp)}>
+      <${GhostFlag} version=${ghost.version} />${" "}
+      ${viewName(link.ghosts, ghost.ref)}</button>`)}
     <button type="button" aria-pressed=${link.free} disabled=${!available}
         title=${available ? "Move the camera yourself, starting from the picture on screen" : reason}
         onclick=${() => link.enterFree()}>Free camera</button>
@@ -1560,7 +1617,7 @@ function CameraBar({ link, tuning, setTuning }) {
     <button type="button" aria-pressed=${link.picking} disabled=${!available || link.finding}
         onclick=${() => link.armPick()}
         title=${available ? "Then click a surface in the picture: the camera turns around that point" : reason}>
-      ${link.finding ? "Finding..." : "Set focus"}</button>
+      <${SteadyText} text=${link.finding ? "Finding..." : "Set focus"} sizes=${FOCUS_WORDS} /></button>
     <button type="button" disabled=${!link.moved} onclick=${(event) => link.resetView(event.timeStamp)}
         title=${link.free ? "Back to where Free camera began" : "Available once you move the free camera"}>
       Reset view</button>
@@ -1581,26 +1638,35 @@ function CameraBar({ link, tuning, setTuning }) {
     ${available && html`<button type="button" aria-pressed=${tuning} onclick=${() => setTuning(!tuning)}
         title="Adjust how the free camera feels, and save the numbers as the defaults">Tune controls</button>`}
   </div>
-  <p class="scene-lab-hint">${hintFor(link)}</p>`;
+  <p class="scene-lab-hint"><${SteadyText} block text=${hintFor(link)} sizes=${hintSizes(link)} /></p>`;
 }
 
 const ENCODING_WORDS = { jpeg: "JPEG", raw: "exact pixels", shared: "exact pixels through shared memory" };
+
+// The two lines at their widest, three-digit times: each line is as tall as that at its width (a
+// slower time than that may add a line), and the second keeps its place before the camera first
+// moves, so the ghost panel under them stays put.
+const DRAWN_SIZE = [`0000x0000 ${ENCODING_WORDS.shared}, input to picture 000 ms (p95 000 ms), server 000 ms: `
+  + "game code 000 ms, renderer 000 ms, encode 000 ms, sound to picture 000 ms (p95 000 ms)"];
+const MOVING_SIZE = ["Last time the camera moved: 000 pictures a second, input to picture 000 ms (p95 000 ms), "
+  + "decode 000 ms, server 000 ms"];
 
 function Readout({ link }) {
   const shown = link.shown, timings = shown?.timings || {}, moving = link.moving;
   if (!shown) return null;
   const rate = moving && (moving.pictures_per_second == null ? `${moving.pictures} picture`
     : `${Math.round(moving.pictures_per_second)} pictures a second`);
-  return html`<p class="scene-lab-readout">
-    ${shown.width}x${shown.height} ${ENCODING_WORDS[shown.encoding] || shown.encoding},
-    ${" "}input to picture ${ms(percentile(link.latencies, 0.5))} (p95 ${ms(percentile(link.latencies, 0.95))}),
-    ${" "}server ${ms(shown.server_ms)}: game code ${ms(timings.evaluate_ms)}, renderer ${ms(timings.host_ms)},
-    ${" "}encode ${ms(timings.encode_ms)}
-  </p>
-  ${moving && html`<p class="scene-lab-readout scene-lab-moving" data-summary=${JSON.stringify(moving)}>
-    Last time the camera moved: ${rate}, input to picture ${ms(moving.input_to_drawn_ms?.p50)}
-    ${" "}(p95 ${ms(moving.input_to_drawn_ms?.p95)}), decode ${ms(moving.decode_ms?.p50)},
-    ${" "}server ${ms(moving.server_ms?.p50)}</p>`}`;
+  const sync = syncWords(link.sound);
+  const drawn = `${shown.width}x${shown.height} ${ENCODING_WORDS[shown.encoding] || shown.encoding}, `
+    + `input to picture ${ms(percentile(link.latencies, 0.5))} (p95 ${ms(percentile(link.latencies, 0.95))}), `
+    + `server ${ms(shown.server_ms)}: game code ${ms(timings.evaluate_ms)}, renderer ${ms(timings.host_ms)}, `
+    + `encode ${ms(timings.encode_ms)}${sync ? `, ${sync}` : ""}`;
+  const moved = moving ? `Last time the camera moved: ${rate}, input to picture ${ms(moving.input_to_drawn_ms?.p50)} `
+    + `(p95 ${ms(moving.input_to_drawn_ms?.p95)}), decode ${ms(moving.decode_ms?.p50)}, `
+    + `server ${ms(moving.server_ms?.p50)}` : "";
+  return html`<p class="scene-lab-readout"><${SteadyText} block text=${drawn} sizes=${DRAWN_SIZE} /></p>
+  <p class=${`scene-lab-readout${moving ? " scene-lab-moving" : ""}`} data-summary=${moving ? JSON.stringify(moving) : undefined}>
+    <${SteadyText} block text=${moved} sizes=${MOVING_SIZE} /></p>`;
 }
 
 // The UI observation log's reader for this page (ui/uilog.js posts it; core/uilog.py keeps the
@@ -1651,6 +1717,22 @@ export function TunePanel({ link = null } = {}) {
   </section>`;
 }
 
+// What the picture wears over it: whose camera it is, Drawing..., and at its foot the notice, the
+// cue and, while a cinematic camera is on, that camera's settings (none of them takes a row, so
+// none moves the controls under the picture).
+function StageOverlays({ link }) {
+  const cue = cueFor(link);
+  return html`<span class=${`scene-lab-tag ${link.free ? "is-free" : link.view || link.rig ? "is-view" : ""}`}>${link.free
+      ? "Free camera" : link.rig ? rigName(link.rig, link.ghosts) : link.view ? viewName(link.ghosts, link.view)
+      : "Recorded camera"}</span>
+    ${link.drawing && html`<span class="scene-lab-busy">Drawing...</span>`}
+    ${(link.notice || cue || link.rig) && html`<div class="scene-lab-overlay">
+      ${link.notice && html`<p class="scene-lab-reason scene-lab-notice" role="status">${link.notice}</p>`}
+      ${cue && html`<p class="scene-lab-cue" aria-hidden="true">${cue}</p>`}
+      <${CinematicSettings} link=${link} tuning=${sceneCameraTuning()} />
+    </div>`}`;
+}
+
 // `ghosts`: the ghost panel, right under the player card.
 function Player({ link, canvas, surface, ghosts }) {
   const [tuning, setTuning] = useState(false);
@@ -1659,13 +1741,8 @@ function Player({ link, canvas, surface, ghosts }) {
     <div class="scene-lab-stage">
       <canvas ref=${canvas} width="640" height="480" class=${classes.filter(Boolean).join(" ")}
         aria-label="The recording's picture" ...${pointerHandlers(link, surface)}></canvas>
-      <span class=${`scene-lab-tag ${link.free ? "is-free" : link.view || link.rig ? "is-view" : ""}`}>${link.free
-        ? "Free camera" : link.rig ? rigName(link.rig, link.ghosts) : link.view ? viewName(link.ghosts, link.view)
-        : "Recorded camera"}</span>
-      ${link.drawing && html`<span class="scene-lab-busy">Drawing...</span>`}
-      ${cueFor(link) && html`<p class="scene-lab-cue" aria-hidden="true">${cueFor(link)}</p>`}
+      <${StageOverlays} link=${link} />
     </div>
-    ${link.notice && html`<p class="scene-lab-reason" role="status">${link.notice}</p>`}
     <${Transport} link=${link} />
     <${SoundBar} sound=${link.sound} frame=${link.frame} />
     <${RecordBar} link=${link} />
@@ -1723,6 +1800,9 @@ export const STAGE_WORDS = {
   prompt: "Choose a course and star to watch one of your attempts.",
   finding: "Finding your fastest attempt with a saved scene...",
   none: "None of your attempts at this has a saved scene.",
+  // A Library ghost with no stage to play in (round 9, item 8): one short sentence, why.
+  noStageForGhost: (target) => `This ghost can't be shown yet: you have no saved scene of this ${
+    target && targetKey(target)?.startsWith("segment:") ? "segment" : "star"}.`,
 };
 
 // The page's heading: the open scene's title and Close, else (`lab`: nothing chosen) the lab
@@ -1790,8 +1870,85 @@ function useMovingObservations(link, surface) {
   }, [link.moving]);
 }
 
+// The lab's stage for `next`; with `anyStrategy` and none of its strategy, his fastest scene of any.
+async function stageFor(next, anyStrategy) {
+  const answer = await getJSON(`${ROOT}/stage?${targetQuery(next)}`);
+  if (answer.attempt != null || !anyStrategy) return answer;
+  return getJSON(`${ROOT}/stage?${targetQuery({ ...next, strat: null })}&strategies=all`);
+}
+
+// A Library ghost as a row of `target`'s list, from the lab: {item}, or {item: null, reason}.
+async function libraryGhostRow(ghost, target) {
+  try {
+    return await getJSON(`${ROOT}/ghost?recording=${encodeURIComponent(ghost.recording)}&${
+      targetQuery({ ...target, strat: null })}`);
+  } catch (problem) {
+    return { item: null, reason: problem.message };
+  }
+}
+
+// What the stage picker shows (`target`), what it says (`stageNote`: "Finding...", or why a target
+// has no stage), and how a choice becomes the stage. `asked` counts choices: an older answer is dropped.
+function useStageChoice(link, open, close) {
+  const [target, setTarget] = useState(null);
+  const [stageNote, setStageNote] = useState(null);
+  const asked = useRef(0);
+  // A target from the stage picker (or the Practice log's, on arriving): the lab's stage for it opens,
+  // or the lab's reason shows and the scene of another target closes. `anyStrategy`: with no stage
+  // of `next`'s strategy, his fastest scene of any strategy; `none` replaces the lab's reason. The
+  // opened scene, or null (none, a failure, or a newer choice).
+  async function choose(next, { anyStrategy = false, none = null } = {}) {
+    const serial = ++asked.current;
+    setTarget(next);
+    setStageNote(STAGE_WORDS.finding);
+    let answer;
+    try {
+      answer = await stageFor(next, anyStrategy);
+    } catch (problem) {
+      if (serial === asked.current) setStageNote(problem.message);
+      return null;
+    }
+    if (serial !== asked.current) return null;
+    const staged = { ...next, ...answer.target };
+    setTarget(staged);
+    if (answer.attempt == null) {
+      setStageNote(none || answer.reason || STAGE_WORDS.none);
+      if (link.scene) await close();
+      return null;
+    }
+    setStageNote(null);
+    const scene = link.scene?.attempt === answer.attempt ? link.scene : await open({ attempt: answer.attempt });
+    if (!scene || serial !== asked.current) return null;
+    keep(scene, { target: staged });
+    return scene;
+  }
+  // A Library row's Ghost button: its stage (above), then that one ghost from the lab, added to the
+  // scene (sent once the scene's socket is open). Why it cannot be shows where the stage note or the
+  // ghost panel's note would.
+  async function showGhost(ghost) {
+    const wanted = entityTarget(ghost.entity, ghost.strat ?? null);
+    if (!wanted) {
+      setStageNote(STAGE_WORDS.noStageForGhost(null));
+      return;
+    }
+    const serial = asked.current + 1;
+    const scene = await choose(wanted, { anyStrategy: true, none: STAGE_WORDS.noStageForGhost(wanted) });
+    if (!scene || serial !== asked.current) return;
+    const answer = await libraryGhostRow(ghost, wanted);
+    if (serial !== asked.current || link.scene !== scene) return;
+    if (answer.item) link.addGhost(sceneGhost(answer.item));
+    else link.noteGhost(answer.reason);
+  }
+  return { target, setTarget, stageNote, setStageNote, asked, choose, showGhost };
+}
+
 // `t.sceneLab.intent` (app.js): the Practice log's Ghost button names an
 // attempt; the viewer opens that attempt's scene and plays it, once per click.
+// A Library row's Ghost button names a ghost ({recording, entity, strat}): the
+// viewer chooses that star or segment as the stage picker would (on the ghost's
+// strategy, else any of his with a scene), then asks the lab for that one ghost
+// and adds it. Where no stage comes back it says why, in one sentence; a later
+// stage source only changes what /stage answers, never the buttons.
 // The stage picker (scenestage.js) starts on the target of the scene on screen,
 // else, with none open, on what the Practice log has selected, whose stage
 // it then opens; a choice there opens that target's stage.
@@ -1799,11 +1956,9 @@ export function SceneViewer({ t }) {
   const lab = t?.sceneLab, intent = lab?.intent;
   const [status, setStatus] = useState(null);
   const [opening, setOpening] = useState(false);
-  const [target, setTarget] = useState(null);         // what the stage picker shows
-  const [stageNote, setStageNote] = useState(null);   // "Finding...", or why a target has no stage
   const canvas = useRef(null), surface = useRef(null), refresh = useRef(null);
-  const asked = useRef(0);                            // the newest choice; older answers are dropped
   const link = useSceneLink(canvas, refresh);
+  const { target, setTarget, stageNote, setStageNote, asked, choose, showGhost } = useStageChoice(link, open, close);
   const strategies = useStrategies(targetKey(target));
   refresh.current = async () => {
     try {
@@ -1827,6 +1982,10 @@ export function SceneViewer({ t }) {
   useEffect(() => {
     if (!intent) return;
     lab.clearIntent();
+    if (intent.ghost) {
+      showGhost(intent.ghost);
+      return;
+    }
     asked.current += 1;              // a stage still being found is no longer wanted
     setStageNote(null);
     const named = stageDefault({ attempt: intent.attempt }, t?.view);
@@ -1837,31 +1996,6 @@ export function SceneViewer({ t }) {
       keep(scene, { target: scene.target || named });
     });
   }, [intent]);
-  // A target from the stage picker (or the Practice log's, on arriving): the lab's stage for it opens,
-  // or the lab's reason shows and the scene of another target closes.
-  async function choose(next) {
-    const serial = ++asked.current;
-    setTarget(next);
-    setStageNote(STAGE_WORDS.finding);
-    let answer;
-    try {
-      answer = await getJSON(`${ROOT}/stage?${targetQuery(next)}`);
-    } catch (problem) {
-      if (serial === asked.current) setStageNote(problem.message);
-      return;
-    }
-    if (serial !== asked.current) return;
-    const staged = { ...next, ...answer.target };
-    setTarget(staged);
-    if (answer.attempt == null) {
-      setStageNote(answer.reason || STAGE_WORDS.none);
-      if (link.scene) await close();
-      return;
-    }
-    setStageNote(null);
-    const scene = link.scene?.attempt === answer.attempt ? link.scene : await open({ attempt: answer.attempt });
-    if (scene && serial === asked.current) keep(scene, { target: staged });
-  }
   const owner = useKeyboardOwner(link, surface, canvas);
   useMovingObservations(link, surface);
   // `body`: {package} from the lab's list, or {attempt} from the Ghost button or the stage picker. A
