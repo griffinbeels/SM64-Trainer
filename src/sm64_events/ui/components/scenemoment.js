@@ -60,7 +60,7 @@ export function SaveStates({ link }) {
   return html`<div class="scene-lab-moment" role="group" aria-label="Save states">
     <div class="scene-lab-cameras-head">
       <h3>Save states</h3>
-      <p class=${`scene-lab-hint${note.bad ? " is-bad" : ""}`} role="status">${note.text}</p>
+      <p class=${`scene-lab-hint${note.bad ? " is-bad" : ""}`} role="status" title=${note.text}>${note.text}</p>
     </div>
     <ol class="scene-lab-moment-slots">
       ${SLOTS.map((slot) => html`<li key=${slot}>

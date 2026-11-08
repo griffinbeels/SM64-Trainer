@@ -11,9 +11,11 @@ every control, slider, readout and row of the player card, and the ghost panel u
 box through paused and playing, frame 1 and the last, Loop on and off, Mute on and off, Free camera
 and Set focus (the hint), four cinematic cameras (their settings), a tilted lens readout, and
 Record, Stop and the video being made. Then the frame readout is planted with its widest values
-(five-digit frames, an eight-digit game frame), which must not move anything either: a box sized
-by its words is exactly what bounced. Restoring the plain Play/Pause label, or the readout sized by
-its digits, turns this red (measured 2026-11-08).
+(five-digit frames, an eight-digit game frame) and every one-line status (Sound, Record, Cameras,
+Save states) with a long sentence, which must not move anything either: a box sized by its words is
+exactly what bounced. Restoring the plain Play/Pause label, the readout sized by its digits, or a
+status line that wraps turns this red (measured 2026-11-08). Save states are never pressed here:
+that writes a slot.
 """
 import json
 from pathlib import Path
@@ -69,7 +71,18 @@ PLANT = r"""(() => {
   const line = texts(frame, false), words = texts(frame, true);
   line.forEach((node, i) => { node.data = i ? '' : 'Frame 99999 of 99999 so far'; });
   words.forEach((node, i) => { node.data = i ? '' : 'level 99, area 9, game frame 99999999'; });
-  return [line.length, words.length];
+  // And every one-line status at a long sentence: the Sound row's note, the Record row's, Cameras'
+  // and Save states'.
+  const long = 'This sentence is much longer than any status line the viewer writes, so it has to be cut '
+    + 'short where its place ends instead of pushing the controls after it onto a new line. '.repeat(2);
+  const statuses = ['.scene-lab-sound-note', '.scene-lab-record-status .scene-lab-record-note',
+    '.scene-lab-cameras .scene-lab-hint', '.scene-lab-moment .scene-lab-hint'].map((selector) => {
+    const node = document.querySelector(selector);
+    if (node?.firstChild?.nodeType === Node.TEXT_NODE) node.firstChild.data = long;
+    else if (node) node.textContent = long;
+    return !!node;
+  });
+  return [line.length, words.length, ...statuses];
 })()"""
 
 
@@ -187,10 +200,10 @@ def test_no_control_moves_or_resizes_when_another_changes_state(tmp_path, monkey
                 page.wait_for_timeout(200)
                 measured[width] = _states(page, shots, width)
             planted = page.evaluate(PLANT)
-            assert planted[0] >= 1 and planted[1] >= 1, planted
+            assert planted[0] >= 1 and planted[1] >= 1 and all(planted[2:]), planted
             for width in WIDTHS:
                 page.set_viewport_size({"width": width, "height": 1000})
-                measured[width]["widest readouts"] = _settle(page, 200)
+                measured[width]["widest readouts, long statuses"] = _settle(page, 200)
                 page.locator(".scene-lab-bar[aria-label=Playback]").screenshot(
                     path=str(shots / f"steady-widest-{width}.png"))
             assert errors == []

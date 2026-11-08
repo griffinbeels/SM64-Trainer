@@ -105,10 +105,13 @@
 /* The Cameras strip (components/scenepresets.js): nine slots in one row, in the order of the number
    keys that cut to them. A slot is its number over its name; rename and delete sit in its corner. */
 .scene-lab-cameras { display: grid; gap: 6px; min-width: 0; }
-.scene-lab-cameras-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; min-width: 0; }
-.scene-lab-cameras-head h3 { margin: 0; color: var(--muted); font-size: .78rem; letter-spacing: .06em; text-transform: uppercase; }
-.scene-lab-cameras-head .scene-lab-hint { flex: 1 1 260px; min-width: 0; }
-.scene-lab-cameras-undo { color: var(--muted); font-size: .8rem; }
+/* Its heading line (and Save states', the same class) is one line as tall as the Undo button, its
+   sentence cut short with the whole of it on hover: what a press says never moves the slots or
+   the rows under them (round 9, item 3). */
+.scene-lab-cameras-head { display: flex; align-items: center; gap: 2px 12px; min-width: 0; min-height: 26px; }
+.scene-lab-cameras-head h3 { flex: none; margin: 0; color: var(--muted); font-size: .78rem; letter-spacing: .06em; text-transform: uppercase; }
+.scene-lab-cameras-head .scene-lab-hint { flex: 1 1 260px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scene-lab-cameras-undo { flex: none; color: var(--muted); font-size: .8rem; }
 .scene-lab-cameras-undo button { min-height: 26px; padding: 0 8px; font-size: .78rem; }
 .scene-lab-slots { display: grid; grid-template-columns: repeat(9, minmax(0, 1fr)); gap: 6px; margin: 0; padding: 0; list-style: none; }
 /* The Save states row (components/scenemoment.js): nine numbers on the Cameras strip's grid. */
