@@ -133,9 +133,9 @@ def configure_args(spec: dict, root: Path) -> list[str]:
 
 
 def build_qt(root: Path, source: Path, jom: Path, spec: dict, vcvars32: Path, jobs: int) -> Path:
+    """Configure, build and install qtbase into `root/prefix`; its build tree
+    (about 1 GB) is removed afterwards, the installed Qt is what is reused."""
     prefix = root / "prefix"
-    if (prefix / "lib" / "Qt5Core.lib").is_file():
-        return prefix
     script = root / "build_qt.bat"
     script.write_bytes((
         _preamble(vcvars32) + f'set "PATH={jom.parent};%PATH%"\r\n'
@@ -145,6 +145,7 @@ def build_qt(root: Path, source: Path, jom: Path, spec: dict, vcvars32: Path, jo
         f"if errorlevel 1 exit /b 11\r\njom -j {jobs}\r\nif errorlevel 1 exit /b 12\r\n"
         f"jom -j {jobs} install\r\nif errorlevel 1 exit /b 13\r\nexit /b 0\r\n").encode())
     _run_hidden_low(script, root / "build_qt.log")
+    shutil.rmtree(source, ignore_errors=True)
     return prefix
 
 
@@ -232,9 +233,12 @@ def main() -> int:
     inputs = renderer.inputs()
     try:
         root = qt_root(cache, inputs["qt"]["version"])
-        source = fetch_qt(root, inputs["qt"])
-        prefix = build_qt(root, source, fetch_jom(root, inputs["jom"]), inputs["qt"], vcvars32, args.jobs)
+        prefix = root / "prefix"
+        if not (prefix / "lib" / "Qt5Core.lib").is_file():
+            source = fetch_qt(root, inputs["qt"])
+            build_qt(root, source, fetch_jom(root, inputs["jom"]), inputs["qt"], vcvars32, args.jobs)
         library = build_ui_library(root, prefix, cache, vcvars32)
+        shutil.rmtree(root / "ui", ignore_errors=True)
     except (RuntimeError, ValueError, FileNotFoundError) as failure:
         print(failure)
         return 2
