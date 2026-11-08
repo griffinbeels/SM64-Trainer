@@ -23,6 +23,7 @@ from pathlib import Path
 
 from sm64_events.core.paths import slot_library_dir
 from sm64_events.slotlibrary import usamune
+from sm64_events.slotlibrary.atlas import default_store
 from sm64_events.slotlibrary.coursesets import CourseSets, InstallReport, install_for_course, place_states
 from sm64_events.slotlibrary.sharefile import export_state, import_state
 from sm64_events.slotlibrary.store import KeptState, SlotLibrary
@@ -47,6 +48,8 @@ def print_report(report: InstallReport | None, dry_run: bool) -> int:
         verdict = "loads now" if placed.loadable_now else (
             "Usamune will refuse: " + ("Mario differs" if placed.place_matches else "another level or area"))
         print(f"slot {placed.slot}: {placed.state_id[:12]} {action}; {verdict}; pointers match {placed.pointers_match}")
+        if placed.words:
+            print(f"    {placed.words}")
     if report.failed:
         print(f"FAILED at slot {report.failed[0]}: {report.failed[1]}", file=sys.stderr)
         return 2
@@ -79,15 +82,17 @@ def list_all(library: SlotLibrary, sets: CourseSets) -> int:
     return 2 if scan.damaged else 0
 
 
-def accepted_fingerprints(args, library: SlotLibrary) -> set[str]:
+def accepted_fingerprints(args, library: SlotLibrary) -> tuple[set[str], str | None]:
+    """The running game's fingerprint and build, else every fingerprint the library holds and no build."""
     try:
         memory = usamune.attach(args.pid)
-        return {routine_fingerprint(memory.read, usamune.check_cartridge(memory))}
+        build = usamune.check_cartridge(memory)
+        return {routine_fingerprint(memory.read, build)}, build.version
     except Refusal:
         held = {state.fingerprint for state in library.scan().states}
         if not held:
             raise Refusal("start the game once: with no game and an empty library, no Usamune build is known") from None
-        return held
+        return held, None
 
 
 def run(args, library: SlotLibrary, sets: CourseSets) -> int:
@@ -99,18 +104,20 @@ def run(args, library: SlotLibrary, sets: CourseSets) -> int:
         case "rename":
             print(describe(library.rename(library.resolve(args.id), args.name)))
         case "install":
-            report = place_states(usamune.attach(args.pid), library, {args.slot: library.resolve(args.id)}, dry_run=args.dry_run)
+            report = place_states(usamune.attach(args.pid), library, {args.slot: library.resolve(args.id)},
+                                  dry_run=args.dry_run, atlases=default_store())
             return print_report(report, args.dry_run)
         case "set-assign":
             sets.assign(library, args.level, args.star, [library.resolve(identity) for identity in args.ids])
             print(f"level {args.level} star {args.star}: {len(args.ids)} states")
         case "set-install":
-            report = install_for_course(usamune.attach(args.pid), library, sets, args.level, args.star, dry_run=args.dry_run)
+            report = install_for_course(usamune.attach(args.pid), library, sets, args.level, args.star,
+                                        dry_run=args.dry_run, atlases=default_store())
             return print_report(report, args.dry_run)
         case "export":
             print(export_state(library, library.resolve(args.id), args.file))
         case "import":
-            state, is_new = import_state(library, args.file, accepted_fingerprints(args, library))
+            state, is_new = import_state(library, args.file, *accepted_fingerprints(args, library))
             print(f"{'added' if is_new else 'already kept'}: {describe(state)}")
     return 0
 

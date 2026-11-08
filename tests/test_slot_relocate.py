@@ -153,7 +153,7 @@ def live_world(game, *, live: int = LIVE, warp_object: int | None = None, focus:
 def install(game, data, tmp_path, **extra):
     current_area = int.from_bytes(game.read(usamune.US.current_area_pointer, 4), "big")
     image = fakes.make_image(game, data=data, current_area=current_area, **extra)
-    return tool.install(game, image, tmp_path, dry_run=False, write_seed=False), image
+    return tool.install(game, image, tmp_path, dry_run=False, write_seed=False).backup, image
 
 
 def test_a_moved_mario_is_written_relocated_and_usamunes_gate_sees_a_match(tmp_path):

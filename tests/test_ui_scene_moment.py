@@ -131,3 +131,52 @@ def _keep_folder():
     return Path(named) if named else None
 
 
+
+
+CROSSED = ("This save state is from the US version. The Trainer changed it to work in your JP game. It left out one "
+           "thing the JP game does not have: a music trigger. Your JP game has a yellow coin there "
+           "instead.")
+
+
+@pytest.mark.parametrize("width", [850, 1280])
+def test_a_save_state_written_into_the_other_versions_game_shows_its_flag_and_says_so(width, tmp_path, monkeypatch):
+    """The longest words a translated write says, under the flag of the version the save state came from."""
+    game = fakes.FakeGame()
+    answers = {"frames": [], "refuse": None, "older": False}
+    rig = _rigged(game, tmp_path, answers)
+
+    def crossed(app, lab, seen):
+        rig(app, lab, seen)
+        lab.moments._write_blocking = lambda entry, slot: {
+            "written": True, "slot": slot, "frame": 7, "backup": "b.bin", "kept": None, "build": "us",
+            "translated": {"from": "us", "to": "jp", "words": CROSSED, "removed": 1}}
+    folder = Path(tmp_path) / "shots"
+    folder.mkdir()
+    with attempt_scene._served(tmp_path, monkeypatch, lab_on=True, extra=crossed) as (base, _seen), \
+            sync_playwright() as play:
+        browser = play.chromium.launch(headless=True, args=["--disable-gpu"])
+        try:
+            page = browser.new_page(viewport={"width": width, "height": 1100})
+            page.add_init_script(CAMERAS)
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            _open(page, base)
+            page.keyboard.press("ArrowRight")
+            _says(page, "Press a number")
+            page.get_by_role("button", name="Put this frame in slot 3").click()
+            _says(page, "Your JP game has a yellow coin there instead.")
+            flag = page.locator(f"{STATUS} img.region-flag")
+            assert flag.get_attribute("alt") == "US" and flag.is_visible()
+            box, text = flag.bounding_box(), page.locator(STATUS).bounding_box()
+            assert box["height"] >= 10 and text["x"] <= box["x"], "the flag starts the line it belongs to"
+            overflow = page.evaluate("(() => { const row = document.querySelector('.scene-lab-moment');"
+                                     "return row.scrollWidth - row.clientWidth; })()")
+            assert overflow <= 0
+            page.locator(ROW).screenshot(path=str(folder / "translated.png"))
+            assert errors == []
+        finally:
+            browser.close()
+    target = _keep_folder()
+    if target:
+        for shot in folder.iterdir():
+            shot.replace(target / f"{width}-{shot.name}")

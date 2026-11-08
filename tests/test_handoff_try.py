@@ -85,7 +85,8 @@ def old_slot(game: FakeGame) -> bytes:
 
 
 def run(game, image, folder, **flags):
-    return tool.install(game, image, folder, dry_run=flags.get("dry_run", False), write_seed=flags.get("write_seed", False))
+    return tool.install(game, image, folder, dry_run=flags.get("dry_run", False),
+                        write_seed=flags.get("write_seed", False)).backup
 
 
 def set_level(game):

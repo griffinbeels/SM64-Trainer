@@ -9,6 +9,7 @@ import { h } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
 import { send } from "../api.js";
+import { RegionFlag } from "./regionflag.js";
 import { SLOTS } from "./scenepresets.js";
 
 const html = htm.bind(h);
@@ -25,14 +26,17 @@ export function whyNot(link) {
   return null;
 }
 
-// One press: the build, then the write. Each step's refusal is the answer.
+// One press: the build, then the write. Each step's refusal is the answer. A written answer names the build
+// (US or JP) the save state came from, for its flag; one written into the other build's game says so in words.
 export async function saveMoment(scene, row, shown, slot) {
   const source = scene.attempt != null ? { attempt: scene.attempt } : { package: scene.name };
   const built = await send("POST", ROOT, { ...source, frame: row.package_frame });
   if (built.refused) return { bad: true, text: built.reason };
   const written = await send("POST", `${ROOT}/${built.id}/write`, { slot });
   if (written.refused) return { bad: true, text: written.reason };
-  return { bad: false, text: `Frame ${shown} is in slot ${slot}.${built.exact ? "" : ` ${OLDER}`}` };
+  const crossed = written.translated ? ` ${written.translated.words}` : "";
+  const said = { bad: false, text: `Frame ${shown} is in slot ${slot}.${crossed}${built.exact ? "" : ` ${OLDER}`}` };
+  return written.build ? { ...said, build: written.build } : said;
 }
 
 export function SaveStates({ link }) {
@@ -60,7 +64,8 @@ export function SaveStates({ link }) {
   return html`<div class="scene-lab-moment" role="group" aria-label="Save states">
     <div class="scene-lab-cameras-head">
       <h3>Save states</h3>
-      <p class=${`scene-lab-hint${note.bad ? " is-bad" : ""}`} role="status">${note.text}</p>
+      <p class=${`scene-lab-hint${note.bad ? " is-bad" : ""}`} role="status">${note.build
+        ? html`<${RegionFlag} version=${note.build} size=${16} className="scene-lab-moment-flag" />` : null}${note.text}</p>
     </div>
     <ol class="scene-lab-moment-slots">
       ${SLOTS.map((slot) => html`<li key=${slot}>

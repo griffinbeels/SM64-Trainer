@@ -7,9 +7,11 @@
 Griffin decided the Trainer writes to game memory for this feature (2026-11-04); this tool is the one
 place that does it, and only inside one slot's range. The slot comes from Usamune's own save routine in
 the simulation (handoff_slot.py), never by hand. Before any write it attaches and refuses unless:
-the cartridge is Usamune US, Usamune's save and load routines match the ones the slot was saved by, and
+the cartridge is Usamune, Usamune's save and load routines match the ones the slot was saved by, and
 level, area, gMarioObject, the current-area pointer and the segment table all match the slot. The last
-two go beyond Usamune's own gate: a slot's pointers mean nothing if the level loaded elsewhere.
+two go beyond Usamune's own gate: a slot's pointers mean nothing if the level loaded elsewhere. A slot from
+the other build (US in a JP game, or JP in a US game) is first rewritten by slotlibrary/translate.py, which
+checks the level loaded where its atlas says; its routines and load context are then the running game's.
 
 The target slot's bytes go to scene-lab/handoff-backups first. The write clears the occupied word (the
 trailer's first), writes the rest, writes the occupied word last, then reads all of it back, so a load
@@ -32,9 +34,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import handoff_slot as slots  # noqa: E402
 from sm64_events.core.paths import slot_library_dir  # noqa: E402
+from sm64_events.slotlibrary.atlas import AtlasStore, default_store  # noqa: E402
 from sm64_events.slotlibrary.store import BUILT, KeptState, LoadContext, SlotLibrary  # noqa: E402
 from sm64_events.slotlibrary.relocate import Ambiguous, to_live_place  # noqa: E402
+from sm64_events.slotlibrary.translate import Translation, for_build  # noqa: E402
 from sm64_events.slotlibrary.usamune import (  # noqa: E402
+    ROM_NAMES,
     SEGMENT_BYTES,
     Build,
     GameMemory,
@@ -72,6 +77,7 @@ class SlotImage:
     current_area: int
     fingerprint: str
     source: str
+    build: str = "us"             # the Usamune build whose slot this is; the recordings so far are all US
 
     @property
     def mario_object(self) -> int:
@@ -152,8 +158,10 @@ def read_backup(path: Path) -> tuple[dict, bytes]:
 
 
 def keep_built(memory: GameMemory, image: SlotImage, library: SlotLibrary) -> tuple[KeptState, bool]:
-    """A built slot joins the Slot Library, so a later watcher reads it as known and not as his new save."""
-    return library.add(image.data, source=BUILT, fingerprint=image.fingerprint, rom=rom_identity(memory),
+    """A built slot joins the Slot Library, so a later watcher reads it as known and not as his new save. It is
+    kept as its own build's: a US image written into a JP game is kept as the US state it is."""
+    rom = ROM_NAMES[image.build] if image.build != check_cartridge(memory).version else rom_identity(memory)
+    return library.add(image.data, source=BUILT, fingerprint=image.fingerprint, rom=rom,
                        name=image.source, context=LoadContext(image.current_area, image.segments))
 
 
@@ -169,12 +177,49 @@ def at_live_place(memory: GameMemory, image: SlotImage, build: Build) -> SlotIma
     return image if data == image.data else replace(image, data=data)
 
 
-def install(memory: GameMemory, image: SlotImage, folder: Path, *, dry_run: bool, write_seed: bool) -> Path:
-    """Every check, Mario moved to the live place, the backup, then (unless a dry run) the write. Returns the
-    backup. The write refuses, leaving the slot empty, if Mario's place changes before the occupied word."""
+@dataclass(frozen=True)
+class Installed:
+    backup: Path
+    translation: Translation | None = None     # set when the image came from the other Usamune build
+
+
+def for_running_build(memory: GameMemory, image: SlotImage, build: Build, atlases: AtlasStore | None
+                      ) -> tuple[SlotImage, Translation | None]:
+    """The image as the running build's slot: unchanged for the same build, else through translate.for_build,
+    which the game must stand in the image's level and area for. Its load context becomes the running game's,
+    which for_build has checked is laid out as the atlas says."""
+    if image.build == build.version:
+        return image, None
+    level = struct.unpack(">h", memory.read(build.curr_level, 2))[0]
+    area = struct.unpack(">h", memory.read(build.curr_area, 2))[0]
+    if int.from_bytes(memory.read(build.mario_object, 4), "big") == 0:
+        raise GameDiffers(["no-mario"], ["no Mario: enter the level first"], level, area)
+    if (level, area) != (image.level, image.area):
+        raise GameDiffers(["place"], [f"the game is in level {level} area {area}, the slot in level {image.level} "
+                                      f"area {image.area}"], level, area)
+    if atlases is None:
+        raise GameDiffers(["version"], ["no atlas store to translate with"], level, area)
+    try:
+        translation = for_build(memory, build, image.data, image.build, atlases.get(image.level, image.area))
+    except Refusal as refused:
+        raise GameDiffers(["version"], [str(refused)], level, area) from refused
+    if translation.unmapped:
+        raise GameDiffers(["version"], [f"{len(translation.unmapped)} pointers have no place in the "
+                                        f"{build.version.upper()} game"], level, area)
+    return replace(image, data=translation.data, fingerprint=routine_fingerprint(memory.read, build),
+                   current_area=int.from_bytes(memory.read(build.current_area_pointer, 4), "big"),
+                   segments=memory.read(build.segment_table, SEGMENT_BYTES), build=build.version), translation
+
+
+def install(memory: GameMemory, image: SlotImage, folder: Path, *, dry_run: bool, write_seed: bool,
+            atlases: AtlasStore | None = None) -> Installed:
+    """Every check, the image made the running build's (translated when it came from the other build), Mario moved
+    to the live place, the backup, then (unless a dry run) the write. The write refuses, leaving the slot empty, if
+    Mario's place changes before the occupied word."""
     slot_range(image.index)
     check_image(image)
     build = check_cartridge(memory)
+    image, translation = for_running_build(memory, image, build, atlases)
     image = at_live_place(memory, image, build)
     check_game_matches(memory, image, build)
     if write_seed and image.seed is None:
@@ -184,7 +229,7 @@ def install(memory: GameMemory, image: SlotImage, folder: Path, *, dry_run: bool
         write_slot_bytes(memory, build, image.index, image.data, mario_place=image.mario_object)
         if write_seed:
             memory.write(slots.RANDOM_SEED, struct.pack(">H", image.seed))
-    return backup
+    return Installed(backup, translation)
 
 
 def restore(memory: GameMemory, path: Path, folder: Path, *, dry_run: bool) -> Path:
@@ -283,7 +328,8 @@ def main() -> int:
         image = build_image(args.session, args.frame, args.slot)
         print(f"slot {image.index}: level {image.level}, area {image.area}, gMarioObject {image.mario_object:08x}")
         game = attach(args.pid)
-        backup = install(game, image, backups_folder(), dry_run=args.dry_run, write_seed=args.write_seed)
+        backup = install(game, image, backups_folder(), dry_run=args.dry_run, write_seed=args.write_seed,
+                         atlases=default_store()).backup
         if not args.dry_run:
             keep_built(game, image, SlotLibrary(slot_library_dir()))
         print(f"{'dry run, nothing written' if args.dry_run else 'written and read back'}; backup: {backup}")
