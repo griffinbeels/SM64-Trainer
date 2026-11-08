@@ -29,7 +29,9 @@ overages or change existing billing to implement a feature. Keep the provider
 boundary changeable so adoption/funding can support a separately approved upgrade.
 The explicitly authorized one-off API-credit review is a separate task expense.
 
-Check this project's GPL-3.0-or-later license against the actual selected SDK,
+Check this project's GPL-3.0-or-later license (GPL-2.0-or-later for the code
+built into or loaded with the graphics plugin; `licenses/README.md` lists it)
+against the actual selected SDK,
 dependencies, interface and redistributable package. A proprietary SDK is not
 automatically compatible or incompatible merely because it runs in another
 process. New code can have its own documented license; existing third-party and

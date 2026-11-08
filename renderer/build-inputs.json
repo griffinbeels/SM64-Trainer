@@ -8,8 +8,23 @@
     "license": "GPL-2.0"
   },
   "prebuilt_libraries": {
-    "GLideNUI.lib": "7595f40fec88b169cee0ff3d5f105b9502d8f9e5bcce245d444d7151bd9c3b38",
-    "libGLideNHQ.lib": "637a6429e01a384e496e0f0e67829ecffe88240b06976ef03ba3c1b393c3263d",
+    "GLideNUI.lib": "c6520683570bb6e3cd857945ef2151de9da8c58e4f83a156784643da5973684e",
+    "libGLideNHQ.lib": "81729b8c8307fd18f1ae2d571ddd9babaa3c4edd945a419de5bb0a0e611c6db8",
     "osal.lib": "89ad6c9b8e6a1e5a36aeb56c549f9f9867ef5dd6de5329c6ebbc5ee213e1b7f9"
+  },
+  "qt": {
+    "project": "qtbase 5.12.12, static, linked into GLideNUI.lib (tools/build_renderer_libs.py)",
+    "version": "5.12.12",
+    "url": "https://download.qt.io/archive/qt/5.12/5.12.12/submodules/qtbase-everywhere-src-5.12.12.tar.xz",
+    "md5": "d29462524b32e0e5192a48432242b745",
+    "sha256": "7c15c31590b6ec12408242b1a32075d1d545f35e1d41fdbad31ec670d00680f2",
+    "configure": ["-static", "-static-runtime", "-release", "-opensource", "-confirm-license",
+                  "-platform", "win32-msvc", "-nomake", "examples", "-nomake", "tests", "-opengl", "desktop",
+                  "-no-icu", "-no-openssl", "-no-dbus", "-no-freetype"],
+    "license": "LGPL-3.0 OR GPL-2.0 OR GPL-3.0"
+  },
+  "jom": {
+    "url": "https://download.qt.io/official_releases/jom/jom_1_1_4.zip",
+    "sha256": "d533c1ef49214229681e90196ed2094691e8c4a0a0bef0b2c901debcb562682b"
   }
 }
