@@ -13605,7 +13605,7 @@
     {
       "seed_key": "landmark:kind:bhvPlaysMusicTrackWhenTouched",
       "key": "kind:bhvPlaysMusicTrackWhenTouched",
-      "name": "plays music track when touched"
+      "name": "music trigger"
     },
     {
       "seed_key": "landmark:kind:bhvInsideCannon",
