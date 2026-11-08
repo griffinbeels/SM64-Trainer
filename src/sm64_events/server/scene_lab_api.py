@@ -564,7 +564,7 @@ class SceneLab:
         config = await asyncio.to_thread(LabConfig.load, self.config_path)
         sidecar = resim = None
         if ghost is not None or stage is not None:
-            path, resim = await self._resim_source(ghost, stage)
+            path, resim, sidecar = await self._resim_source(ghost, stage)   # a ghost: as soon as it starts playing
         elif attempt is None:
             path = await asyncio.to_thread(config.package_path, name)
         elif self.scenes is None:
@@ -599,14 +599,16 @@ class SceneLab:
             self._start_watch()
             return self._scene(described)
 
-    async def _resim_source(self, ghost: str | None, stage: dict | None) -> tuple[Path, dict]:
-        """(package, its resim table) for a ghost or a stage; SceneRefused with the sentence otherwise."""
+    async def _resim_source(self, ghost: str | None, stage: dict | None) -> tuple[Path, dict, Path | None]:
+        """(package, its resim table, the sidecar of a scene still being built) for a ghost or a stage;
+        SceneRefused with the sentence otherwise. A ghost answers at its first published frames."""
         from sm64_events.server.scene_resim import ResimRefused
         try:
             if ghost is not None:
-                return await asyncio.to_thread(self.resim.ghost_scene_blocking, ghost)
-            return await asyncio.to_thread(self.resim.stage_scene_blocking, stage["course"], stage["act"],
-                                           stage.get("area") or 1)
+                return await asyncio.to_thread(self.resim.ghost_scene_blocking, ghost, progressive=True)
+            path, info = await asyncio.to_thread(self.resim.stage_scene_blocking, stage["course"], stage["act"],
+                                                 stage.get("area") or 1)
+            return path, info, None
         except ResimRefused as refused:
             raise SceneRefused(str(refused)) from None
 
@@ -677,6 +679,15 @@ class SceneLab:
                 if failures < GROW_FAILURES:
                     continue
                 grown = {"from": len((self.described or {}).get("frames", ())), "frames": [], "growing": False}
+            if grown and not grown["growing"] and (self.open_resim or {}).get("building"):
+                info, failed = await asyncio.to_thread(self.resim.finished, self.open_path)   # the child's last word
+                if failed is not None:
+                    async with self.lock:
+                        if generation == self.generation:
+                            await self._end("closed", failed)
+                    return
+                if info is not None and generation == self.generation:
+                    self.open_resim = grown["resim"] = info
             if grown:
                 if self.described is not None and generation == self.generation:
                     frames = self.described["frames"][:grown["from"]] + grown["frames"]
@@ -1176,6 +1187,9 @@ def _mount_ghost_routes(router: APIRouter, lab: SceneLab) -> None:
               strategies: str = Query(default="one", pattern="^(one|all)$"),
               ghost: str | None = Query(default=None, min_length=1, max_length=512)):
         found = lab.ghosts.stage(target_of(course, star, segment), strat or None, every=strategies == "all")
+        if lab.resim is not None and star is not None:     # its ghosts then start from a stage made ahead
+            from sm64_events.server.scene_resim import act_of_target
+            lab.resim.warm(course, act_of_target({"kind": "star", "entity_key": f"{course}-{star}"}))
         return _stage_open(found, ghost)
 
     @router.get("/ghosts")

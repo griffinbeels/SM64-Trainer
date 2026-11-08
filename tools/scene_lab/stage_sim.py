@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import struct
 import sys
 import threading
@@ -115,6 +116,20 @@ def u32(ram: np.ndarray, address: int) -> int:
     return struct.unpack_from(">I", ram, sim.phys(address))[0]
 
 
+def _keep(path: Path, ram: np.ndarray) -> None:
+    """A cached RAM image, whole or not at all: the server's background warm and a build can make the same one."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    partial = path.with_name(f"{path.stem}.{os.getpid()}-{threading.get_ident()}.partial")
+    with partial.open("wb") as handle:
+        np.savez_compressed(handle, ram=ram)
+    try:
+        partial.replace(path)
+    except PermissionError:                     # the other one wrote it and is reading it now: the same bytes
+        partial.unlink(missing_ok=True)
+        if not path.is_file():
+            raise
+
+
 def menu_input(frames_in_menu: int, pushes: int, act: int) -> tuple[int, tuple[int, int], int]:
     """The act selector's input on its n-th frame: (buttons, stick, pushes so far). Nothing for MENU_WAIT
     frames, then every MENU_PERIOD frames one stick push right until act - 1 were made, then A."""
@@ -188,8 +203,7 @@ class Stages:
             else:
                 _game, snap = self._cold()
                 self._boot = snap[0].copy()
-                self.cache.mkdir(parents=True, exist_ok=True)
-                np.savez_compressed(path, ram=self._boot)
+                _keep(path, self._boot)
         return self._boot, COLD_FCSR
 
     def vi(self) -> dict:
@@ -266,8 +280,7 @@ class Stages:
             if path.is_file():
                 return np.load(path)["ram"]
             ram = self._make_reset(level, area, act)
-            self.cache.mkdir(parents=True, exist_ok=True)
-            np.savez_compressed(path, ram=ram)
+            _keep(path, ram)
             return ram
 
     def reset_digest(self, level: int, area: int, act: int) -> str:
@@ -319,16 +332,19 @@ class Stages:
         return ram.copy()
 
     # ---------------------------------------------------------------- as a scene
-    def package(self, level: int, area: int, act: int, frames: int = 150) -> Path:
-        """That reset played on with no input, as a scene package the viewer opens (cached)."""
+    def package(self, level: int, area: int, act: int, frames: int = 150, out: Path | None = None) -> Path:
+        """That reset played on with no input, as a scene package the viewer opens (cached; `out`: written there
+        instead, uncached)."""
         import sim_scene  # noqa: PLC0415
-        out = self.cache / f"stage-{self.key(level, area, act)}-p{PACKAGE_VERSION}-{frames}.sm64scene"
-        if out.is_file():
+        cached = out is None
+        out = out or self.cache / f"stage-{self.key(level, area, act)}-p{PACKAGE_VERSION}-{frames}.sm64scene"
+        if cached and out.is_file():
             return out
         start = self.reset(level, area, act)
         template = start[sim.phys(self.symbols["gControllerPads"]):sim.phys(self.symbols["gControllerPads"]) + 24].tobytes()
         machine = self.machine(start.copy())
-        writer = sim_scene.SimScene(out, self.cache / f"work-{time.monotonic_ns()}", self.rom_path, self.symbols, self.vi())
+        writer = sim_scene.SimScene(out, self.cache / f"work-{time.monotonic_ns()}", self.rom_path, self.symbols, self.vi(),
+                                    seeds=self.cache)
         try:
             for _ in range(frames):
                 machine.step(pads(0, 0, 0, template))

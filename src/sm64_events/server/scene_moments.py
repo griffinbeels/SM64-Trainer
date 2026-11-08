@@ -176,6 +176,10 @@ class SceneMoments:
         """The built state with its level, area and Mario word, or {refused, reason}. LookupError: no such
         scene. SceneRefused or ConfigError: this scene cannot be read now."""
         api = importlib.import_module("sm64_events.server.scene_lab_api")   # the module in sys.modules, as the routes catch
+        resim = getattr(self.lab, "resim", None)
+        if body.ghost is not None and resim is not None and resim.is_building(body.ghost):
+            from sm64_events.server.scene_resim import BUILDING   # its parting frame is not known yet
+            return {"refused": "building", "reason": BUILDING}
         path, title = await self._source(body)
         config = await asyncio.to_thread(api.LabConfig.load, self.lab.config_path)
         if config.map is None:

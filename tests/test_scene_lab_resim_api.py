@@ -36,7 +36,7 @@ def recording(tmp_path_factory):
     out = folder / "scene.sm64scene"
     fixture.pk.write_package(fixture.pk.tap_source(session, "next", states=True), rom, out, fixture.pk.ZLIB)
     (folder / "rom.z64").write_bytes(rom)
-    return {"folder": folder, "rom": folder / "rom.z64", "package": out}
+    return {"folder": folder, "rom": folder / "rom.z64", "package": out, "session": session}
 
 
 class Runner:
@@ -48,7 +48,7 @@ class Runner:
         self.clips: list[bytes] = []
         self.done = threading.Event()
 
-    def __call__(self, args):
+    def __call__(self, args, on_progress=None):
         self.calls.append(args)
         if "--clip" in args:
             self.clips.append(Path(args[args.index("--clip") + 1]).read_bytes())
@@ -212,6 +212,126 @@ def test_the_stage_falls_through_to_the_ghost_when_he_has_no_scene_of_it(recordi
     assert api._stage_open(found, None)["open"] is None
     his = {**found, "attempt": 12, "reason": None}
     assert api._stage_open(his, "ghost-7")["open"] == {"attempt": 12}
+
+
+class GrowingRunner:
+    """ghost_resim's build as the fast load makes it (sim_scene.py): the package written in place, its first frames
+    published with a sidecar and announced on a progress line, then the rest once the test lets it go on."""
+
+    def __init__(self, recording, tmp_path, publish: int = 3, parting: int | None = None, fail: bool = False):
+        self.recording, self.out = recording, tmp_path / "lab" / "resim" / "ghost-growing.sm64scene"
+        self.publish, self.parting, self.fail = publish, parting, fail
+        self.go = threading.Event()
+        self.calls: list[list[str]] = []
+
+    def __call__(self, args, on_progress=None):
+        self.calls.append(args)
+        if args[0] == "check-slot":
+            return {"ok": True, "frames": 60, "compared": 60, "reason": None}
+        pk = fixture.pk
+        source = pk.tap_source(self.recording["session"], "next", states=True)
+        self.out.parent.mkdir(parents=True, exist_ok=True)
+        sidecar = self.out.with_suffix(".grow")
+        writer = pk.PackageWriter(source, Path(self.recording["rom"]).read_bytes(), self.out, pk.ZLIB, in_place=True)
+        captures = iter(source.captures)
+        for _ in range(self.publish + 1):                     # the scene state runs one frame behind
+            writer.add(next(captures))
+        published = writer.publish(sidecar)
+        if on_progress is not None:
+            on_progress({"stage": "re-simulating", "done": published, "total": 5, "package": str(self.out),
+                         "sidecar": str(sidecar), "published": published, "start": "simulated_reset"})
+        assert self.go.wait(30)
+        if self.fail:
+            writer.abandon()
+            sidecar.unlink(missing_ok=True)
+            raise ResimRefused("The simulated game stopped.")
+        for capture in captures:
+            writer.add(capture)
+        writer.finish()
+        sidecar.unlink()
+        return {"path": str(self.out), "info": {"start": "simulated_reset", "parting_frame": self.parting,
+                                                "first_record": 1, "exact": "mario", "records": 6,
+                                                "save_states": {"allowed": True, "reason": None, "until": self.parting,
+                                                                "check": "load"}}}
+
+
+def _status(client, until, seconds: float = 20.0):
+    for _ in range(int(seconds / 0.05)):
+        status = client.get("/api/scene-lab/status").json()
+        if until(status):
+            return status
+        threading.Event().wait(0.05)
+    raise AssertionError(f"status never reached the wanted state: {status}")
+
+
+def test_a_ghost_opens_at_its_first_frames_and_grows_while_it_builds(recording, tmp_path, monkeypatch):
+    """The fast load (his words: "There's gotta be a fast load method."): the open answers at the first
+    publication, a growing scene with a building table; the rest arrives as a grown scene; the last table
+    replaces the building one; a save state asked for meanwhile is refused with the sentence."""
+    from sm64_events.server.scene_resim import BUILDING
+    runner = GrowingRunner(recording, tmp_path)
+    app, lab = _lab(recording, tmp_path, monkeypatch, runner)
+    with TestClient(app) as client:
+        opened = client.post("/api/scene-lab/open", json={"ghost": "ghost-1"})
+        assert opened.status_code == 200, opened.text
+        scene = opened.json()
+        assert scene["growing"] is True and 1 <= len(scene["frames"]) < 6
+        assert scene["resim"] == {"start": "simulated_reset", "building": True, "records": 6, "first_record": 1,
+                                  "parting_frame": None, "save_states": {"allowed": False, "reason": BUILDING}}
+        moment = client.post("/api/scene-lab/moment", json={"ghost": "ghost-1", "frame": 1})
+        assert moment.status_code == 200 and moment.json() == {"refused": "building", "reason": BUILDING}
+        runner.go.set()
+        status = _status(client, lambda s: s["session"] and not s["session"]["resim"].get("building"))
+        assert status["session"]["growing"] is False and len(status["session"]["frames"]) == 6
+        assert status["session"]["resim"]["parting_frame"] is None and status["session"]["resim"]["exact"] == "mario"
+        client.post("/api/scene-lab/close")
+    builds = [args for args in runner.calls if args[0] == "build"]
+    assert len(builds) == 1                                   # the moment refusal started no second build
+
+
+def test_a_build_that_fails_after_it_began_playing_closes_the_scene_with_the_sentence(recording, tmp_path, monkeypatch):
+    runner = GrowingRunner(recording, tmp_path, fail=True)
+    app, lab = _lab(recording, tmp_path, monkeypatch, runner)
+    with TestClient(app) as client:
+        assert client.post("/api/scene-lab/open", json={"ghost": "ghost-1"}).status_code == 200
+        runner.go.set()
+        status = _status(client, lambda s: s["session"] is None and s["ended"])
+        assert status["ended"]["message"] == "The simulated game stopped."
+
+
+def test_looking_at_a_star_warms_its_stage_once_in_the_background(recording, tmp_path, monkeypatch):
+    """GET /stage for a star makes that course and act's reset ahead (a cold stage cost ~6 s of a first build),
+    in one background child at idle priority on one core; once per course and act; a segment warms nothing."""
+    from sm64_events.server.scene_resim import SceneResim
+    spawned, finished = [], threading.Event()
+
+    class Child:
+        returncode = 0
+
+        def communicate(self, timeout=None):
+            finished.set()
+            return '{"warm": "v2-us-24-1-3", "seconds": 5.6}\n', ""
+
+        def poll(self):
+            return 0
+
+    def spawn(args, *, background=False):
+        spawned.append((args, background))
+        return Child()
+    monkeypatch.setattr(SceneResim, "_spawn", staticmethod(spawn))
+    from sm64_events.memory import version_probe
+    monkeypatch.setattr(version_probe, "version_from_header", lambda header: "us")   # the fixture ROM is no Usamune
+    app, lab = _lab(recording, tmp_path, monkeypatch, Runner(recording["package"]))
+    monkeypatch.setattr(lab.ghosts, "stage", lambda target, strat, every=False: {
+        "target": {}, "attempt": None, "time": None, "reason": "none", "scenes": []})
+    with TestClient(app) as client:
+        for _ in range(2):
+            assert client.get("/api/scene-lab/stage", params={"course": 2, "star": 2}).status_code == 200
+            assert finished.wait(10)
+        client.get("/api/scene-lab/stage", params={"segment": 7})
+    ((args, background),) = spawned
+    assert background is True and args[0] == "warm"
+    assert (_value(args, "--course"), _value(args, "--act")) == ("2", "3")
 
 
 def test_a_first_build_shows_its_progress_on_status(recording, tmp_path, monkeypatch):

@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import struct
 import sys
 import threading
@@ -71,6 +72,8 @@ SAVE_STATES = {GHOST_START: True, OWN_SCENE: True, DOWNLOADED_START: "checked", 
                SIMULATED_RESET: "checked"}
 EXACT = {GHOST_START: "bytes", OWN_SCENE: "bytes", DOWNLOADED_START: "objects", ANOTHER_RESET: "mario",
          SIMULATED_RESET: "mario"}
+PROBES_FILE, PROBE_VERSION = "scene-probes.json", 1   # his scenes' first-frame words, kept between builds
+WARM_FRAMES = 10                     # a warmed stage's frames packed ahead, for the packer's seed
 LOAD_CHECK_FRAMES = 60
 LOAD_INDEX = 3                       # the simulated slot a load check uses (the running game is never touched)
 GAME_TIMER, AREA_COUNTER, MARIO_OBJECT = "gGlobalTimer", "gAreaUpdateCounter", stage_sim.MARIO_OBJECT   # map names
@@ -199,22 +202,49 @@ class GhostScenes:
     # ---------------------------------------------------------------- scenes he recorded
     def _scenes(self):
         """(path, stamp, the first frame's identity words) of every readable scene in the attempt scenes
-        folder; each scene is read once per file version (PROBE_WORDS), so a second build reads only the
-        scene it starts from."""
+        folder; each scene file version is read once and its words kept on disk (PROBES_FILE), so a build
+        reads only the scene it starts from. Reading all of his 16 scenes cost 1.5 s on every ask, a cached
+        ghost's included (2026-11-08)."""
         folders = self.scenes_dir if isinstance(self.scenes_dir, (list, tuple)) else [self.scenes_dir]
         paths = sorted({path for folder in folders if folder is not None and Path(folder).is_dir()
                         for path in Path(folder).glob("*.sm64scene")})
+        known = self._probe_file()
+        seen, found = {}, []
         for path in paths:
             try:
                 stat = path.stat()
                 stamp = f"{path.name}:{stat.st_size}:{stat.st_mtime_ns}"
-                words = self.probes.get(stamp)
+                where = f"{path}|{stat.st_size}|{stat.st_mtime_ns}"
+                words = self.probes.get(stamp) or known.get(where)
                 if words is None:
                     regions, _pool = first_state(package.open_package(path, self.rom_path))
-                    words = self.probes[stamp] = probe(regions, self.symbols)
-            except (OSError, package.PackageError):
+                    words = probe(regions, self.symbols)
+                self.probes[stamp] = seen[where] = words
+            except (OSError, package.PackageError):     # a scene still being written, or not one
                 continue
-            yield path, stamp, words
+            found.append((path, stamp, words))
+        if seen != known:
+            self._probe_file(seen)
+        yield from found
+
+    def _probe_file(self, words: dict | None = None) -> dict:
+        """The kept probe words ({path|size|mtime: words}) for this map; with `words`, writes them instead."""
+        path = self.cache / PROBES_FILE
+        mark = f"{PROBE_VERSION}|{getattr(self.stages, 'map_path', None)}|{self.rom_path}"
+        if words is not None:
+            try:
+                self.cache.mkdir(parents=True, exist_ok=True)
+                partial = path.with_name(path.name + ".partial")
+                partial.write_text(json.dumps({"mark": mark, "words": words}), encoding="utf-8")
+                partial.replace(path)
+            except OSError:
+                pass                                   # a next build reads the scenes again
+            return words
+        try:
+            kept = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        return kept.get("words", {}) if isinstance(kept, dict) and kept.get("mark") == mark else {}
 
     def _read_start(self, path: Path, base) -> np.ndarray:
         regions, pool = first_state(package.open_package(path, self.rom_path))
@@ -387,8 +417,18 @@ class GhostScenes:
     def _simulate(self, clip, clip_sha: str, started: Start, out: Path, progress) -> dict:
         template = started.ram[sim.phys(self.symbols["gControllerPads"]):sim.phys(self.symbols["gControllerPads"]) + 24].tobytes()
         machine = self.stages.machine(started.ram.copy())
+        total = len(clip.frames) - 1
+        sidecar = out.with_suffix(".grow")
+        simulated = [0]
+
+        def published(frames: int) -> None:
+            """The scene so far can be opened (scene_session.Growth): the server opens it at the first one."""
+            if progress is not None:
+                progress("re-simulating", simulated[0], total, package=str(out), sidecar=str(sidecar),
+                         published=frames, start=started.kind)
         writer = sim_scene.SimScene(out, self.cache / f"work-{time.monotonic_ns()}", self.rom_path, self.symbols,
-                                    self.stages.vi())
+                                    self.stages.vi(), sidecar=sidecar, on_publish=published,
+                                    seeds=getattr(self.stages, "cache", None))
         parting = farthest = None
         compared, began = 0, time.perf_counter()
         try:
@@ -403,10 +443,11 @@ class GhostScenes:
                     if parting is None and (action != pose[1] or not np.array_equal(position, pose[0])):
                         parting = index
                 writer.add(machine.ram)
+                simulated[0] = index
                 if progress is not None:
-                    progress("re-simulating", index, len(clip.frames) - 1)
+                    progress("re-simulating", index, total)
             if progress is not None:
-                progress("writing the scene", len(clip.frames) - 1, len(clip.frames) - 1)
+                progress("writing the scene", total, total)
             writer.finish()
         except BaseException:
             writer.abandon()
@@ -506,14 +547,48 @@ def check_slot_load(package_path: Path, frame: int, slot: bytes, clip, stages: s
     return {"ok": True, "reason": None, "frames": played, "compared": compared}
 
 
+def warm(stages: stage_sim.Stages, course: int, area: int, act: int, scenes: GhostScenes | None = None) -> dict:
+    """What a first build of that course and act would make before its first frame, made ahead (the server's
+    background child, scene_resim.warm): the practice reset, the boot RAM, the packer's seed of the ROM and that
+    level's ROM windows, and his scenes' first frames read (scene-probes.json)."""
+    began = time.perf_counter()
+    kept = sum(1 for _scene in scenes._scenes()) if scenes is not None else 0
+    level = stages.level_of_course(course)
+    stages.reset(level, area, act)
+    # A few frames of that stage packed and thrown away: the packer's seed then knows that level's ROM windows
+    # (its first frames otherwise search the ROM: ~0.8 s of a first build, 2026-11-08).
+    out = stages.cache / f"warm-{os.getpid()}.sm64scene"
+    try:
+        stages.package(level, area, act, frames=WARM_FRAMES, out=out)
+    finally:
+        out.unlink(missing_ok=True)
+    return {"warm": stages.key(level, area, act), "scenes": kept, "seconds": round(time.perf_counter() - began, 2)}
+
+
 # ---------------------------------------------------------------- the server's child (scene_resim.py)
+def _progress_lines():
+    """progress(stage, done, total, **extra): one JSON line the server reads as it comes (scene_resim.py), at most
+    ~5 a second; every publication of the growing package (extra: package, sidecar, published, start) is printed,
+    from the packer's thread beside the main one."""
+    shown, printing = {"at": 0.0}, threading.Lock()
+
+    def progress(stage: str, done: int, total: int, **extra) -> None:
+        now = time.monotonic()
+        with printing:
+            if extra or done in (0, total) or now - shown["at"] > 0.2:
+                shown["at"] = now
+                sys.stdout.write(json.dumps({"progress": {"stage": stage, "done": done, "total": total, **extra}}) + "\n")
+                sys.stdout.flush()
+    return progress
+
+
 def main(argv=None) -> int:
     """One build in a child of its own, so the server's interpreter never runs the simulation: prints one
     JSON line ({"path", "info"} | {"path"} | {"error"})."""
     import argparse  # noqa: PLC0415
 
     parser = argparse.ArgumentParser(description="Ghost Handoff re-simulation: one build, one JSON line.")
-    parser.add_argument("command", choices=("build", "stage", "capture", "check-slot"))
+    parser.add_argument("command", choices=("build", "stage", "capture", "check-slot", "warm"))
     parser.add_argument("--lab-root", required=True)
     parser.add_argument("--cache", required=True)
     parser.add_argument("--rom", required=True)
@@ -532,14 +607,7 @@ def main(argv=None) -> int:
     parser.add_argument("--first-record", type=int, default=1)
     args = parser.parse_args(argv)
     symbols = sim.Symbols(Path(args.map))
-    shown = {"at": 0.0}
-
-    def progress(stage: str, done: int, total: int) -> None:
-        """One JSON line the server reads as it comes (scene_resim.py), at most ~5 a second."""
-        now = time.monotonic()
-        if done in (0, total) or now - shown["at"] > 0.2:
-            shown["at"] = now
-            print(json.dumps({"progress": {"stage": stage, "done": done, "total": total}}), flush=True)
+    progress = _progress_lines()
     stages = stage_sim.Stages(Path(args.lab_root), Path(args.cache) / "stages", rom_path=Path(args.rom), symbols=symbols,
                               map_path=Path(args.map))
     try:
@@ -555,6 +623,10 @@ def main(argv=None) -> int:
                       "info": {"course": args.course, "level": level, "area": args.area, "act": act, "frames": args.frames,
                                "start": SIMULATED_RESET, "first_record": 0, "parting_frame": None,
                                "exact": EXACT[SIMULATED_RESET], "save_states": save_states(SIMULATED_RESET)}}
+        elif args.command == "warm":
+            answer = warm(stages, args.course, args.area, args.act or 1,
+                          GhostScenes(Path(args.lab_root), Path(args.cache), scenes_dir=[Path(folder) for folder in args.scenes],
+                                      starts_dir=None, stages=stages))
         elif args.command == "check-slot":
             answer = check_slot_load(Path(args.package), args.frame, Path(args.slot).read_bytes(),
                                      decode_clip(Path(args.clip).read_bytes()), stages, args.first_record)
