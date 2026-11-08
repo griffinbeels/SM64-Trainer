@@ -108,6 +108,14 @@ def _settle(page, ms: int = 150) -> dict:
 def _states(page, shots: Path, width: int) -> dict:
     """The player card's boxes in every state one control can put it in, keyed by state."""
     seen = {}
+    _playback_states(page, shots, width, seen)
+    _camera_states(page, seen)
+    _record_states(page, shots, width, seen)
+    return seen
+
+
+def _playback_states(page, shots: Path, width: int, seen: dict) -> None:
+    """Frame 1 and the last, Loop, Play and Pause, Mute."""
     page.keyboard.press("Home")
     seen["frame 1"] = _settle(page)
     page.locator(".scene-lab-player").screenshot(path=str(shots / f"steady-paused-{width}.png"))
@@ -133,6 +141,10 @@ def _states(page, shots: Path, width: int) -> dict:
     assert mute.get_attribute("aria-pressed") == "true"
     seen["muted"] = _settle(page)
     mute.click()
+
+
+def _camera_states(page, seen: dict) -> None:
+    """Free camera, Set focus, four cinematic cameras, a tilt."""
     page.get_by_role("button", name="Free camera").click()
     page.wait_for_function("document.querySelector('.scene-lab-tag').textContent === 'Free camera'")
     seen["free camera"] = _settle(page)
@@ -153,6 +165,10 @@ def _states(page, shots: Path, width: int) -> dict:
     page.wait_for_function("document.querySelector('.scene-lab-lens output').textContent.includes('-135')")
     seen["tilted"] = _settle(page)
     page.get_by_role("button", name="Recorded camera").click()
+
+
+def _record_states(page, shots: Path, width: int, seen: dict) -> None:
+    """Record, the video being made, the video made."""
     page.get_by_role("button", name="Record", exact=True).click()
     page.locator(".scene-lab-record-time", has_text="Recording 0:00").wait_for(timeout=5000)
     seen["recording"] = _settle(page)
@@ -162,7 +178,6 @@ def _states(page, shots: Path, width: int) -> dict:
     page.locator(".scene-lab-record-link").wait_for(timeout=60000)
     seen["video made"] = _settle(page)
     page.locator(".scene-lab-player").screenshot(path=str(shots / f"steady-made-{width}.png"))
-    return seen
 
 
 def _moved(states: dict) -> list:

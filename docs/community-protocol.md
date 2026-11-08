@@ -336,8 +336,9 @@ its encoded hash, so bytes are never revalidated, only re-gated.
 | Call | Trigger | Held by | Fresh for |
 | --- | --- | --- | --- |
 | `GET /v1/catalog` | the first community read of the hour, shared with the race | the client | 1 hour |
-| `GET /v1/library/recordings` | a strategy's top list with no held list and no complete race list (a held complete pool answers it); a page past the 20 rows held | target, clock, ROM, strategy | 10 minutes; a continuation 5 |
+| `GET /v1/library/recordings` | a strategy's top list with no held list and no complete race list (a held complete pool answers it); a page past the 20 rows held. Top ghosts' All strategies (its first choice) asks each strategy of the target this way at once, so a target's first look costs one page per strategy; a strategy the held catalog does not list is never asked (the service would refuse it) | target, clock, ROM, strategy | 10 minutes; a continuation 5 |
 | `GET /v1/search` | a submitted name no held list answers (a complete top list, or a complete search for a shorter name, does) | identity and folded name | 10 minutes |
+| `GET /v1/recordings/{id}` | the Library's Ghost button on a recording whose row the Library read more than the lease ago (inside it, nothing) | the population's loose rows | 10 minutes |
 | `GET /v1/recordings/{id}` then `/asset` | adding a community ghost the cache does not hold | the race's asset cache, by id | this Trainer run |
 
 Why a library page and not a rival pool: pools live in the population's 16
@@ -352,7 +353,10 @@ complete pool for the identity, the viewer reads that and asks nothing.
 A typical session (open a target, page through three top pages, search two
 players, add three ghosts) costs 2-3 calls for the pages, 0-2 for the searches
 and 0-6 for the ghosts (none for his own or for ones a race already downloaded):
-at most 11 of the account's 500 daily tickets (the service's own caps, which bind
+at most 11 of the account's 500 daily tickets. Since Top ghosts opens on All
+strategies (round 9, 2026-11-08), the first look at a target adds one page for
+each other strategy the catalog lists for it, once per ten-minute lease
+(the service's own caps, which bind
 first: 500 per account and 30,000 in all a day, 200,000 Class B; the service README),
 and at most 3 R2 reads (Class B: 10 million a month free, and no egress charge,
 [R2 pricing](https://developers.cloudflare.com/r2/pricing/)). Each call also
