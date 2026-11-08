@@ -412,20 +412,19 @@ def _build_replay(replay_cfg, layout_of, service, *, recorder_lock=None):
 
 def _build_capture_layer(poller, replay):
     # THE CAPTURE LAYER's installer (item 95): the setup screen's door to
-    # installing the wrapper plugin under consent. Built on the real
+    # installing the graphics plugin under consent. Built on the real
     # registry and process list; its liveness is the GPU route's control page
     # and capture receipt (core/setup_gpu.py), so "active" means the plugin
     # is presenting.
     from sm64_events.core.capturelayer import CaptureLayer, WinProcesses, WinRegistry
     from sm64_events.core.setup_gpu import GpuSetupProbe
-    from sm64_events.core.paths import (bundled_plugin_dll, bundled_renderer_dll, capture_layer_settings_path,
+    from sm64_events.core.paths import (bundled_plugin_dll, capture_layer_settings_path,
                                         installer_identity, migrate_capture_layer_settings)
     migrate_capture_layer_settings()
     capture_layer = CaptureLayer(
         registry=WinRegistry(), processes=WinProcesses(),
         settings_path=capture_layer_settings_path(),
         dll_source=bundled_plugin_dll,
-        renderer_source=bundled_renderer_dll,
         gpu_observation=GpuSetupProbe(lambda: replay.recorder.status() if replay else {}),
         auto_refresh=current_build().channel == 'stable',
         installer=installer_identity())
@@ -434,7 +433,7 @@ def _build_capture_layer(poller, replay):
     if not capture_layer.auto_refresh:
         return capture_layer, setup_observer
     try:
-        # A build carrying a newer layer refreshes the installed DLL while
+        # A build carrying a newer plugin refreshes the installed one while
         # Project64 is closed, under the consent already given -- but only an
         # install by an installer like this one (the frozen app's, or this
         # checkout's own) and never with an older build (plugin_ownership).
@@ -443,7 +442,7 @@ def _build_capture_layer(poller, replay):
         # which app opens first.
         if capture_layer.refresh_if_stale():
             logging.getLogger("sm64.replay").info(
-                "capture layer refreshed to this build's DLL (Project64 was closed)")
+                "capture layer refreshed to this build's plugin (Project64 was closed)")
         capture_layer.start_refresh(logging.getLogger("sm64.replay"))
     except Exception:
         logging.getLogger("sm64.replay").exception("capture layer refresh failed")
@@ -763,7 +762,7 @@ def _build_stale_natives() -> None:
     spec = importlib.util.spec_from_file_location("build_natives", tool)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    print("Checking the capture layer and renderer against this checkout's sources...")
+    print("Checking the graphics plugin and encoder helper against this checkout's sources...")
     try:
         states = module.ensure()
     except Exception as failure:  # noqa: BLE001 - never stop the server over the bundle

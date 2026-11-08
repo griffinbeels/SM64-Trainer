@@ -148,7 +148,7 @@ remain rejected; all private-data and path-containment checks still apply.
 Send the installer EXE and checksum receipt through the private distribution
 path. The tester double-clicks that one file, signs in, and follows the existing
 Project64/Usamune setup. The beta shortcut opens subsequent sessions. The trainer
-includes its renderer/wrapper/encoder DLLs and installs the renderer and wrapper
+includes its graphics plugin and encoder DLLs and installs the graphics plugin
 through the existing explicit setup action, while Project64 is closed. The tester
 supplies their supported Project64 and practice ROM; those files are not bundled.
 Actual ROM and moving game/input/picture evidence still gates completion.

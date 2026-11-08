@@ -19,9 +19,7 @@ from test_version_probe import LIVE_USAMUNE_BE, _header, _word_swapped
 def installed(**kwargs):
     return _status("active", consented_at="yesterday", wrapper_present=True,
                    wrapper_current=True, wrapper_selected=True, pj64_dir="C:/PJ64",
-                   pj64_running=True, layer_alive=True, plugin_pid=123,
-                   wrapped_name="sm64_trainer_gfx.renderer", renderer_present=True,
-                   renderer_current=True, **kwargs)
+                   pj64_running=True, layer_alive=True, plugin_pid=123, **kwargs)
 
 
 def observation(raw=LIVE_USAMUNE_BE):
@@ -95,7 +93,7 @@ def test_matching_existing_installation_does_not_require_local_consent():
     layer = replace(installed(), consented_at=None)
     assert readiness(layer, observation())["ready"]
     assert readiness(layer, observation(None))["step"] == "rom"
-    assert not readiness(replace(layer, wrapped_name=None), observation())["installed"]
+    assert not readiness(replace(layer, leftovers=["sm64_trainer_gfx.renderer"]), observation())["installed"]
 
 
 def test_movement_is_not_consumed_by_another_client_and_expires():

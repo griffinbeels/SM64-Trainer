@@ -121,3 +121,20 @@ def test_bundle_paths_refuse_unknown_first_party_and_private_inputs(path):
 ])
 def test_bundle_paths_keep_runtime_dependencies_and_explicit_assets(path):
     policy.check_bundle_path(path, ui_paths={"index.html"})
+
+
+def test_the_retired_native_name_holds_only_the_placeholder_text(monkeypatch):
+    """Older apps refuse an update without a file at each retired native name
+    (core/update_plan.py RETIRED_NATIVES), so a build carries the placeholder
+    text there. The policy accepts exactly those bytes, as data; a program or
+    any other file under that name is refused once no native ships there."""
+    import hashlib
+    from sm64_events.core.update_plan import BUNDLED_NATIVES, NATIVE_FOLDER, RETIRED_NATIVE_TEXT, RETIRED_NATIVES
+    monkeypatch.setattr(policy, "NATIVE_FILES", BUNDLED_NATIVES)
+    for name in RETIRED_NATIVES:
+        path = f"{NATIVE_FOLDER}/{name}"
+        policy.check_bundle_path(path, ui_paths={"index.html"},
+                                 digest=hashlib.sha256(RETIRED_NATIVE_TEXT).hexdigest())
+        for other in (None, hashlib.sha256(b"MZ a program").hexdigest()):
+            with pytest.raises(ValueError, match="unexpected"):
+                policy.check_bundle_path(path, ui_paths={"index.html"}, digest=other)

@@ -1,10 +1,11 @@
-/* THE CAPTURE LAYER: the wrapper graphics plugin Project64 1.6 selects.
+/* THE GRAPHICS PLUGIN Project64 1.6 loads: sm64_trainer_gfx.dll, one file.
  *
  * Round 32 item 95, 2026-09-04; one shipped mode since 2026-09-16 (the raw
- * ReadScreen/frame-stream path was deleted). It forwards every Zilmar-spec
- * call to THE RENDERER named by `wrapped=` in sm64_trainer_gfx.ini beside this
- * DLL (the trainer's build of LINK's GLideN64 v4.2 with the SourceV2/ContextV1
- * overlay) and, on the emulation thread, does two extra things:
+ * ReadScreen/frame-stream path was deleted); one file since 2026-11-07. Every
+ * Zilmar-spec call Project64 makes lands here and is forwarded to THE RENDERER
+ * linked into the same DLL (the trainer's build of LINK's GLideN64 v4.2 with
+ * the SourceV2/ContextV1 overlay; renderer_entries.h is the seam). On the
+ * emulation thread this capture layer does two extra things:
  *
  *   ProcessDList  -- the stamp adapter wraps the original call and copies the
  *                    tracker's address table out of RDRAM into a PENDING stamp.
@@ -20,6 +21,17 @@
  * stays one atomic load unless a one-shot arming file exists at RomOpen or the
  * Trainer's scene lab holds the live spool's lease (its own thread checks).
  *
+ * WHY ONE FILE. Until 2026-11-07 this was a wrapper DLL that loaded the
+ * renderer named by `wrapped=` in sm64_trainer_gfx.ini: a second DLL,
+ * installed as sm64_trainer_gfx.renderer so Project64 would not list it.
+ * Defender flagged the renderer as Trojan:Win32/Bearfoos.A!ml (2026-11-06), and
+ * a proxy DLL forwarding to a sibling DLL under a disguised name is the shape
+ * malware takes. His ruling (2026-11-07): "the approach that's easiest for the
+ * user and has the least likelihood of being accidentally flagged as malware".
+ * So this plugin loads no other plugin and reads no ini of its own: the
+ * renderer is linked in, and GLideN64's own GLideN64.ini beside the plugin is
+ * the only settings file, exactly as for a stock GLideN64.
+ *
  * The plugin knows NO game address: the tracker publishes {rdram_offset,
  * length} entries through the control page (memory/layout.py stays the one
  * source of addresses) and this copies bytes. It reads the emulator's memory
@@ -27,20 +39,24 @@
  * the callbacks forward and keep the bounded diagnostics; the control worker
  * (control_worker.h) answers discovery and leases on its own thread.
  *
- * A wrapped renderer without the SourceV2 export (a stock GLideN64) is
- * forwarded to but never captured: the runtime refuses to configure and the
- * control page says so. That is why the setup screen installs OUR renderer.
- *
  * ONLY ON A PRACTICE ROM (practice_rom.h). RomOpen reads the cartridge header;
  * for vanilla SM64, another SM64 hack or another game every callback forwards
  * straight to the renderer -- no stamp adapter, no per-call timing, no lease
  * admitted -- and the control page reports `rom_baseline` so the trainer stays
  * idle. A real speedrun on the same plugin costs what plain GLideN64 costs
- * (his ruling, 2026-09-16). */
+ * (his ruling, 2026-09-16).
+ *
+ * THE RENDERER-ONLY MODE (SM64RendererOnlyV1, at the end) is for the scene
+ * lab's hosts, which draw saved scenes through this same file without
+ * Project64: every call then goes straight to the renderer and none of the
+ * above runs, so a lab host never publishes a control page beside a running
+ * Project64's. */
 #include <windows.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include "zilmar.h"
+#include "renderer_entries.h"
 #include "wrapper_runtime.h"
 #include "stamp_adapter.h"
 #include "gpu_delivery_diagnostics.h"
@@ -50,23 +66,23 @@
 
 #define EXPORT __declspec(dllexport)
 #define CALL __cdecl
-#define GFXWRAP_VERSION 3
-/* The control page name the trainer opens (replay/gpudemand.py); the ini's
- * `stream=` line overrides it for test hosts that drive several wrappers. */
+#define GFXWRAP_VERSION 4   /* 4: the renderer is linked in (2026-11-07) */
+/* The control page name the trainer opens (replay/gpudemand.py). */
 #define GFXWRAP_CONTROL_NAME "sm64_trainer_gfx_v1"
 /* The picker label Project64 shows. The build id, not the label, names the
  * exact sources (SM64TrainerWrapperIdentity); the label is the product. */
 #define GFXWRAP_PLUGIN_NAME "SM64 Trainer v1.0"
 
 static HMODULE g_self;
-static HMODULE g_wrapped_module;
-static gfx_api_t g_wrapped;
-static char g_wrapped_name[MAX_PATH];
-static char g_stream_name[128] = GFXWRAP_CONTROL_NAME;
-static BOOL g_loaded_once;
+/* The renderer linked into this DLL, bound once in DllMain. */
+static gfx_api_t g_renderer;
 static GFX_INFO g_gfx;
 static BOOL g_have_gfx;
+/* InitiateGFX has been called and CloseDLL has not: SM64RendererOnlyV1 refuses. */
+static BOOL g_initiated;
 static BOOL g_runtime_ready;
+/* Set once by SM64RendererOnlyV1 before InitiateGFX; never cleared. */
+static BOOL g_renderer_only;
 /* The open ROM is a practice ROM. Written by RomOpen/RomClosed on the
  * emulation thread, the same thread every frame callback runs on. */
 static BOOL g_practice_rom;
@@ -77,7 +93,7 @@ static int64_t qpc_now(void) {
     return counter.QuadPart;
 }
 
-/* -- the ini beside this DLL: wrapped=<file>, stream=<name> -------------- */
+/* This DLL's folder: where the plugin log lives (diagnostics.h). */
 static void self_dir(wchar_t *out, size_t count) {
     out[0] = L'\0';
     if (GetModuleFileNameW(g_self, out, (DWORD)count) == 0) return;
@@ -87,94 +103,18 @@ static void self_dir(wchar_t *out, size_t count) {
 
 #include "diagnostics.h"
 
-static BOOL g_ini_read;
-
-static void read_ini(void) {
-    if (g_ini_read) return;
-    g_ini_read = TRUE;
-    strncpy_s(g_stream_name, sizeof g_stream_name, GFXWRAP_CONTROL_NAME, _TRUNCATE);
-    wchar_t path[MAX_PATH];
-    self_dir(path, MAX_PATH);
-    wcsncat_s(path, MAX_PATH, L"sm64_trainer_gfx.ini", _TRUNCATE);
-    FILE *ini = _wfopen(path, L"r");
-    if (!ini) return;
-    char line[512];
-    while (fgets(line, sizeof line, ini)) {
-        char *end = line + strlen(line);
-        while (end > line && (end[-1] == '\n' || end[-1] == '\r' || end[-1] == ' '))
-            *--end = '\0';
-        char *start = line;
-        while (*start == ' ' || *start == '\t') start++;
-        if (strncmp(start, "wrapped=", 8) == 0)
-            strncpy_s(g_wrapped_name, sizeof g_wrapped_name, start + 8, _TRUNCATE);
-        else if (strncmp(start, "stream=", 7) == 0)
-            strncpy_s(g_stream_name, sizeof g_stream_name, start + 7, _TRUNCATE);
-    }
-    fclose(ini);
-}
-
-/* Load the wrapped plugin. NOT from GetDllInfo: Project64 enumerates every
- * DLL in its Plugin folder by loading it, asking GetDllInfo and freeing it
- * again, and a plugin loaded from inside that enumeration would leak one
- * reference per pass (review finding 16). So the dialog is answered from
- * the ini alone, and the real plugin loads at InitiateGFX. */
-static void ensure_wrapped(void) {
-    if (g_loaded_once) return;
-    g_loaded_once = TRUE;
-    read_ini();
-    if (!g_wrapped_name[0]) { plugin_log("no wrapped= line in sm64_trainer_gfx.ini"); return; }
-    wchar_t name[MAX_PATH];
-    if (MultiByteToWideChar(CP_UTF8, 0, g_wrapped_name, -1, name, MAX_PATH) == 0) return;
-    wchar_t path[MAX_PATH];
-    if (wcschr(name, L':') || name[0] == L'\\' || name[0] == L'/') {
-        wcsncpy_s(path, MAX_PATH, name, _TRUNCATE);
-    } else {
-        self_dir(path, MAX_PATH);
-        wcsncat_s(path, MAX_PATH, name, _TRUNCATE);
-    }
-    g_wrapped_module = LoadLibraryExW(path, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
-    if (!g_wrapped_module) {
-        char message[MAX_PATH + 64];
-        snprintf(message, sizeof message, "LoadLibrary(%s) failed: %lu", g_wrapped_name, GetLastError());
-        plugin_log(message);
-        return;
-    }
-    if (g_wrapped_module == g_self ||
-            GetProcAddress(g_wrapped_module, "SM64TrainerWrapperIdentity")) {
-        /* The ini names THIS DLL (a copy, or an install that wrote the
-         * wrapper's own name): forwarding would recurse until the stack
-         * died. Stay unwrapped and say so through GetDllInfo. */
-        FreeLibrary(g_wrapped_module);
-        g_wrapped_module = NULL;
-        plugin_log("wrapped= names the capture layer itself; staying unwrapped");
-        return;
-    }
-    RESOLVE_GFX_API(g_wrapped, g_wrapped_module);
-    /* A wrapper's own complete export table must not mask a broken wrapped
-     * plugin which Project64 would have rejected when loaded directly. */
-    const char *missing = NULL;
-#define REQUIRE_EXPORT(name) if (!g_wrapped.name && !missing) missing = #name
-    REQUIRE_EXPORT(GetDllInfo); REQUIRE_EXPORT(InitiateGFX); REQUIRE_EXPORT(CloseDLL);
-    REQUIRE_EXPORT(ChangeWindow); REQUIRE_EXPORT(DrawScreen); REQUIRE_EXPORT(MoveScreen);
-    REQUIRE_EXPORT(ProcessDList); REQUIRE_EXPORT(RomClosed); REQUIRE_EXPORT(RomOpen);
-    REQUIRE_EXPORT(UpdateScreen); REQUIRE_EXPORT(ViStatusChanged); REQUIRE_EXPORT(ViWidthChanged);
-#undef REQUIRE_EXPORT
-    if (missing) {
-        plugin_logf("wrapped_export_missing", "name=%s", missing);
-        FreeLibrary(g_wrapped_module); g_wrapped_module = NULL;
-        memset(&g_wrapped, 0, sizeof g_wrapped);
-        return;
-    }
-    log_module_path("wrapped_loaded", g_wrapped_module);
-}
-
-static void release_wrapped(void) {
-    if (g_wrapped_module) FreeLibrary(g_wrapped_module);
-    g_wrapped_module = NULL;
-    memset(&g_wrapped, 0, sizeof g_wrapped);
-    g_loaded_once = FALSE;
-    g_ini_read = FALSE;
-    g_wrapped_name[0] = '\0';
+/* The control page this plugin publishes: always GFXWRAP_CONTROL_NAME in the
+ * shipped build. A TEST plugin (tools/build_plugin.py build_test_plugin, the
+ * only build that defines GFXWRAP_TEST_PLUGIN) takes another from
+ * SM64_TEST_CONTROL_NAME, so tests that run several at once, beside a live
+ * Project64, never answer as each other's or as Project64's page. */
+static const char *control_name(void) {
+#ifdef GFXWRAP_TEST_PLUGIN
+    static char named[128];
+    DWORD length = GetEnvironmentVariableA("SM64_TEST_CONTROL_NAME", named, sizeof named);
+    if (length && length < sizeof named) return named;
+#endif
+    return GFXWRAP_CONTROL_NAME;
 }
 
 /* How much of RDRAM is really there. GFX_INFO carries no size, and the
@@ -230,61 +170,63 @@ static int __cdecl runtime_ram(void *unused, uint32_t offset, uint32_t length, u
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved) {
     if (reason == DLL_PROCESS_ATTACH) {
         g_self = instance;
+        g_renderer = *renderer_entries();
         /* /MT needs the CRT's thread attach/detach notifications. */
-    } else if (reason == DLL_PROCESS_DETACH && reserved == NULL) {
+        return renderer_dll_main(instance, reason, reserved);
+    }
+    if (reason == DLL_PROCESS_DETACH && reserved == NULL) {
         /* A FreeLibrary (the plugin dialog enumerating, or a plugin change).
          * On process exit (`reserved` set) the handles are already being
          * reclaimed and nothing here is safe. */
         if (g_control_signal) CloseHandle(g_control_signal);
         g_control_signal = NULL;
     }
-    return TRUE;
+    return renderer_dll_main(instance, reason, reserved);
 }
 
 EXPORT void CALL GetDllInfo(PLUGIN_INFO *info) {
-    read_ini();
+    if (g_renderer_only) {
+        if (g_renderer.GetDllInfo) g_renderer.GetDllInfo(info);
+        return;
+    }
+    /* Answered here, without the renderer: Project64 asks every DLL in its
+     * Plugin folder during discovery. The fields are the renderer's own
+     * (upstream's PluginAPI::GetDllInfo) apart from the name. PJ64's narrow
+     * selector clips long renderer names before the build tag, so the label is
+     * the product and stays the same before and after loading; full identity
+     * is in the log and on the control page. */
     info->Version = 0x0103;
     info->Type = PLUGIN_TYPE_GFX;
     info->NormalMemory = FALSE;
     info->MemoryBswaped = TRUE;
-    /* PJ64's narrow selector clips long renderer names before the build tag.
-     * Keep this label stable before/after loading; full identity is in the log
-     * and control page. GetDllInfo must not load the renderer during discovery. */
-    if (g_wrapped_module && g_wrapped.GetDllInfo) g_wrapped.GetDllInfo(info);
-    strncpy_s(info->Name, sizeof info->Name,
-        g_wrapped_module || g_wrapped_name[0]
-            ? GFXWRAP_PLUGIN_NAME : GFXWRAP_PLUGIN_NAME " (not set up)", _TRUNCATE);
+    strncpy_s(info->Name, sizeof info->Name, GFXWRAP_PLUGIN_NAME, _TRUNCATE);
 }
 
 EXPORT BOOL CALL InitiateGFX(GFX_INFO info) {
+    g_initiated = TRUE;
+    if (g_renderer_only) {
+        g_gfx = info;
+        g_have_gfx = g_renderer.InitiateGFX ? g_renderer.InitiateGFX(info) : FALSE;
+        return g_have_gfx;
+    }
     wr_suspend(); g_runtime_ready = FALSE; g_practice_rom = FALSE; sa_reset();
     control_stop(); /* a failed reinitialization cannot retain an old session */
     diagnostics_start();
     plugin_logf("init_begin", "wrapper_version=%u", GFXWRAP_VERSION);
     log_module_path("wrapper_loaded", g_self);
-    ensure_wrapped();
     g_gfx = info;
     st_configure(&g_gfx);
     g_have_gfx = FALSE;
     callback_diagnostic_reset(&g_diagnostic_list);
     callback_diagnostic_reset(&g_diagnostic_update);
     callback_diagnostic_reset(&g_diagnostic_rdp);
-    if (!g_wrapped.InitiateGFX) {
-        char message[MAX_PATH + 200];
-        snprintf(message, sizeof message,
-                 "SM64 Trainer's capture layer could not load the graphics plugin it wraps"
-                 " (%s).\nCheck the wrapped= line in sm64_trainer_gfx.ini beside it, or"
-                 " set up Practice Replay again from the trainer's Settings.",
-                 g_wrapped_name[0] ? g_wrapped_name : "no wrapped= line in sm64_trainer_gfx.ini");
-        plugin_log("InitiateGFX refused: no wrapped plugin");
-        if (!GetEnvironmentVariableA("SM64_TRAINER_GFX_NO_DIALOGS", NULL, 0))   /* the test host sets it */
-            MessageBoxA(g_gfx.hWnd, message, "SM64 Trainer capture layer", MB_OK | MB_ICONWARNING);
-        release_wrapped();
+    if (!g_renderer.InitiateGFX) {   /* only a stand-in renderer can lack it */
+        plugin_log("InitiateGFX refused: the linked renderer has no InitiateGFX");
         diagnostics_stop();
         return FALSE;
     }
     int64_t begin = qpc_now();
-    BOOL initiated = g_wrapped.InitiateGFX(info);
+    BOOL initiated = g_renderer.InitiateGFX(info);
     plugin_logf("init_result", "success=%d wrapped_ms=%.3f", initiated,
         g_diagnostic_frequency ? 1000.0 * (qpc_now() - begin) / g_diagnostic_frequency : 0.0);
     if (!initiated) {
@@ -295,51 +237,52 @@ EXPORT BOOL CALL InitiateGFX(GFX_INFO info) {
     measure_rdram();
     gd_set_diagnostic(runtime_diagnostic);
     if (info.MemoryBswaped && info.RDRAM && info.VI_ORIGIN_REG)
-        g_runtime_ready = wr_configure(g_wrapped_module, &g_wrapped, runtime_vi, runtime_ram);
-    control_start(g_stream_name);
-    if (g_wrapped.GetDllInfo) {
-        PLUGIN_INFO wrapped_info = {0};
-        g_wrapped.GetDllInfo(&wrapped_info);
+        g_runtime_ready = wr_configure(g_self, &g_renderer, runtime_vi, runtime_ram);
+    control_start(control_name());
+    if (g_renderer.GetDllInfo) {
+        PLUGIN_INFO renderer_info = {0};
+        g_renderer.GetDllInfo(&renderer_info);
         plugin_logf("wrapped_info", "name=\"%.99s\" version=%04x bswapped=%d runtime=%d",
-            wrapped_info.Name, wrapped_info.Version, wrapped_info.MemoryBswaped, g_runtime_ready);
+            renderer_info.Name, renderer_info.Version, renderer_info.MemoryBswaped, g_runtime_ready);
     }
     return initiated;
 }
 
 EXPORT void CALL ProcessDList(void) {
-    if (!g_practice_rom) { if (g_wrapped.ProcessDList) g_wrapped.ProcessDList(); return; }
+    if (!g_practice_rom) { if (g_renderer.ProcessDList) g_renderer.ProcessDList(); return; }
     /* Producer timing covers every completed callback, independent of
      * recording retention or polling. The adapter wraps the original call,
      * so the duration includes stamp copying; formatting runs off-thread. */
     int64_t begin = callback_diagnostic_begin(&g_diagnostic_list);
     st_process_dlist();                       /* idle unless a scene-lab session is armed */
     if (g_runtime_ready) sa_process_dlist();
-    else if (g_wrapped.ProcessDList) g_wrapped.ProcessDList();
+    else if (g_renderer.ProcessDList) g_renderer.ProcessDList();
     callback_diagnostic_end(&g_diagnostic_list, begin, qpc_now());
 }
 
 EXPORT void CALL UpdateScreen(void) {
-    if (!g_practice_rom) { if (g_wrapped.UpdateScreen) g_wrapped.UpdateScreen(); return; }
+    if (!g_practice_rom) { if (g_renderer.UpdateScreen) g_renderer.UpdateScreen(); return; }
     int64_t begin = callback_diagnostic_begin(&g_diagnostic_update);
     if (g_runtime_ready) sa_update_screen();
-    else if (g_wrapped.UpdateScreen) g_wrapped.UpdateScreen();
-    st_update_screen(g_wrapped.ReadScreen);
+    else if (g_renderer.UpdateScreen) g_renderer.UpdateScreen();
+    st_update_screen(g_renderer.ReadScreen);
     int64_t end = qpc_now();
     callback_diagnostic_end(&g_diagnostic_update, begin, end);
 }
 
 EXPORT void CALL RomOpen(void) {
+    if (g_renderer_only) { if (g_renderer.RomOpen) g_renderer.RomOpen(); return; }
     sa_reset();
     /* Decided before the renderer opens the ROM, so no frame of a baseline
      * ROM ever reaches the stamp adapter. */
     g_practice_rom = g_have_gfx && loaded_rom_is_practice();
     if (g_practice_rom && g_gfx.MemoryBswaped && g_gfx.RDRAM && g_gfx.VI_ORIGIN_REG)
-        g_runtime_ready = wr_configure(g_wrapped_module, &g_wrapped, runtime_vi, runtime_ram);
+        g_runtime_ready = wr_configure(g_self, &g_renderer, runtime_vi, runtime_ram);
     else {
         wr_suspend(); g_runtime_ready = FALSE;
     }
     plugin_logf("rom_open_begin", "initiated=%d practice_rom=%d", g_have_gfx, g_practice_rom);
-    if (g_wrapped.RomOpen) g_wrapped.RomOpen();
+    if (g_renderer.RomOpen) g_renderer.RomOpen();
     measure_rdram();                          /* the expansion pak is committed by now */
     if (g_practice_rom) st_rom_open();
     control_rom(g_practice_rom, !g_practice_rom);
@@ -347,6 +290,7 @@ EXPORT void CALL RomOpen(void) {
 }
 
 EXPORT void CALL RomClosed(void) {
+    if (g_renderer_only) { if (g_renderer.RomClosed) g_renderer.RomClosed(); return; }
     /* Revoke clean-source capability before the renderer tears its context
      * down. A practice-ROM reopen renegotiates through the proven binding. */
     wr_suspend(); g_runtime_ready = FALSE;
@@ -355,44 +299,50 @@ EXPORT void CALL RomClosed(void) {
     sa_reset();
     st_stop();
     plugin_logf("rom_closed_begin", "");
-    if (g_wrapped.RomClosed) g_wrapped.RomClosed();
+    if (g_renderer.RomClosed) g_renderer.RomClosed();
     plugin_logf("rom_closed_end", "");
 }
 
 EXPORT void CALL CloseDLL(void) {
+    if (g_renderer_only) {
+        if (g_renderer.CloseDLL) g_renderer.CloseDLL();
+        g_have_gfx = FALSE;
+        g_initiated = FALSE;
+        return;
+    }
     wr_suspend(); g_runtime_ready = FALSE; g_practice_rom = FALSE; sa_reset();
     st_close(15000);
     control_stop();
     plugin_logf("close_begin", "initiated=%d", g_have_gfx);
-    if (g_wrapped.CloseDLL) g_wrapped.CloseDLL();
+    if (g_renderer.CloseDLL) g_renderer.CloseDLL();
     g_have_gfx = FALSE;
-    release_wrapped();
+    g_initiated = FALSE;
     plugin_logf("close_end", "");
     diagnostics_stop();
 }
 
 EXPORT void CALL ProcessRDPList(void) {
-    if (!g_practice_rom) { if (g_wrapped.ProcessRDPList) g_wrapped.ProcessRDPList(); return; }
+    if (!g_practice_rom) { if (g_renderer.ProcessRDPList) g_renderer.ProcessRDPList(); return; }
     int64_t begin = callback_diagnostic_begin(&g_diagnostic_rdp);
-    if (g_wrapped.ProcessRDPList) g_wrapped.ProcessRDPList();
+    if (g_renderer.ProcessRDPList) g_renderer.ProcessRDPList();
     callback_diagnostic_end(&g_diagnostic_rdp, begin, qpc_now());
 }
 EXPORT void CALL ChangeWindow(void) {
+    if (g_renderer_only) { if (g_renderer.ChangeWindow) g_renderer.ChangeWindow(); return; }
     plugin_logf("change_window_begin", "");
-    if (g_wrapped.ChangeWindow) g_wrapped.ChangeWindow();
+    if (g_renderer.ChangeWindow) g_renderer.ChangeWindow();
     plugin_logf("change_window_end", "");
 }
-EXPORT void CALL DrawScreen(void) { if (g_wrapped.DrawScreen) g_wrapped.DrawScreen(); }
-EXPORT void CALL ShowCFB(void) { if (g_wrapped.ShowCFB) g_wrapped.ShowCFB(); }
-EXPORT void CALL ViStatusChanged(void) { if (g_wrapped.ViStatusChanged) g_wrapped.ViStatusChanged(); }
-EXPORT void CALL ViWidthChanged(void) { if (g_wrapped.ViWidthChanged) g_wrapped.ViWidthChanged(); }
-EXPORT void CALL MoveScreen(int x, int y) { if (g_wrapped.MoveScreen) g_wrapped.MoveScreen(x, y); }
-EXPORT void CALL CaptureScreen(char *directory) { if (g_wrapped.CaptureScreen) g_wrapped.CaptureScreen(directory); }
+EXPORT void CALL DrawScreen(void) { if (g_renderer.DrawScreen) g_renderer.DrawScreen(); }
+EXPORT void CALL ShowCFB(void) { if (g_renderer.ShowCFB) g_renderer.ShowCFB(); }
+EXPORT void CALL ViStatusChanged(void) { if (g_renderer.ViStatusChanged) g_renderer.ViStatusChanged(); }
+EXPORT void CALL ViWidthChanged(void) { if (g_renderer.ViWidthChanged) g_renderer.ViWidthChanged(); }
+EXPORT void CALL MoveScreen(int x, int y) { if (g_renderer.MoveScreen) g_renderer.MoveScreen(x, y); }
+EXPORT void CALL CaptureScreen(char *directory) { if (g_renderer.CaptureScreen) g_renderer.CaptureScreen(directory); }
 /* About is ours, not the renderer's: the plugin he picks is the trainer's
  * build of LINK's GLideN64, and the credit belongs to the people whose
- * work it is. The renderer's own About stays reachable by selecting the
- * renderer DLL directly in Project64. Credits are the ones the pinned
- * GLideN64 source names in its own About dialog (AboutDialog.ui). */
+ * work it is. Credits are the ones the pinned GLideN64 source names in its
+ * own About dialog (AboutDialog.ui). */
 static const char k_about[] =
     GFXWRAP_PLUGIN_NAME " - graphics plugin for Project64\n\n"
     "Built by griffman1212 on LINK's GLideN64 v4.2 (the Luna-Project64 fork,\n"
@@ -402,33 +352,49 @@ static const char k_about[] =
     "This build adds the Practice Replay capture hooks. Like GLideN64 it is\n"
     "licensed under the GNU GPL v2; the modified source and the build recipe\n"
     "are published at https://github.com/griffinbeels/SM64-Trainer\n\n"
-    "Capture wrapper build " GFXWRAP_BUILD_ID;
+    "Build " GFXWRAP_BUILD_ID;
 EXPORT void CALL DllAbout(HWND parent) {
     MessageBoxA(parent, k_about, "About " GFXWRAP_PLUGIN_NAME, MB_OK | MB_ICONINFORMATION);
 }
-/* PJ64 can load a DLL only for its settings dialog, then FreeLibrary without
- * CloseDLL. Balance loads here while still outside DllMain/loader lock. */
-EXPORT void CALL DllConfig(HWND parent) {
-    BOOL temporary = !g_wrapped_module;
-    ensure_wrapped(); if (g_wrapped.DllConfig) g_wrapped.DllConfig(parent);
-    if (temporary && !g_have_gfx) release_wrapped();
-}
-EXPORT void CALL DllTest(HWND parent) {
-    BOOL temporary = !g_wrapped_module;
-    ensure_wrapped(); if (g_wrapped.DllTest) g_wrapped.DllTest(parent);
-    if (temporary && !g_have_gfx) release_wrapped();
-}
-EXPORT void CALL FBRead(unsigned int address) { if (g_wrapped.FBRead) g_wrapped.FBRead(address); }
-EXPORT void CALL FBWrite(unsigned int address, unsigned int size) { if (g_wrapped.FBWrite) g_wrapped.FBWrite(address, size); }
+/* The renderer's settings window. PJ64 can load a DLL only for this dialog,
+ * then FreeLibrary without CloseDLL; nothing here is loaded to balance. */
+EXPORT void CALL DllConfig(HWND parent) { if (g_renderer.DllConfig) g_renderer.DllConfig(parent); }
+EXPORT void CALL DllTest(HWND parent) { if (g_renderer.DllTest) g_renderer.DllTest(parent); }
+EXPORT void CALL FBRead(unsigned int address) { if (g_renderer.FBRead) g_renderer.FBRead(address); }
+EXPORT void CALL FBWrite(unsigned int address, unsigned int size) { if (g_renderer.FBWrite) g_renderer.FBWrite(address, size); }
 EXPORT void CALL FBWList(void *entries, unsigned int size) {
-    if (g_wrapped.FBWList) g_wrapped.FBWList(entries, size);
+    if (g_renderer.FBWList) g_renderer.FBWList(entries, size);
 }
-EXPORT void CALL FBGetFrameBufferInfo(void *info) { if (g_wrapped.FBGetFrameBufferInfo) g_wrapped.FBGetFrameBufferInfo(info); }
+EXPORT void CALL FBGetFrameBufferInfo(void *info) { if (g_renderer.FBGetFrameBufferInfo) g_renderer.FBGetFrameBufferInfo(info); }
 EXPORT void CALL ReadScreen(void **dest, long *width, long *height) {
-    if (g_wrapped.ReadScreen) { g_wrapped.ReadScreen(dest, width, height); return; }
+    if (g_renderer.ReadScreen) { g_renderer.ReadScreen(dest, width, height); return; }
     *dest = NULL; *width = 0; *height = 0;
 }
 
-/* A copied wrapper is a different HMODULE; identity comparison alone cannot
- * prevent recursively wrapping that copy. No host calls this marker. */
+/* This plugin's build id (tools/build_renderer.py), the same string the
+ * control page, the plugin log and the About box carry. Python reads the id
+ * from the file's bytes (core/capturelayer.py); no host calls this. */
 EXPORT const char *CALL SM64TrainerWrapperIdentity(void) { return GFXWRAP_BUILD_ID; }
+
+/* THE RENDERER-ONLY MODE: `int SM64RendererOnlyV1(uint32_t version)`.
+ *
+ * A scene-lab host (tools/scene_lab/renderer_load.h) calls it with version 1
+ * right after LoadLibrary, before any Zilmar call. From then on, for as long
+ * as this module stays loaded, every call goes straight to the renderer:
+ * GetDllInfo answers the renderer's own fields, and InitiateGFX, RomOpen,
+ * ProcessDList, UpdateScreen, RomClosed and CloseDLL do nothing else. No
+ * control page or control worker (a lab host never meets a running
+ * Project64's page), no stamp adapter and no GPU delivery (the host may act as
+ * the renderer's SourceV3 consumer itself), no scene tap, no plugin log.
+ * DllAbout stays the plugin's own box.
+ *
+ * Returns 1 when the mode is on (also when it already was). Returns 0, and
+ * changes nothing, for any other version, or while the plugin is initiated:
+ * after InitiateGFX and before CloseDLL, since the capture layer may already
+ * have published its page. There is no way back: the mode ends with the
+ * module. Call it on the thread that makes the plugin calls. */
+EXPORT int CALL SM64RendererOnlyV1(uint32_t version) {
+    if (version != 1 || g_initiated) return 0;
+    g_renderer_only = TRUE;
+    return 1;
+}

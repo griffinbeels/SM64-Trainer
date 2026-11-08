@@ -14,12 +14,15 @@ import release_candidate as candidate
 import release_flow
 from make_manifest import build_zip, make_manifest
 from sm64_events.core.build_channel import BuildChannel, CONFIG_FILENAME
+from sm64_events.core.update_plan import BUNDLED_NATIVES, NATIVE_FOLDER, RETIRED_NATIVE_TEXT, RETIRED_NATIVES
 from test_bootstrap_installer import _app_files
 
 
-def prepared(tmp_path, *, private=True, version="1.10.0-beta.1", manifest_version=None):
+def prepared(tmp_path, *, private=True, version="1.10.0-beta.1", manifest_version=None, placeholder=None):
     app = tmp_path / "app"
     files = _app_files(b"FROZEN-APP")
+    if placeholder is not None:
+        files.update({f"{NATIVE_FOLDER}/{name}": placeholder for name in RETIRED_NATIVES})
     build = BuildChannel(channel="beta", build_id="qa-1", installation="normal")
     files["_internal/" + CONFIG_FILENAME] = json.dumps(build.metadata()).encode()
     files["_internal/release-version.json"] = json.dumps({"schema": 1, "version": version}).encode()
@@ -48,7 +51,7 @@ def test_candidate_binds_all_six_artifacts_runtime_version_native_and_public_con
     record = candidate.verify_artifacts(directory, expected_assets=[p.name for p in release.release_assets(directory)])
     assert record["version"] == "1.10.0-beta.1"
     assert len(record["artifacts"]) == 6
-    assert len(record["native_sha256"]) == 3
+    assert set(record["native_sha256"]) == set(BUNDLED_NATIVES)
     assert record["public_config_sha256"] == candidate.public_fingerprint(build)
     assert record["service"]["catalog_sha256"] == "c" * 64
     assert "friend_invitation" not in (directory / candidate.RECORD).read_text()
@@ -353,3 +356,14 @@ def test_candidate_provenance_requires_source_still_unchanged_after_long_build(t
     else:
         with pytest.raises(ValueError, match="changed during preparation"):
             release._assert_build_source("a" * 40, lock_digest)
+
+
+@pytest.mark.parametrize("placeholder", [b"MZ a program under the retired name", RETIRED_NATIVE_TEXT + b" "])
+def test_candidate_refuses_anything_but_the_placeholder_text_at_a_retired_name(tmp_path, placeholder):
+    """Older apps need a file at each retired native name; the candidate must
+    carry exactly the placeholder text there, never a program."""
+    good, _, _ = prepared(tmp_path / "good")
+    assert candidate.verify_artifacts(good, expected_assets=[p.name for p in release.release_assets(good)])
+    directory, _, _ = prepared(tmp_path / "bad", placeholder=placeholder)
+    with pytest.raises(ValueError, match="placeholder|unexpected"):
+        candidate.verify_artifacts(directory, expected_assets=[p.name for p in release.release_assets(directory)])

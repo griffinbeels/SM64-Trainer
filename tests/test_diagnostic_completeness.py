@@ -16,7 +16,7 @@ BIRTH = int((datetime(2026, 10, 21, 18, tzinfo=timezone.utc).timestamp() + 11644
 ROOT = Path(__file__).resolve().parents[1]
 
 
-@pytest.mark.parametrize("key", ["configuration_consistent", "frame_buffer_emulation_off"])
+@pytest.mark.parametrize("key", ["frame_buffer_emulation_off"])
 def test_setup_configuration_consistency_is_boolean_only(key):
     result = safe_snapshot({"setup": {key: False}})
     assert result["setup"][key] is False
@@ -224,7 +224,7 @@ def test_oversized_allowed_scalars_leave_an_explicit_bounded_evidence_failure():
         "capture": {"gpu": {"latest": wide}},
         "pipeline": {"polling": {key: "\u2605" * 1000 for key in ("state", "error")}},
         "setup": {key: "\u2605" * 1000 for key in ("state", "pj64_running", "wrapper_present", "wrapper_current",
-            "wrapper_selected", "renderer_present", "renderer_current", "installation_verified", "layer_alive",
+            "wrapper_selected", "installation_verified", "layer_alive",
             "pictures_flowing", "observed_unix_s")}})
     assert len(json.dumps(result).encode()) <= MAX_SNAPSHOT_BYTES
     assert result["truncated"] is True and result["error_type"] == "Oversize"

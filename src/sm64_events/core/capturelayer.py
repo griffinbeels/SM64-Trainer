@@ -1,41 +1,43 @@
-"""THE CAPTURE LAYER's installer: the wrapper graphics plugin, into and out
+"""THE CAPTURE LAYER's installer: the trainer's graphics plugin, into and out
 of Project64, under consent (round 32 item 95; the facts live in this
-docstring and in .claude/rules/replay-compare.md).
+docstring and in .claude/rules/chain-setup-readiness.md).
 
 Project64 1.6 keeps its plugin choice in the registry, under
 ``HKCU\\Software\\N64 Emulation\\Project64 Version 1.6\\Dll``: the value
 ``Graphics Dll`` is a FILENAME inside ``<pj64>\\Plugin\\`` (``Use Default
 Plugin Dir`` = 1; otherwise the ``Plugin Directory`` value names the
-folder). Installing the layer is five writes and nothing else:
+folder). The graphics plugin is ONE file, ``sm64_trainer_gfx.dll``: the
+trainer's build of LINK's GLideN64 v4.2 (the renderer) with the capture
+layer inside it, which Project64 loads itself (2026-11-07: one file, nothing
+loaded by name, after Defender flagged the separate renderer). Installing it
+is three writes and nothing else:
 
-1. copy THE RENDERER -- the trainer's build of LINK's GLideN64 v4.2 with
-   the capture hooks, bundled as ``GLideN64_SM64Trainer.dll`` -- into that
-   Plugin folder as ``sm64_trainer_gfx.renderer``. Not a ``.dll``: Project64
-   lists every DLL there as a graphics plugin, so a tester saw "2 graphics
-   plugins" and picking the renderer skips capture (2026-10-24);
-2. copy ``sm64_trainer_gfx.dll`` -- the capture wrapper -- beside it;
-3. write ``sm64_trainer_gfx.ini`` with ``wrapped=sm64_trainer_gfx.renderer``
-   so the wrapper loads OUR renderer (a stock renderer has no capture
-   export, and every picture would read "input unavailable");
-4. set ``Graphics Dll`` to the wrapper's filename, remembering the plugin
-   it replaced (``previous_graphics_dll`` in the overlay) for undo;
-5. turn off frame buffer emulation in the renderer's own ``GLideN64.ini``
-   (``core/renderer_settings.py``): the real file, created when missing, and
-   an existing per-user VirtualStore copy, never created. With it on, ghosts
-   do not draw and the game lags (his rule, 2026-10-30). The overlay's
-   ``renderer_settings`` remembers each file's earlier value, which undo puts
-   back. A status read only checks it; install and refresh write it.
+1. copy the bundled ``sm64_trainer_gfx.dll`` into that Plugin folder under
+   the same name;
+2. set ``Graphics Dll`` to that filename, remembering the plugin it replaced
+   (``previous_graphics_dll`` in the overlay) for undo;
+3. turn off frame buffer emulation in the renderer's own ``GLideN64.ini``
+   beside it (``core/renderer_settings.py``): the real file, created when
+   missing, and an existing per-user VirtualStore copy, never created. With
+   it on, ghosts do not draw and the game lags (his rule, 2026-10-30). The
+   overlay's ``renderer_settings`` remembers each file's earlier value, which
+   undo puts back. A status read only checks it; install and refresh write it.
 
-An older install's ``GLideN64_SM64Trainer.dll`` reads as stale, not broken.
-Install and the automatic refresh move it to the new name, then delete
-the DLL: only one of ours (by build id) and never while Project64's
-``Graphics Dll`` names it, so Project64 is never left selecting a missing file.
+Older installs put a wrapper under that name, which loaded the renderer
+named by ``sm64_trainer_gfx.ini``: ``sm64_trainer_gfx.renderer`` or, before
+2026-10-24, ``GLideN64_SM64Trainer.dll``. Such an install reads as stale, not
+broken. Install and the automatic refresh copy the one plugin over the
+wrapper, then delete those leftovers (`plugin_installation.our_leftovers`):
+only files of ours (a renderer by its build id, the ini by its contents),
+never while Project64 runs, and never the file ``Graphics Dll`` names, so
+Project64 is never left selecting a missing file. Since the plugin keeps the
+wrapper's name, Project64's choice stays valid and nobody picks a plugin again.
 
-Undo is steps 4 and 5 in reverse; the plugin files stay (harmless, and a
+Undo is steps 2 and 3 in reverse; the plugin file stays (harmless, and a
 reinstall is instant). An app update never re-onboards: a trainer refreshes
-the installed pair by itself (``refresh_if_stale`` at boot and every two seconds) as soon
-as Project64 is closed, under the consent already given, and the setup
-screen stays shut while that is pending (his rule, 2026-09-16: "No
+the installed plugin by itself (``refresh_if_stale`` at boot and every two
+seconds) as soon as Project64 is closed, under the consent already given, and
+the setup screen stays shut while that is pending (his rule, 2026-09-16: "No
 additional onboarding past the original onboarding"). It refreshes only what
 an installer like it put there -- the frozen app a frozen app's install, a
 source checkout only its own -- and never with an older build
@@ -44,7 +46,7 @@ Both refuse while Project64 runs: PJ64 1.6 rewrites its registry
 values on exit, so a change made under it can be undone by its own
 shutdown, and a running emulator has the old DLL loaded anyway.
 
-Nothing here knows a game address or a pixel; it moves one file and one
+Nothing here knows a game address or a pixel; it moves files and one
 registry value, and it remembers what it did in a JSON overlay
 (`capture_layer_settings_path()`), resilient like `core/modes.py`: an
 absent or corrupt file loads as "never consented" with one warning.
@@ -70,8 +72,9 @@ from sm64_events.core import renderer_settings
 from sm64_events.core.renderer_settings import RENDERER_INI
 from sm64_events.core.setup_gpu import GpuSetupEvidence
 from sm64_events.core.plugin_installation import (
-    LEGACY_RENDERER_DLL, RENDERER_FILE, WRAPPER_DLL, WRAPPER_INI,
-    DestinationInUse, PluginInstallError, file_operation, in_use, sha256 as _sha256, verified_copy,
+    LEFTOVERS, LEGACY_RENDERER_DLL, LEGACY_RENDERER_FILE, LEGACY_WRAPPER_INI, PLUGIN_DLL,
+    DestinationInUse, PluginInstallError, file_operation, in_use, our_leftovers, remove_files,
+    sha256 as _sha256, verified_copy,
 )
 from sm64_events.core.plugin_ownership import FROZEN, build_stamp, not_older, owns
 
@@ -79,7 +82,7 @@ log = logging.getLogger("sm64.capturelayer")
 
 #: the files this trainer puts (or once put) in the Plugin folder; never
 #: "the plugin the user had", so undo can never select one of ours
-OWN_FILES = frozenset(name.lower() for name in (WRAPPER_DLL, RENDERER_FILE, LEGACY_RENDERER_DLL))
+OWN_FILES = frozenset(name.lower() for name in (PLUGIN_DLL, LEGACY_RENDERER_FILE, LEGACY_RENDERER_DLL))
 REGISTRY_KEY = r"Software\N64 Emulation\Project64 Version 1.6"
 REGISTRY_DLL_SUBKEY = REGISTRY_KEY + r"\Dll"
 GRAPHICS_DLL_VALUE = "Graphics Dll"
@@ -96,15 +99,15 @@ UNAVAILABLE = "unavailable"       # no PJ64 folder known / no DLL shipped with t
 _OVERLAY_DEFAULTS = {
     "consented_at": None,
     "pj64_dir": None,
+    # What an older install's ini wrapped: before 2026-09-16 the user's own
+    # plugin, which undo selects again (`_previous_graphics_dll`).
     "wrapped": None,
     "uninstalled_at": None,
     "installed_sha256": None,
     "installation_receipt": None,
-    "installed_renderer_sha256": None,
-    "renderer_receipt": None,
     "previous_graphics_dll": None,
-    # Who installed the pair and what build it was (core/plugin_ownership.py),
-    # and the installed wrapper's hash that proves nobody replaced it since.
+    # Who installed the plugin and what build it was (core/plugin_ownership.py),
+    # and the installed plugin's hash that proves nobody replaced it since.
     # `installed_sha256` above is what OLDER trainers' refresh trusts: it is
     # written only for a frozen installer.
     "installed_by": None,
@@ -135,13 +138,15 @@ class Processes(Protocol):
 
 @dataclass(frozen=True)
 class LayerStatus:
+    """The setup screen's view of the install. The `wrapper_*` fields name
+    the graphics plugin file, `sm64_trainer_gfx.dll` (their names are part
+    of the setup API and of every debug report)."""
     pj64_dir: str | None
     pj64_running: bool
     registry_graphics_dll: str | None
-    wrapper_present: bool         # the DLL file sits in the Plugin folder
+    wrapper_present: bool         # the plugin file sits in the Plugin folder
     wrapper_current: bool         # ...and equals the one shipped with this build
-    wrapper_selected: bool        # the registry names the wrapper
-    wrapped_name: str | None      # what the ini forwards to (our renderer once installed)
+    wrapper_selected: bool        # the registry names it
     layer_alive: bool             # recent source/control evidence, bound to plugin_pid
     consented_at: str | None
     problems: list = field(default_factory=list)   # fixable sentences, in order
@@ -157,17 +162,17 @@ class LayerStatus:
     plugin_pid: int | None = None
     pictures_flowing: bool = False
     plugin_dir: str | None = None
-    renderer_present: bool = False     # the renderer the ini names sits in the Plugin folder
-    renderer_current: bool = False     # ...under its installed name, as shipped, no older DLL of ours left
+    #: an older install's files of ours still in the Plugin folder (names, in
+    #: removal order); any one makes the install stale until refresh or
+    #: Install deletes it
+    leftovers: list = field(default_factory=list)
     previous_graphics_dll: str | None = None   # what undo selects again
-    #: this build refreshes the installed pair by itself once Project64 is
+    #: this build refreshes the installed plugin by itself once Project64 is
     #: closed (packaged build, our own earlier install); the UI must not
     #: reopen onboarding for a stale layer it will update anyway
     automatic_update: bool = False
     # Internal typed evidence is excluded from the public setup response.
     gpu_observation: GpuSetupEvidence | None = field(default=None, repr=False)
-    # A legacy x86 process may read its VirtualStore INI before the real file.
-    configuration_consistent: bool = True
     #: every GLideN64.ini Project64 may read (the real one, an existing
     #: VirtualStore copy) loads frame buffer emulation as off; with it on,
     #: ghosts do not draw. Stale like an old DLL: refresh or Install fixes it.
@@ -181,19 +186,8 @@ class LayerStatus:
     @property
     def installation_verified(self) -> bool:
         """Current files/configuration, independent of this checkout's history."""
-        return (self.wrapper_current and self.renderer_current and self.configuration_consistent
-                and self.frame_buffer_emulation_off
-                and _configured(self.wrapper_present, self.wrapper_selected, self.wrapped_name,
-                                self.renderer_present))
-
-
-def _configured(present: bool, selected: bool, wrapped: str | None, renderer_present: bool) -> bool:
-    """Both files in place, the wrapper selected, and the ini pointing the
-    wrapper at OUR renderer -- or at an older install's renderer DLL, which
-    still captures and reads as stale until it moves. An ini naming any
-    other plugin (an older install that wrapped the user's own renderer)
-    is not set up."""
-    return bool(present and selected and renderer_present and _names_our_renderer(wrapped))
+        return (self.wrapper_present and self.wrapper_current and self.wrapper_selected
+                and not self.leftovers and self.frame_buffer_emulation_off)
 
 
 def virtualstore_copy(local_appdata: str | None, folder: Path, name: str) -> Path | None:
@@ -215,10 +209,6 @@ def _names(value: str | None, name: str) -> bool:
     return (value or "").lower() == name.lower()
 
 
-def _names_our_renderer(wrapped: str | None) -> bool:
-    return _names(wrapped, RENDERER_FILE) or _names(wrapped, LEGACY_RENDERER_DLL)
-
-
 def _not_ours(name: str | None) -> str | None:
     """A plugin file name that is not one of the trainer's own, else None."""
     return name if name and name.lower() not in OWN_FILES else None
@@ -228,9 +218,10 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-# Every native build id ends in its role (-gpu-runtime, -gpu-encoder,
-# -renderer). The suffix is required: the renderer DLL carries hundreds of
-# 64-digit decimal tables that a bare hex pattern also matches.
+# Every native build id ends in its role (-gpu-runtime, -gpu-encoder, and
+# -renderer for an older install's renderer). The suffix is required: the
+# renderer's code carries hundreds of 64-digit decimal tables that a bare hex
+# pattern also matches.
 _BUILD_ID = re.compile(rb"[0-9a-f]{64}-[a-z][a-z-]*")
 
 
@@ -241,7 +232,7 @@ def _build_identity(path: Path) -> bytes | None:
     """A native file's embedded build id: a digest of the sources it was
     compiled from, plus its role suffix. None for a file without one.
     Cached by (path, size, mtime): the refresh loop and the setup screen's
-    polling would otherwise scan the 12 MB renderer every two seconds."""
+    polling would otherwise scan the 12 MB plugin every two seconds."""
     stat = path.stat()
     key = (str(path), stat.st_size, stat.st_mtime_ns)
     if key not in _identity_cache:
@@ -251,12 +242,11 @@ def _build_identity(path: Path) -> bytes | None:
 
 
 def _files_match(path_a: Path, path_b: Path) -> bool:
-    """Same capture layer. Two wrappers built from the same native sources
-    carry the same embedded build id but differ in bytes (link timestamps),
-    so a rebuild of an unchanged tree must not tell him his installed
-    candidate "differs from this build" (his report, 2026-09-15). Files
-    without an id fall back to the byte hash; a stale-but-same-size DLL
-    still never reads as current."""
+    """Same graphics plugin. Two plugins built from the same native sources
+    carry the same embedded build id, so a rebuild of an unchanged tree must
+    not tell him his installed candidate "differs from this build" (his
+    report, 2026-09-15). Files without an id fall back to the byte hash; a
+    stale-but-same-size DLL still never reads as current."""
     try:
         own, other = _build_identity(path_a), _build_identity(path_b)
         if own is not None and other is not None:
@@ -266,18 +256,8 @@ def _files_match(path_a: Path, path_b: Path) -> bool:
         return False
 
 
-def _our_renderer(path: Path) -> bool:
-    """A renderer this trainer built: its build id carries the -renderer
-    role. A user's own GLideN64 under the same name has none."""
-    try:
-        return path.is_file() and (_build_identity(path) or b"").endswith(b"-renderer")
-    except OSError:
-        return False
-
-
-def _problems(state: str, pj64_dir, running: bool, wrapper_selected: bool, registry_graphics_dll,
-              wrapper_present: bool, wrapped_name, renderer_present: bool, layer_current: bool,
-              automatic: bool, configuration_consistent: bool, fbe_off: bool) -> list[str]:
+def _problems(state: str, pj64_dir, running: bool, plugin_selected: bool, registry_graphics_dll,
+              layer_current: bool, automatic: bool, fbe_off: bool) -> list[str]:
     """Fixable sentences, in order, for the setup screen."""
     problems: list[str] = []
     if state == NOT_INSTALLED and pj64_dir is None:
@@ -286,25 +266,17 @@ def _problems(state: str, pj64_dir, running: bool, wrapper_selected: bool, regis
         problems.append("Project64 is running -- close it before installing")
     elif state == REGRESSED and pj64_dir is None:
         problems.append("start Project64 once so the trainer can find it again")
-    elif state == REGRESSED and not wrapper_selected:
+    elif state == REGRESSED and not plugin_selected:
         problems.append(
             f"another graphics plugin is selected ({registry_graphics_dll}); "
             "re-install to restore the capture layer")
-    elif state == REGRESSED and not configuration_consistent:
-        problems.append("Windows has a different per-user capture configuration; "
-                        "close Project64, then re-install the capture layer to repair it")
-    elif state == REGRESSED and wrapper_present and (
-            not renderer_present or not _names_our_renderer(wrapped_name)):
-        problems.append(
-            f"the capture layer wraps {wrapped_name or 'no plugin'} instead of the trainer's "
-            "renderer, so it cannot capture; re-install to add the renderer")
     elif state == REGRESSED:
-        problems.append("the capture layer's files or configuration are missing from Project64's "
-                        "Plugin folder; re-install to restore them")
+        problems.append("the capture layer's plugin is missing from Project64's "
+                        "Plugin folder; re-install to restore it")
     elif state == NEEDS_RESTART:
         problems.append(("restart" if running else "start")
                         + " Project64 to load the capture layer")
-    if state in (ACTIVE, NEEDS_RESTART) and wrapper_present and not layer_current:
+    if state in (ACTIVE, NEEDS_RESTART) and not layer_current:
         problems.append("the installed capture layer differs from this build; "
                         + _update_guidance(running, automatic))
     if state in (ACTIVE, NEEDS_RESTART) and not fbe_off:
@@ -338,14 +310,12 @@ class CaptureLayer:
     def __init__(self, registry: Registry, processes: Processes,
                  settings_path: Path, dll_source: Path | None | Callable[[], Path | None],
                  *,
-                 renderer_source: Path | None | Callable[[], Path | None] = None,
                  gpu_observation: Callable[[], GpuSetupEvidence | None] | None = None,
                  auto_refresh: bool = False, installer: dict | None = None):
         self._registry = registry
         self._processes = processes
         self._settings_path = settings_path
         self._dll_source = dll_source
-        self._renderer_source = renderer_source
         # Resolve in the original process, never under a file helper's alternate
         # administrator account. That helper owns only the protected plugin files.
         self._local_appdata = os.environ.get("LOCALAPPDATA")
@@ -400,10 +370,6 @@ class CaptureLayer:
         # Resolve on use: copying/restoring a developer build after server
         # startup must not cache "unavailable" for the rest of the session.
         source = self._dll_source() if callable(self._dll_source) else self._dll_source
-        return source if source is not None and source.is_file() else None
-
-    def _renderer_dll(self) -> Path | None:
-        source = self._renderer_source() if callable(self._renderer_source) else self._renderer_source
         return source if source is not None and source.is_file() else None
 
     # -- overlay -----------------------------------------------------
@@ -464,13 +430,13 @@ class CaptureLayer:
         previous = self._registry_graphics_dll()
         attempted = False
 
-        def select_wrapper():
+        def select_plugin():
             nonlocal attempted
             attempted = True
-            self._set_registry_graphics_dll(WRAPPER_DLL)
+            self._set_registry_graphics_dll(PLUGIN_DLL)
 
         try:
-            yield select_wrapper
+            yield select_plugin
         except BaseException:
             if attempted:
                 try:
@@ -482,42 +448,39 @@ class CaptureLayer:
                     log.exception("could not restore Project64's previous graphics selection")
             raise
 
-    def _read_wrapped_name(self, ini_path: Path) -> str | None:
+    @staticmethod
+    def _read_wrapped_name(ini_path: Path) -> str | None:
+        """What an older install's ini told its wrapper to load, read as the
+        wrapper did (gfxwrap.c::read_ini: leading indentation accepted, the
+        last wrapped= line wins). Before 2026-09-16 that was the user's own
+        plugin, which undo must select again."""
         try:
             text = ini_path.read_text()
         except (OSError, UnicodeError):
             return None
         wrapped = None
         for line in text.splitlines():
-            # Match gfxwrap.c::read_ini: leading indentation is accepted and
-            # the last wrapped= line wins. Setup must inspect what PJ64 reads.
             line = line.rstrip(" \r\n").lstrip(" \t")
             if line.startswith("wrapped="):
                 wrapped = line[len("wrapped="):]
         return wrapped
 
-    def _write_wrapped_name(self, ini_path: Path, name: str | None) -> None:
-        ini_path.write_text(f"wrapped={name or ''}\n")
+    def _leftovers(self, plugin_dir: Path, *, keep_selected: bool) -> list[Path]:
+        """Our older files in `plugin_dir`; with `keep_selected`, without the
+        one Project64's `Graphics Dll` names (never deleted)."""
+        keep = self._registry_graphics_dll() if keep_selected else None
+        return our_leftovers(plugin_dir, keep=keep, identity=_build_identity)
 
-    def _shadow_ini(self, plugin_dir: Path, name: str = WRAPPER_INI) -> Path | None:
-        """Only the existing per-user counterpart of our owned INI, or of the
-        renderer's GLideN64.ini (`name`).
+    # -- the renderer's own settings (core/renderer_settings.py) ---------
+
+    def _shadow_ini(self, plugin_dir: Path, name: str) -> Path | None:
+        """Only the existing per-user counterpart of `name` in the Plugin folder.
 
         Windows searches this copy first for a virtualized legacy application.
         A manifested/elevated Project64 may instead read the physical file, so
         both copies must agree. Never create a VirtualStore file or scan a tree.
         """
         return virtualstore_copy(self._local_appdata, plugin_dir, name)
-
-    def _reconcile_shadow(self, shadow: Path | None) -> None:
-        if shadow is None:
-            return
-        with file_operation("write per-user plugin configuration", shadow):
-            self._write_wrapped_name(shadow, RENDERER_FILE)
-            if self._read_wrapped_name(shadow) != RENDERER_FILE:
-                raise OSError("Per-user plugin configuration verification failed")
-
-    # -- the renderer's own settings (core/renderer_settings.py) ---------
 
     def _renderer_settings_files(self, plugin_dir: Path) -> list[Path]:
         """Every GLideN64.ini Project64 may read: the real file, which install
@@ -583,29 +546,6 @@ class CaptureLayer:
             return Path(remembered)
         return None
 
-    def _installed_files(self, pj64_dir: Path | None, source: Path | None,
-                         renderer: Path | None) -> tuple[bool, bool, str | None, bool, bool, bool]:
-        """(wrapper present, wrapper current, ini wrapped name, renderer
-        present, renderer current, frame buffer emulation off); "current"
-        compares build ids. An older install's renderer DLL is never current,
-        named by the ini or left beside it: Project64 lists it as a second
-        graphics plugin."""
-        if pj64_dir is None:
-            return False, False, None, False, False, False
-        plugin_dir = self._plugin_dir(pj64_dir)
-        dll_path = plugin_dir / WRAPPER_DLL
-        present = dll_path.is_file()
-        current = present and source is not None and _files_match(dll_path, source)
-        wrapped = self._read_wrapped_name(plugin_dir / WRAPPER_INI)
-        renderer_path = plugin_dir / RENDERER_FILE
-        legacy = _names(wrapped, LEGACY_RENDERER_DLL)
-        renderer_present = (plugin_dir / LEGACY_RENDERER_DLL if legacy else renderer_path).is_file()
-        renderer_current = (not legacy and renderer_present and renderer is not None
-                            and _files_match(renderer_path, renderer)
-                            and not _our_renderer(plugin_dir / LEGACY_RENDERER_DLL))
-        return (present, current, wrapped, renderer_present, renderer_current,
-                self._frame_buffer_emulation_off(plugin_dir))
-
     def _previous_graphics_dll(self, overlay: dict, ini_wrapped: str | None) -> str | None:
         """The plugin undo selects: what the registry names now if that is
         not ours, else what we remembered, else what an older install's ini
@@ -615,29 +555,37 @@ class CaptureLayer:
                 or _not_ours(ini_wrapped)
                 or _not_ours(overlay.get("wrapped")))
 
+    def _legacy_wrapped(self, plugin_dir: Path) -> str | None:
+        return self._read_wrapped_name(plugin_dir / LEGACY_WRAPPER_INI)
+
     def status(self) -> LayerStatus:
         source = self._source_dll()
-        renderer = self._renderer_dll()
         pj64_dir = self.locate()
         running = self._processes.pj64_image_path() is not None
         overlay = self._load_overlay()
         automatic = self._automatic_refresh(pj64_dir)
 
         registry_graphics_dll = self._registry_graphics_dll()
-        wrapper_selected = (registry_graphics_dll is not None
-                             and registry_graphics_dll.lower() == WRAPPER_DLL.lower())
-        wrapper_present, wrapper_current, wrapped_name, renderer_present, renderer_current, fbe_off = (
-            self._installed_files(pj64_dir, source, renderer))
-        shadow = self._shadow_ini(self._plugin_dir(pj64_dir)) if pj64_dir else None
-        configuration_consistent = shadow is None or (
-            (self._read_wrapped_name(shadow) or "").lower() == (wrapped_name or "").lower())
-        configured = configuration_consistent and _configured(
-            wrapper_present, wrapper_selected, wrapped_name, renderer_present)
-        layer_current = wrapper_current and renderer_current
+        selected = _names(registry_graphics_dll, PLUGIN_DLL)
+        plugin_dir = self._plugin_dir(pj64_dir) if pj64_dir is not None else None
+        if plugin_dir is None:
+            present = current = False
+            leftovers, fbe_off, legacy_wrapped = [], False, None
+        else:
+            dll_path = plugin_dir / PLUGIN_DLL
+            present = dll_path.is_file()
+            current = present and source is not None and _files_match(dll_path, source)
+            leftovers = self._leftovers(plugin_dir, keep_selected=False)
+            fbe_off = self._frame_buffer_emulation_off(plugin_dir)
+            legacy_wrapped = self._legacy_wrapped(plugin_dir)
+        configured = present and selected
+        # An older install's leftovers are stale the same way an older DLL
+        # is: the same update steps remove them.
+        layer_current = current and not leftovers
 
         # The only liveness evidence is the GPU route's control page and its
         # accepted-picture count (core/setup_gpu.py); no observation means the
-        # wrapper has not published a page this server can see.
+        # plugin has not published a page this server can see.
         gpu = self._gpu_observation()
         if gpu is None:
             activity = {"pictures": False}
@@ -651,7 +599,7 @@ class CaptureLayer:
         # where Project64 lives is a step the setup screen walks the user
         # through, not a reason to hide it (his first launch after the
         # layer shipped: no screen, because PJ64 was not running yet).
-        if source is None or renderer is None:
+        if source is None:
             state = UNAVAILABLE
         elif overlay.get("consented_at") is None and not configured:
             state = NOT_INSTALLED
@@ -662,23 +610,21 @@ class CaptureLayer:
         else:
             state = NEEDS_RESTART
 
-        problems = _problems(state, pj64_dir, running, wrapper_selected, registry_graphics_dll,
-                             wrapper_present, wrapped_name, renderer_present, layer_current, automatic,
-                             configuration_consistent, fbe_off)
+        problems = _problems(state, pj64_dir, running, selected, registry_graphics_dll,
+                             layer_current, automatic, fbe_off)
         # A frame buffer emulation setting turned on is stale the same way an
         # older DLL is: the same update steps lead to the fix.
         steps = self._steps(state, running,
-                            source is not None and wrapper_present and not (layer_current and fbe_off),
+                            source is not None and present and not (layer_current and fbe_off),
                             layer_alive, automatic)
 
         status = LayerStatus(
             pj64_dir=str(pj64_dir) if pj64_dir is not None else None,
             pj64_running=running,
             registry_graphics_dll=registry_graphics_dll,
-            wrapper_present=wrapper_present,
-            wrapper_current=wrapper_current,
-            wrapper_selected=wrapper_selected,
-            wrapped_name=wrapped_name,
+            wrapper_present=present,
+            wrapper_current=current,
+            wrapper_selected=selected,
             layer_alive=layer_alive,
             pictures_via=pictures_via,
             steps=steps,
@@ -687,13 +633,11 @@ class CaptureLayer:
             state=state,
             plugin_pid=plugin_pid,
             pictures_flowing=activity.get("pictures", False),
-            plugin_dir=str(self._plugin_dir(pj64_dir)) if pj64_dir else None,
-            renderer_present=renderer_present,
-            renderer_current=renderer_current,
-            previous_graphics_dll=self._previous_graphics_dll(overlay, wrapped_name),
+            plugin_dir=str(plugin_dir) if plugin_dir is not None else None,
+            leftovers=[path.name for path in leftovers],
+            previous_graphics_dll=self._previous_graphics_dll(overlay, legacy_wrapped),
             automatic_update=automatic,
             gpu_observation=gpu,
-            configuration_consistent=configuration_consistent,
             frame_buffer_emulation_off=fbe_off,
         )
         self._last_status, self._status_observed = status, time.time()
@@ -728,8 +672,7 @@ class CaptureLayer:
             plugin = self._plugin_dir(pj64_dir)
             # Only a destination write denial earns a UAC retry. Per-user
             # settings, source failures and background refresh never elevate.
-            eligible = {plugin, *(plugin / name for name in (WRAPPER_DLL, RENDERER_FILE, WRAPPER_INI,
-                                                             LEGACY_RENDERER_DLL, RENDERER_INI))}
+            eligible = {plugin, *(plugin / name for name in (PLUGIN_DLL, RENDERER_INI, *LEFTOVERS))}
             if exc.reason != "access_denied" or Path(exc.filename) not in eligible:
                 raise
             if in_use(Path(exc.filename)):
@@ -739,8 +682,8 @@ class CaptureLayer:
                 return self._install_files(pj64_dir, elevated=True)
 
     def _install_files(self, pj64_dir: Path, *, elevated=False) -> LayerStatus:
-        source, renderer = self._source_dll(), self._renderer_dll()
-        if source is None or renderer is None:
+        source = self._source_dll()
+        if source is None:
             raise LayerRefused("this build carries no capture layer")
         validate = getattr(self._processes, "check_folder", None)
         if validate is not None:
@@ -749,80 +692,59 @@ class CaptureLayer:
                 raise LayerRefused(target["message"])
 
         plugin_dir = self._plugin_dir(pj64_dir)
-        dll_path = plugin_dir / WRAPPER_DLL
-        ini_path = plugin_dir / WRAPPER_INI
-        renderer_path = plugin_dir / RENDERER_FILE
-        shadow = self._shadow_ini(plugin_dir)
-        # The per-user GLideN64.ini belongs to this original user, like the
-        # wrapper INI's shadow; the real one is a plugin file (elevated or not).
+        dll_path = plugin_dir / PLUGIN_DLL
+        # The per-user GLideN64.ini belongs to this original user; the real
+        # one is a plugin file (elevated or not).
         settings_shadow = self._shadow_ini(plugin_dir, RENDERER_INI)
-        per_user = [path for path in (shadow, settings_shadow) if path is not None]
+        per_user = [settings_shadow] if settings_shadow is not None else []
 
         overlay = self._load_overlay()
-        # The plugin undo returns to. A re-install finds OUR wrapper in the
+        # The plugin undo returns to. A re-install finds OUR plugin in the
         # registry, so the answer is what we remembered (or what an older
         # install's ini wrapped), never one of our own files.
-        previous = self._previous_graphics_dll(
-            overlay, self._read_wrapped_name(ini_path) if ini_path.exists() else None)
+        overlay["previous_graphics_dll"] = self._previous_graphics_dll(
+            overlay, self._legacy_wrapped(plugin_dir))
         overlay["consented_at"] = _now_iso()
         overlay["pj64_dir"] = str(pj64_dir)
-        overlay["wrapped"] = RENDERER_FILE
-        overlay["previous_graphics_dll"] = previous
+        overlay["wrapped"] = None
         overlay["uninstalled_at"] = None
         # Before any write: undo needs each file's value as the user had it.
         self._remember_renderer_settings(overlay, self._renderer_settings_files(plugin_dir))
         from sm64_events.core.setup_files import restore_on_failure
-        with self._registry_install_transaction() as select_wrapper, restore_on_failure([
+        with self._registry_install_transaction() as select_plugin, restore_on_failure([
                 self._settings_path, *per_user]), self._install_plugin_files(
-                pj64_dir, source, renderer, elevated=elevated) as receipts:
-            renderer_receipt, receipt = receipts["renderer_receipt"], receipts["installation_receipt"]
-            overlay["installed_renderer_sha256"] = renderer_receipt["after"]["sha256"]
-            overlay["renderer_receipt"] = renderer_receipt
+                pj64_dir, source, elevated=elevated) as receipts:
+            receipt = receipts["installation_receipt"]
             overlay["installation_receipt"] = receipt
             overlay["installed_by"] = self._installer
-            self._record_wrapper(overlay, receipt["after"]["sha256"], dll_path, renderer_path)
-            self._reconcile_shadow(shadow)
-            self._turn_off_frame_buffer_emulation([settings_shadow] if settings_shadow is not None else [])
+            self._record_plugin(overlay, receipt["after"]["sha256"], dll_path)
+            self._turn_off_frame_buffer_emulation(per_user)
             self._save_overlay(overlay)
             # HKCU always belongs to this original user, even if UAC used
             # another administrator's credentials for the file transaction.
-            select_wrapper()
+            select_plugin()
 
         self._refresh_blocked = None
         return self.status()
 
     @contextmanager
-    def _install_plugin_files(self, pj64_dir, source, renderer, *, elevated):
+    def _install_plugin_files(self, pj64_dir, source, *, elevated):
         plugin = self._plugin_dir(pj64_dir)
         if elevated:
             from sm64_events.core.plugin_elevation import elevated_install
-            with elevated_install(pj64_dir, plugin, source, renderer) as receipts:
+            with elevated_install(pj64_dir, plugin, source) as receipts:
                 yield receipts
             return
         with file_operation("create plugin folder", plugin):
             plugin.mkdir(parents=True, exist_ok=True)
-        dll, renderer_path, ini = plugin / WRAPPER_DLL, plugin / RENDERER_FILE, plugin / WRAPPER_INI
-        settings = plugin / RENDERER_INI
-        with verified_copy(renderer, renderer_path, reason="explicit_install",
-                           rollback=(dll, ini, settings)) as renderer_receipt:
-            with verified_copy(source, dll, reason="explicit_install", rollback=(ini, settings)) as receipt:
-                with file_operation("write plugin configuration", ini):
-                    self._write_wrapped_name(ini, RENDERER_FILE)
-                    if self._read_wrapped_name(ini) != RENDERER_FILE:
-                        raise OSError("Plugin configuration verification failed")
-                self._turn_off_frame_buffer_emulation([settings])
-                yield {"renderer_receipt": renderer_receipt, "installation_receipt": receipt}
-                # Last, once the caller has selected the wrapper: a refused
-                # delete rolls back every file and that selection.
-                self._remove_legacy_renderer(plugin)
-
-    def _remove_legacy_renderer(self, plugin_dir: Path) -> None:
-        """Delete an older install's renderer DLL, the second plugin Project64
-        listed: only one of ours, never while Project64 selects it directly."""
-        legacy = plugin_dir / LEGACY_RENDERER_DLL
-        if _our_renderer(legacy) and not _names(self._registry_graphics_dll(), LEGACY_RENDERER_DLL):
-            with file_operation("remove the older renderer", legacy):
-                legacy.unlink()
+        dll, settings = plugin / PLUGIN_DLL, plugin / RENDERER_INI
+        with verified_copy(source, dll, reason="explicit_install", rollback=(settings,)) as receipt:
+            self._turn_off_frame_buffer_emulation([settings])
+            yield {"installation_receipt": receipt}
+            # Last, once the caller has selected the plugin: a refused
+            # delete puts back what it removed, then rolls back every file
+            # and that selection.
+            remove_files(self._leftovers(plugin, keep_selected=True))
 
     def _steps(self, state: str, running: bool, stale: bool, layer_alive: bool, automatic: bool) -> list:
         """The ordered steps from this state to a live layer. Every step is
@@ -858,21 +780,22 @@ class CaptureLayer:
             return ([close, start] if running else [start])
         return []
 
-    def _record_wrapper(self, overlay: dict, sha: str, dll_path: Path, renderer_path: Path) -> None:
-        """The installed wrapper's hash and the installed build. Older
+    def _record_plugin(self, overlay: dict, sha: str, dll_path: Path) -> None:
+        """The installed plugin's hash and the installed build. Older
         trainers refresh whatever `installed_sha256` names, so only a frozen
         installer writes it; they then leave a checkout's install alone."""
         frozen = isinstance(self._installer, dict) and self._installer.get("kind") == FROZEN
         overlay["owned_sha256"] = sha
         overlay["installed_sha256"] = sha if frozen else None
-        overlay["installed_build"] = build_stamp(dll_path, renderer_path, _build_identity)
+        overlay["installed_build"] = build_stamp(dll_path, _build_identity)
 
     def _automatic_refresh(self, pj64_dir: Path | None) -> bool:
-        """This trainer may update the installed pair by itself: consent, an
+        """This trainer may update the installed plugin by itself: consent, an
         install by an installer like this one (the frozen app's by a frozen
-        app, a checkout's only by that checkout), the wrapper unchanged since
+        app, a checkout's only by that checkout), the file unchanged since
         (a manual or external replacement transfers nothing), and a bundle no
-        older than what is installed (never a downgrade)."""
+        older than what is installed (never a downgrade). An older install's
+        wrapper counts as the installed plugin: replacing it is the move."""
         if not self.auto_refresh or pj64_dir is None:
             return False
         overlay = self._load_overlay()
@@ -882,47 +805,43 @@ class CaptureLayer:
         if not owns(overlay.get("installed_by"), self._installer):
             return False
         plugin_dir = self._plugin_dir(pj64_dir)
-        source, renderer = self._source_dll(), self._renderer_dll()
-        if source is None or renderer is None:
+        source = self._source_dll()
+        if source is None:
             return False
         try:
-            key = self._refresh_key(pj64_dir, source, renderer)
+            key = self._refresh_key(pj64_dir, source)
             if self._refresh_blocked is not None:
                 if self._refresh_blocked[0] == key:
                     return False
                 self._refresh_blocked = None  # New target/bundle earns a fresh attempt.
-            if _sha256(plugin_dir / WRAPPER_DLL) != expected:
+            if _sha256(plugin_dir / PLUGIN_DLL) != expected:
                 return False
         except OSError:
             return False
-        installed_renderer = plugin_dir / RENDERER_FILE
-        if not installed_renderer.exists() and _our_renderer(plugin_dir / LEGACY_RENDERER_DLL):
-            installed_renderer = plugin_dir / LEGACY_RENDERER_DLL  # moving it is no downgrade either
-        return not_older(source, plugin_dir / WRAPPER_DLL) and not_older(renderer, installed_renderer)
+        return not_older(source, plugin_dir / PLUGIN_DLL)
 
-    def _refresh_key(self, pj64_dir, source, renderer):
-        def identity(path):
-            stat = path.stat()
-            return str(path.resolve()), stat.st_size, stat.st_mtime_ns
+    def _refresh_key(self, pj64_dir, source):
+        stat = source.stat()
         return (str(pj64_dir.resolve()), str(self._plugin_dir(pj64_dir).resolve()),
-                identity(source), identity(renderer))
+                (str(source.resolve()), stat.st_size, stat.st_mtime_ns))
 
     def refresh_if_stale(self) -> bool:
         with self._install_lock:
             return self._refresh_if_stale()
 
     def _refresh_if_stale(self) -> bool:
-        """Copy this build's DLLs over differing ones when `_automatic_refresh`
-        allows it: this installer's own earlier install, never a downgrade, a
-        manual or another checkout's candidate left alone. Project64 must be
-        closed. True when a copy happened; False when nothing was
-        installed, the file is current, or PJ64 holds it open. Runs at boot
-        under the consent already given -- the one update path for a plugin
-        fix, so a user never re-consents to what they already chose."""
+        """Copy this build's plugin over a differing one and delete an older
+        install's leftovers when `_automatic_refresh` allows it: this
+        installer's own earlier install, never a downgrade, a manual or
+        another checkout's candidate left alone. Project64 must be closed.
+        True when something changed; False when nothing was installed, the
+        install is current, or PJ64 holds a file open. Runs at boot under the
+        consent already given -- the one update path for a plugin fix, so a
+        user never re-consents to what they already chose."""
         if not self.auto_refresh:
             return False
-        source, renderer = self._source_dll(), self._renderer_dll()
-        if source is None or renderer is None:
+        source = self._source_dll()
+        if source is None:
             return False
         if self._load_overlay().get("consented_at") is None:
             return False
@@ -935,35 +854,36 @@ class CaptureLayer:
         if validate is not None and validate(str(pj64_dir))["state"] != "ready":
             return False
         plugin_dir = self._plugin_dir(pj64_dir)
-        dll_path, renderer_path, ini_path = (plugin_dir / WRAPPER_DLL, plugin_dir / RENDERER_FILE,
-                                             plugin_dir / WRAPPER_INI)
+        dll_path = plugin_dir / PLUGIN_DLL
         if not dll_path.exists():
             return False
-        ini_wrapped = self._read_wrapped_name(ini_path)
-        stale = self._stale_parts(plugin_dir, source, renderer, ini_wrapped)
+        # A refresh never changes Project64's selection, so a leftover it
+        # names directly stays until Install selects the plugin.
+        leftovers = self._leftovers(plugin_dir, keep_selected=True)
+        stale = {"plugin": not _files_match(dll_path, source), "leftovers": bool(leftovers),
+                 "renderer_settings": not self._frame_buffer_emulation_off(plugin_dir)}
         if not any(stale.values()):
             self._deferred = False
             return False
-        # A running Project64 maps both DLLs, and the process list can miss it
+        # A running Project64 maps the DLLs, and the process list can miss it
         # for an instant: at his server start on 2026-09-28 Project64 loaded
         # its plugins in the moment after the check above found none. A held
         # file is the same "not now" as a running Project64.
-        held = [path for path, part in ((renderer_path, "renderer"), (dll_path, "wrapper"),
-                                        (plugin_dir / LEGACY_RENDERER_DLL, "legacy"))
-                if stale[part] and in_use(path)]
+        held = [path for path in ([dll_path] if stale["plugin"] else []) + leftovers if in_use(path)]
         if held:
             return self._defer(held[0])
         overlay = self._load_overlay()
-        if stale["ini"]:
+        if leftovers:
             # An older install wrapped the user's own plugin: that name is
-            # what undo must return to once the ini names our renderer.
-            overlay["previous_graphics_dll"] = self._previous_graphics_dll(overlay, ini_wrapped)
-            overlay["wrapped"] = RENDERER_FILE
-        # Only the file that differs is copied; each copy is verified and
-        # rolls the whole install back on failure.
-        refresh_key = self._refresh_key(pj64_dir, source, renderer)
+            # what undo must return to once the ini is gone.
+            overlay["previous_graphics_dll"] = self._previous_graphics_dll(
+                overlay, self._legacy_wrapped(plugin_dir))
+            overlay["wrapped"] = None
+        # Only a plugin that differs is copied; the copy is verified and
+        # rolls the whole refresh back on failure.
+        refresh_key = self._refresh_key(pj64_dir, source)
         try:
-            self._copy_stale(overlay, source, renderer, (dll_path, renderer_path, ini_path), stale)
+            self._copy_stale(overlay, source, plugin_dir, stale["plugin"], leftovers)
         except DestinationInUse as exc:
             return self._defer(Path(exc.filename))
         except OSError as exc:
@@ -984,51 +904,24 @@ class CaptureLayer:
         self._deferred = True
         return False
 
-    def _stale_parts(self, plugin_dir: Path, source: Path, renderer: Path, ini_wrapped) -> dict:
-        """What a refresh must change, each part on its own. `legacy`: an
-        older install's renderer DLL may go, since Project64 does not select
-        it directly; a refresh never changes that selection, so while it does,
-        the file stays until Install."""
-        renderer_path, shadow = plugin_dir / RENDERER_FILE, self._shadow_ini(plugin_dir)
-        return {
-            "wrapper": not _files_match(plugin_dir / WRAPPER_DLL, source),
-            "renderer": not renderer_path.exists() or not _files_match(renderer_path, renderer),
-            "ini": not _names(ini_wrapped, RENDERER_FILE),
-            "shadow": shadow is not None and not _names(self._read_wrapped_name(shadow), RENDERER_FILE),
-            "legacy": (_our_renderer(plugin_dir / LEGACY_RENDERER_DLL)
-                       and not _names(self._registry_graphics_dll(), LEGACY_RENDERER_DLL)),
-            "renderer_settings": not self._frame_buffer_emulation_off(plugin_dir),
-        }
-
-    def _copy_stale(self, overlay, source, renderer, paths, stale):
-        dll_path, renderer_path, ini_path = paths
-        shadow = self._shadow_ini(ini_path.parent)
-        settings_files = self._renderer_settings_files(ini_path.parent)
+    def _copy_stale(self, overlay, source, plugin_dir: Path, copy_plugin: bool, leftovers: list[Path]):
+        dll_path = plugin_dir / PLUGIN_DLL
+        settings_files = self._renderer_settings_files(plugin_dir)
         from sm64_events.core.setup_files import restore_on_failure
-        rollback = [ini_path, self._settings_path, *([shadow] if shadow is not None else []), *settings_files]
-        with restore_on_failure(rollback), ExitStack() as copies:
-            if stale["renderer"]:
-                renderer_receipt = copies.enter_context(verified_copy(
-                    renderer, renderer_path, reason="automatic_refresh",
-                    rollback=(dll_path, ini_path, self._settings_path)))
-                overlay["installed_renderer_sha256"] = renderer_receipt["after"]["sha256"]
-                overlay["renderer_receipt"] = renderer_receipt
-            if stale["wrapper"]:
+        with restore_on_failure([self._settings_path, *settings_files]), ExitStack() as copies:
+            if copy_plugin:
                 receipt = copies.enter_context(verified_copy(
-                    source, dll_path, reason="automatic_refresh", rollback=(ini_path, self._settings_path)))
+                    source, dll_path, reason="automatic_refresh", rollback=(self._settings_path,)))
                 overlay["installation_receipt"] = receipt
-            self._record_wrapper(overlay, _sha256(dll_path), dll_path, renderer_path)
-            self._write_wrapped_name(ini_path, RENDERER_FILE)
-            self._reconcile_shadow(shadow)
+            self._record_plugin(overlay, _sha256(dll_path), dll_path)
             # A write this user may not make raises; refresh never elevates,
             # so status then offers Install, which can.
             self._remember_renderer_settings(overlay, settings_files)
             self._turn_off_frame_buffer_emulation(settings_files)
             self._save_overlay(overlay)
-            # Last, once the ini names the moved renderer: a refused delete
-            # rolls back everything above, and nothing can fail after it.
-            if stale["legacy"]:
-                self._remove_legacy_renderer(ini_path.parent)
+            # Last, once the plugin is in place: a refused delete puts back
+            # what it removed and rolls back everything above.
+            remove_files(leftovers)
 
     def refresh_loop(self, stop, interval_s: float = 2.0, log=None) -> None:
         """`refresh_if_stale` every `interval_s` until `stop` is set -- so a
@@ -1041,7 +934,7 @@ class CaptureLayer:
         while not stop.wait(interval_s):
             try:
                 if self.refresh_if_stale() and log is not None:
-                    log.info("capture layer refreshed to this build's DLL "
+                    log.info("capture layer refreshed to this build's plugin "
                              "(Project64 was closed)")
             except Exception:
                 if log is not None:
@@ -1050,7 +943,7 @@ class CaptureLayer:
     def uninstall(self) -> LayerStatus:
         """Select the previous graphics plugin again. When none is known
         (the registry named one of our own files when we installed), the
-        wrapper stays selected: it still draws the game, and the setup
+        plugin stays selected: it still draws the game, and the setup
         page says so instead of promising a restore."""
         with self._install_lock:
             return self._uninstall()
@@ -1061,12 +954,8 @@ class CaptureLayer:
 
         pj64_dir = self.locate()
         overlay = self._load_overlay()
-        ini_wrapped = None
-        if pj64_dir is not None:
-            ini_path = self._plugin_dir(pj64_dir) / WRAPPER_INI
-            if ini_path.exists():
-                ini_wrapped = self._read_wrapped_name(ini_path)
-        previous = self._previous_graphics_dll(overlay, ini_wrapped)
+        legacy_wrapped = self._legacy_wrapped(self._plugin_dir(pj64_dir)) if pj64_dir is not None else None
+        previous = self._previous_graphics_dll(overlay, legacy_wrapped)
         if previous is not None:
             self._set_registry_graphics_dll(previous)
         # The user's own GLideN64 in the same folder reads the same file.

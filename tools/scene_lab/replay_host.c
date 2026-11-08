@@ -10,8 +10,9 @@
  * frame_dir arguments.
  *
  * GLideN64 reads GLideN64.ini and GLideN64.custom.ini from its settings
- * folder: the host loads --renderer where it is and names --settings as that
- * folder before any plugin call (renderer_load.h); it never copies the DLL.
+ * folder: the host loads --renderer (the Trainer's graphics plugin) where it is,
+ * runs it as the renderer alone and names --settings as that folder before any
+ * plugin call (renderer_load.h); it never copies the DLL.
  * Per frame: rdram.bin -> RDRAM, dmem.bin -> DMEM (OSTask at 0xFC0),
  * frame.json's VI registers, ProcessDList, UpdateScreen, ReadScreen ->
  * <out>/<index>.raw (BGR rows, bottom-up) plus <index>.json. ProcessDList

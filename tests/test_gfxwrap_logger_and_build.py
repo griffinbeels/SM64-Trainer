@@ -79,11 +79,15 @@ def test_native_log_keeps_startup_evidence_and_every_slow_call_after_a_capture_r
     assert second["max_ms"] == "1.000" and second["mean_ms"] == "1.000"
 
 
-def test_the_wrapper_build_leaves_only_the_dll_in_its_output_folder(tmp_path, build):
+def test_a_plugin_build_leaves_only_the_dll_in_its_output_folder(tmp_path, build):
     """An install candidate folder holds the file he installs and nothing else.
     The compiler's objects, export library and batch step used to land beside
-    it (`_build_wrapper`, `.exp`, `.lib`); they belong in scratch."""
+    it (`_build_wrapper`, `.exp`, `.lib`); they belong in scratch. Asked of a
+    test plugin, which links the capture layer exactly as the shipped plugin's
+    build does minus MSBuild, and of the encoder helper."""
     out = tmp_path / "candidate"
-    built = build.build_wrapper(out)
+    built = build.build_test_plugin(out)
     assert built == out / "sm64_trainer_gfx.dll" and built.stat().st_size > 0
     assert sorted(p.name for p in out.iterdir()) == ["sm64_trainer_gfx.dll"]
+    helper = build.build_encoder_helper(tmp_path / "helper")
+    assert sorted(p.name for p in helper.parent.iterdir()) == ["SM64GpuEncoderV1.dll"]

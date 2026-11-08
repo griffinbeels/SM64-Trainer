@@ -73,8 +73,10 @@ def test_a_real_build_names_itself_and_carries_its_source_date(tmp_path, monkeyp
     spec = importlib.util.spec_from_file_location("order_build_plugin", ROOT / "tools" / "build_plugin.py")
     build = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(build)
-    if build.find_vcvars32() is None:
+    if build.find_vcvars64() is None:
         pytest.skip("needs the MSVC toolchain")
-    wrapper = build.build_wrapper(tmp_path)
-    assert names_itself(wrapper)
-    assert link_time(wrapper) == build._build_term()[1]
+    # The encoder helper is stamped exactly as the plugin is (tools/native_identity.py
+    # stamp, with the date of the same inputs) and builds without MSBuild.
+    helper = build.build_encoder_helper(tmp_path)
+    assert names_itself(helper)
+    assert link_time(helper) == build._build_term()[1]

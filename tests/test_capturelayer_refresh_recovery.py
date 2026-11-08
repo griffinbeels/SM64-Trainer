@@ -3,7 +3,7 @@ import logging
 from pathlib import Path
 import shutil
 
-from sm64_events.core.capturelayer import WRAPPER_DLL
+from sm64_events.core.capturelayer import PLUGIN_DLL
 from test_capturelayer import (
     build, dll_source as dll_source, make_layer, pj64_dir as pj64_dir,
     settings_path as settings_path,
@@ -23,7 +23,7 @@ def deny_wrapper(monkeypatch, directory):
     real_copy, attempts = shutil.copyfile, []
 
     def copy(source, destination, **kwargs):
-        if Path(destination) == directory / "Plugin" / WRAPPER_DLL:
+        if Path(destination) == directory / "Plugin" / PLUGIN_DLL:
             attempts.append(destination)
             failure = PermissionError(13, "protected plugin folder", str(destination))
             failure.winerror = 5
@@ -41,7 +41,7 @@ def test_refused_refresh_exposes_install_without_background_uac_or_error_storm(
 ):
     layer, _, _ = make_layer(pj64_dir, dll_source, settings_path)
     layer.install(True)
-    previous = (pj64_dir / "Plugin" / WRAPPER_DLL).read_bytes()
+    previous = (pj64_dir / "Plugin" / PLUGIN_DLL).read_bytes()
     dll_source.write_bytes(build(b"new GPU support"))
     attempts, real_copy = deny_wrapper(monkeypatch, pj64_dir)
     logger = logging.getLogger("refresh-recovery")
@@ -53,7 +53,7 @@ def test_refused_refresh_exposes_install_without_background_uac_or_error_storm(
     assert not status.wrapper_current and not status.automatic_update
     assert any(step["action"] == "install" for step in status.steps)
     assert not any("automatically" in problem for problem in status.problems)
-    assert (pj64_dir / "Plugin" / WRAPPER_DLL).read_bytes() == previous
+    assert (pj64_dir / "Plugin" / PLUGIN_DLL).read_bytes() == previous
     assert "protected plugin folder" in layer.diagnostic_status()["refresh_error"]
 
     monkeypatch.setattr(shutil, "copyfile", real_copy)

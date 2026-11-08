@@ -301,7 +301,7 @@ def test_project64_code_opens_no_second_gpu_context():
     """NVIDIA's threaded optimization froze the renderer 150-270 ms the first
     time any other thread in Project64 used the GPU, so every capture GPU call
     runs in the renderer's own context (renderer-thread capture). No unit
-    compiled into the wrapper or the renderer overlay may create, share or make
+    compiled into the plugin (capture layer or renderer overlay) may create, share or make
     current a GL context, or open D3D11/DXGI; the encoder helper's own 64-bit
     process may, and does."""
     import re
@@ -314,8 +314,8 @@ def test_project64_code_opens_no_second_gpu_context():
 
     # Every shipped Project64 unit is covered. No speculative device warm-up
     # may bypass this guard: its own initialization can stall the game thread.
-    units = ["gfxwrap.c", *(f"{name}.cpp" for name in load("build_plugin").RUNTIME_SOURCES),
-             *load("build_renderer").OVERLAY_MODULES]
+    plugin = load("build_renderer")   # one plugin file: the capture layer and the overlay
+    units = [*plugin.CAPTURE_MODULES, *plugin.OVERLAY_MODULES]
     forbidden = re.compile(r"\b(wglCreateContext\w*|wglShareLists|wglMakeCurrent|D3D11CreateDevice\w*|CreateDXGIFactory\w*)\b")
     offenders = {}
     for unit in units:

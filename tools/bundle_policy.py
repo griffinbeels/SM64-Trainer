@@ -6,10 +6,12 @@ collection remains PyInstaller's responsibility; secrets also need source scans.
 from __future__ import annotations
 
 from collections.abc import Collection
+import hashlib
 from pathlib import Path, PurePosixPath
 import subprocess
 
 from sm64_events.core.childproc import quiet_spawn_kwargs
+from sm64_events.core.update_plan import BUNDLED_NATIVES
 
 DATA_FILES = frozenset({
     "behaviours_jp.tsv", "behaviours_us.tsv", "defaults.seed.json",
@@ -26,7 +28,7 @@ ROOT_DATA_FILES = frozenset({
     "video_checks.seed.json.gz", "ukiki.ico", "build-channel.json",
     "error-reporting.json", "release-version.json",
 })
-NATIVE_FILES = ("sm64_trainer_gfx.dll", "GLideN64_SM64Trainer.dll", "SM64GpuEncoderV1.dll")
+NATIVE_FILES = BUNDLED_NATIVES  # owned by core/update_plan.py
 COLLECTION_NAME = "griffman1212.sm64ghosts"
 SEED_DESCRIPTOR = "beta-ghost-seed.json"
 VENDOR_HIDDEN = {
@@ -97,6 +99,15 @@ def ui_inputs(repo: Path) -> tuple[Path, ...]:
     return tuple(directory / name for name in sorted(paths))
 
 
+def _retired_placeholder(relative: str, digest: str | None) -> bool:
+    """The placeholder at a retired native name (core/update_plan.py
+    RETIRED_NATIVES): plain-text data with exactly RETIRED_NATIVE_TEXT's
+    bytes, never a native. Any other file under that name is refused."""
+    from sm64_events.core.update_plan import NATIVE_FOLDER, RETIRED_NATIVE_TEXT, RETIRED_NATIVES
+    return (relative in {f"{NATIVE_FOLDER}/{name}" for name in RETIRED_NATIVES}
+            and digest == hashlib.sha256(RETIRED_NATIVE_TEXT).hexdigest())
+
+
 def check_bundle_path(relative: str, *, ui_paths: Collection[str], is_dir: bool = False,
                       digest: str | None = None, reviewed_collection: bool = False) -> None:
     """Apply the same private-file and first-party allowlists to folders and ZIPs."""
@@ -126,6 +137,8 @@ def check_bundle_path(relative: str, *, ui_paths: Collection[str], is_dir: bool 
         if (path.name not in ROOT_DATA_FILES and not (reviewed_collection and path.name == SEED_DESCRIPTOR)
                 and path.suffix.lower() not in {".dll", ".pyd", ".exe", ".zip"}):
             raise ValueError("bundle contains an unexpected runtime input")
+    elif _retired_placeholder(relative, digest):
+        return
     elif parts[1:3] == ("sm64_events", "data"):
         suffix = path.relative_to("_internal/sm64_events/data").as_posix()
         if suffix not in DATA_FILES and suffix not in {"plugin/" + item for item in NATIVE_FILES}:

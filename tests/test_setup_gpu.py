@@ -3,7 +3,7 @@ from dataclasses import replace
 import pytest
 
 from sm64_events.core import setup_gpu as G
-from sm64_events.core.capturelayer import ACTIVE, RENDERER_FILE, CaptureLayer, WRAPPER_DLL, WRAPPER_INI
+from sm64_events.core.capturelayer import ACTIVE, PLUGIN_DLL, CaptureLayer
 from sm64_events.core.onboarding import readiness
 from sm64_events.core.renderer_settings import MINIMAL as FRAME_BUFFER_EMULATION_OFF, RENDERER_INI
 from sm64_events.replay import capturecontrol as C
@@ -145,17 +145,12 @@ def test_capturelayer_uses_gpu_observation_without_pixel_ring(tmp_path):
     plugin = directory / "Plugin"
     plugin.mkdir(parents=True)
     source = tmp_path / "bundle.dll"
-    source.write_bytes(b"fixture wrapper")
-    renderer = tmp_path / "renderer.dll"
-    renderer.write_bytes(b"fixture renderer")
-    (plugin / WRAPPER_DLL).write_bytes(source.read_bytes())
-    (plugin / RENDERER_FILE).write_bytes(renderer.read_bytes())
-    (plugin / WRAPPER_INI).write_text("wrapped=" + RENDERER_FILE)
+    source.write_bytes(b"fixture plugin")
+    (plugin / PLUGIN_DLL).write_bytes(source.read_bytes())
     (plugin / RENDERER_INI).write_bytes(FRAME_BUFFER_EMULATION_OFF)
-    registry = FakeRegistry({(REGISTRY_DLL_SUBKEY, GRAPHICS_DLL_VALUE): WRAPPER_DLL})
+    registry = FakeRegistry({(REGISTRY_DLL_SUBKEY, GRAPHICS_DLL_VALUE): PLUGIN_DLL})
     layer = CaptureLayer(registry, FakeProcesses(str(directory / "Project64.exe")),
-                         tmp_path / "settings.json", source, renderer_source=renderer,
-                         gpu_observation=probe)
+                         tmp_path / "settings.json", source, gpu_observation=probe)
     assert not layer.status().pictures_flowing
     advance(now, control, receipt)
     status = layer.status()

@@ -13,14 +13,18 @@ sys.path.insert(0, str(REPO / "src"))
 from sm64_events.bootstrap.beta_payload import checked_members  # noqa: E402
 from sm64_events.core.build_channel import CONFIG_FILENAME, STABLE_PORT, parse_metadata  # noqa: E402
 from sm64_events.core.release_contract import version_key  # noqa: E402
-from sm64_events.core.update_plan import parse_manifest, validate_release_manifest  # noqa: E402
+from sm64_events.core.update_plan import (BUNDLED_NATIVES, NATIVE_FOLDER, RETIRED_NATIVE_TEXT,  # noqa: E402
+                                          RETIRED_NATIVES, parse_manifest, validate_release_manifest)
 from bundle_policy import (check_bundle_path, tracked_ui_paths, COLLECTION_NAME,
-                           SEED_DESCRIPTOR, NATIVE_FILES)  # noqa: E402
+                           SEED_DESCRIPTOR)  # noqa: E402
 
 RECORD = "candidate.json"
 VERIFICATION = "candidate-verification.json"
 PUBLIC_FIELDS = ("community_url", "supabase_url", "supabase_publishable_key", "oauth_client_id")
-NATIVES = NATIVE_FILES
+#: The natives a candidate records by hash. The retired names' placeholder
+#: (core/update_plan.py RETIRED_NATIVES) is no native: _verify_identity checks
+#: that it is exactly RETIRED_NATIVE_TEXT.
+NATIVES = BUNDLED_NATIVES
 
 
 def digest(path: Path) -> str:
@@ -116,6 +120,13 @@ def _verify_identity(archive, record):
         with archive.open("_internal/sm64_events/data/plugin/" + name) as stream:
             if hashlib.file_digest(stream, "sha256").hexdigest() != record["native_sha256"][name]:
                 raise ValueError("candidate native provenance disagrees")
+    for name in RETIRED_NATIVES:
+        try:
+            placeholder = archive.read(f"{NATIVE_FOLDER}/{name}")
+        except KeyError:
+            placeholder = None
+        if placeholder != RETIRED_NATIVE_TEXT:
+            raise ValueError("candidate retired-name placeholder is not its plain text")
 
 
 def _reviewed_collection(archive) -> bool:

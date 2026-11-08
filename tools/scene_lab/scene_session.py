@@ -266,7 +266,8 @@ class HostImage:
 
 def renderer_host(config):
     """The real host factory: viewer_host.c over the Trainer's renderer where the bundle keeps it
-    (replay.trainer_renderer(): loaded in place, never copied), reading Project64's renderer
+    (replay.trainer_renderer(): the graphics plugin, loaded in place, never copied, and run as the
+    renderer alone through SM64RendererOnlyV1), reading Project64's renderer
     settings from the renderer settings folder (replay.settings_folder: Project64's Plugin folder
     is only read). No other renderer: one that cannot take a settings folder would read and write
     the folder it sits in."""

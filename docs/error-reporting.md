@@ -312,9 +312,9 @@ repeating the same denied writes for that bundle and target. Explicit successful
 installation clears the retained denial; a changed bundle can retry normally.
 
 Files roll back until the helper commits. If its final acknowledgment is lost
-after commit, the complete verified DLL pair may remain while the original user's
-settings and graphics selection restore. Setup does not claim success or select
-the wrapper in that ambiguous case; retrying installation is safe.
+after commit, the verified plugin may remain while the original user's settings
+and graphics selection restore. Setup does not claim success or select the
+plugin in that ambiguous case; retrying installation is safe.
 
 ## Verification limits
 

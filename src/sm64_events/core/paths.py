@@ -20,6 +20,7 @@ import sys
 from pathlib import Path
 
 from sm64_events.core import build_channel
+from sm64_events.core.update_plan import BUNDLED_NATIVES
 
 log = logging.getLogger("sm64.paths")
 
@@ -289,9 +290,7 @@ def migrate_capture_layer_settings() -> None:
         pass  # Another checkout's newer record is authoritative.
 
 
-WRAPPER_DLL_NAME = "sm64_trainer_gfx.dll"
-RENDERER_DLL_NAME = "GLideN64_SM64Trainer.dll"
-ENCODER_DLL_NAME = "SM64GpuEncoderV1.dll"
+WRAPPER_DLL_NAME, ENCODER_DLL_NAME = BUNDLED_NATIVES
 
 
 def bundled_plugin_file(name: str) -> Path | None:
@@ -307,15 +306,10 @@ def bundled_plugin_file(name: str) -> Path | None:
 
 
 def bundled_plugin_dll() -> Path | None:
-    """THE CAPTURE LAYER's wrapper (`sm64_trainer_gfx.dll`), the plugin
-    Project64 selects."""
+    """THE GRAPHICS PLUGIN (`sm64_trainer_gfx.dll`): the renderer and the
+    capture layer in one file, which the setup screen installs into Project64
+    under the same name and the scene lab's helpers load where it is."""
     return bundled_plugin_file(WRAPPER_DLL_NAME)
-
-
-def bundled_renderer_dll() -> Path | None:
-    """THE RENDERER the wrapper wraps (LINK's GLideN64 v4.2 with the capture
-    overlay, built by tools/build_renderer.py). Installed beside the wrapper."""
-    return bundled_plugin_file(RENDERER_DLL_NAME)
 
 
 def bundled_encoder_dll() -> Path | None:
