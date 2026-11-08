@@ -51,6 +51,48 @@ def test_hiding_him_clears_his_nodes_render_flag_and_nothing_else():
     assert camera_state.hide_mario(nobody, MARIO_STATES) is False and _flags(nobody) == 0x0021
 
 
+def _model(memory, ranges, extra_type=0x01B):
+    """Mario's object's model: a root whose children ring holds a display list node and one level-of-detail
+    node per range (the game's GEO_RENDER_RANGE), as his geo layout makes them."""
+    root, first = 0x341000, 0x341100
+    struct.pack_into(">I", memory, MARIO_OBJECT + camera_state.SHARED_CHILD, 0x80000000 | root)
+    struct.pack_into(">I", memory, root + camera_state.NODE_CHILDREN, 0x80000000 | first)
+    nodes = [first + 0x40 * k for k in range(len(ranges) + 1)]
+    for k, node in enumerate(nodes):
+        struct.pack_into(">h", memory, node, extra_type if k == 0 else camera_state.GRAPH_NODE_TYPE_LEVEL_OF_DETAIL)
+        struct.pack_into(">I", memory, node + camera_state.NODE_NEXT, 0x80000000 | nodes[(k + 1) % len(nodes)])
+        if k:
+            struct.pack_into(">hh", memory, node + camera_state.LOD_MIN, *ranges[k - 1])
+    return nodes[1:]
+
+
+def _ranges(memory, nodes):
+    return [struct.unpack_from(">hh", memory, node + camera_state.LOD_MIN) for node in nodes]
+
+
+def test_every_moved_camera_draws_marios_most_detailed_model_at_any_distance():
+    """Measured on the BoB package (2026-11-08, scene-cameras' CPU check): his 752-triangle model nearer than
+    600 units, 514 to about 1600, 212 beyond. Now the nearest range covers every distance and the others
+    none; whatever is not his model is untouched."""
+    memory = _memory()
+    nodes = _model(memory, [(600, 1600), (-2048, 600), (1600, 32767)])
+    camera = ([0.0, 0.0, 0.0], [0.0, 100.0, 9000.0])
+    before = bytearray(memory)
+    camera_state.place(before, camera, LAKITU, FOV)                 # the camera alone
+    camera_state.place(memory, camera, LAKITU, FOV, MARIO_STATES)
+    assert _ranges(memory, nodes) == [(32767, 32767), (-32768, 32767), (32767, 32767)]
+    changed = [at for at in range(0x330000, 0x350000) if memory[at] != before[at]]
+    assert changed
+    assert all(any(node + camera_state.LOD_MIN <= at < node + camera_state.LOD_BYTES for node in nodes) for at in changed)
+    assert _flags(memory) == 0x0021                                 # still drawn
+    # No Mario, or a model whose graph points nowhere: nothing changes, and a ring that never closes ends.
+    assert camera_state.full_detail(_memory(obj=0), MARIO_STATES) == 0
+    broken = _memory()
+    nodes = _model(broken, [(-2048, 600), (600, 32767)])
+    struct.pack_into(">I", broken, nodes[-1] + camera_state.NODE_NEXT, 0x80000000 | nodes[-1])   # a loop onto itself
+    assert camera_state.full_detail(broken, MARIO_STATES) == 2
+
+
 FREE = {"focus": [0.0, 160.0, 0.0], "position": [0.0, 560.0, 1500.0], "roll": 0, "fov": 45.0}
 
 

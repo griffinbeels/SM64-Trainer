@@ -1554,7 +1554,9 @@ first), **Top [[ghost]]s** (each player's best for a [[strategy]], with its plac
 scene's life and a name only once typing stops or on Enter; Add draws that [[ghost]] into the stage
 from the next picture, and a [[ghost]] the lab cannot draw shows its reason. **HUD** (kept per
 viewer) leaves the game's on-screen counters and timer out of every picture, the one on screen at
-once. **Mario** beside it (for this visit only) leaves the stage's Mario out of every picture the
+once. Every picture the lab draws again shows Mario's most detailed model however far the camera
+is (the game itself picks a plainer one from about 600 units and a blocky one from about 1600).
+**Mario** beside HUD (for this visit only) leaves the stage's Mario out of every picture the
 lab draws again, his shadow and what he holds too, so only the [[stage ghost]]s show; the lab then
 draws the recorded camera's picture again from that camera, the same picture without him, and a
 level load or a menu, which it cannot draw again, keeps him and says so. The **Cinematic** row's [[cinematic camera]]s (Front, Side, Orbit, Chase, Overhead, Tripod)

@@ -20,7 +20,9 @@ coordinates, optionally with its own "roll" (the game's s16 angle the screen tur
 "fov" (degrees); without them the frame's own apply. The scene evaluator re-runs SM64's own
 scene-graph code for that camera and the host draws the whole rebuilt RDRAM with the new list.
 The pose's camera (focus, position, roll, fov) redraws the recorded picture exactly, which is
-what lets a free camera start from the picture on screen. A free camera with "recorded": weight
+what lets a free camera start from the picture on screen, but for Mario's model: every moved
+camera draws his most detailed one whatever its distance (camera_state.full_detail), where the
+game may have drawn a plainer one. A free camera with "recorded": weight
 (a camera path easing into or out of the recorded camera, ui/components/scenepath.js) is drawn
 that share of the way to the frame's recorded camera (recorded_blend).
 
