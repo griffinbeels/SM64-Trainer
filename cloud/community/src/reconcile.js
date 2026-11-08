@@ -1,6 +1,12 @@
-import {Store} from './store.js';
+import {Store,storedBytes} from './store.js';
 import {config} from './config.js';
 import {ServiceError} from './errors.js';
+
+// One object holds the ghost and, after it, the start its grant declared.
+function matchesGrant(object,g){
+  return object.size===storedBytes(g)&&object.customMetadata?.encoded_sha256===g.encoded_sha256&&
+    (!(g.start_bytes>0)||object.customMetadata?.start_sha256===g.start_sha256);
+}
 
 export async function reconcile(env,{limit=20}={}) {
   const s=new Store(env.DB,config(env)),now=Math.floor(Date.now()/1000);
@@ -34,7 +40,7 @@ export async function reconcile(env,{limit=20}={}) {
       }
       const object=await env.GHOSTS.head(g.asset_key);
       if(object) {
-        if(object.size!==g.encoded_bytes||object.customMetadata?.encoded_sha256!==g.encoded_sha256)throw Error('Stored intent integrity mismatch');
+        if(!matchesGrant(object,g))throw Error('Stored intent integrity mismatch');
         try{await s.stored(g);}catch(e){if(e instanceof ServiceError&&e.code==='conflict')return;throw e;}
         await publish(g);
       }else await s.release(g);
@@ -51,8 +57,9 @@ export async function reconcile(env,{limit=20}={}) {
       try{await s.tx("EXISTS(SELECT 1 FROM assets WHERE key=?) AND NOT EXISTS(SELECT 1 FROM winners w JOIN recordings r ON r.id=w.recording_id WHERE r.asset_key=?) AND NOT EXISTS(SELECT 1 FROM pins p JOIN recordings r ON r.id=p.recording_id WHERE r.asset_key=?)",[a.key,a.key,a.key],[s.sql("UPDATE assets SET state='deleting' WHERE key=?",a.key)]);}
       catch(e){if(e instanceof ServiceError&&e.code==='conflict')return;throw e;}
       await s.ticket(a.uid,{classA:1,maintenance:true});
+      // Deleting the object deletes the ghost's start with it: they share one key.
       await env.GHOSTS.delete(a.key);
-      await s.tx("EXISTS(SELECT 1 FROM assets WHERE key=? AND state='deleting')",[a.key],[s.sql('DELETE FROM recordings WHERE asset_key=?',a.key),s.sql('DELETE FROM assets WHERE key=?',a.key),s.sql('UPDATE accounts SET bytes_used=bytes_used-? WHERE uid=?',a.encoded_bytes,a.uid),s.sql('UPDATE storage_budget SET bytes_used=bytes_used-? WHERE id=1',a.encoded_bytes)]);
+      await s.tx("EXISTS(SELECT 1 FROM assets WHERE key=? AND state='deleting')",[a.key],[s.sql('DELETE FROM recordings WHERE asset_key=?',a.key),s.sql('DELETE FROM assets WHERE key=?',a.key),s.sql('UPDATE accounts SET bytes_used=bytes_used-? WHERE uid=?',storedBytes(a),a.uid),s.sql('UPDATE storage_budget SET bytes_used=bytes_used-? WHERE id=1',storedBytes(a))]);
       deleted++;
     });
   }
