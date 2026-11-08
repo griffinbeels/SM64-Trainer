@@ -6,6 +6,9 @@ pointer lock, and Windows confined Griffin's mouse to the test's viewport ([0,0,
 source scan over tools/, tests/ and src/), and every browser-lane test leaves the cursor as free as
 it found it (tests/conftest.py, checked here against fake readings and once against the real
 operating system without moving his cursor).
+
+The same door raises Chromium's 250-entry resource-timing buffer in every page (2026-11-08), so a
+probe that waits for one late request's entry never waits on an entry the browser dropped.
 """
 import ctypes
 import os
@@ -108,6 +111,51 @@ def test_in_every_page_the_lock_is_emulated_and_never_the_browsers():
             assert with_context.evaluate("window.__pointerLockStandIn?.armed() === true")
         finally:
             browser.close()
+
+
+def test_every_page_keeps_more_than_chromiums_250_resource_timings():
+    """Chromium's default buffer drops entry 251 onward. A page that loads 300 resources at startup
+    must still list the last one, or a probe waiting for a late request's entry waits forever."""
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    count = 300
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            body = (f"<script>for (let i = 0; i < {count}; i++) fetch('/r' + i);</script>"
+                    if self.path == "/" else "ok").encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html" if self.path == "/" else "text/plain")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with sync_playwright() as play:
+            browser = play.chromium.launch(headless=True, args=["--disable-gpu"])
+            try:
+                page = browser.new_page()
+                page.goto(f"http://127.0.0.1:{server.server_address[1]}/")
+                paths = page.evaluate(f"""async () => {{
+                  const read = () => performance.getEntriesByType('resource').map(e => new URL(e.name).pathname);
+                  const deadline = performance.now() + 10000;
+                  while (read().length < {count} && performance.now() < deadline)
+                    await new Promise(resolve => setTimeout(resolve, 50));
+                  return read();
+                }}""")
+            finally:
+                browser.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(5)
+    assert len(paths) == count and f"/r{count - 1}" in paths, (len(paths), paths[-3:])
 
 
 def test_a_clip_the_test_left_is_named_and_one_already_there_is_not():

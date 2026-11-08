@@ -171,6 +171,13 @@ Playwright itself); check `window.__pointerLockStandIn.armed()` before a
 right press. `tests/test_browser_guard.py` scans every launch path, and every
 browser-lane test fails, freeing the cursor, if it leaves the cursor clipped.
 
+The same door raises Chromium's resource-timing buffer in every page. By default
+Chromium keeps 250 entries and silently drops the rest, and the app loads about
+260 at startup once its database has attempts (2026-11-08). A probe that waits
+for one request's `performance.getEntriesByType('resource')` entry can rely on
+it; one that wants only its own gesture's requests calls
+`performance.clearResourceTimings()` first.
+
 ## One budget across worktrees
 
 A merge check (or `--all`) takes one of two OS-lock slots before creating any
