@@ -1554,7 +1554,10 @@ first), **Top [[ghost]]s** (each player's best for a [[strategy]], with its plac
 scene's life and a name only once typing stops or on Enter; Add draws that [[ghost]] into the stage
 from the next picture, and a [[ghost]] the lab cannot draw shows its reason. **HUD** (kept per
 viewer) leaves the game's on-screen counters and timer out of every picture, the one on screen at
-once. The **Cinematic** row's [[cinematic camera]]s (Front, Side, Orbit, Chase, Overhead, Tripod)
+once. **Mario** beside it (for this visit only) leaves the stage's Mario out of every picture the
+lab draws again, his shadow and what he holds too, so only the [[stage ghost]]s show; the lab then
+draws the recorded camera's picture again from that camera, the same picture without him, and a
+level load or a menu, which it cannot draw again, keeps him and says so. The **Cinematic** row's [[cinematic camera]]s (Front, Side, Orbit, Chase, Overhead, Tripod)
 follow Mario or a [[stage ghost]] along his path. The [[tilt and lens]] row turns and zooms whichever
 camera is on screen. Under the camera controls, the **Cameras** strip keeps [[camera preset]]s in
 slots 1-9, and the block under it holds the [[Play speed]], the **Action** row and the [[camera path]]
@@ -1622,7 +1625,7 @@ its music and sound effects (why, with its numbers, goes to the logs). Each
 What the [[scene viewer]] showed while **Record** was on, kept by the page as
 one entry per screen refresh: the [[frame]] Play's clock was at (or the one on
 screen while paused), the camera asked for and the camera the server drew
-(recorded, free, a [[ghost's view]], a rig), the HUD switch, the [[stage ghost]]s
+(recorded, free, a [[ghost's view]], a rig), the HUD and Mario switches, the [[stage ghost]]s
 drawn, and the sound's switches, volume, mutes and the recorded time it played.
 It holds no pictures: making the [[scene clip]] draws each entry again, so a
 stall while recording never reaches the video. Recordings stop at 30 minutes.

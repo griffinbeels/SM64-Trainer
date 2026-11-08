@@ -120,6 +120,7 @@ def checked_timeline(timeline, frames: int) -> list[dict]:
         entries.append({
             "t_ms": float(t_ms), "scene_frame": frame, "camera": _camera(entry.get("camera")),
             "camera_used": None if used is None else _pose(used), "hud": entry.get("hud", True) is not False,
+            "mario": entry.get("mario", True) is not False,          # version 2; version 1 always drew him
             "ghosts": _refs(entry.get("ghosts") or [], "a timeline entry's ghosts"),
             "play_ms": None if play is None else float(play),
             "sound": {"music": sound.get("music", True) is not False, "effects": sound.get("effects", True) is not False,
@@ -261,7 +262,7 @@ class SceneExports:
             raise ValueError("The export is {version, session, timeline, fps}.")
         from sm64_events.server.scene_lab_api import _lab_module
         reader = _lab_module("scene_export")                   # the recording's format and its one reader
-        if body.get("version") != reader.TIMELINE_VERSION:
+        if body.get("version") not in reader.READABLE:
             raise ValueError(reader.OTHER_VERSION)
         fps = body.get("fps", 60)
         if fps not in FPS_CHOICES:

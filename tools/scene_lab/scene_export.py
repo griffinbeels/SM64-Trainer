@@ -60,7 +60,11 @@ FPS_CHOICES = (30, 60)
 # The scene recording's format (interface G's entries, scenerecord.js RECORDING.version). A recording
 # outlives changes to the viewer, so a reader refuses a version it does not know rather than guessing:
 # a new field that changes what an entry means (a play rate for slow motion, say) is a new version.
-TIMELINE_VERSION = 1
+# Version 2 (2026-11-08) adds "mario": false, the stage's Mario left out of that entry's picture; a
+# version 1 entry has none, so it draws him, as it always did. The page writes TIMELINE_VERSION; the
+# lab reads every version in READABLE.
+TIMELINE_VERSION = 2
+READABLE = (1, 2)
 OTHER_VERSION = ("This recording was made by another version of the Scene viewer, so it cannot be made "
                  "into a video here.")
 NO_RIG_PATH = "The cinematic camera's path could not be read, so its shots show the recorded camera."
@@ -118,7 +122,7 @@ def picture_camera(entry: dict):
 def picture_key(entry: dict) -> str:
     """Two entries with the same key draw the same picture."""
     return json.dumps([entry["scene_frame"], picture_camera(entry), bool(entry.get("hud", True)),
-                       list(entry.get("ghosts") or ())], sort_keys=True)
+                       list(entry.get("ghosts") or ()), entry.get("mario", True) is not False], sort_keys=True)
 
 
 # ---------------------------------------------------------------- the encoder
@@ -317,7 +321,7 @@ def _encoder(job: dict, width: int, height: int, fps: int, sound: Path, rate: in
 def run(job: dict, folder: Path, report, cancelled: threading.Event) -> dict:
     """Makes the video; returns its stats. ExportError with a sentence, or Cancelled."""
     started = time.perf_counter()
-    if job.get("version") != TIMELINE_VERSION:
+    if job.get("version") not in READABLE:
         raise ExportError(OTHER_VERSION)
     entries, fps = job["timeline"], int(job["fps"])
     if fps not in FPS_CHOICES or not entries:
@@ -429,7 +433,9 @@ class _Drawing:
         if refs != drawn_set:
             self.session.set_ghosts(_ghost_set(job, refs), loader)
         try:
-            pending = self.session.begin(entry["scene_frame"], picture_camera(entry), "raw", bool(entry.get("hud", True)))
+            hidden = {} if entry.get("mario", True) is not False else {"mario": False}    # version 2's switch
+            pending = self.session.begin(entry["scene_frame"], picture_camera(entry), "raw", bool(entry.get("hud", True)),
+                                         **hidden)
         except ValueError as error:
             raise ExportError(f"Frame {entry['scene_frame'] + 1} of the recording could not be drawn again: "
                               f"{error}.") from None

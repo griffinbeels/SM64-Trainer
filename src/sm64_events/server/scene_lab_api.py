@@ -69,7 +69,8 @@ that fails its hash.
 Socket protocol. The page sends JSON: {"id", "session", "frame", "camera": null or {"focus":
 xyz, "position": xyz[, "roll", "fov"][, "recorded": weight]} (a camera path's blend toward the
 recorded camera, scene_session.recorded_blend) or {"ghost": ref} or {"rig": {...}}, "encoding":
-"jpeg"|"raw"|"shared"[, "hud": false]} for a picture ({"ghost": ref}: that scene ghost's own
+"jpeg"|"raw"|"shared"[, "hud": false][, "mario": false]} for a picture ("mario": false leaves the
+stage's Mario out, its header then "mario": false; {"ghost": ref}: that scene ghost's own
 recorded camera at this picture, its header's "view" {"ghost", "camera"} the camera drawn; {"rig":
 {"kind", "target", "shot", "height", "radius", "speed", "phase", "side", "tuning"}}: a cinematic
 camera following the stage's Mario or a scene ghost, its header's "rig" what it did,
@@ -682,7 +683,8 @@ class SceneLab:
         loop = asyncio.get_running_loop()
         try:
             pending = await self._run(generation, "begin", message.get("frame"), message.get("camera"),
-                                      message.get("encoding", "jpeg"), message.get("hud", True))
+                                      message.get("encoding", "jpeg"), message.get("hud", True),
+                                      message.get("mario", True))
         except SceneClosed as closed:
             return _answered({"id": ident, "error": str(closed), "closed": True})
         except ValueError as error:
@@ -1182,6 +1184,14 @@ def _mount_preset_routes(router: APIRouter, lab: SceneLab) -> None:
         except ValueError as refused:            # camera_paths.PathError
             raise HTTPException(422, str(refused)) from None
 
+    # Every frame's action of the open scene's Mario or a scene ghost (SceneLab.actions).
+    @router.get("/actions")
+    async def actions(session: int, target: str = Query(default="stage", min_length=1, max_length=512)):
+        try:
+            return await lab.actions(session, target)
+        except SceneClosed as closed:
+            raise HTTPException(409, str(closed)) from None
+
 
 def _mount_job_routes(router: APIRouter, lab: SceneLab, export_options: dict, moment_options: dict) -> None:
     """What runs in a child of its own: a recording made into a video (scene_exports.py), and one frame made into a
@@ -1245,13 +1255,6 @@ def mount_scene_lab(app, config_path, **options) -> SceneLab:
             raise HTTPException(404, str(missing)) from None
         except (ConfigError, SceneRefused) as refused:
             raise HTTPException(409, str(refused)) from None
-
-    @router.get("/actions")
-    async def actions(session: int, target: str = Query(default="stage", min_length=1, max_length=512)):
-        try:
-            return await lab.actions(session, target)
-        except SceneClosed as closed:
-            raise HTTPException(409, str(closed)) from None
 
     @router.post("/close")
     async def close_scene():

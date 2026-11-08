@@ -124,6 +124,7 @@ WORLD_LIMIT = 1e6             # SM64's world fits in +-32768; a camera far outsi
 NO_SCENE = ("This frame has no 3D scene to move around in (a level load, a fade or a menu), "
             "so it shows the recorded camera.")
 NOTHING_DRAWN = "Nothing is drawn there to focus on (sky, or too far away). Pick a surface."
+MARIO_SHOWN = "This picture cannot be drawn again without Mario (a level load, a fade or a menu), so he shows."
 RUN_GAP_WORDS = 16            # changed words this close together travel to the host as one run
 MAX_HOST_RUNS = 65536         # viewer_host.c's MAX_RUNS
 LOOK_AHEAD_STEP = 4           # a free picture this many frames before the last one is a step back
@@ -439,6 +440,7 @@ class PendingPicture:
     view: dict | None = None     # a ghost's view: {"ghost": ref, "camera": the camera drawn, or None}
     rig: dict | None = None      # a cinematic camera: {"kind", "target", "shot", "side", "pulled", "raised"}
     used: dict | None = None     # the camera drawn when the server drew one: {"focus", "position", "roll", "fov"}
+    mario: bool = True           # the stage's Mario is in the picture (False: left out, camera_state.hide_mario)
 
 
 class SceneSession:
@@ -834,20 +836,32 @@ class SceneSession:
         or ReadScreen's own BGR rows bottom-up ("raw")."""
         return self.finish(self.begin(frame, camera, encoding, hud))
 
-    def begin(self, frame: int, camera=None, encoding: str = "jpeg", hud: bool = True) -> PendingPicture:
+    def begin(self, frame: int, camera=None, encoding: str = "jpeg", hud: bool = True,
+              mario: bool = True) -> PendingPicture:
         """picture()'s first half, on the session's thread: everything up to the host (the package
         decode or the evaluator's view, the words the host lacks) and the request written. The host
-        draws it while this thread begins the next picture; finish() collects it."""
+        draws it while this thread begins the next picture; finish() collects it. `mario` False leaves
+        the stage's Mario out of the redraw (camera_state.hide_mario); the recorded camera is then
+        drawn again from its own pose, which redraws its picture exactly. Where the frame cannot be
+        redrawn he shows, and the header's reason says so."""
         index = self._index(frame)
         if encoding not in ENCODINGS:
             raise ValueError("unknown encoding")
         if not isinstance(hud, bool):
             raise ValueError("hud is true or false")
+        if not isinstance(mario, bool):
+            raise ValueError("mario is true or false")
         view, camera = self._ghost_view(index, camera)
         rig_started = time.perf_counter()
         rig, camera = self._rig_view(frame, camera)
         camera, blend_reason = self.recorded_blend(frame, camera)
+        redrawn = not mario and camera is None
+        if redrawn:                                      # the recorded camera, drawn again from its pose
+            pose = self.pose(frame)["pose"]
+            camera = None if pose is None else {key: pose[key] for key in ("focus", "position", "roll", "fov")}
         free = None if camera is None else world_camera(camera)
+        if free is not None and not mario:
+            free = (*free, None, None)[:4] + (True,)
         if free is not None:
             self._ahead_generation += 1          # the look-ahead stops before its next frame
         started = time.perf_counter()
@@ -860,6 +874,8 @@ class SceneSession:
         if rig is not None:                  # the recorded camera when the rig had none or it could not be drawn
             own = rig.pop("reason")
             reason = reason or own
+        if redrawn and not drawn_free:                   # the recorded picture as it was, Mario in it
+            reason = MARIO_SHOWN
         reason = reason or blend_reason
         used =None if not drawn_free else {"focus": camera["focus"], "position": camera["position"],
                                             "roll": camera.get("roll"), "fov": camera.get("fov")}
@@ -874,7 +890,8 @@ class SceneSession:
         cut = cuts[-1] if cuts else None
         pending = PendingPicture(frame, encoding, "free" if drawn_free else "recorded", reason, timings, started,
                                  cut is None or cut.reason is not None, cut and cut.reason,
-                                 ghosts=host_frame.ghosts is not None, view=view, rig=rig, used=used)
+                                 ghosts=host_frame.ghosts is not None, view=view, rig=rig, used=used,
+                                 mario=mario or not drawn_free)
         self._begun.append(pending)
         return pending
 
@@ -916,7 +933,7 @@ class SceneSession:
         return {"frame": pending.frame, "width": picture.width, "height": picture.height, "encoding": encoding,
                 "format": "image/jpeg" if encoding == "jpeg" else "bgr24-bottom-up",
                 "camera": pending.camera, "reason": pending.reason, "sha256": digest,
-                "hud": pending.hud, "hud_reason": pending.hud_reason,
+                "hud": pending.hud, "hud_reason": pending.hud_reason, **({} if pending.mario else {"mario": False}),
                 "payload_bytes": len(payload), "timings": timings, "camera_used": pending.used,
                 **({"ghosts": picture.ghosts} if pending.ghosts else {}),
                 **({"view": pending.view} if pending.view else {}),

@@ -470,7 +470,7 @@ export class SceneLink {
     if (play && this.wanted.kind !== "play") play.moved = true;
     this.wanted = null;
     this.ws.send(JSON.stringify({ id, session: this.scene.session, frame, camera, encoding: this.encoding,
-      ...(this.hud ? {} : { hud: false }) }));
+      ...(this.hud ? {} : { hud: false }), ...(this.mario === false ? { mario: false } : {}) }));
     this.drawing = true;
     this.changed();
   }
@@ -1240,6 +1240,14 @@ export class SceneLink {
     this.changed();
   }
 
+  // The Mario switch: off leaves the stage's Mario out of every picture the lab redraws (the ghosts
+  // stay), the one on screen at once. For this visit only.
+  setMario(on) {
+    this.mario = on;
+    this.want("input");
+    this.changed();
+  }
+
   setLoop(on) {
     this.loop = on;
     try { localStorage.setItem(LOOP_PREFERENCE, on ? "on" : "off"); } catch { /* kept for this visit only */ }
@@ -1561,6 +1569,14 @@ function SpeedControl({ link }) {
   </div>`;
 }
 
+// Beside HUD: the stage's Mario in the pictures, or left out so only the ghosts show.
+function MarioSwitch({ link }) {
+  const shown = link.mario !== false, available = link.freeAvailable;
+  const why = shown ? "Hide the stage's Mario, so only the ghosts show" : "Show the stage's Mario again";
+  return html`<button type="button" aria-pressed=${shown} disabled=${!available}
+    onclick=${() => link.setMario(!shown)} title=${available ? why : link.scene.free_camera.reason}>Mario</button>`;
+}
+
 function CameraBar({ link, tuning, setTuning }) {
   const available = link.freeAvailable, reason = link.scene.free_camera.reason;
   return html`<div class="scene-lab-bar" aria-label="Camera">
@@ -1585,6 +1601,7 @@ function CameraBar({ link, tuning, setTuning }) {
     <button type="button" aria-pressed=${link.hud} onclick=${() => link.setHud(!link.hud)}
         title=${link.hud ? "Hide the lives, coins, stars and timer drawn over the picture"
           : "Show the lives, coins, stars and timer over the picture"}>HUD</button>
+    <${MarioSwitch} link=${link} />
   </div>
   <${CinematicBar} link=${link} tuning=${sceneCameraTuning()} />
   ${available && html`<${LensBar} link=${link} tuning=${sceneCameraTuning()} />`}

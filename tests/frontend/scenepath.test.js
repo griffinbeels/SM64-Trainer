@@ -497,6 +497,36 @@ test("Play follows the path every display frame, and a recording keeps the path'
   }
 });
 
+// ---------------------------------------------------------------- the Mario switch
+
+test("the Mario switch beside HUD asks every picture without the stage's Mario, and Record keeps it", async () => {
+  const { page, socket } = await openScene();
+  const mario = page.getByRole("button", { name: "Mario" });
+  expect(mario.getAttribute("aria-pressed")).toBe("true");
+  expect(mario.previousElementSibling.textContent).toBe("HUD");
+  expect(socket.pictures().at(-1).mario).toBe(undefined);
+  fireEvent.click(mario);
+  await answerAll(socket);
+  expect(mario.getAttribute("aria-pressed")).toBe("false");
+  expect(socket.pictures().at(-1)).toMatchObject({ frame: 0, camera: null, mario: false });
+  fireEvent.click(page.getByRole("button", { name: "Record" }));
+  await displayFrames(socket, 3);
+  fireEvent.click(mario);
+  await answerAll(socket);
+  expect(socket.pictures().at(-1).mario).toBe(undefined);
+  await displayFrames(socket, 3);
+  fireEvent.click(page.getByRole("button", { name: "Stop" }));
+  const sent = await until(() => {
+    const found = fetches.find(([url, method]) => url === "/api/scene-lab/export" && method === "POST");
+    expect(found).toBeTruthy();
+    return JSON.parse(found[2]);
+  });
+  expect(sent.version).toBe(2);
+  const switches = sent.timeline.map((entry) => entry.mario);
+  expect(switches[0]).toBe(false);
+  expect(switches.at(-1)).toBe(true);
+});
+
 // ---------------------------------------------------------------- the step to the next action change
 
 test("an action change is a frame whose action differs from the last known one", () => {
