@@ -4,9 +4,11 @@ The GNU GPL asks that the source come from the same place as the binary
 (GPL v2 section 3; GPL v3 section 6). licenses/third-party-sources.json pins
 every third-party source archive; tools/corresponding_source.py writes them
 into byte-stable archives, and tools/release.py attaches those to every
-release beside its six product assets. Lead decision 2026-11-08: attach to
-every release ("the literal same-place reading"); uploads still wait for
-Griffin. These tests use local files, never the network.
+release beside its six product assets. Griffin chose that over one shared
+upload (2026-11-08): "Attach to each release, that's probably what's easiest
+for the user. They should just have to download the program once and be able
+to update easily from the client forever." These tests use local files, never
+the network.
 """
 import hashlib
 import json
@@ -15,6 +17,9 @@ import sys
 from pathlib import Path
 
 import pytest
+
+from sm64_events.core import release_contract
+from sm64_events.core.release_contract import REQUIRED_ASSETS, select_release
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
@@ -68,6 +73,18 @@ def test_every_release_uploads_the_source_archives_beside_the_six():
     assert everything[6:] == sources.asset_names()
     assert all(re.fullmatch(r"SM64Trainer-third-party-source-[a-z0-9-]+\.tar(\.sha256)?", name)
                for name in everything[6:])
+
+
+def test_a_release_carrying_the_source_archives_still_updates_the_app():
+    """The updater and the installer read only the app's files. The source
+    archives beside them neither block an update nor join one, so a user
+    downloads the program once and updates from inside it ever after."""
+    names = [p.name for p in release.candidate_assets(Path("dist"))]
+    page = {"tag_name": "1.10.0", "prerelease": False,
+            "assets": [{"name": name, "browser_download_url": "https://example.com/" + name}
+                       for name in names]}
+    assert select_release([page], "1.9.1") == page
+    assert sorted(release_contract.release_assets(page)) == sorted(REQUIRED_ASSETS)
 
 
 def _pinned_digests() -> set[str]:
