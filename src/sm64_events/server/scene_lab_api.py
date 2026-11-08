@@ -32,6 +32,8 @@ one reader, and without it this module is never imported and no route is added. 
                                   (server/scene_exports.py)
     POST /api/scene-lab/moment, POST /moment/{id}/write   one frame as a Usamune save state, into a slot of the
                                   running game (server/scene_moments.py; the lab's one write to game memory)
+    GET  /api/scene-lab/slots, /slots/picture/{name}      what the nine slots hold, read only, and a Lab
+                                  write's picture (server/scene_slots.py, the Ghost Lab's save-state strip)
 
 The lab config is a private JSON file of absolute paths: {"rom", "packages" (a folder of
 .sm64scene files), "pj64_plugin", "map" (the free camera's MappingUS.map), and optionally
@@ -518,9 +520,13 @@ class SceneLab:
             from sm64_events.core.paths import slot_library_dir
             from sm64_events.slotlibrary.store import SlotLibrary
             library = SlotLibrary(slot_library_dir())
+        slots = getattr(getattr(self, "moments", None), "slots", None)     # the Ghost Lab's strip (scene_slots.py)
         self.refitter = refit.SlotRefitter(game or (lambda: usamune.attach(None)), library,
-                                           log_file=log_file or refit.log_path())
+                                           log_file=log_file or refit.log_path(),
+                                           on_report=slots.observe_refit if slots is not None else None)
         broadcaster.observe(self.refitter.observe)
+        if slots is not None:
+            broadcaster.observe(slots.observe_event)          # a state_loaded names the slot loaded last
 
     # ------------------------------------------------------------ status, open, close
 

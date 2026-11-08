@@ -1,7 +1,8 @@
 """Save this moment: one frame of a scene as a Usamune save state, into a slot of the running game (lab only).
 
     POST /api/scene-lab/moment {package|attempt|ghost, frame}   -> the built state, or {refused, reason}
-    POST /api/scene-lab/moment/{id}/write {slot: 1..9}    -> {written, slot, ...}, or {refused, reason}
+    POST /api/scene-lab/moment/{id}/write {slot: 1..9[, picture]}    -> {written, slot, ...}, or {refused, reason}
+    GET  /api/scene-lab/slots, /slots/picture/{name}      -> what the nine slots hold, read only (scene_slots.py)
 
 Griffin's words: "Once we build out the infrastructure so that I can select an arbitrary game state and create a
 save state from it, I'll be able to test independently and gather results." `frame` is the package's own frame
@@ -28,8 +29,10 @@ from collections import OrderedDict
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, model_validator
 
+from sm64_events.server.scene_slots import SceneSlots, picture_bytes
 from sm64_events.slotlibrary.usamune import MarioMoved
 from sm64_events.tracking.eventlabel import place_name
 
@@ -71,6 +74,7 @@ class MomentBody(BaseModel):
 
 class WriteBody(BaseModel):
     slot: int = Field(ge=1, le=9)
+    picture: str | None = None      # the page's JPEG of the frame (scene_slots.picture_bytes); untrusted, may be ignored
 
 
 def run_builder(config, path: Path, frame: int, register=lambda child: None) -> tuple[dict, bytes | None]:
@@ -103,11 +107,31 @@ def run_builder(config, path: Path, frame: int, register=lambda child: None) -> 
         return answer, out.read_bytes() if "refused" not in answer else None
 
 
+def _attach_game():
+    """The strip's reader: the running Project64's read-only handle (memory/pj64.py)."""
+    from sm64_events.slotlibrary.usamune import attach
+    return attach(None)
+
+
+def _no_game():
+    """The strip outside the live server (the UI fixture, a test): it never reaches for his running Project64."""
+    from sm64_events.slotlibrary.usamune import Refusal
+    raise Refusal("no Project64 with a running game found")
+
+
+def _his_library():
+    """The Slot Library in his user data, for the strip's reads of which build made a state (has/get only)."""
+    from sm64_events.core.paths import slot_library_dir
+    from sm64_events.slotlibrary.store import SlotLibrary
+    return SlotLibrary(slot_library_dir())
+
+
 class SceneMoments:
-    """The built states a page can still write, and the one build running."""
+    """The built states a page can still write, the one build running, and the save-state strip's reads
+    (`slots`, scene_slots.py), which every write tells what it wrote."""
 
     def __init__(self, lab, *, builder=run_builder, game=None, library=None, backups: Path | None = None,
-                 atlases=None):
+                 atlases=None, slot_run=None):
         self.lab, self.builder, self.game, self.library, self.backups = lab, builder, game, library, backups
         self.built: OrderedDict[str, dict] = OrderedDict()
         self.by_frame: dict[tuple, str] = {}
@@ -117,6 +141,11 @@ class SceneMoments:
         self.child_lock = threading.Lock()
         self.checks: dict[str, bool] = {}          # package path -> its frames need the load check
         self._atlases = atlases
+        # The strip reads the running game only on the live server (main.py's lab, live_on); a fixture or a test
+        # without a `game` of its own gets "not running", so no page under test reads his Project64.
+        live = lab is not None and getattr(lab, "live_on", False)
+        self.slots = SceneSlots(game=game or (_attach_game if live else _no_game), library=library or _his_library,
+                                root=(lambda: lab._lab_root()) if lab is not None else None, run=slot_run)
 
     def _note_child(self, child) -> None:
         with self.child_lock:
@@ -134,12 +163,13 @@ class SceneMoments:
         return self._atlases
 
     def shutdown(self) -> None:
-        """The children this owns, by their handles."""
+        """The children this owns, by their handles, and the strip's reader."""
         with self.child_lock:
             children = (self.child, self.atlas_child)
         for child in children:
             if child is not None and child.poll() is None:
                 child.kill()
+        self.slots.shutdown()
 
     async def _source(self, body: MomentBody) -> tuple[Path, str]:
         api = importlib.import_module("sm64_events.server.scene_lab_api")   # the module in sys.modules, as the routes catch
@@ -246,14 +276,17 @@ class SceneMoments:
         if translation is not None:
             written["translated"] = {"from": translation.source, "to": translation.target,
                                      "words": translation.words(), "removed": len(translation.removed)}
+        self.slots.note_written(memory, slot, written, entry.get("picture"))
         return written
 
-    async def write(self, token: str, slot: int) -> dict:
-        """LookupError: that build is gone. The game's own answer comes back as {refused, reason}."""
+    async def write(self, token: str, slot: int, picture: str | None = None) -> dict:
+        """LookupError: that build is gone. The game's own answer comes back as {refused, reason}. `picture` is the
+        page's JPEG of the frame for the strip: kept when it is one, else ignored (never a refusal)."""
         entry = self.built.get(token)
         if entry is None:
             raise LookupError("That save state is gone. Press the slot again.")
-        return await asyncio.to_thread(self._write_blocking, entry, slot)
+        # The picture rides on a copy of the built entry (kept builds stay as they were for the next press).
+        return await asyncio.to_thread(self._write_blocking, {**entry, "picture": picture_bytes(picture)}, slot)
 
 
 def game_sentence(text: str) -> str:
@@ -284,9 +317,22 @@ def mount_moment_routes(router: APIRouter, moments: SceneMoments) -> None:
     @router.post("/moment/{token}/write")
     async def write_moment(token: str, body: WriteBody):
         try:
-            return await moments.write(token, body.slot)
+            return await moments.write(token, body.slot, body.picture)
         except LookupError as missing:
             raise HTTPException(404, str(missing)) from None
         except ConfigError as refused:
             raise HTTPException(409, str(refused)) from None
+
+    # The Ghost Lab's save-state strip (scene_slots.py): read only, polled by the page.
+    @router.get("/slots")
+    async def slots():
+        return await asyncio.to_thread(moments.slots.read_blocking)
+
+    @router.get("/slots/picture/{name}")
+    def slot_picture(name: str):
+        path = moments.slots.pictures.path(name)
+        if path is None:
+            raise HTTPException(404, "No such picture.")
+        return FileResponse(path, media_type="image/jpeg",
+                            headers={"Cache-Control": "public, max-age=31536000, immutable"})
 
