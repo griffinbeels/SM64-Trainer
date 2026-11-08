@@ -7,13 +7,16 @@
 //
 // A camera path is a list of keys. Each key is a camera on a frame of the scene: where it stands and
 // looks, its tilt and lens ({focus, position, roll, fov}, as a camera preset keeps one), or null for
-// the recorded camera, the one the player saw. Between two keys the camera follows a smooth curve:
-// each key eases in and out by default (the camera slows to its key and away from it), and a key with
-// ease off lets the camera pass through it without slowing. Where one of the two keys is the
-// recorded camera, the camera blends between the other key and the game's own moving camera (the
-// lab draws the blend: {..., recorded: weight}, scene_session.recorded_blend), so a path can ease
-// out of the game's camera and back into it. Before the first key and after the last the camera
-// stays on that key.
+// the recorded camera, the one the player saw. Between two keys the camera follows a smooth curve
+// that keeps its speed through a key (the lead's correction, 2026-11-08: Xander's default stops at
+// every key, which reads as jerky in a video): it slows only into the path's first and last keys,
+// into and out of a hold, and at a key whose `ease` is on. Where one of the two keys is the recorded
+// camera, the camera blends between the other key and the game's own moving camera (the lab draws
+// the blend: {..., recorded: weight}, scene_session.recorded_blend), so a path can ease out of the
+// game's camera and back into it. A key's `aim` ("stage" or a stage ghost's ref; null: the point it
+// keeps) turns its focus onto that runner as he moves: the camera asks {..., aim: {target: weight}}
+// and the lab puts the focus that share of the way to his eyes on his path (scene_session.aim_blend).
+// Before the first key and after the last the camera stays on that key.
 //
 // The path is a pure function of its own clock, so Play, a step, a seek and an export of the same
 // moment draw the same camera. Its clock, q, runs with the scene's recorded time (sceneclock.js) in
@@ -47,10 +50,20 @@ export const keyCamera = (camera) => (isPose(camera) ? { focus: [...camera.focus
   roll: camera.roll ?? 0, fov: camera.fov ?? null } : null);
 
 // A key as the path keeps it: every field filled.
-export function makeKey({ frame, camera = null, ease = true, hold = 0, speed = 1 }) {
-  return { frame: Math.max(0, Math.round(frame)), camera: keyCamera(camera), ease: ease !== false,
-    hold: Number.isFinite(hold) ? hold : 0, speed: PLAY_SPEEDS.includes(speed) ? speed : 1 };
+export function makeKey({ frame, camera = null, ease = false, hold = 0, speed = 1, aim = null }) {
+  return { frame: Math.max(0, Math.round(frame)), camera: keyCamera(camera), ease: ease === true,
+    hold: Number.isFinite(hold) ? hold : 0, speed: PLAY_SPEEDS.includes(speed) ? speed : 1,
+    aim: typeof aim === "string" && aim ? aim : null };
 }
+
+// Whether the camera slows to a stop at key `j` of the played keys whatever its ease: the path's first
+// and last, and either end of a hold.
+export function alwaysSettles(keys, j) {
+  return j === 0 || j === keys.length - 1 || keys[j].hold > 0 || (keys[j + 1]?.hold ?? 0) > 0;
+}
+
+// Whether it slows to a stop there: always, or because the key's ease is on.
+export const settles = (keys, j) => alwaysSettles(keys, j) || keys[j].ease;
 
 // The keys a scene of `frameCount` pictures plays, in order: by frame, and keys on one frame in the
 // order they were made. The first key on a frame holds nothing; each later one on that frame is a hold
@@ -170,12 +183,12 @@ function keyNumbers(keys) {
   });
 }
 
-// How fast each number leaves key j (per ms of the path's clock): 0 where it eases, at either end of the
-// path, beside the recorded camera or beside a key on the same moment; else the slope through the keys
-// either side of it, so the camera passes through without slowing.
+// How fast each number leaves key j (per ms of the path's clock): 0 where the camera settles there
+// (settles: the path's ends, a hold's ends, Ease on) or beside the recorded camera; else the slope
+// through the keys either side of it, so the camera passes through without slowing.
 function slopes(keys, numbers, keyQ, j) {
   const before = j - 1, after = j + 1;
-  const smooth = !keys[j].ease && numbers[j] && numbers[before] && numbers[after]
+  const smooth = !settles(keys, j) && numbers[j] && numbers[before] && numbers[after]
     && keyQ[after] > keyQ[j] && keyQ[j] > keyQ[before];
   return smooth ? numbers[after].map((value, i) => (value - numbers[before][i]) / (keyQ[after] - keyQ[before]))
     : numbers[j]?.map(() => 0);
@@ -183,27 +196,43 @@ function slopes(keys, numbers, keyQ, j) {
 
 const smoothstep = (u) => u * u * (3 - 2 * u);
 
+// The share of the focus each runner holds `u` of the way from key j to key j + 1 ({target: weight}, the
+// rest the keys' own points): each key's runner fades out as the next one's fades in.
+function aimsAt(keys, j, u) {
+  const weights = {}, add = (target, weight) => {
+    if (target && weight > 0) weights[target] = (weights[target] || 0) + weight;
+  };
+  add(keys[j].aim, 1 - smoothstep(u));
+  if (keys[j + 1]) add(keys[j + 1].aim, smoothstep(u));
+  return weights;
+}
+
+const aimed = (camera, weights) => (camera && Object.keys(weights).length ? { ...camera, aim: weights } : camera);
+
 // The camera at `q` on the path's clock: a camera ({focus, position, roll, fov}), a camera blended with
-// the recorded one ({..., recorded: weight 0..1}, the lab blends), or null for the recorded camera.
-// `keyQ` is the clock's. Cubic Hermite between two camera keys, so a key is met exactly at its moment
-// and the camera moves smoothly between.
+// the recorded one ({..., recorded: weight 0..1}, the lab blends), with its focus turned toward a runner
+// ({..., aim: {target: weight}}, the lab blends), or null for the recorded camera. `keyQ` is the
+// clock's. Cubic Hermite between two camera keys, so a key is met exactly at its moment and the
+// camera moves smoothly between.
 export function pathCamera(keys, keyQ, q) {
   if (!keys.length) return null;
   const numbers = keyNumbers(keys);
   const fov = keys.some((key) => key.camera && key.camera.fov != null) ? GAME_FOV : null;
   const own = (j) => (keys[j].camera ? cameraFrom(numbers[j], keys[j].camera.fov ?? fov) : null);
   const last = keys.length - 1;
-  if (q <= keyQ[0]) return own(0);
-  if (q >= keyQ[last]) return own(last);
+  if (q <= keyQ[0]) return aimed(own(0), aimsAt(keys, 0, 0));
+  if (q >= keyQ[last]) return aimed(own(last), aimsAt(keys, last, 0));
   let j = 0;
   while (j < last - 1 && keyQ[j + 1] <= q) j += 1;
   const span = keyQ[j + 1] - keyQ[j], u = span > 0 ? clamp((q - keyQ[j]) / span, 0, 1) : 1;
-  if (!keys[j].camera || !keys[j + 1].camera) return recordedBlend(own(j), own(j + 1), u);
+  if (!keys[j].camera || !keys[j + 1].camera) {
+    return aimed(recordedBlend(own(j), own(j + 1), u), aimsAt(keys, keys[j].camera ? j : j + 1, 0));
+  }
   const p0 = numbers[j], p1 = numbers[j + 1], m0 = slopes(keys, numbers, keyQ, j), m1 = slopes(keys, numbers, keyQ, j + 1);
   const u2 = u * u, u3 = u2 * u;
   const h00 = 2 * u3 - 3 * u2 + 1, h10 = u3 - 2 * u2 + u, h01 = -2 * u3 + 3 * u2, h11 = u3 - u2;
   const moved = p0.map((value, i) => h00 * value + h10 * span * m0[i] + h01 * p1[i] + h11 * span * m1[i]);
-  return cameraFrom(moved, keys[j].camera.fov ?? keys[j + 1].camera.fov ?? fov);
+  return aimed(cameraFrom(moved, keys[j].camera.fov ?? keys[j + 1].camera.fov ?? fov), aimsAt(keys, j, u));
 }
 
 // `u` of the way from camera `from` to camera `to` where one of them (null) is the recorded camera: the

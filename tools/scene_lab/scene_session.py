@@ -856,7 +856,9 @@ class SceneSession:
         view, camera = self._ghost_view(index, camera)
         rig_started = time.perf_counter()
         rig, camera = self._rig_view(frame, camera)
+        camera, aim_reason = self.aim_blend(frame, camera)
         camera, blend_reason = self.recorded_blend(frame, camera)
+        blend_reason = blend_reason or aim_reason
         redrawn = not mario and camera is None
         if redrawn:                                      # the recorded camera, drawn again from its pose
             pose = self.pose(frame)["pose"]
@@ -1355,6 +1357,48 @@ class SceneSession:
                 self._walls_at(place)
         except Exception as error:  # noqa: BLE001 - the first camera that needs it says why
             log.warning("scene viewer: warming the free camera failed: %s", error)
+
+    def aim_blend(self, frame: int, camera) -> tuple[dict | None, str | None]:
+        """A camera path's camera whose keys aim at a runner (ui/components/scenepath.js): {..., "aim":
+        {target: weight}} ("stage" or a scene ghost's ref, weights 0 to 1 that sum to at most 1) has its
+        focus moved that share of the way to each runner's eyes on his lightly smoothed path at frame
+        position `frame` (camera_rig.Track.aim, what the cinematic cameras aim at). Returns the camera
+        without "aim" and None; a runner with no place here (his path not read yet, another area, a
+        ghost gone) keeps the camera's own focus for its share, and the reason says why. Any other
+        camera comes back as it is. ValueError for weights that are not that."""
+        if not (isinstance(camera, dict) and "aim" in camera):
+            return camera, None
+        weights = camera["aim"]
+        if not (isinstance(weights, dict) and len(weights) <= stage_ghosts.MAX_GHOSTS + 1
+                and all(isinstance(target, str) and 0 < len(target) <= 512 and _number(weight) and 0 <= weight <= 1
+                        for target, weight in weights.items()) and sum(weights.values()) <= 1 + 1e-6):
+            raise ValueError("a camera's aim is {runner: weight}, weights 0 to 1 summing to at most 1")
+        own = {key: value for key, value in camera.items() if key != "aim"}
+        focus, reason = np.array(own.get("focus"), np.float64), None
+        if focus.shape != (3,):
+            raise ValueError("camera focus must be three finite world coordinates")
+        moved = focus.copy()
+        for target, weight in weights.items():
+            point, missing = self._aim_point(frame, target)
+            if point is None:
+                reason = reason or missing
+            else:
+                moved += weight * (point - focus)
+        if math.dist(moved, own["position"]) >= 1.0:          # never on its own place
+            own["focus"] = [float(value) for value in moved]
+        return own, reason
+
+    def _aim_point(self, frame: int, target: str):
+        """A runner's eyes on his lightly smoothed path at frame position `frame` (the point a cinematic
+        camera aims at), or None and why."""
+        runner = self._runner(target)
+        if isinstance(runner, str):
+            return None, runner
+        if frame >= len(runner):
+            return None, camera_rig.PATH_PENDING
+        track = self.rigs.track(camera_rig.Rig.of({"kind": "front", "target": target}, self._shipped_rig_tuning()), runner)
+        point = track.aim[frame]
+        return (point, None) if np.isfinite(point).all() else (None, runner.reason)
 
     def recorded_blend(self, frame: int, camera) -> tuple[dict | None, str | None]:
         """A camera path's camera on its way into or out of the recorded camera (ui/components/

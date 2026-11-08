@@ -104,6 +104,31 @@ def test_the_stage_and_a_ghost_answer_every_frames_action_in_plain_words(config,
         session.close()
 
 
+def test_a_path_camera_aimed_at_mario_looks_at_his_eyes_on_his_path(config, recording):
+    """A camera path's key can aim at a runner (the lead's correction, 2026-11-08): {..., "aim": {"stage": w}}
+    has its focus moved that share of the way to his eyes on his lightly smoothed path, the point a
+    cinematic camera aims at (here his straight run: exactly his place, eye height up). A ghost not in
+    the scene keeps the camera's own focus and says why; weights that sum past 1 are refused."""
+    session = _session(config, recording)
+    try:
+        session.prepare_path().result()
+        eye = session._shipped_rig_tuning()["marioHeight"][0]
+        own = {"focus": [0.0, 0.0, 0.0], "position": [0.0, 300.0, 1200.0], "roll": 0, "fov": 45.0}
+        for position in (2, 4):
+            header, _ = session.picture(position, {**own, "aim": {"stage": 1.0}}, "raw")
+            x, y, z, _yaw = POSES[position]
+            assert header["camera_used"]["focus"] == pytest.approx([x, y + eye, z]) and header["reason"] is None
+            assert header["camera_used"]["position"] == own["position"]
+        half, _ = session.picture(4, {**own, "aim": {"stage": 0.5}}, "raw")
+        assert half["camera_used"]["focus"] == pytest.approx([POSES[4][0] / 2, (POSES[4][1] + eye) / 2, POSES[4][2] / 2])
+        gone, _ = session.picture(4, {**own, "aim": {"nobody": 1.0}}, "raw")
+        assert gone["camera_used"]["focus"] == own["focus"] and gone["reason"] == stage_ghosts.VIEW_GONE
+        with pytest.raises(ValueError, match="aim"):
+            session.picture(4, {**own, "aim": {"stage": 0.8, "nobody": 0.8}}, "raw")
+    finally:
+        session.close()
+
+
 def test_the_route_answers_every_frames_action_once_his_path_is_read(config, recording, tmp_path):
     (tmp_path / "packages").mkdir()
     (tmp_path / "packages" / "scene.sm64scene").write_bytes(recording["package"].read_bytes())

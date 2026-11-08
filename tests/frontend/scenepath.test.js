@@ -8,7 +8,7 @@
 import { h } from "preact";
 import { render, cleanup, fireEvent, within } from "@testing-library/preact";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { HOLD, makeKey, orderedKeys, pathCamera, pathClock } from "../../src/sm64_events/ui/components/scenepath.js";
+import { HOLD, makeKey, orderedKeys, pathCamera, pathClock, settles } from "../../src/sm64_events/ui/components/scenepath.js";
 import { SceneViewer } from "../../src/sm64_events/ui/components/sceneviewer.js";
 import { SceneSound } from "../../src/sm64_events/ui/components/sceneaudio.js";
 import { actionChanges, actionWords, changeFrom } from "../../src/sm64_events/ui/components/sceneactions.js";
@@ -53,17 +53,42 @@ test("before the first key and after the last, the camera stays on them", () => 
   expect(path().at(100)).toBe(null);
 });
 
-test("ease slows the camera into and out of a key; with ease off it passes through", () => {
-  const speedAt = (p, q) => Math.hypot(...p.at(q + 0.5).position.map((value, i) => value - p.at(q - 0.5).position[i]));
-  const eased = path({ frame: 0, camera: A }, { frame: 15, camera: B }, { frame: 30, camera: C });
-  const through = path({ frame: 0, camera: A }, { frame: 15, camera: B, ease: false }, { frame: 30, camera: C });
+const speedAt = (p, q) => Math.hypot(...p.at(q + 0.5).position.map((value, i) => value - p.at(q - 0.5).position[i]));
+
+test("the camera glides through a middle key; it slows only at the path's ends and where Ease is on", () => {
+  // The lead's correction (2026-11-08): stopping at every key reads as jerky in a video.
+  const through = path({ frame: 0, camera: A }, { frame: 15, camera: B }, { frame: 30, camera: C });
+  const eased = path({ frame: 0, camera: A }, { frame: 15, camera: B, ease: true }, { frame: 30, camera: C });
   const middle = TIMES[15];
-  expect(speedAt(eased, middle)).toBeLessThan(0.01);                 // stopped at B
   expect(speedAt(through, middle)).toBeGreaterThan(1);               // still moving at B
   expect(same(through.at(middle), B)).toBe(true);                    // and still meets it
+  expect(speedAt(eased, middle)).toBeLessThan(0.01);                 // Ease on: stopped at B
   // Leaving the first key and arriving at the last, both slow down to rest.
   expect(speedAt(through, 0.5)).toBeLessThan(0.05);
   expect(speedAt(through, TIMES[30] - 0.5)).toBeLessThan(0.05);
+  // Either end of a hold settles too: into the frozen frame's swoop and out of it again.
+  const held = path({ frame: 0, camera: A }, { frame: 10, camera: B }, { frame: 10, camera: C, hold: 1000 },
+    { frame: 20, camera: A }, { frame: 30, camera: B });
+  const [, start, end, after] = held.clock.keyQ;
+  expect(speedAt(held, start)).toBeLessThan(0.05);
+  expect(speedAt(held, end)).toBeLessThan(0.05);
+  expect(speedAt(held, after)).toBeGreaterThan(1);                   // the next middle key glides again
+  expect(held.keys.map((_, j) => settles(held.keys, j))).toEqual([true, true, true, false, true]);
+});
+
+test("a key can aim at a runner: the camera asks the lab to turn its focus that share of the way to him", () => {
+  const p = path({ frame: 0, camera: A, aim: "stage" }, { frame: 15, camera: B, aim: "stage" },
+    { frame: 30, camera: C, aim: "ghost:7" }, );
+  expect(p.at(0).aim).toEqual({ stage: 1 });                         // the first key's runner
+  expect(p.at(TIMES[8]).aim).toEqual({ stage: 1 });                  // both keys follow Mario: all of the focus
+  const between = p.at((TIMES[15] + TIMES[30]) / 2).aim;             // from Mario to the ghost, crossing over
+  expect(between.stage).toBeCloseTo(0.5, 6);
+  expect(between["ghost:7"]).toBeCloseTo(0.5, 6);
+  expect(p.at(TIMES[30]).aim).toEqual({ "ghost:7": 1 });
+  const own = path({ frame: 0, camera: A }, { frame: 30, camera: B, aim: "stage" });
+  expect(own.at(TIMES[15] / 2).aim.stage).toBeLessThan(0.5);         // easing from its own point toward him
+  expect(own.at(0).aim).toBe(undefined);                             // its own point: nothing to ask
+  expect(makeKey({ frame: 3, camera: A }).aim).toBe(null);
 });
 
 test("into and out of the recorded camera: a smooth blend, and the recorded camera itself beyond", () => {
@@ -292,14 +317,22 @@ test("+ Key keeps the frame and the camera on screen; from the Recorded camera, 
   const { page, socket, block } = await openScene();
   fireEvent.click(block.getByRole("button", { name: "Key" }));      // the Recorded camera on frame 1
   await until(() => expect(puts().length).toBe(1));
-  expect(puts()[0]).toEqual([{ frame: 0, camera: null, ease: true, hold: 0, speed: 1 }]);
+  expect(puts()[0]).toEqual([{ frame: 0, camera: null, ease: false, hold: 0, speed: 1, aim: null }]);
   fireEvent.click(page.getByRole("button", { name: "Free camera" }));
   await answerAll(socket);
   for (let k = 0; k < 10; k++) await step(socket, page, "ArrowRight");
   fireEvent.click(block.getByRole("button", { name: "Key" }));
   await until(() => expect(puts().length).toBe(2));
-  expect(puts()[1]).toEqual([{ frame: 0, camera: null, ease: true, hold: 0, speed: 1 },
-    { frame: 10, camera: { focus: POSE.focus, position: POSE.position, roll: 0, fov: 45 }, ease: true, hold: 0, speed: 1 }]);
+  expect(puts()[1]).toEqual([{ frame: 0, camera: null, ease: false, hold: 0, speed: 1, aim: null },
+    { frame: 10, camera: { focus: POSE.focus, position: POSE.position, roll: 0, fov: 45 }, ease: false, hold: 0, speed: 1,
+      aim: null }]);
+  // Its row: Aim chooses where its camera looks, and the path's first key always slows (Ease fixed on).
+  const aim = block.getByRole("combobox", { name: "Aim of the key on frame 11" });
+  expect([...aim.options].map((option) => option.textContent)).toEqual(["Its own point", "Mario"]);
+  fireEvent.change(aim, { target: { value: "stage" } });
+  await until(() => expect(puts().length).toBe(3));
+  expect(puts()[2][1].aim).toBe("stage");
+  expect(block.queryByRole("combobox", { name: "Aim of the key on frame 1" })).toBe(null);   // the recorded camera's
   await until(() => expect(block.getByRole("button", { name: "Frame 11" })).toBeTruthy());
   expect(page.container.querySelector(".scene-lab-path-keys .is-here")?.textContent).toContain("Frame 11");
 });

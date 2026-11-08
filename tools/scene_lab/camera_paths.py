@@ -4,8 +4,10 @@ in the lab folder, so they survive restarts.
 Griffin, 2026-11-08: "evaluate https://github.com/MikeXander/SM64Scripts to see what camera techniques
 / methods we could add + support from this tool". A path is a list of keys (ui/components/
 scenepath.js owns what they mean): each key a camera on a frame of the scene, {"frame", "camera",
-"ease", "hold", "speed"}, its camera one the free camera draws ({focus, position, roll, fov},
-scene_session.world_camera checks it) or null for the recorded camera. A camera's coordinates belong
+"ease", "hold", "speed", "aim"}, its camera one the free camera draws ({focus, position, roll, fov},
+scene_session.world_camera checks it) or null for the recorded camera, its aim null (its own focus),
+"stage" (Mario) or a scene ghost's ref (which lasts while that ghost is in the scene; a key saved
+before aims existed reads as null). A camera's coordinates belong
 to one area of one level, so the file keeps one path per "level:area", as camera_presets.py keeps one
 set of slots; a key's frame counts from the first frame of whichever scene plays it.
 
@@ -37,6 +39,7 @@ MAX_KEYS = 64                     # scenepath.js MAX_KEYS
 MAX_FRAME = 1_000_000
 SPEEDS = (1, 0.5, 0.25)           # scenepath.js PLAY_SPEEDS
 MAX_HOLD_MS = 60000               # scenepath.js HOLD.maxMs
+MAX_AIM = 512                     # a ghost's ref, as the scene's ghost set takes it
 MAX_FILE_BYTES = 4 << 20
 _AREA_KEY = re.compile(r"(\d{1,3}):(\d{1,3})")
 KEY_FIELDS = {"frame", "camera", "ease", "hold", "speed"}
@@ -53,9 +56,11 @@ def _number(value) -> bool:
 
 
 def checked_key(key) -> dict:
-    if not isinstance(key, dict) or set(key) != KEY_FIELDS:
-        raise PathError("Each key is {frame, camera, ease, hold, speed}.")
-    frame, ease, hold, speed = key["frame"], key["ease"], key["hold"], key["speed"]
+    if not isinstance(key, dict) or set(key) - {"aim"} != KEY_FIELDS:
+        raise PathError("Each key is {frame, camera, ease, hold, speed, aim}.")
+    frame, ease, hold, speed, aim = key["frame"], key["ease"], key["hold"], key["speed"], key.get("aim")
+    if aim is not None and not (isinstance(aim, str) and 0 < len(aim) <= MAX_AIM):
+        raise PathError('A key aims at its own point (null), "stage" (Mario) or a ghost in the scene.')
     if type(frame) is not int or not 0 <= frame <= MAX_FRAME:
         raise PathError("A key's frame is a whole number from 0.")
     if not isinstance(ease, bool):
@@ -68,7 +73,7 @@ def checked_key(key) -> dict:
         camera = None if key["camera"] is None else camera_presets.checked_camera(key["camera"])
     except camera_presets.PresetError as problem:
         raise PathError(str(problem)) from None
-    return {"frame": frame, "camera": camera, "ease": ease, "hold": float(hold), "speed": speed}
+    return {"frame": frame, "camera": camera, "ease": ease, "hold": float(hold), "speed": speed, "aim": aim}
 
 
 def checked_keys(keys) -> list[dict]:

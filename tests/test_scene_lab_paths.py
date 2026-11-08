@@ -29,8 +29,8 @@ WIDE = {"focus": [100.0, 200.0, -300.0], "position": [100.0, 900.0, 1700.0], "ro
 LOW = {"focus": [-50.0, 0.0, 10.0], "position": [400.0, 20.0, 10.0], "roll": -1200, "fov": 30.5}
 
 
-def key(frame, camera=WIDE, ease=True, hold=0.0, speed=1):
-    return {"frame": frame, "camera": camera, "ease": ease, "hold": hold, "speed": speed}
+def key(frame, camera=WIDE, ease=True, hold=0.0, speed=1, aim=None):
+    return {"frame": frame, "camera": camera, "ease": ease, "hold": hold, "speed": speed, "aim": aim}
 
 
 def test_the_path_in_jsdom():
@@ -43,7 +43,8 @@ def store(tmp_path):
 
 
 def test_each_level_and_area_keeps_its_own_path_across_a_restart(store, tmp_path):
-    first = [key(3, WIDE), key(40, None, ease=False), key(40, LOW, hold=2000.0), key(90, LOW, speed=0.25)]
+    first = [key(3, WIDE, aim="stage"), key(40, None, ease=False), key(40, LOW, hold=2000.0, aim="ghost:4"),
+             key(90, LOW, speed=0.25)]
     store.replace(9, 1, first)
     store.replace(9, 2, [key(1, LOW)])
     again = camera_paths.CameraPaths(tmp_path / camera_paths.FILE_NAME)     # the next server
@@ -53,6 +54,9 @@ def test_each_level_and_area_keeps_its_own_path_across_a_restart(store, tmp_path
     again.replace(9, 2, [])
     document = json.loads((tmp_path / camera_paths.FILE_NAME).read_text(encoding="utf-8"))
     assert document == {"version": 1, "areas": {"9:1": first}}
+    # A key saved before keys could aim reads back looking at its own point.
+    older = {name: value for name, value in key(5).items() if name != "aim"}
+    assert camera_paths.checked_keys([older]) == [key(5)]
 
 
 @pytest.mark.parametrize(("keys", "words"), [
@@ -64,6 +68,8 @@ def test_each_level_and_area_keeps_its_own_path_across_a_restart(store, tmp_path
     ([key(1, hold=-5)], "holds"),
     ([key(1, hold=600000)], "holds"),
     ([key(1, ease="yes")], "ease"),
+    ([key(1, aim="")], "aims"),
+    ([key(1, aim=7)], "aims"),
     ([key(n) for n in range(65)], "at most 64"),
 ])
 def test_a_path_it_refuses_names_why_and_changes_nothing(store, tmp_path, keys, words):
@@ -157,7 +163,7 @@ def test_a_recording_of_a_path_exports_the_same_cameras(config, recording, tmp_p
     from test_scene_export import _app, _body, _direct, _finished
     from test_scene_lab_stage_ghosts import Loader
     moments = [(1, LOW), (1, {**LOW, "position": [410.0, 25.0, 12.0]}), (2, {**WIDE, "recorded": 0.4}),
-               (3, {**WIDE, "recorded": 0.9}), (4, None)]
+               (3, {**WIDE, "recorded": 0.9}), (3, {**WIDE, "aim": {"stage": 0.6}, "recorded": 0.2}), (4, None)]
     entries = [{"t_ms": k * 1000 / 60, "scene_frame": frame, "camera": camera, "camera_used": None, "hud": True,
                 "ghosts": [], "play_ms": None, "sound": {"music": True, "effects": True, "volume": 1.0, "muted": False,
                                                         "ghost_mutes": []}}
@@ -165,7 +171,7 @@ def test_a_recording_of_a_path_exports_the_same_cameras(config, recording, tmp_p
     with TestClient(_app(tmp_path, {"scene.sm64scene": recording["package"].read_bytes()}, recording["rom"],
                          Loader({}))) as http:
         opened = http.post("/api/scene-lab/open", json={"package": "scene.sm64scene"}).json()
-        job = http.post("/api/scene-lab/export", json=_body(opened, entries, duration_ms=5 * 1000 / 60)).json()["job"]
+        job = http.post("/api/scene-lab/export", json=_body(opened, entries, duration_ms=len(entries) * 1000 / 60)).json()["job"]
         status = _finished(http, job)
     assert status["state"] == "done", status
     made = json.loads(Path(status["path"]).read_text(encoding="utf-8"))

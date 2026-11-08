@@ -8,8 +8,9 @@
 // camera's, a cinematic camera's or a ghost's view as the lab drew it, the path's own, or, from the
 // Recorded camera, the recorded camera itself, which the path then eases out of and back into
 // (scenepath.js owns what a key means). Each key can be jumped to (the scene pauses on its frame
-// and the path shows its camera), replaced with the camera on screen, deleted, and made to pass
-// through without slowing (Ease off).
+// and the path shows its camera), replaced with the camera on screen, deleted, made to slow to a stop
+// (Ease; the camera glides through a middle key otherwise), and aimed at Mario or a stage ghost
+// (Aim; + Key from a cinematic camera aims at the runner it follows).
 //
 // A path's coordinates belong to one area of one level, so each course and area keeps one path, as
 // it keeps its nine camera presets (scenepresets.js placeOf): the block shows the path of the area the
@@ -27,7 +28,8 @@ import { getJSON, send } from "../api.js";
 import { Icon } from "./icons.js";
 import { ActionStep } from "./sceneactions.js";
 import { recordedTimes } from "./sceneclock.js";
-import { HOLD, MAX_KEYS, PLAY_SPEEDS, makeKey, orderedKeys, pathCamera, pathClock } from "./scenepath.js";
+import { HOLD, MAX_KEYS, PLAY_SPEEDS, alwaysSettles, makeKey, orderedKeys, pathCamera, pathClock } from "./scenepath.js";
+import { ghostName } from "./sceneghosts.js";
 
 const html = htm.bind(h);
 const ROOT = "/api/scene-lab/camera-paths";
@@ -247,10 +249,10 @@ export function PathBar({ link }) {
   const save = (next) => { paths.write(key, next); changedKeys(link); };
   async function add() {
     if (stored.length >= MAX_KEYS) return link.sayBriefly(`A path holds at most ${MAX_KEYS} keys.`);
-    const frame = link.frame, got = await cameraForKey(link);
+    const frame = link.frame, got = await cameraForKey(link), aim = link.rig?.target ?? null;   // a rig aims at its runner
     if (!got || paths.of(key) !== path) return;
     const held = stored.some((one) => one.frame === frame);     // a second key on a frame is a hold
-    save([...stored, makeKey({ frame, camera: got.camera, hold: held ? HOLD.ms : 0 })]);
+    save([...stored, makeKey({ frame, camera: got.camera, hold: held ? HOLD.ms : 0, aim: got.camera ? aim : null })]);
   }
   async function replace(index) {
     const got = await cameraForKey(link);
@@ -266,8 +268,9 @@ export function PathBar({ link }) {
     if (clock) link.pathHeld = { keys, frame: one.frame, q: clock.keyQ[index] };
     if (!link.pathOn) usePath(link, true, time);
   }
+  // The note is one line, cut short with its whole sentence on hover, so a longer one never moves the row.
   return html`<div class="scene-lab-path" role="group" aria-label="Camera path">
-    <div class="scene-lab-bar">
+    <div class="scene-lab-bar" aria-label="Path">
       <span class="scene-lab-rigs-name">Path</span>
       <button type="button" aria-pressed=${!!link.pathOn} disabled=${!usable || !keys.length}
           title=${keys.length ? "Show the camera path: the camera moves through its keys as the scene plays"
@@ -276,12 +279,13 @@ export function PathBar({ link }) {
       <button type="button" disabled=${!usable} onclick=${add}
           title="Add a key: this frame and the camera on screen (from the Recorded camera, the recorded camera itself)">
         <${Icon} name="plus" size=${13} /> Key</button>
-      <p class=${`scene-lab-hint${note.bad ? " is-bad" : ""}`} role=${note.bad ? "status" : null}>${note.text}</p>
+      <p class=${`scene-lab-hint scene-lab-path-note${note.bad ? " is-bad" : ""}`} role=${note.bad ? "status" : null}
+        title=${note.text}>${note.text}</p>
     </div>
     ${stored.length > 0 && html`<ol class="scene-lab-path-keys">
       ${stored.map((one, index) => html`<${KeyRow} key=${index} link=${link} one=${one} index=${index}
         held=${index > 0 && stored[index - 1].frame === one.frame} usable=${usable} count=${count}
-        jump=${jump} change=${change} replace=${replace}
+        fixed=${index < keys.length && alwaysSettles(keys, index)} jump=${jump} change=${change} replace=${replace}
         remove=${() => save(stored.filter((_, at) => at !== index))} />`)}
     </ol>`}
   </div>`;
@@ -290,9 +294,23 @@ export function PathBar({ link }) {
 const SPEED_WORDS = { 1: "1x", 0.5: "½x", 0.25: "¼x" };
 const holdMs = (value) => Math.round(Math.min(HOLD.maxMs, Math.max(HOLD.minMs, (Number(value) || 0) * 1000)));
 
-// One key's row: its frame (a jump to it), what it is, its hold, Ease, the speed from it to the next
-// key (a slow stretch), Replace and Delete.
-function KeyRow({ link, one, index, held, usable, count, jump, change, replace, remove }) {
+// Where a key's camera looks: its own point, or a runner it turns to follow (Mario, a stage ghost; one
+// whose ghost left the scene says so, and looks at its own point meanwhile).
+function aimChoices(link, one) {
+  const choices = [["", "Its own point"], ["stage", "Mario"],
+    ...link.ghosts.map((ghost) => [ghost.ref, ghostName(link.ghosts, ghost.ref)])];
+  return one.aim && !choices.some(([value]) => value === one.aim) ? [...choices, [one.aim, "A ghost not here"]] : choices;
+}
+
+const EASE_WORDS = {
+  fixed: "The camera always slows into and out of this key: it starts or ends the path, or a hold",
+  on: "The camera slows into and out of this key. Turn off to glide through it",
+  off: "The camera glides through this key. Turn on to slow into and out of it",
+};
+
+// One key's row: its frame (a jump to it), what it is, its hold, where it looks, Ease, the speed from
+// it to the next key (a slow stretch), Replace and Delete.
+function KeyRow({ link, one, index, held, usable, count, fixed, jump, change, replace, remove }) {
   const outside = one.frame >= count, here = !outside && one.frame === link.frame;
   return html`<li class=${[here && "is-here", outside && "is-outside"].filter(Boolean).join(" ")}>
     <button type="button" class="scene-lab-path-jump" disabled=${!usable || outside}
@@ -304,9 +322,13 @@ function KeyRow({ link, one, index, held, usable, count, jump, change, replace, 
       <input type="number" min=${HOLD.minMs / 1000} max=${HOLD.maxMs / 1000} step="0.1" disabled=${!usable}
         value=${(one.hold || HOLD.ms) / 1000} aria-label=${`Hold on frame ${one.frame + 1}, in seconds`}
         onchange=${(event) => change(index, { hold: holdMs(event.currentTarget.value) })} /> s</label>`}
-    <button type="button" aria-pressed=${one.ease} disabled=${!usable}
-        title=${one.ease ? "The camera slows into and out of this key. Turn off to pass through it"
-          : "The camera passes through this key. Turn on to slow into and out of it"}
+    ${one.camera && html`<label class="scene-lab-path-aim" title="Where this key's camera looks as the scene plays">Aim
+      <select value=${one.aim ?? ""} disabled=${!usable} aria-label=${`Aim of the key on frame ${one.frame + 1}`}
+          onchange=${(event) => change(index, { aim: event.currentTarget.value || null })}>
+        ${aimChoices(link, one).map(([value, words]) => html`<option key=${value} value=${value}>${words}</option>`)}
+      </select></label>`}
+    <button type="button" aria-pressed=${fixed || one.ease} disabled=${!usable || fixed}
+        title=${EASE_WORDS[fixed ? "fixed" : one.ease ? "on" : "off"]}
         onclick=${() => change(index, { ease: !one.ease })}>Ease</button>
     <select class="scene-lab-path-speed" value=${String(one.speed)} disabled=${!usable}
         title="How fast the game plays from this key to the next one (slower plays without sound)"
@@ -325,7 +347,7 @@ function KeyRow({ link, one, index, held, usable, count, jump, change, replace, 
 // (scenepath.js soundPlays). Beside it, the step to the next or previous action change.
 function PlayRow({ link }) {
   const speed = link.playSpeed || 1;
-  return html`<div class="scene-lab-bar scene-lab-path-play">
+  return html`<div class="scene-lab-bar scene-lab-path-play" aria-label="Play speed and action">
     <div class="scene-lab-path-speeds" role="group" aria-label="Play speed">
       <span class="scene-lab-rigs-name">Play speed</span>
       ${PLAY_SPEEDS.map((value) => html`<button type="button" key=${value} aria-pressed=${speed === value}

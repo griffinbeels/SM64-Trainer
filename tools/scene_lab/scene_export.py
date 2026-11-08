@@ -288,7 +288,8 @@ def _await_rig_path(session, entries: list[dict], notes: list, report) -> None:
     its own as it opens (scene_session.prepare_path): the drawing waits for it, so no such entry comes
     out on the recorded camera. A path that cannot be read is one note, and those shots are the
     recorded camera's. Entries with their pose never need it."""
-    if not any(isinstance(camera := picture_camera(entry), dict) and "rig" in camera for entry in entries):
+    if not any(isinstance(camera := picture_camera(entry), dict) and ("rig" in camera or "aim" in camera)
+               for entry in entries):                     # a camera path aimed at a runner follows his path too
         return
     report({"kind": "progress", "progress": SOUND_SHARE, "message": "Getting the cinematic camera's path ready..."})
     try:

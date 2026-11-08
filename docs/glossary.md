@@ -1793,9 +1793,12 @@ camera on a [[frame]] of the scene (its place, aim, [[tilt and lens]]), or the
 camera on screen; from the Recorded camera it keeps the recorded camera, which
 the path then eases out of and back into, blending with the game's own moving
 camera. Between two keys the camera follows a smooth curve and meets each key
-exactly on its [[frame]]; it slows into and out of a key (**Ease**, on by
-default), or with Ease off passes through it without slowing. Before the
-first key and after the last it stays on that key. A **hold** is a second key
+exactly on its [[frame]], gliding through a middle key without slowing; it
+slows to a stop only at the first and last keys, at either end of a hold, and
+at a key whose **Ease** is on. A key's **Aim** is its own point, or Mario or a
+[[stage ghost]]: then the camera keeps turning to his eyes as he moves (the
+point a [[cinematic camera]] aims at), easing between one key's aim and the
+next one's. Before the first key and after the last it stays on that key. A **hold** is a second key
 on the [[frame]] of the key before it (+ Key again on the same [[frame]]): Play
 stops the game on that [[frame]], silent, for the hold's length (2 s unless its
 row says otherwise) while the camera travels from the key before to it, then
@@ -1815,10 +1818,11 @@ SM64Scripts camera tools (credited in the app).
 - **Lives** -- the math (`src/sm64_events/ui/components/scenepath.js`); the
   block and the viewer's side of it (`src/sm64_events/ui/components/scenepathbar.js`);
   the file (`tools/scene_lab/camera_paths.py`, served by
-  `src/sm64_events/server/scene_lab_api.py`); the blend with the recorded
-  camera (`tools/scene_lab/scene_session.py`)
-- **Not** -- a [[cinematic camera]], which follows Mario or a [[stage ghost]];
-  a camera path goes where its keys say, whoever moves
+  `src/sm64_events/server/scene_lab_api.py`); the blends with the recorded
+  camera and with a runner's eyes (`tools/scene_lab/scene_session.py`)
+- **Not** -- a [[cinematic camera]], which follows Mario or a [[stage ghost]]
+  wherever he goes; a camera path stands where its keys say, and at most turns
+  to look at him
 
 ### Play speed
 

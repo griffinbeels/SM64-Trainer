@@ -1,15 +1,17 @@
 /* The Scene viewer's camera path block (components/scenepathbar.js links this sheet when it loads, so
    with the lab switched off the browser never fetches it). One block under the Cameras strip: the
-   Play speed row, the Path row, then one row per key. It lays out by wrapping, never by the viewport. */
+   Play speed and Action row, the Path row, then one row per key. It lays out by wrapping, never by the
+   viewport, and no control in it moves when another changes state (viewer round 9's SteadyText): the
+   action's name keeps its own width, and the Path row's note is one line cut short. */
 .scene-lab-path-panel { display: grid; gap: 8px; min-width: 0; }
 .scene-lab-path-play { column-gap: 18px; }
 .scene-lab-path-speeds, .scene-lab-action { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
 .scene-lab-path-speeds button { min-width: 44px; justify-content: center; }
 .scene-lab-action button { width: 34px; justify-content: center; padding: 0; }
-.scene-lab-action-name { min-width: 16ch; max-width: 34ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scene-lab-action-name { min-width: 0; max-width: 100%; }
 .scene-lab-path { display: grid; gap: 6px; min-width: 0; }
-.scene-lab-path-speed { min-height: 28px; padding: 0 6px; background: var(--surface-2); font-size: .82rem; }
-.scene-lab-path > .scene-lab-bar .scene-lab-hint { flex: 1 1 260px; min-width: 0; }
+.scene-lab-path > .scene-lab-bar .scene-lab-path-note { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; }
 .scene-lab-path-keys { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
 .scene-lab-path-keys li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0;
   padding: 3px 6px; border: 1px solid var(--border-soft); border-radius: 6px; }
@@ -20,6 +22,9 @@
 .scene-lab-path-jump { font-variant-numeric: tabular-nums; }
 .scene-lab-path-what { flex: 1 1 120px; min-width: 0; color: var(--muted); font-size: .82rem; }
 .scene-lab-path-delete { width: 30px; justify-content: center; padding: 0; }
-.scene-lab-path-hold { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: .82rem; }
+.scene-lab-path-hold, .scene-lab-path-aim { display: inline-flex; align-items: center; gap: 5px; color: var(--muted);
+  font-size: .82rem; }
 .scene-lab-path-hold input { width: 6ch; min-width: 0; padding: 2px 4px; background: var(--surface-2); color: var(--text);
   font-variant-numeric: tabular-nums; }
+.scene-lab-path-aim select, .scene-lab-path-speed { min-height: 28px; max-width: 160px; padding: 0 6px;
+  background: var(--surface-2); font-size: .82rem; }

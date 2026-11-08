@@ -18,6 +18,7 @@ import htm from "htm";
 import { getJSON } from "../api.js";
 import { Icon } from "./icons.js";
 import { ghostName } from "./sceneghosts.js";
+import { SteadyText } from "./steadytext.js";
 
 const html = htm.bind(h);
 
@@ -76,6 +77,11 @@ function actionLine(link, answer) {
   return { text: `${who}: ${action ? actionWords(answer.names[String(action)]) : "no action here"}`, title: null };
 }
 
+// The name's place is as wide as Mario and the longest action name the Trainer knows (memory/
+// addresses.py action_label, 24 letters), whatever is on screen, so stepping never moves the buttons
+// (viewer round 9's SteadyText); a longer name or a ghost's is cut short, whole on hover.
+const NAME_SIZES = ["Mario: reading automatic dialog"];
+
 // An effect only when what it asks about changes: Preact runs effects after an animation frame, and
 // this page draws for every picture.
 export function ActionStep({ link }) {
@@ -85,7 +91,8 @@ export function ActionStep({ link }) {
     <button type="button" disabled=${!usable} onclick=${(event) => stepAction(link, -1, event.timeStamp)}
         aria-label="Back to the last action change" title="Back to the frame this action began, or the one before ([)">
       <${Icon} name="stepBack" size=${14} /></button>
-    <output class="scene-lab-action-name" title=${line.title}>${line.text}</output>
+    <output class="scene-lab-action-name" title=${line.title || line.text}>
+      <${SteadyText} text=${line.text} sizes=${NAME_SIZES} /></output>
     <button type="button" disabled=${!usable} onclick=${(event) => stepAction(link, 1, event.timeStamp)}
         aria-label="On to the next action change" title="On to the frame the next action begins (])">
       <${Icon} name="stepForward" size=${14} /></button>
