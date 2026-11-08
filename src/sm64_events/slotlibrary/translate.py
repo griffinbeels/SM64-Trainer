@@ -29,10 +29,10 @@ import struct
 from collections import Counter
 from dataclasses import dataclass
 from functools import cache
+from importlib import resources
 
 import numpy as np
 
-from sm64_events.core.paths import bundled_symbol_map
 from sm64_events.memory import behaviours
 from sm64_events.memory.addresses import OBJECT_BEHAVIOR, OBJECT_COUNT, OBJECT_HOME_POS, OBJECT_SIZE
 from sm64_events.slotlibrary.atlas import SEGMENTS, Atlas, World, pool_blocks
@@ -70,7 +70,8 @@ UNMAPPED = frozenset({"behaviour script, unmapped", "main pool, between blocks",
 @cache
 def _shifts(source: str) -> tuple[list[int], list[int]]:
     starts, deltas = [], []
-    for line in bundled_symbol_map("build_shifts.tsv").read_text(encoding="utf-8").splitlines():
+    table = resources.files("sm64_events.data") / "build_shifts.tsv"   # package data, frozen or not
+    for line in table.read_text(encoding="utf-8").splitlines():
         if line and not line.startswith("#"):
             version, start, delta, _symbol = line.split("\t")
             if version == source:

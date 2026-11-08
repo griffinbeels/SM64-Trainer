@@ -121,6 +121,56 @@ test('the public config advertises the start cap a trainer checks before sending
   }finally{env.DB.close();}
 });
 
+// Griffin, 2026-11-08: "Sure, update privacy policy". The Worker that takes
+// starts serves a new privacy version; an account on the old one is held at the
+// consent step until it accepts once. Trainers (beta.37 and later) rely on this.
+test('a new privacy version holds an account at the consent step until it accepts once',async()=>{
+  const {env,store}=await environment(),h=harness(env);
+  try{
+    env.PRIVACY_VERSION='test-2';
+    const config=(await h.call('/v1/config')).json;
+    assert.equal(config.privacy_version,'test-2');assert.equal(config.terms_version,'test-1');
+    const before=await h.call('/v1/account');
+    assert.equal(before.response.status,200);assert.equal(before.json.status,'active');assert.equal(before.json.privacy_version,'test-1');
+    const fixture=withStart(upload());
+    for(const [path,options] of [['/v1/uploads',{method:'POST',body:fixture.body}],['/v1/catalog',{}]]){
+      const refused=await h.call(path,options);
+      assert.equal(refused.response.status,403,path);assert.equal(refused.json.error.code,'consent_required');
+    }
+    assert.deepEqual(await used(store),{bytes_used:0,bytes_reserved:0});
+    const profile={name:'Alice',sharing:true,terms_version:'test-1',privacy_version:'test-1',sheet_runner:null};
+    assert.equal((await h.call('/v1/account',{method:'PUT',body:profile})).response.status,400);
+    const accepted=await h.call('/v1/account',{method:'PUT',body:{...profile,privacy_version:'test-2'}});
+    assert.equal(accepted.response.status,200);assert.equal(accepted.json.privacy_version,'test-2');assert.equal(accepted.json.sharing,true);
+    const id=await publish(h,fixture);
+    assert.deepEqual(await bytesOf((await h.call('/v1/recordings/'+id+'/start')).response),fixture.start);
+    // Another player still on the old version receives neither the ghost nor its start.
+    for(const part of ['/asset','/start'])
+      assert.equal((await h.call('/v1/recordings/'+id+part,{user:'bob'})).json.error.code,'consent_required',part);
+  }finally{env.DB.close();}
+});
+
+test('the privacy notice says what a ghost start holds, its size, who receives it, that it is deleted with its ghost, and that controller input is always shared',async()=>{
+  const {env}=await environment(),h=harness(env);
+  try{
+    const page=await (await h.call('/policies')).response.text();
+    assert(page.includes('<p id="ghost-start">'));
+    // The paragraph sits inside the privacy section, under its version.
+    assert(page.indexOf('<section id="privacy">')<page.indexOf('<p id="ghost-start">')&&page.indexOf('<p id="ghost-start">')<page.indexOf('<section id="progress">'));
+    const paragraph=page.slice(page.indexOf('<p id="ghost-start">')).split('</p>')[0];
+    for(const words of ["a copy of the game's memory at the moment the ghost's run begins","your save file's star flags",
+      'the settings of your practice ROM','about 21 KB and never more than 64 KB',
+      'The players who can download a ghost can also download its start',
+      'when your account is deleted, the start is removed together with the ghost'])
+      assert(paragraph.includes(words),words);
+    // Every shared ghost carries its pads (required since 2026-10-12), so the
+    // notice must not call controller input optional.
+    const privacy=page.slice(page.indexOf('<section id="privacy">'),page.indexOf('<section id="progress">'));
+    assert(privacy.includes('Native bytes contain pose and camera data, raw controller input,'));
+    assert(!/optional[^.]*controller input/i.test(privacy),'controller input is always included');
+  }finally{env.DB.close();}
+});
+
 test('the cap and the hash refuse a start before any storage, and refund its reservation',async()=>{
   const {env,store}=await environment(),h=harness(env);
   try{

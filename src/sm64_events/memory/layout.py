@@ -457,6 +457,15 @@ JP = Layout(
     usamune_stop=0x80417C15,        # ROM-derived; read 3 2 1 0 1 2 3 as he stepped STOP
                                     # GrabX -> Grab -> None and back, 2026-10-17
     behaviour_base=0x800E8320,      # from Mario's object, 2026-10-16
+    # Ghost Handoff's slots, verified live 2026-11-08 by the lead's sync run on his JP game
+    # (data/version_sync/jp.json); candidates from rom_candidates_jp.tsv and STROOP's JP map.
+    usamune_state_start=0x80417C14,  # holds every verified Usamune setting and counter
+    usamune_state_end=0x80417D48,    # (both span ends; 308 bytes)
+    usamune_slot_save=0x80403930,    # Usamune's code lies here; the cold-booted JP game saves through it
+    usamune_slot_load=0x80411D84,    # and loads through this one
+    usamune_slots_start=0x80500000,  # every occupied slot word points past the object pool's start
+    segment_table=0x8033A090,        # its behaviour segment equals the verified behaviour base
+    second_camera_focus=0x8032CFD0,  # holds zero or an object's start
 )
 
 VERSIONS = ("us", "jp")

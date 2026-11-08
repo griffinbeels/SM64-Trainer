@@ -12,10 +12,14 @@ main-pool delta, and start_check's reference, mean the same thing on another pla
   1. cold_boot.boot_into_castle: save file A exists, Mario stands in the castle grounds (~3 s, once).
   2. That course's six star flags are set in the simulation's own save, so the act selector offers every act.
   3. The painting warp (sWarpDest, written at Usamune's call site), then the act selector: MENU_WAIT frames,
-     one stick push per wanted act after the first, A until Mario spawns; gCurrActNum must read the act.
+     one stick push per wanted act after the first, A until Mario spawns; gCurrActNum must read the act. A level
+     without an act selector (courses 16-24, the Bowser arenas) spawns him straight away, its own way
+     (SPAWN_ACTIONS), and names no act.
   4. sTransitionTimer back at 0 (cold_boot.arrived), settle, SETTLE_FRAMES with no input.
-  5. USAMUNE_RESET_WORD into Usamune's state block, then L for two frames: Usamune's practice reset.
-     The state after it is the reset. US and JP both fire; ~2-4 s per reset after the boot.
+  5. USAMUNE_RESET_WORD into Usamune's state block, then L for two frames: Usamune's practice reset, which must
+     spawn him the way the level's entry did, in the same level. The state after it is the reset. US and JP
+     both fire; ~2-4 s per reset after the boot. All 90 acts of courses 1-15, the nine courses without acts and
+     the three arenas make one (2026-11-08); the castle's own levels do not (scene_warm.py says why).
 His recorded scenes re-run the same over the cold boot's RAM as over his session's boot record (two
 scenes, every frame, Mario 0.000 units, the same single differing word), so the cold boot is also what a
 start lies over (boot()).
@@ -29,6 +33,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import struct
 import sys
 import threading
@@ -46,6 +51,11 @@ RESET_BUTTON = 0x0020            # L: Usamune's practice reset
 ENTRY_NODE = 0x0A                # a course's painting entry
 A_BUTTON = 0x8000
 SPAWN_ACTION = 0x00001924        # ACT_SPAWN_SPIN_AIRBORNE: a course entry's and a practice reset's first action
+# A level without a painting spawns Mario its own way, and Usamune's reset does the same (measured 2026-11-08):
+# ACT_SPAWN_NO_SPIN_AIRBORNE in the Bowser courses, the slide, the cap courses and Wing Mario over the Rainbow,
+# ACT_FLYING in the Tower of the Wing Cap, ACT_WATER_IDLE in the aquarium.
+SPAWN_ACTIONS = (SPAWN_ACTION, 0x00001932, 0x10880899, 0x380022C0)
+LAST_ACT_COURSE = 15             # courses 1-15 have an act selector; the rest (and the arenas) enter straight in
 COLD_FCSR = 0x01000800           # thread 5's FCSR: what every recorded boot record holds, and what cold_boot runs with
 # Usamune's state block's first word as his game holds it (2026-11-08). With it zero, L does nothing; it is the
 # only word of the block a reset needs (a bisection of the block against his game).
@@ -113,6 +123,20 @@ def s16(ram: np.ndarray, address: int) -> int:
 
 def u32(ram: np.ndarray, address: int) -> int:
     return struct.unpack_from(">I", ram, sim.phys(address))[0]
+
+
+def _keep(path: Path, ram: np.ndarray) -> None:
+    """A cached RAM image, whole or not at all: the server's background warm and a build can make the same one."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    partial = path.with_name(f"{path.stem}.{os.getpid()}-{threading.get_ident()}.partial")
+    with partial.open("wb") as handle:
+        np.savez_compressed(handle, ram=ram)
+    try:
+        partial.replace(path)
+    except PermissionError:                     # the other one wrote it and is reading it now: the same bytes
+        partial.unlink(missing_ok=True)
+        if not path.is_file():
+            raise
 
 
 def menu_input(frames_in_menu: int, pushes: int, act: int) -> tuple[int, tuple[int, int], int]:
@@ -188,8 +212,7 @@ class Stages:
             else:
                 _game, snap = self._cold()
                 self._boot = snap[0].copy()
-                self.cache.mkdir(parents=True, exist_ok=True)
-                np.savez_compressed(path, ram=self._boot)
+                _keep(path, self._boot)
         return self._boot, COLD_FCSR
 
     def vi(self) -> dict:
@@ -266,8 +289,7 @@ class Stages:
             if path.is_file():
                 return np.load(path)["ram"]
             ram = self._make_reset(level, area, act)
-            self.cache.mkdir(parents=True, exist_ok=True)
-            np.savez_compressed(path, ram=ram)
+            _keep(path, ram)
             return ram
 
     def reset_digest(self, level: int, area: int, act: int) -> str:
@@ -288,8 +310,8 @@ class Stages:
         game.pending = lambda: struct.pack_into(">BBBBI", game.cpu.ram, warp, 1, level, area, ENTRY_NODE, 0)
         in_menu = pushes = 0
         for _ in range(MENU_FRAMES):
-            if s16(ram, syms[CURR_LEVEL]) == level and s16(ram, syms[CURR_AREA]) == area \
-                    and u32(ram, syms[MARIO_OBJECT]) and u32(ram, syms["gMarioStates"] + 0x0C) == SPAWN_ACTION:
+            if s16(ram, syms[CURR_LEVEL]) == level and s16(ram, syms[CURR_AREA]) == area and u32(ram, syms[MARIO_OBJECT]):
+                entry = u32(ram, syms["gMarioStates"] + 0x0C)    # how this level's entry spawns him: the reset's too
                 break
             buttons, stick = 0, (0, 0)
             if s16(ram, syms[CURR_LEVEL]) == level and not u32(ram, syms[MARIO_OBJECT]):
@@ -299,7 +321,7 @@ class Stages:
                 raise StageError(f"The simulated game stopped on its way to level {level}: {game.cpu.violations[:2]}")
         else:
             raise StageError(f"The simulated game never reached level {level} area {area} act {act}.")
-        if ram[sim.phys(syms["gCurrActNum"]) + 1] != act:
+        if 1 <= course <= LAST_ACT_COURSE and ram[sim.phys(syms["gCurrActNum"]) + 1] != act:   # an act selector chose
             raise StageError(f"The act selector chose act {ram[sim.phys(syms['gCurrActNum']) + 1]}, not {act}.")
         try:
             cold_boot.arrived(game)
@@ -313,22 +335,25 @@ class Stages:
         before = u32(ram, syms[MARIO_OBJECT])
         game.step(RESET_BUTTON)
         game.step(RESET_BUTTON)
-        if u32(ram, syms["gMarioStates"] + 0x0C) != SPAWN_ACTION or u32(ram, syms[MARIO_OBJECT]) == before \
-                or game.cpu.violations:
+        if u32(ram, syms["gMarioStates"] + 0x0C) != entry or u32(ram, syms[MARIO_OBJECT]) == before \
+                or s16(ram, syms[CURR_LEVEL]) != level or game.cpu.violations:
             raise StageError("Usamune's practice reset did not run in the simulated game.")
         return ram.copy()
 
     # ---------------------------------------------------------------- as a scene
-    def package(self, level: int, area: int, act: int, frames: int = 150) -> Path:
-        """That reset played on with no input, as a scene package the viewer opens (cached)."""
+    def package(self, level: int, area: int, act: int, frames: int = 150, out: Path | None = None) -> Path:
+        """That reset played on with no input, as a scene package the viewer opens (cached; `out`: written there
+        instead, uncached)."""
         import sim_scene  # noqa: PLC0415
-        out = self.cache / f"stage-{self.key(level, area, act)}-p{PACKAGE_VERSION}-{frames}.sm64scene"
-        if out.is_file():
+        cached = out is None
+        out = out or self.cache / f"stage-{self.key(level, area, act)}-p{PACKAGE_VERSION}-{frames}.sm64scene"
+        if cached and out.is_file():
             return out
         start = self.reset(level, area, act)
         template = start[sim.phys(self.symbols["gControllerPads"]):sim.phys(self.symbols["gControllerPads"]) + 24].tobytes()
         machine = self.machine(start.copy())
-        writer = sim_scene.SimScene(out, self.cache / f"work-{time.monotonic_ns()}", self.rom_path, self.symbols, self.vi())
+        writer = sim_scene.SimScene(out, self.cache / f"work-{time.monotonic_ns()}", self.rom_path, self.symbols, self.vi(),
+                                    seeds=self.cache)
         try:
             for _ in range(frames):
                 machine.step(pads(0, 0, 0, template))

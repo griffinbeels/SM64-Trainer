@@ -1544,8 +1544,12 @@ recorded it on beside the one it ran on. The lab plays these scenes on the US
 cartridge only for now. It makes a JP [[reset]] and checks JP starts against it,
 but it cannot play a JP scene or make a JP save state yet, and it says so in
 one sentence when asked. Three of his Whomp's Fortress [[ghost]]s and two
-other players' (2026-11-08): no parting record from any start, about 25-45 s
-to make, a cache read after that.
+other players' (2026-11-08): no parting record from any start. The lab writes
+the scene while it simulates, so the viewer opens it as a growing scene: the
+first picture shows in about a second once the lab has made its stage ahead
+(looking at a [[star]] makes its stage in the background), and the rest
+follows at about 55 [[frame]]s a second; a scene the lab made before opens in
+under half a second.
 
 - **Lives** -- `tools/scene_lab/ghost_resim.py` (from a ghost),
   `tools/scene_lab/stage_sim.py` (a stage), `tools/scene_lab/sim_scene.py`

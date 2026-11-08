@@ -75,8 +75,8 @@ def build() -> Path:
 
 
 def default_lab_root() -> Path:
-    base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
-    return Path(base) / "SM64Trainer" / "scene-lab"
+    from sm64_events.core.paths import scene_lab_root
+    return scene_lab_root()
 
 
 def settings_folder(pj64_plugin: Path, resolution: tuple[int, int] | None = None,

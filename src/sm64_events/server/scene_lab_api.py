@@ -569,8 +569,10 @@ class SceneLab:
         re-simulated into a scene (scene_resim.py; the build runs before the open scene is replaced)."""
         config = await asyncio.to_thread(LabConfig.load, self.config_path)
         sidecar = resim = None
+        if ghost is None and self.resim is not None:      # one build at a time: a newer open ends an older one
+            await asyncio.to_thread(self.resim.cancel)     # (a ghost's own open joins or ends it, scene_resim.py)
         if ghost is not None or stage is not None:
-            path, resim = await self._resim_source(ghost, stage)
+            path, resim, sidecar = await self._resim_source(ghost, stage)   # a ghost: as soon as it starts playing
         elif attempt is None:
             path = await asyncio.to_thread(config.package_path, name)
         elif self.scenes is None:
@@ -605,14 +607,16 @@ class SceneLab:
             self._start_watch()
             return self._scene(described)
 
-    async def _resim_source(self, ghost: str | None, stage: dict | None) -> tuple[Path, dict]:
-        """(package, its resim table) for a ghost or a stage; SceneRefused with the sentence otherwise."""
+    async def _resim_source(self, ghost: str | None, stage: dict | None) -> tuple[Path, dict, Path | None]:
+        """(package, its resim table, the sidecar of a scene still being built) for a ghost or a stage;
+        SceneRefused with the sentence otherwise. A ghost answers at its first published frames."""
         from sm64_events.server.scene_resim import ResimRefused
         try:
             if ghost is not None:
-                return await asyncio.to_thread(self.resim.ghost_scene_blocking, ghost)
-            return await asyncio.to_thread(self.resim.stage_scene_blocking, stage["course"], stage["act"],
-                                           stage.get("area") or 1)
+                return await asyncio.to_thread(self.resim.ghost_scene_blocking, ghost, progressive=True)
+            path, info = await asyncio.to_thread(self.resim.stage_scene_blocking, stage["course"], stage["act"],
+                                                 stage.get("area") or 1)
+            return path, info, None
         except ResimRefused as refused:
             raise SceneRefused(str(refused)) from None
 
@@ -665,13 +669,18 @@ class SceneLab:
 
     async def _grow(self, generation: int) -> None:
         """While the open scene is still being written (an attempt scene whose fade-out has not
-        reached the recording yet) or its sound still comes from the recorder's ring: every
-        GROW_SECONDS its worker takes the newest publication and sound, and each page showing it
-        is told what it gained, {"kind": "grown", "session", "from", "frames", "growing", and
-        "audio" when the sound's table changed}, until the scene is settled or closed."""
+        reached the recording yet, a ghost's scene still being re-simulated) or its sound still comes
+        from the recorder's ring: every GROW_SECONDS its worker takes the newest publication and sound,
+        and each page showing it is told what it gained, {"kind": "grown", "session", "from", "frames",
+        "growing", "audio" when the sound's table changed, and "resim" for a ghost's scene still being
+        built: its newest table, the final one with the last message}, until the scene is settled or
+        closed."""
         failures = 0
         while self.session is not None and generation == self.generation:
             await asyncio.sleep(self.grow_seconds)
+            if (self.open_resim or {}).get("building") and self.resim.was_cancelled(self.open_path):
+                await self._stop_growing(generation)       # its build was cancelled: it keeps what it has
+                return
             try:
                 grown = await self._run(generation, "grow")
                 failures = 0
@@ -683,6 +692,8 @@ class SceneLab:
                 if failures < GROW_FAILURES:
                     continue
                 grown = {"from": len((self.described or {}).get("frames", ())), "frames": [], "growing": False}
+            if grown and (self.open_resim or {}).get("building") and not await self._resim_grown(grown, generation):
+                return
             if grown:
                 if self.described is not None and generation == self.generation:
                     frames = self.described["frames"][:grown["from"]] + grown["frames"]
@@ -696,6 +707,41 @@ class SceneLab:
                         log.debug("a scene page did not hear the scene grow: %r", error)
             if self._settled() or failures >= GROW_FAILURES:
                 return
+
+    async def _resim_grown(self, grown: dict, generation: int) -> bool:
+        """A ghost's scene still being built grew: its newest table ("built_to", a parting so far) rides on the
+        grown message; the last one carries the final table. False when its build failed and the scene closed."""
+        if generation != self.generation:
+            return True
+        if grown["growing"]:
+            info = self.resim.current(self.open_path)
+            if info is not None:
+                self.open_resim = grown["resim"] = info
+            return True
+        info, failed = await asyncio.to_thread(self.resim.finished, self.open_path)   # the child's last word
+        if failed is not None:
+            async with self.lock:
+                if generation == self.generation:
+                    await self._end("closed", failed)
+            return False
+        if info is not None and generation == self.generation:
+            self.open_resim = grown["resim"] = info
+        return True
+
+    async def _stop_growing(self, generation: int) -> None:
+        """A ghost's scene whose build was cancelled: the pages hear it grows no more ("growing": false, its table
+        "building": false and "cancelled": true); the frames it has keep playing."""
+        if self.described is None or generation != self.generation:
+            return
+        self.open_resim = {**(self.open_resim or {}), "building": False, "cancelled": True}
+        self.described = {**self.described, "growing": False}
+        message = {"kind": "grown", "session": generation, "from": len(self.described.get("frames", ())),
+                   "frames": [], "growing": False, "resim": self.open_resim}
+        for page in list(self.pages):
+            try:
+                await page.send(message)
+            except Exception as error:  # noqa: BLE001 - a page that left misses nothing it needs
+                log.debug("a scene page did not hear the scene stop growing: %r", error)
 
     async def _watch(self) -> None:
         """Releases a scene nobody is looking at or using; stops once no scene is open."""
@@ -1182,6 +1228,7 @@ def _mount_ghost_routes(router: APIRouter, lab: SceneLab) -> None:
               strategies: str = Query(default="one", pattern="^(one|all)$"),
               ghost: str | None = Query(default=None, min_length=1, max_length=512)):
         found = lab.ghosts.stage(target_of(course, star, segment), strat or None, every=strategies == "all")
+        _warm_target(lab, course, star, "current")          # its ghosts then start from a stage made ahead
         return _stage_open(found, ghost)
 
     @router.get("/ghosts")
@@ -1191,6 +1238,7 @@ def _mount_ghost_routes(router: APIRouter, lab: SceneLab) -> None:
                      q: str = Query(default="", max_length=128), player: str = Query(default="", max_length=128),
                      strategies: str = Query(default="one", pattern="^(one|all)$")):
         target = await asyncio.to_thread(target_of, course, star, segment)
+        _warm_target(lab, course, star, "list")
         every = strategies == "all"
         try:
             await lab.ghosts.fill(target, strat or None, section=section, page=page, query=q, player=player,
@@ -1205,8 +1253,18 @@ def _mount_ghost_routes(router: APIRouter, lab: SceneLab) -> None:
     async def ghost(recording: str = Query(min_length=1, max_length=128), course: int | None = None,
                     star: int | None = None, segment: int | None = None):
         target = await asyncio.to_thread(target_of, course, star, segment)
+        _warm_target(lab, course, star, "list")
         await lab.ghosts.fill_recording(recording)
         return await asyncio.to_thread(lab.ghosts.recording_item, target, recording)
+
+
+def _warm_target(lab: SceneLab, course: int | None, star: int | None, tier: str) -> None:
+    """A star target he is looking at: its stage made ahead (scene_warm.py; "current" for the stage he opened,
+    "list" for a target on a list he is looking at). Never waits."""
+    if lab.resim is None or course is None or star is None:
+        return
+    from sm64_events.server import scene_warm
+    lab.resim.warm(course, star, scene_warm.CURRENT if tier == "current" else scene_warm.LIST)
 
 
 def _stage_open(found: dict, ghost: str | None) -> dict:
@@ -1297,6 +1355,12 @@ def _mount_job_routes(router: APIRouter, lab: SceneLab, export_options: dict, mo
     mount_export_routes(router, lab.exports)
     lab.moments = SceneMoments(lab, **moment_options)
     mount_moment_routes(router, lab.moments)
+
+    @router.post("/open/cancel")
+    async def cancel_build():
+        """Ends a ghost's scene still being built (its child, its partial package); the open scene keeps the frames
+        it has. {"cancelled": False} when nothing was building."""
+        return {"cancelled": await asyncio.to_thread(lab.resim.cancel)}
 
 
 def _mount_live_routes(router: APIRouter, lab: SceneLab) -> None:
