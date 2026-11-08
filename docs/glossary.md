@@ -1503,7 +1503,7 @@ The reader refuses a version or layer it does not know.
 A [[scene package]] the lab makes from a [[ghost]] alone: the [[ghost]]'s
 recorded pads play SM64's own code from a start, in the simulation, and the
 real [[scene tap]] producer records each simulated [[frame]]. The start, best
-first: the [[ghost start frame]]; his own [[attempt scene]] that begins at the
+first: the [[ghost's start]]; his own [[attempt scene]] that begins at the
 [[ghost]]'s first record; another take's practice [[reset]] in that level; or a
 practice [[reset]] the simulation makes from his boot recording for any course
 and act, even one he never played (a stage). The lab compares every simulated
@@ -1521,20 +1521,6 @@ read after that.
   (the producer feed); `src/sm64_events/server/scene_resim.py` runs them in a
   child process; lab only
 - **Not** -- an [[attempt scene]], which the cutter cuts from the live recording
-
-### Ghost start frame
-
-The game state a [[ghost]]'s recording began from, kept beside the [[ghost]] so
-its [[re-simulated scene]] stays exact after retention deletes the [[attempt
-scene]]: the [[scene state]] regions of that first record, and the main pool's
-difference from the simulated practice [[reset]] of that level and act. About
-25 KB each. The lab saves one when an [[attempt scene]] becomes ready while its
-recording's clip exists, and when it re-simulates a [[ghost]] from his own
-[[attempt scene]]. It never goes into a clip and never leaves his machine.
-
-- **Lives** -- `src/sm64_events/ghost/start_frame.py` (the versioned file),
-  in the ghost population folder's starts folder, named by the clip's sha256
-- **Not** -- the clip, whose format the race and the community exchange
 
 ### Scene evaluator
 
@@ -2715,17 +2701,31 @@ it does not certify that gameplay was legitimate. Sharing begins unchecked.
 ### Ghost's start
 
 The game state a [[ghost]] begins from, saved with its recording. With it, the
-[[ghost]]'s recorded pads re-simulate the whole recording exactly. The trainer
-uploads a [[community ghost]]'s start after the [[ghost]]'s own bytes when the
-cloud accepts one, at most 64 KiB. The cloud keeps the start in the same object as
-its [[ghost]], counts its bytes in every storage budget and deletes it with the
-[[ghost]]. The cloud and the community client never read inside a start. A
-downloaded start came from another player's trainer, so its owner validates it
-before any use. A missing start never stops a [[ghost]] from sharing or playing.
+[[ghost]]'s recorded pads re-simulate the whole recording exactly in a
+[[re-simulated scene]], even after the [[attempt scene]] it came from is gone:
+the [[scene state]] regions of that first record, and his own copy also keeps
+the main pool's difference from the simulated practice [[reset]] of that level
+and act. About 25 KB on his machine; about 21 KB travels, without the main-pool
+part, which no other machine applies. The trainer saves one when an [[attempt
+scene]] becomes ready while its recording's clip exists, and when the lab
+re-simulates a [[ghost]] from his own [[attempt scene]]. It uploads a [[community
+ghost]]'s start after the [[ghost]]'s own bytes when the cloud accepts one, at
+most 64 KiB. The cloud keeps the start in the same object as its [[ghost]],
+counts its bytes in every storage budget and deletes it with the [[ghost]]; on
+his machine a purge deletes a start when the last clip of its bytes goes. The
+cloud and the community client never read inside a start. A downloaded start
+came from another player's trainer, so its owner checks its size, shape and
+binding to the [[ghost]]'s first record, keeps it apart from his own, and the
+lab checks every pointer in it against his ROM before it simulates anything. A
+missing or refused start never stops a [[ghost]] from sharing or playing.
 
-- **Lives** — `cloud/community/src/service.js` (storage and routes),
+- **Lives** -- `src/sm64_events/ghost/start_frame.py` (the versioned file and its
+  checks, in the ghost population folder's starts folder),
+  `tools/scene_lab/start_check.py` (the pointer checks),
+  `cloud/community/src/service.js` (storage and routes),
   `src/sm64_events/community/ghost_start.py` (the client's seam to its owner) and
   `src/sm64_events/community/sync.py` (send and download)
+- **Not** -- the clip, whose format the race and the community exchange
 
 ### Has ghost
 

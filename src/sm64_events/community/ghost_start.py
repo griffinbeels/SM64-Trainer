@@ -1,7 +1,7 @@
 """A ghost's start on the community wire, and the seam to the module that owns it.
 
-A ghost's start is the game state the ghost begins from (glossary: "Ghost start
-frame"). With it, the ghost's recorded pads re-simulate its whole run exactly.
+A ghost's start is the game state the ghost begins from (glossary: "Ghost's
+start"). With it, the ghost's recorded pads re-simulate its whole run exactly.
 The community client only carries it. On upload it asks the owner for the
 start of the ghost it is sharing and sends those bytes after the ghost's own.
 On download it keeps the copy beside the cached ghost and hands it to the
