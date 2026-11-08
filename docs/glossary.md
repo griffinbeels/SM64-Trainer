@@ -2656,6 +2656,21 @@ it does not certify that gameplay was legitimate. Sharing begins unchecked.
 
 - **Lives** — `cloud/community/` and `src/sm64_events/community/`
 
+### Ghost's start
+
+The game state a [[ghost]] begins from, saved with its recording. With it, the
+[[ghost]]'s recorded pads re-simulate the whole recording exactly. The trainer
+uploads a [[community ghost]]'s start after the [[ghost]]'s own bytes when the
+cloud accepts one, at most 64 KiB. The cloud keeps the start in the same object as
+its [[ghost]], counts its bytes in every storage budget and deletes it with the
+[[ghost]]. The cloud and the community client never read inside a start. A
+downloaded start came from another player's trainer, so its owner validates it
+before any use. A missing start never stops a [[ghost]] from sharing or playing.
+
+- **Lives** — `cloud/community/src/service.js` (storage and routes),
+  `src/sm64_events/community/ghost_start.py` (the client's seam to its owner) and
+  `src/sm64_events/community/sync.py` (send and download)
+
 ### Has ghost
 
 The Library page's filter for published [[community ghost]] recordings. It shows
