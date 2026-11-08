@@ -1,23 +1,30 @@
-"""Build the renderer's two prebuilt libraries that differ from upstream's,
-libGLideNHQ.lib and GLideNUI.lib, from pinned sources, into the build cache by hash.
+"""Build every static library the renderer links, from pinned sources, into the build cache by hash.
 
-    uv run python tools/build_renderer_libs.py              # Qt (once), then both libraries
+    uv run python tools/build_renderer_libs.py              # Qt (once), then the libraries
     uv run python tools/build_renderer_libs.py --jobs 8     # fewer parallel compilers for Qt
 
 SPDX-License-Identifier: GPL-2.0-or-later (licenses/README.md: the plugin's build tools)
 
-The graphics plugin links three static libraries the upstream project builds
-itself (renderer/README.md, "The three prebuilt libraries"). This is the recipe
-for two of them, built from one staged copy of the pinned tree:
+The graphics plugin links four static libraries (renderer/README.md, "The
+prebuilt libraries"). This is the recipe for all of them, built from one
+staged copy of the pinned tree:
 
-- libGLideNHQ.lib, the texture enhancement library, without xBRZ;
-- GLideNUI.lib, the settings window, with a static Qt merged in.
+- libGLideNHQ.lib, the texture enhancement library, without xBRZ, with the
+  libpng 1.6.32 and zlib 1.2.8 built here merged in;
+- GLideNUI.lib, the settings window, with a static Qt merged in;
+- osal.lib, upstream's small file-system layer;
+- freetype253MT.lib, FreeType 2.5.3, which the plugin links itself.
 
-Their inputs are pinned in renderer/build-inputs.json (`qt`, `jom`): qtbase
-5.12.12 from download.qt.io, checked against the md5 download.qt.io publishes
-and a pinned SHA-256, built static with the recorded configure line. Each
+Upstream's tree carries FreeType, libpng and zlib only as prebuilt .lib files
+without their build files; these are built from each project's own release
+archive with its own MSVC build files, release settings and the static CRT.
+
+Their inputs are pinned in renderer/build-inputs.json (`qt`, `jom`,
+`libraries`): qtbase 5.12.12 from download.qt.io, checked against the md5
+download.qt.io publishes and a pinned SHA-256, built static with the
+recorded configure line, and each library's archive by SHA-256. Each
 result goes to `<cache>/prebuilt/<sha256>/<name>`, where tools/build_renderer.py
-finds it once its hash is pinned. osal.lib is still the 2026-09 build.
+finds it once its hash is pinned. Two runs give the same bytes.
 
 Two licenses decide what is in them (2026-11-07). GLideN64 is GPL v2 only, so:
 - Qt is 5.12.12, not 5.15.2: from Qt 5.14 on, QtCore's qcalendar.cpp is GPL v3
@@ -37,7 +44,6 @@ import argparse
 import hashlib
 import importlib.util
 import io
-import json
 import os
 import shutil
 import subprocess
@@ -49,7 +55,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 PATCHES = (REPO / "renderer" / "patches" / "no-xbrz.json",)
-LIBRARIES = {"libGLideNHQ.lib": "libGLideNHQ.vcxproj", "GLideNUI.lib": "GLideNUI.vcxproj"}
+LIBRARIES = {"libGLideNHQ.lib": "libGLideNHQ.vcxproj", "GLideNUI.lib": "GLideNUI.vcxproj", "osal.lib": "osal.vcxproj"}
 BELOW_NORMAL = 0x00004000
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 # Upstream lists 5.15's support modules; 5.12's Windows platform plugin also
@@ -161,16 +167,7 @@ def build_qt(root: Path, source: Path, jom: Path, spec: dict, vcvars32: Path, jo
     return prefix
 
 
-def apply_patch(tree: Path, patch: Path) -> None:
-    """A tracked patch file's edits, each to text that occurs exactly once."""
-    for edit in json.loads(patch.read_text(encoding="utf-8"))["edits"]:
-        path = tree / edit["file"]
-        data = path.read_bytes()
-        before, after = edit["before"].encode("utf-8"), edit["after"].encode("utf-8")
-        if data.count(before) != 1:
-            raise ValueError(f"{patch.name}: {edit['file']} no longer holds its anchor exactly once "
-                             f"({data.count(before)} times)")
-        path.write_bytes(data.replace(before, after))
+apply_patch = _load("source_patch").apply_patch   # a tracked patch file's edits, each anchored once
 
 
 def stage_ui_project(project: Path, prefix: Path) -> None:
@@ -231,6 +228,77 @@ def stage(tree: Path, prefix: Path) -> None:
     stage_hq_project(msvc / "libGLideNHQ.vcxproj")
 
 
+def fetch_source(cache: Path, spec: dict) -> Path:
+    """A pinned library source, cached and checked (a download tool's user
+    agent: SourceForge serves a web page to anything else)."""
+    target = cache / "sources" / Path(spec["url"]).name
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if not (target.is_file() and _digest(target) == spec["sha256"]):
+        request = urllib.request.Request(spec["url"], headers={"User-Agent": "Wget/1.21.4"})
+        with urllib.request.urlopen(request, timeout=600) as response, target.open("wb") as out:
+            shutil.copyfileobj(response, out)
+        if _digest(target) != spec["sha256"]:
+            target.unlink()
+            raise ValueError(f"{spec['url']} is not the pinned file")
+    return target
+
+
+def platform_toolset(vcvars32: Path) -> str:
+    """The newest MSVC platform toolset installed beside this vcvars (v145 for
+    MSVC 14.5x): FreeType's own project names v100."""
+    found = sorted({path.name for path in (vcvars32.parents[3] / "MSBuild" / "Microsoft" / "VC").glob(
+        "v*/Platforms/Win32/PlatformToolsets/v*") if path.is_dir()}, key=lambda name: int(name[1:]))
+    if not found:
+        raise RuntimeError("no MSVC platform toolset found")
+    return found[-1]
+
+
+REPRO_PROPS = (b'<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003"><ItemDefinitionGroup>'
+               b"<Lib><AdditionalOptions>/Brepro %(AdditionalOptions)</AdditionalOptions></Lib>"
+               b"</ItemDefinitionGroup></Project>\r\n")
+OSAL_PROPS = REPRO_PROPS.replace(b"<Lib>", b"<ClCompile><DebugInformationFormat>None</DebugInformationFormat>"
+                                 b"</ClCompile><Lib>")
+
+
+def build_dependencies(work: Path, cache: Path, vcvars32: Path) -> dict[str, Path]:
+    """zlib 1.2.8, libpng 1.6.32 and FreeType 2.5.3 from their pinned sources,
+    as the static /MT libraries upstream's tree carries prebuilt without the
+    scripts that built them (`projects/msvc/lib/rel`): zlib.lib, libpng.lib,
+    freetype253MT.lib. Their own MSVC build files, release settings, /MT."""
+    deps = work / "deps"
+    deps.mkdir()
+    folders = {}
+    for name, spec in renderer.inputs()["libraries"].items():
+        with tarfile.open(fetch_source(cache, spec)) as bundle:
+            bundle.extractall(deps, filter="data")
+        folders[name] = deps / spec["folder"]
+    (deps / "repro.props").write_bytes(REPRO_PROPS)
+    zlib, png, freetype = folders["zlib"], folders["libpng"], folders["freetype"]
+    script = deps / "build_deps.bat"
+    script.write_bytes((
+        _preamble(vcvars32) + f'set "CL=/experimental:deterministic /pathmap:{deps}=\\deps"\r\n'
+        f'cd /d "{zlib}"\r\n'
+        'nmake /nologo -f win32\\Makefile.msc CFLAGS="-nologo -MT -W3 -O2 -Oy-" ARFLAGS="-nologo /Brepro" zlib.lib\r\n'
+        "if errorlevel 1 exit /b 30\r\n"
+        f'cd /d "{png}"\r\n'
+        f'nmake /nologo -f scripts\\makefile.vcwin32 CPPFLAGS="-I{zlib}" '
+        'CFLAGS="-nologo -D_CRT_SECURE_NO_DEPRECATE -D_CRT_SECURE_NO_WARNINGS -MT -O2 -W3" '
+        'ARFLAGS="-nologo /Brepro" libpng.lib\r\n'
+        "if errorlevel 1 exit /b 31\r\n"
+        f'cd /d "{freetype}\\builds\\windows\\vc2010"\r\n'
+        f'"{renderer.find_msbuild(vcvars32)}" freetype.vcxproj /nologo /nr:false /v:minimal '
+        f'"/p:Configuration=Release Multithreaded" /p:Platform=Win32 /p:PlatformToolset={platform_toolset(vcvars32)} '
+        f'/p:WindowsTargetPlatformVersion=10.0 "/p:ForceImportBeforeCppTargets={deps / "repro.props"}"\r\n'
+        "if errorlevel 1 exit /b 32\r\nexit /b 0\r\n").encode())
+    _run_hidden_low(script, deps / "build_deps.log")
+    built = {"zlib.lib": zlib / "zlib.lib", "libpng.lib": png / "libpng.lib",
+             "freetype253MT.lib": freetype / "objs" / "win32" / "vc2010" / "freetype253MT.lib"}
+    for name, path in built.items():
+        if not path.is_file():
+            raise RuntimeError(f"the dependency build reported success but {path} is missing")
+    return built
+
+
 def build_libraries(root: Path, prefix: Path, cache: Path, vcvars32: Path) -> dict[str, Path]:
     work = root / "libs"
     shutil.rmtree(work, ignore_errors=True)
@@ -238,13 +306,22 @@ def build_libraries(root: Path, prefix: Path, cache: Path, vcvars32: Path) -> di
     tree = renderer.pristine_source(cache, work, None)
     stage(tree, prefix)
     msvc = tree / "projects" / "msvc"
+    # libGLideNHQ merges libpng.lib and zlib.lib from lib/rel: ours, built from source.
+    deps = build_dependencies(work, cache, vcvars32)
+    for name in ("libpng.lib", "zlib.lib"):
+        shutil.copyfile(deps[name], msvc / "lib" / "rel" / name)
     user_props = work / "empty-user-props"
     user_props.mkdir()
     args = ["/nologo", "/nr:false", "/m:1", "/v:minimal", "/p:Configuration=Release", "/p:Platform=Win32",
             f"/p:QTDIR={prefix}", f"/p:SolutionDir={msvc}\\", f"/p:UserRootDir={user_props}\\",
             "/p:UseMultiToolTask=false", "/p:BuildProjectReferences=false"]
     msbuild = renderer.find_msbuild(vcvars32)
-    lines = "".join(f'"{msbuild}" {project} {" ".join(args)}\r\nif errorlevel 1 exit /b 20\r\n'
+    # osal.vcxproj sets no librarian options to anchor /Brepro on, and writes
+    # a program database whose path /pathmap would rewrite: a property sheet
+    # for that build alone gives it /Brepro and no debug information.
+    (work / "osal.props").write_bytes(OSAL_PROPS)
+    extra = {"osal.vcxproj": f' "/p:ForceImportBeforeCppTargets={work / "osal.props"}"'}
+    lines = "".join(f'"{msbuild}" {project} {" ".join(args)}{extra.get(project, "")}\r\nif errorlevel 1 exit /b 20\r\n'
                     for project in LIBRARIES.values())
     script = work / "build_libs.bat"
     script.write_bytes((
@@ -252,8 +329,9 @@ def build_libraries(root: Path, prefix: Path, cache: Path, vcvars32: Path) -> di
         f'cd /d "{msvc}"\r\n{lines}exit /b 0\r\n').encode())
     _run_hidden_low(script, work / "build_libs.log")
     built = {}
-    for name in LIBRARIES:
-        path = msvc / "bin" / "Win32" / "Release" / "lib" / name
+    outputs = {name: msvc / "bin" / "Win32" / "Release" / "lib" / name for name in LIBRARIES}
+    outputs["freetype253MT.lib"] = deps["freetype253MT.lib"]   # the plugin links it itself
+    for name, path in outputs.items():
         if not path.is_file():
             raise RuntimeError(f"MSBuild reported success but {path} is missing")
         target = renderer.prebuilt_path(cache, name, _digest(path))

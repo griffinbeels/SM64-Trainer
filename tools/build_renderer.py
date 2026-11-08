@@ -340,6 +340,9 @@ def stage_capture_layer(staged: Path) -> None:
                                      b"  </PropertyGroup>\r\n"))
 
 
+UPSTREAM_LIB_REL = ("freetype253MT.lib",)   # linked from projects/msvc/lib/rel (GLideN64.vcxproj)
+
+
 def stage(pristine: Path, staged: Path, libraries: dict[str, Path], build_id: str) -> None:
     witness.overlay(pristine, staged, boundary=True, label=LABEL, context_lifetime=True, ghost=True)
     stage_settings_folder(staged)
@@ -375,10 +378,18 @@ def stage(pristine: Path, staged: Path, libraries: dict[str, Path], build_id: st
         if b"copy /Y" in stripped or b"getRevision.bat" in stripped:
             raise ValueError(f"{path.name} still carries a build hook")
         path.write_bytes(stripped)
+    # Upstream's tree carries FreeType, libpng and zlib as prebuilt binaries
+    # without their build files (projects/msvc/lib). None of them is linked:
+    # the plugin links the FreeType tools/build_renderer_libs.py built from
+    # source, where the project looks for it (lib/rel), and libpng and zlib
+    # are already inside that tool's libGLideNHQ.lib.
+    shutil.rmtree(msvc / "lib")
     lib_dir = msvc / "bin" / "Win32" / "Release" / "lib"
     lib_dir.mkdir(parents=True)
     for name, path in libraries.items():
-        shutil.copyfile(path, lib_dir / name)
+        target = msvc / "lib" / "rel" if name in UPSTREAM_LIB_REL else lib_dir
+        target.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(path, target / name)
     stage_identity(staged)
 
 VERSION_RC = "sm64_trainer_version.rc"
