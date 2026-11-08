@@ -101,7 +101,7 @@ export const CREDIT_GROUPS = [
     id: "libraries",
     eyebrow: "Open source",
     title: "Libraries",
-    lead: "Every license text, and where to get the source of each GPL part, ships with the trainer in its _internal\\licenses folder.",
+    lead: "Every license text ships with the trainer, in its _internal\\licenses folder. The full source code of each GPL part is in the source archives on this version's release page on GitHub.",
     compact: true,
     items: [
       { name: "FastAPI", by: "Sebastián Ramírez", url: "https://github.com/fastapi/fastapi",

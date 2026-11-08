@@ -1,0 +1,241 @@
+{
+  "about": "Every third-party source archive whose code is in something the trainer ships, pinned by URL and SHA-256. tools/corresponding_source.py downloads and checks them and writes the release's source archives; every release attaches those archives beside its binaries. The trainer's own source, with every build recipe and patch, is the release's tag.",
+  "user_agent": "Wget/1.21.4",
+  "archives": {
+    "SM64Trainer-third-party-source-plugin.tar": {
+      "about": "The graphics plugin's third-party sources: LINK's GLideN64 tree, Qt, FreeType, libpng and zlib. tools/build_renderer.py and tools/build_renderer_libs.py build the plugin from them with this release's tag.",
+      "sources": [
+        {
+          "url": "https://codeload.github.com/Luna-Project64/GLideN64/zip/d0d101054421dd74c6c398919112c7adfd8265e3",
+          "sha256": "cf074c84891a759a74d8b345d84818177293b0a973cae5abbc51aa86c7287a81",
+          "license": "GPL-2.0",
+          "used_in": [
+            "sm64_trainer_gfx.dll"
+          ],
+          "filename": "GLideN64-d0d101054421dd74c6c398919112c7adfd8265e3.zip"
+        },
+        {
+          "url": "https://download.qt.io/archive/qt/5.12/5.12.12/submodules/qtbase-everywhere-src-5.12.12.tar.xz",
+          "sha256": "7c15c31590b6ec12408242b1a32075d1d545f35e1d41fdbad31ec670d00680f2",
+          "license": "LGPL-3.0 OR GPL-2.0 OR GPL-3.0",
+          "used_in": [
+            "sm64_trainer_gfx.dll"
+          ]
+        },
+        {
+          "url": "https://download-mirror.savannah.gnu.org/releases/freetype/freetype-old/freetype-2.5.3.tar.bz2",
+          "sha256": "c0848b29d52ef3ca27ad92e08351f023c5e24ce8cea7d8fe69fc96358e65f75e",
+          "license": "FTL OR GPL-2.0-or-later",
+          "used_in": [
+            "sm64_trainer_gfx.dll"
+          ]
+        },
+        {
+          "url": "https://downloads.sourceforge.net/project/libpng/libpng16/older-releases/1.6.32/libpng-1.6.32.tar.xz",
+          "sha256": "c918c3113de74a692f0a1526ce881dc26067763eb3915c57ef3a0f7b6886f59b",
+          "license": "Libpng",
+          "used_in": [
+            "sm64_trainer_gfx.dll"
+          ]
+        },
+        {
+          "url": "https://zlib.net/fossils/zlib-1.2.8.tar.gz",
+          "sha256": "36658cb768a54c1d4dec43c3116c27ed893e88b02ecfcb44f2166f9c0b7f2a0d",
+          "license": "Zlib",
+          "used_in": [
+            "sm64_trainer_gfx.dll"
+          ]
+        }
+      ]
+    },
+    "SM64Trainer-third-party-source-ffmpeg.tar": {
+      "about": "FFmpeg's and its libraries' sources: ffmpeg.exe, which tools/build_ffmpeg.py builds with this release's tag, and the FFmpeg libraries inside PyAV's wheel (av.libs), built by pyav-ffmpeg 8.1.1-2 (https://github.com/PyAV-Org/pyav-ffmpeg/tree/8.1.1-2, whose scripts are the build recipe). The MSYS2 source packages hold the MinGW runtime built into ffmpeg.exe and copied into PyAV's wheel.",
+      "sources": [
+        {
+          "url": "https://ffmpeg.org/releases/ffmpeg-8.1.1.tar.xz",
+          "sha256": "b6863adde98898f42602017462871b5f6333e65aec803fdd7a6308639c52edf3",
+          "license": "GPL-3.0-or-later as built",
+          "used_in": [
+            "ffmpeg.exe",
+            "av.libs (PyAV)"
+          ]
+        },
+        {
+          "url": "https://code.videolan.org/videolan/x264/-/archive/b35605ace3ddf7c1a5d67a2eb553f034aef41d55/x264-b35605ace3ddf7c1a5d67a2eb553f034aef41d55.tar.bz2",
+          "sha256": "6eeb82934e69fd51e043bd8c5b0d152839638d1ce7aa4eea65a3fedcf83ff224",
+          "license": "GPL-2.0-or-later",
+          "used_in": [
+            "ffmpeg.exe",
+            "av.libs (PyAV)"
+          ]
+        },
+        {
+          "url": "https://code.videolan.org/videolan/dav1d/-/archive/1.5.3/dav1d-1.5.3.tar.bz2",
+          "sha256": "e099f53253f6c247580c554d53a13f1040638f2066edc3c740e4c2f15174ce22",
+          "license": "BSD-2-Clause",
+          "used_in": [
+            "ffmpeg.exe",
+            "av.libs (PyAV)"
+          ]
+        },
+        {
+          "url": "https://github.com/FFmpeg/nv-codec-headers/archive/refs/tags/n13.0.19.0.tar.gz",
+          "sha256": "86d15d1a7c0ac73a0eafdfc57bebfeba7da8264595bf531cf4d8db1c22940116",
+          "license": "MIT",
+          "used_in": [
+            "ffmpeg.exe",
+            "av.libs (PyAV)"
+          ],
+          "filename": "nv-codec-headers-n13.0.19.0.tar.gz"
+        },
+        {
+          "url": "https://github.com/GPUOpen-LibrariesAndSDKs/AMF/releases/download/v1.5.0/AMF-headers-v1.5.0.tar.gz",
+          "sha256": "d569647fa26f289affe81a206259fa92f819d06db1e80cc334559953e82a3f01",
+          "license": "MIT",
+          "used_in": [
+            "ffmpeg.exe",
+            "av.libs (PyAV)"
+          ]
+        },
+        {
+          "url": "https://github.com/intel/libvpl/archive/refs/tags/v2.16.0.tar.gz",
+          "sha256": "d60931937426130ddad9f1975c010543f0da99e67edb1c6070656b7947f633b6",
+          "license": "MIT",
+          "used_in": [
+            "ffmpeg.exe",
+            "av.libs (PyAV)"
+          ],
+          "filename": "libvpl-2.16.0.tar.gz"
+        },
+        {
+          "url": "https://zlib.net/fossils/zlib-1.3.1.tar.gz",
+          "sha256": "9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23",
+          "license": "Zlib",
+          "used_in": [
+            "ffmpeg.exe"
+          ]
+        },
+        {
+          "url": "http://deb.debian.org/debian/pool/main/l/lame/lame_3.100.orig.tar.gz",
+          "sha256": "ddfe36cab873794038ae2c1210557ad34857a4b6bdc515785d1da9e175b1da1e",
+          "license": "LGPL-2.0-or-later",
+          "used_in": [
+            "av.libs (PyAV)"
+          ]
+        },
+        {
+          "url": "https://ftp.osuosl.org/pub/xiph/releases/opus/opus-1.6.1.tar.gz",
+          "sha256": "6ffcb593207be92584df15b32466ed64bbec99109f007c82205f0194572411a1",
+          "license": "BSD-3-Clause",
+          "used_in": [
+            "av.libs (PyAV)"
+          ]
+        },
+        {
+          "url": "https://gitlab.com/AOMediaCodec/SVT-AV1/-/archive/v4.1.0/SVT-AV1-v4.1.0.tar.bz2",
+          "sha256": "184162d3db3a4448882b17230413b4938ca252eef6b3c5e2f1236b2fcf497881",
+          "license": "BSD-3-Clause-Clear",
+          "used_in": [
+            "av.libs (PyAV)"
+          ]
+        },
+        {
+          "url": "https://github.com/webmproject/libvpx/archive/refs/tags/v1.16.0.tar.gz",
+          "sha256": "7a479a3c66b9f5d5542a4c6a1b7d3768a983b1e5c14c60a9396edc9b649e015c",
+          "license": "BSD-3-Clause",
+          "used_in": [
+            "av.libs (PyAV)"
+          ],
+          "filename": "vpx-1.16.0.tar.gz"
+        },
+        {
+          "url": "https://downloads.sourceforge.net/project/libpng/libpng16/1.6.58/libpng-1.6.58.tar.xz",
+          "sha256": "28eb403f51f0f7405249132cecfe82ea5c0ef97f1b32c5a65828814ae0d34775",
+          "license": "Libpng",
+          "used_in": [
+            "av.libs (PyAV)"
+          ]
+        },
+        {
+          "url": "https://github.com/webmproject/libwebp/archive/refs/tags/v1.6.0.tar.gz",
+          "sha256": "93a852c2b3efafee3723efd4636de855b46f9fe1efddd607e1f42f60fc8f2136",
+          "license": "BSD-3-Clause",
+          "used_in": [
+            "av.libs (PyAV)"
+          ],
+          "filename": "webp-1.6.0.tar.gz"
+        },
+        {
+          "url": "https://downloads.sourceforge.net/project/opencore-amr/opencore-amr/opencore-amr-0.1.6.tar.gz",
+          "sha256": "483eb4061088e2b34b358e47540b5d495a96cd468e361050fae615b1809dc4a1",
+          "license": "Apache-2.0",
+          "used_in": [
+            "av.libs (PyAV)"
+          ]
+        },
+        {
+          "url": "https://bitbucket.org/multicoreware/x265_git/downloads/x265_4.2.tar.gz",
+          "sha256": "40b1ea0453e0309f0eba934e0ddf533f8f6295966679e8894e8f1c1c8d5e1210",
+          "license": "GPL-2.0-or-later",
+          "used_in": [
+            "av.libs (PyAV)"
+          ]
+        },
+        {
+          "url": "https://repo.msys2.org/mingw/sources/mingw-w64-gcc-16.2.0-6.src.tar.zst",
+          "sha256": "a901d8afb78438abcff9ed020cd9aa9431db76de1992171c2454c3c07ad289e8",
+          "license": "GPL-3.0-or-later WITH GCC-exception-3.1",
+          "used_in": [
+            "ffmpeg.exe"
+          ],
+          "note": "libgcc and libstdc++ linked statically into ffmpeg.exe"
+        },
+        {
+          "url": "https://repo.msys2.org/mingw/sources/mingw-w64-winpthreads-14.0.0.r598.ge3d18511f-1.src.tar.zst",
+          "sha256": "1da3dad4f6916d0c23e8fe76c38ed79946fb32078f94047c0475229b8112a1db",
+          "license": "MIT AND BSD-3-Clause AND ZPL-2.1",
+          "used_in": [
+            "ffmpeg.exe"
+          ],
+          "note": "the mingw-w64 tree at e3d18511f: winpthreads and the C runtime start-up code in ffmpeg.exe"
+        },
+        {
+          "url": "https://repo.msys2.org/mingw/sources/mingw-w64-gcc-15.2.0-13.src.tar.zst",
+          "sha256": "a676171fe0f41ad46e6b0db2c218f3870199ac7ba01940dea7b540355878b06e",
+          "license": "GPL-3.0-or-later WITH GCC-exception-3.1",
+          "used_in": [
+            "av.libs (PyAV)"
+          ],
+          "note": "libgcc_s_seh-1.dll and libstdc++-6.dll in PyAV's wheel (their code matches gcc-libs 15.2.0-13)"
+        },
+        {
+          "url": "https://repo.msys2.org/mingw/sources/mingw-w64-libiconv-1.19-1.src.tar.zst",
+          "sha256": "74428280c17094da5b702c29b2e1a0abae59556ea5dfdd65705cc8ccc1e000fb",
+          "license": "LGPL-2.1-or-later",
+          "used_in": [
+            "av.libs (PyAV)"
+          ],
+          "note": "libiconv-2.dll in PyAV's wheel (its code matches libiconv 1.19-1)"
+        },
+        {
+          "url": "https://repo.msys2.org/mingw/sources/mingw-w64-zlib-1.3.2-2.src.tar.zst",
+          "sha256": "eef69dea52357e01b272d6fd6dc4d7c0773f71260cb7bcde6047c8c383518db3",
+          "license": "Zlib",
+          "used_in": [
+            "av.libs (PyAV)"
+          ],
+          "note": "zlib1.dll in PyAV's wheel (its code matches zlib 1.3.2-1 and 1.3.2-2)"
+        },
+        {
+          "url": "https://repo.msys2.org/mingw/sources/mingw-w64-winpthreads-14.0.0.r14.g4761eabdd-1.src.tar.zst",
+          "sha256": "9a71ee4b17a23905ec9990ce0474b49e51a5b4a584ad3bdfbda2172786b0fed3",
+          "license": "MIT AND BSD-3-Clause AND ZPL-2.1",
+          "used_in": [
+            "av.libs (PyAV)"
+          ],
+          "note": "libwinpthread-1.dll in PyAV's wheel (its code matches 14.0.0.r1 to r14)"
+        }
+      ]
+    }
+  }
+}
