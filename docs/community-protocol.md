@@ -136,7 +136,7 @@ Burst limits shed traffic before expensive operations.
 
 | Route | Contract |
 | --- | --- |
-| `GET /v1/config` | Public config:protocol/limits/policy versions, auth public fields, canonical catalog generation. No secrets. |
+| `GET /v1/config` | Public config:protocol/limits/policy versions, auth public fields, canonical catalog generation. No secrets. `limits.start_bytes` (65,536) is the largest [ghost's start](#a-ghosts-start) the service accepts; a Worker without it accepts none. |
 | `GET /v1/account` | Token-free profile:uid,name,status (`new`,`active`,`rename_required`,`suspended`,`deleted`,`not_invited`),sharing,terms_version,privacy_version,sheet_runner,sheet_verified. |
 | `POST /v1/account/invitation` | Authenticated `{token}` beta capability, stored as SHA-256 only. Legacy single-use binds one UID; reusable admits independent UIDs without consumption. Reusable expiry0 means until revoked. Membership is atomically capped unless the operator explicitly enables uncapped mode. Retries preserve profile/visibility epoch; revoked, deleted and suspended accounts cannot re-invite themselves. Request/storage limits always apply. Invalid/unavailable capability returns403 `invite_unavailable`. |
 | `PUT /v1/account` | Initial profile `{name,sharing,terms_version,privacy_version,sheet_runner:null|string}`; requires current policies and admission through an invitation or enabled public signup. Public signup persists only on deliberate creation. No client owner/status/verification fields. |
@@ -146,9 +146,10 @@ Burst limits shed traffic before expensive operations.
 | `GET /v1/pool` | Validated target,clock,rom,scope,strategy (Strategy only),min_step,max_step,base_step,cursor. Bounded canonical band; the trainer asks for the whole ladder (at most 45 bins) so it can widen the rival range above, then below, until the list is full (round 49). Returns recordings,coverage/generation,next_cursor. Truncation is incomplete, never proof that higher ranks have no entries. |
 | `GET /v1/search` | Same target/clock/ROM/scope identity plus bounded Unicode player prefix and keyset cursor; at most20 rows. Indexed prefix range, no wildcard/substring SQL. |
 | `GET /v1/recordings/{id}` | Current metadata/publication gate, including explicit pins; recording IDs are immutable64-hex identities independent of public names. |
-| `GET /v1/recordings/{id}/asset` | Auth/status/visibility/owner publication gate before immutable compressed bytes; Content-Type application/octet-stream. |
-| `POST /v1/uploads` | Admission `{target,clock,rom,strategy,frames,raw_sha256,raw_bytes,encoded_sha256,encoded_bytes,codec:"ghc1",generation}`. Server rejects unsupported catalog entries and derives UID/bin. Returns `upload_id,expires_at` or `already_present/not_faster`. Ghost ceiling: a run with `frames*100 > edge*110`, where `edge` is the strategy ladder's step-1 cutoff, answers `not_faster` before any upload budget, so deployed trainers skip it silently. |
-| `PUT /v1/uploads/{upload_id}` | Bounded streamed GHC1 bytes; grant binds exact hashes/lengths/identity/generation and is single-use/idempotent. Decode/native validation precede conditional winner publication. The clip must bear out the admission's claims (422): `rom_mismatch` (the header's ROM layout, 1 = us, 2 = jp, differs from `rom`), `incomplete_inputs` (a record without its pad), `playback_gaps` (the ghost would vanish in the middle of a scene: refused rows playback does not bridge, or occurrences that never arrived; hiding across a level change is allowed), `frames_mismatch` (the clip's own clock disagrees with `frames`; exact for a star, bounded for a segment). The trainer runs the same checks before uploading (`community/claims.py`). |
+| `GET /v1/recordings/{id}/asset` | Auth/status/visibility/owner publication gate before immutable compressed bytes; Content-Type application/octet-stream. A ghost with a start adds `Ghost-Start-SHA256` and `Ghost-Start-Bytes` headers; its bytes, length and ETag stay the ghost's. |
+| `GET /v1/recordings/{id}/start` | The same gate and one Class B ticket, then the ghost's start: its exact bytes, ETag its SHA-256. `404 start_missing` when the ghost has none. |
+| `POST /v1/uploads` | Admission `{target,clock,rom,strategy,frames,raw_sha256,raw_bytes,encoded_sha256,encoded_bytes,codec:"ghc1",generation}`, plus optional `start_sha256,start_bytes` (both or neither; `413 start_limit` past the cap). Server rejects unsupported catalog entries and derives UID/bin. Returns `upload_id,expires_at` or `already_present/not_faster`. Ghost ceiling: a run with `frames*100 > edge*110`, where `edge` is the strategy ladder's step-1 cutoff, answers `not_faster` before any upload budget, so deployed trainers skip it silently. |
+| `PUT /v1/uploads/{upload_id}` | Bounded streamed GHC1 bytes, followed by the start's bytes when the grant declared one (`422 start_mismatch` on a wrong hash); grant binds exact hashes/lengths/identity/generation and is single-use/idempotent. Decode/native validation precede conditional winner publication. The clip must bear out the admission's claims (422): `rom_mismatch` (the header's ROM layout, 1 = us, 2 = jp, differs from `rom`), `incomplete_inputs` (a record without its pad), `playback_gaps` (the ghost would vanish in the middle of a scene: refused rows playback does not bridge, or occurrences that never arrived; hiding across a level change is allowed), `frames_mismatch` (the clip's own clock disagrees with `frames`; exact for a star, bounded for a segment). The trainer runs the same checks before uploading (`community/claims.py`). |
 | `PUT /v1/pins` | At most4 recording IDs; finite expiring leases preserve replaced winners subject to account/global physical-byte limits and publication visibility. |
 | `POST /v1/recordings/retract` | Owner-only `{raw_sha256,keep_strategy:string|null}`. Unpublishes the caller's recordings of those bytes under every other strategy (all when null), removes their winners and pins, expires their unfinished grants and bumps the affected scope epochs. Bytes are collected by reconciliation, as after withdrawal. Returns `{retracted:n}`. Persisted owners keep it after suspension, like withdrawal. |
 | `POST /v1/account/withdraw` | Explicitly confirmed withdrawal of own published ghosts; visibility changes before physical collection. |
@@ -177,6 +178,41 @@ provenance:"community-unverified",structurally_valid:true,full_start:true}`.
 binding must be unique. Server-produced eligibility is structural, not anti-cheat
 certification. The client regrades frames using its current strategy/Overall
 model and maps public rows into existing `PortableGhost` objects.
+
+## A ghost's start
+
+A ghost's start is the game state the ghost begins from. With it, the ghost's
+recorded pads re-simulate the whole run exactly, so a community ghost becomes a
+full scene with exact save states. Griffin approved the upload format change and
+the service update on 2026-11-08: "Yes, 5% more per ghost is fine, and go ahead
+and update..". The 5% compares a start with the raw clip (20.5-26.1 KB against
+452-519 KB). Against the stored GHC1 bytes it is larger: the live average was
+73 KB per ghost on 2026-11-04, so a 26 KB start adds about 36% to what R2 stores.
+
+The service never reads inside a start. It checks the declared size and SHA-256
+before any write, then stores the start in the ghost's own R2 object, right after
+the ghost's bytes, in the same multipart write. Downloads read each part by range.
+So every deletion path deletes a start with its ghost: withdrawal, account and
+identity deletion, retraction, a faster replacement, a catalog retirement and a
+lapsed pin all end at reconciliation, which deletes that one object. The start's
+bytes count wherever the ghost's do: the grant's reservation, the daily upload
+bytes, the account's retained bytes and the global physical budget. It adds no R2
+operation to an upload. Migration `0008_ghost_start.sql` adds the start's hash and
+size to grants and assets.
+
+The trainer (`community/sync.py`) asks the start's owner for a start, via the
+seam in `community/ghost_start.py`, and sends it only when `/v1/config`
+advertises `limits.start_bytes` and the start fits. That config read costs no
+account ticket and is held for an hour. A grant key binds one exact admission
+body, so a start that begins to ride along gets a new key. A released trainer
+sends no start fields and its uploads are unchanged; a start upload later finds
+the earlier ghost `already_present` and is not attached. A downloaded ghost with
+start headers costs one more account ticket for `/start`. The cache keeps the
+start beside the ghost (`<id>.start`, counted in the cache's byte cap and evicted
+with it) and hands it to the owner. A start is an extra: a failed or mismatched
+start download, or an owner that refuses it, leaves the ghost playable. Another
+player's trainer produced it, so it is untrusted data the owner validates before
+use.
 
 ## Lossless bounded GHC1 transport
 
