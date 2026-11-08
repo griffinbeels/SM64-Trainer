@@ -143,6 +143,16 @@ the first account that shares from this computer gets them. You can turn sharing
 in your account settings. If you press **Remove shared ghosts**, your older ghosts
 will not upload again by themselves.
 
+**What a shared ghost carries.** A shared ghost carries Mario's poses, the camera,
+the timing and your controller inputs, with your player name. It can also carry its
+start: a copy of the game's memory when the run begins, about 21 KB. The start
+includes your save file's star flags and your practice ROM's settings. With it,
+another player can replay your whole run exactly. Players who can download the ghost
+can also download its start, and the start is deleted with the ghost or your account.
+Your ROM, videos and full practice history are never uploaded. When the privacy
+notice changes, the app asks you to read and accept it once. Until you accept,
+uploads wait: ghosts you finish in the meantime are kept and upload afterwards.
+
 **Free up space from ghosts.** Settings shows how much space ghost files use on
 this computer under **Ghost files**. **Delete ghosts, keep PBs** deletes every
 ghost except your PB ghosts, the ghosts you saved and the ghosts you imported.

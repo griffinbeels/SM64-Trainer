@@ -1,8 +1,11 @@
 import {requireThat,uuid} from "./errors.js";
 // start_bytes caps a ghost's start, the opaque game state a ghost begins from.
-// Measured starts are 20.5-26.1 KB compressed (2026-11-08, three Whomp's
-// Fortress ghosts); 64 KiB leaves 2.5x for larger courses. The trainer reads
-// this cap from /v1/config and sends a start only when one is advertised.
+// The trainer's start (ghost/start_frame.py: the start frame's task regions) is
+// about 21 KB compressed; with main-pool changes it measured up to 26.1 KB
+// (2026-11-08, three Whomp's Fortress ghosts). 64 KiB leaves room for larger
+// courses. The trainer reads this cap from /v1/config and sends a start only
+// when one is advertised, and only for an account on the current privacy
+// notice (beta-3 is the first that describes starts, /policies#ghost-start).
 export const LIMITS = Object.freeze({
   encoded_bytes: 2 * 1024 * 1024, raw_bytes: 16 * 1024 * 1024, start_bytes: 64 * 1024,
   retained_bytes: 64 * 1024 * 1024, global_bytes: 10 * 1000 * 1000 * 1000,
