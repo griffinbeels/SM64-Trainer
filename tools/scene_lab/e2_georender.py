@@ -597,12 +597,13 @@ class Cpu:
 def run_geo(frame: Frame, cpu: Cpu, head: int, end: int, poison: list[tuple[int, int]],
             camera: tuple | None, ram: bytes | None = None, trace: bool = True) -> tuple[Sandbox, dict]:
     """geo_process_root over `frame`'s RAM (or `ram`), from `camera` when given: (focus,
-    position), or (focus, position, roll, fov) with None for the frame's own (camera_state.place)."""
+    position), or (focus, position, roll, fov) with None for the frame's own, and a fifth True to
+    leave the stage's Mario out (camera_state.place)."""
     sandbox = cpu.sandbox(frame.ram if ram is None else ram, trace)
     for lo, hi in poison:
         sandbox.memory[phys(lo):phys(hi)] = 0xA5
     if camera:
-        camera_state.place(sandbox.memory, camera, US["gLakituState"], US["sFOVState"])
+        camera_state.place(sandbox.memory, camera, US["gLakituState"], US["sFOVState"], US["gMarioStates"])
     sandbox.put_u32(US["gDisplayListHead"], head)
     sandbox.put_u32(US["gGfxPoolEnd"], end)
     root = frame.word(frame.word(US["gCurrentArea"]) + 4)

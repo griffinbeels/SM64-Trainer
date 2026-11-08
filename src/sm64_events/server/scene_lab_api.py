@@ -21,6 +21,10 @@ one reader, and without it this module is never imported and no route is added. 
                                   (the Library's ghost button)
     GET  /api/scene-lab/camera-presets?level=&area=  the saved cameras of that level and area (slots 1-9);
                                   PUT the same {slots} to replace them (tools/scene_lab/camera_presets.py)
+    GET  /api/scene-lab/camera-paths?level=&area=    the camera path of that level and area ({keys});
+                                  PUT the same {keys} to replace it (tools/scene_lab/camera_paths.py)
+    GET  /api/scene-lab/actions?session=N&target=stage   every frame's action of the stage's Mario or a
+                                  scene ghost (its ref), for the step to the next action change
     POST /api/scene-lab/close
     WS   /api/scene-lab/ws        pictures and poses of the open scene (protocol below)
     GET  /api/scene-lab/audio/{block}?session=N[&track=music|effects|ghost:<ref>]   one block of the open scene's sound
@@ -69,8 +73,10 @@ sound late. 404 for no sound or no such block, 409 for a scene no longer open, 4
 that fails its hash.
 
 Socket protocol. The page sends JSON: {"id", "session", "frame", "camera": null or {"focus":
-xyz, "position": xyz[, "roll", "fov"]} or {"ghost": ref} or {"rig": {...}}, "encoding":
-"jpeg"|"raw"|"shared"[, "hud": false]} for a picture ({"ghost": ref}: that scene ghost's own
+xyz, "position": xyz[, "roll", "fov"][, "recorded": weight]} (a camera path's blend toward the
+recorded camera, scene_session.recorded_blend) or {"ghost": ref} or {"rig": {...}}, "encoding":
+"jpeg"|"raw"|"shared"[, "hud": false][, "mario": false]} for a picture ("mario": false leaves the
+stage's Mario out, its header then "mario": false; {"ghost": ref}: that scene ghost's own
 recorded camera at this picture, its header's "view" {"ghost", "camera"} the camera drawn; {"rig":
 {"kind", "target", "shot", "height", "radius", "speed", "phase", "side", "tuning"}}: a cinematic
 camera following the stage's Mario or a scene ghost, its header's "rig" what it did,
@@ -730,7 +736,8 @@ class SceneLab:
         loop = asyncio.get_running_loop()
         try:
             pending = await self._run(generation, "begin", message.get("frame"), message.get("camera"),
-                                      message.get("encoding", "jpeg"), message.get("hud", True))
+                                      message.get("encoding", "jpeg"), message.get("hud", True),
+                                      message.get("mario", True))
         except SceneClosed as closed:
             return _answered({"id": ident, "error": str(closed), "closed": True})
         except ValueError as error:
@@ -833,6 +840,17 @@ class SceneLab:
         except (LookupError, RuntimeError, OSError, ValueError) as error:
             ready, reason = False, str(error)
         return {"id": message.get("id"), "kind": "rig-path", "ready": ready, "reason": reason}
+
+    async def actions(self, generation, target: str) -> dict:
+        """Each frame's action of the stage's Mario or a scene ghost (scene_session.actions), for the
+        step to the next action change, once Mario's path (which carries his actions) is read. Over
+        HTTP, not the socket, so the socket's messages stay the pictures' and their questions."""
+        if target == "stage":
+            try:
+                await asyncio.wrap_future(await self._run(generation, "prepare_path"))
+            except (LookupError, RuntimeError, OSError, ValueError):
+                pass                                      # actions() says why there are none
+        return {"target": target, **await self._run(generation, "actions", target)}
 
     async def ghosts_reply(self, message: dict) -> dict:
         """The open scene's ghosts become the page's set (scene_session.set_ghosts), drawn with the
@@ -1199,6 +1217,10 @@ class PresetsBody(BaseModel):
     slots: list = Field(max_length=9)
 
 
+class PathBody(BaseModel):
+    keys: list = Field(max_length=64)
+
+
 def _mount_preset_routes(router: APIRouter, lab: SceneLab) -> None:
     """GET and PUT /camera-presets?level=&area=: the camera presets of one level and area, in the lab
     folder's camera-presets.json (tools/scene_lab/camera_presets.py owns the file and its checks).
@@ -1225,6 +1247,35 @@ def _mount_preset_routes(router: APIRouter, lab: SceneLab) -> None:
             return presets().replace(*where, body.slots)
         except ValueError as refused:            # camera_presets.PresetError
             raise HTTPException(422, str(refused)) from None
+
+    paths_store = None
+
+    def paths():
+        nonlocal paths_store
+        if paths_store is None:
+            paths_module = _lab_module("camera_paths")
+            paths_store = paths_module.CameraPaths(lab._lab_root() / paths_module.FILE_NAME)
+        return paths_store
+
+    # The camera path of one level and area (tools/scene_lab/camera_paths.py owns the file and its checks).
+    @router.get("/camera-paths")
+    def camera_paths(where: tuple[int, int] = Depends(place)):
+        return paths().keys(*where)
+
+    @router.put("/camera-paths")
+    def replace_camera_paths(body: PathBody, where: tuple[int, int] = Depends(place)):
+        try:
+            return paths().replace(*where, body.keys)
+        except ValueError as refused:            # camera_paths.PathError
+            raise HTTPException(422, str(refused)) from None
+
+    # Every frame's action of the open scene's Mario or a scene ghost (SceneLab.actions).
+    @router.get("/actions")
+    async def actions(session: int, target: str = Query(default="stage", min_length=1, max_length=512)):
+        try:
+            return await lab.actions(session, target)
+        except SceneClosed as closed:
+            raise HTTPException(409, str(closed)) from None
 
 
 def _mount_job_routes(router: APIRouter, lab: SceneLab, export_options: dict, moment_options: dict,

@@ -20,7 +20,11 @@ coordinates, optionally with its own "roll" (the game's s16 angle the screen tur
 "fov" (degrees); without them the frame's own apply. The scene evaluator re-runs SM64's own
 scene-graph code for that camera and the host draws the whole rebuilt RDRAM with the new list.
 The pose's camera (focus, position, roll, fov) redraws the recorded picture exactly, which is
-what lets a free camera start from the picture on screen.
+what lets a free camera start from the picture on screen, but for Mario's model: every moved
+camera draws his most detailed one whatever its distance (camera_state.full_detail), where the
+game may have drawn a plainer one. A free camera with "recorded": weight
+(a camera path easing into or out of the recorded camera, ui/components/scenepath.js) is drawn
+that share of the way to the frame's recorded camera (recorded_blend).
 
 A picture without the HUD (begin's hud=False) sends either list with the 2D overlay the game
 draws after the world turned into no-ops (hud.py: lives, coins, stars, the timer, Usamune's
@@ -122,6 +126,7 @@ WORLD_LIMIT = 1e6             # SM64's world fits in +-32768; a camera far outsi
 NO_SCENE = ("This frame has no 3D scene to move around in (a level load, a fade or a menu), "
             "so it shows the recorded camera.")
 NOTHING_DRAWN = "Nothing is drawn there to focus on (sky, or too far away). Pick a surface."
+MARIO_SHOWN = "This picture cannot be drawn again without Mario (a level load, a fade or a menu), so he shows."
 RUN_GAP_WORDS = 16            # changed words this close together travel to the host as one run
 MAX_HOST_RUNS = 65536         # viewer_host.c's MAX_RUNS
 LOOK_AHEAD_STEP = 4           # a free picture this many frames before the last one is a step back
@@ -164,6 +169,29 @@ def world_camera(camera) -> tuple:
     if roll is None and fov is None:
         return vectors[0], vectors[1]
     return vectors[0], vectors[1], roll, None if fov is None else float(fov)
+
+
+def blend_cameras(camera: dict, toward: dict, weight: float) -> dict:
+    """`camera` moved `weight` (0 to 1) of the way to `toward` (both {"focus", "position", "roll",
+    "fov"}; a roll or fov of None counts as the other's): place and aim along straight lines, the
+    roll (the game's s16) the short way round, the field of view evenly in log(tan(fov / 2)), as a
+    camera path moves its lens (scenepath.js)."""
+    def mix(a, b):
+        return [x + (y - x) * weight for x, y in zip(a, b, strict=True)]
+    roll, other = camera.get("roll"), toward.get("roll")
+    roll = other if roll is None else roll
+    if roll is not None and other is not None:
+        turn = (other - roll + 32768) % 65536 - 32768
+        roll = (round(roll + turn * weight) + 32768) % 65536 - 32768
+    fov, aim = camera.get("fov"), toward.get("fov")
+    fov = aim if fov is None else fov
+    if fov is not None and aim is not None:
+        low, high = (math.log(math.tan(math.radians(value) / 2)) for value in (fov, aim))
+        fov = math.degrees(2 * math.atan(math.exp(low + (high - low) * weight)))
+    focus, position = mix(camera["focus"], toward["focus"]), mix(camera["position"], toward["position"])
+    if math.dist(focus, position) < 1.0:                  # never on its own aim
+        position[2] += 1.5
+    return {"focus": focus, "position": position, "roll": roll, "fov": fov}
 
 
 @dataclass
@@ -414,6 +442,7 @@ class PendingPicture:
     view: dict | None = None     # a ghost's view: {"ghost": ref, "camera": the camera drawn, or None}
     rig: dict | None = None      # a cinematic camera: {"kind", "target", "shot", "side", "pulled", "raised"}
     used: dict | None = None     # the camera drawn when the server drew one: {"focus", "position", "roll", "fov"}
+    mario: bool = True           # the stage's Mario is in the picture (False: left out, camera_state.hide_mario)
 
 
 class SceneSession:
@@ -457,6 +486,7 @@ class SceneSession:
         self._rig_tuning: dict | None = None             # the registry's rows a rig request may leave out
         self._runners: dict = {}                         # target -> (what it was read from, camera_rig.Runner)
         self._stage_reads: dict[int, tuple] = {}         # package frame -> the stage Mario's (position, yaw)
+        self._stage_actions: dict[int, int | None] = {}  # package frame -> his action (gMarioStates.action)
         self.path_reader_factory = rig_path.PathReader   # open() may name another (tests: InProcessReader)
         self._path_reader = None                         # the reader of his path, once a rig asked for it
         self._path_reading: tuple | None = None          # (future, the package frames it reads)
@@ -808,19 +838,34 @@ class SceneSession:
         or ReadScreen's own BGR rows bottom-up ("raw")."""
         return self.finish(self.begin(frame, camera, encoding, hud))
 
-    def begin(self, frame: int, camera=None, encoding: str = "jpeg", hud: bool = True) -> PendingPicture:
+    def begin(self, frame: int, camera=None, encoding: str = "jpeg", hud: bool = True,
+              mario: bool = True) -> PendingPicture:
         """picture()'s first half, on the session's thread: everything up to the host (the package
         decode or the evaluator's view, the words the host lacks) and the request written. The host
-        draws it while this thread begins the next picture; finish() collects it."""
+        draws it while this thread begins the next picture; finish() collects it. `mario` False leaves
+        the stage's Mario out of the redraw (camera_state.hide_mario); the recorded camera is then
+        drawn again from its own pose, which redraws its picture exactly. Where the frame cannot be
+        redrawn he shows, and the header's reason says so."""
         index = self._index(frame)
         if encoding not in ENCODINGS:
             raise ValueError("unknown encoding")
         if not isinstance(hud, bool):
             raise ValueError("hud is true or false")
+        if not isinstance(mario, bool):
+            raise ValueError("mario is true or false")
         view, camera = self._ghost_view(index, camera)
         rig_started = time.perf_counter()
         rig, camera = self._rig_view(frame, camera)
+        camera, aim_reason = self.aim_blend(frame, camera)
+        camera, blend_reason = self.recorded_blend(frame, camera)
+        blend_reason = blend_reason or aim_reason
+        redrawn = not mario and camera is None
+        if redrawn:                                      # the recorded camera, drawn again from its pose
+            pose = self.pose(frame)["pose"]
+            camera = None if pose is None else {key: pose[key] for key in ("focus", "position", "roll", "fov")}
         free = None if camera is None else world_camera(camera)
+        if free is not None and not mario:
+            free = (*free, None, None)[:4] + (True,)
         if free is not None:
             self._ahead_generation += 1          # the look-ahead stops before its next frame
         started = time.perf_counter()
@@ -833,6 +878,9 @@ class SceneSession:
         if rig is not None:                  # the recorded camera when the rig had none or it could not be drawn
             own = rig.pop("reason")
             reason = reason or own
+        if redrawn and not drawn_free:                   # the recorded picture as it was, Mario in it
+            reason = MARIO_SHOWN
+        reason = reason or blend_reason
         used =None if not drawn_free else {"focus": camera["focus"], "position": camera["position"],
                                             "roll": camera.get("roll"), "fov": camera.get("fov")}
         if drawn_free:
@@ -846,7 +894,8 @@ class SceneSession:
         cut = cuts[-1] if cuts else None
         pending = PendingPicture(frame, encoding, "free" if drawn_free else "recorded", reason, timings, started,
                                  cut is None or cut.reason is not None, cut and cut.reason,
-                                 ghosts=host_frame.ghosts is not None, view=view, rig=rig, used=used)
+                                 ghosts=host_frame.ghosts is not None, view=view, rig=rig, used=used,
+                                 mario=mario or not drawn_free)
         self._begun.append(pending)
         return pending
 
@@ -888,7 +937,7 @@ class SceneSession:
         return {"frame": pending.frame, "width": picture.width, "height": picture.height, "encoding": encoding,
                 "format": "image/jpeg" if encoding == "jpeg" else "bgr24-bottom-up",
                 "camera": pending.camera, "reason": pending.reason, "sha256": digest,
-                "hud": pending.hud, "hud_reason": pending.hud_reason,
+                "hud": pending.hud, "hud_reason": pending.hud_reason, **({} if pending.mario else {"mario": False}),
                 "payload_bytes": len(payload), "timings": timings, "camera_used": pending.used,
                 **({"ghosts": picture.ghosts} if pending.ghosts else {}),
                 **({"view": pending.view} if pending.view else {}),
@@ -1200,6 +1249,32 @@ class SceneSession:
             return
         for index, row in zip(reading[1], rows, strict=True):
             self._stage_reads[index] = None if np.isnan(row[0]) else ([float(v) for v in row[:3]], int(row[3]))
+            self._stage_actions[index] = int(row[4]) if len(row) > 4 and np.isfinite(row[4]) else None
+
+    def actions(self, target: str = "stage") -> dict:
+        """Each frame position's action, for the Scene viewer's step to the next or previous action
+        change: the stage's Mario's ("stage", gMarioStates.action from the frames his path has been read
+        for, from the first: prepare_path) or a scene ghost's (its clip's live_action in the row its
+        drawing shows). {"actions": [code or None], "names": {code: the action's name in plain words
+        (memory/addresses.py action_label)}, "reason": why there are none, or None}."""
+        from sm64_events.memory.addresses import action_label
+        if target == "stage":
+            self._take_path()
+            if self._path_problem or self.package.states is None:
+                return {"actions": [], "names": {}, "reason": self._path_problem or camera_rig.NO_STATE}
+            codes = []
+            for index in self.frames:
+                if index not in self._stage_reads:            # not read yet
+                    break
+                codes.append(self._stage_actions.get(index))
+        else:
+            rows = self.ghosts.rows(target)
+            if rows is None:
+                return {"actions": [], "names": {}, "reason": stage_ghosts.VIEW_GONE}
+            codes = [None if (ghost_frame := self._ghost_frame(index)) is None else rows.action(ghost_frame)
+                     for index in self.frames]
+        names = {str(code): action_label(code) for code in sorted({code for code in codes if code})}
+        return {"actions": codes, "names": names, "reason": None}
 
     def _mario_offset(self) -> int | None:
         """gMarioStates' RDRAM offset on this ROM (US or JP), None on another."""
@@ -1282,6 +1357,70 @@ class SceneSession:
                 self._walls_at(place)
         except Exception as error:  # noqa: BLE001 - the first camera that needs it says why
             log.warning("scene viewer: warming the free camera failed: %s", error)
+
+    def aim_blend(self, frame: int, camera) -> tuple[dict | None, str | None]:
+        """A camera path's camera whose keys aim at a runner (ui/components/scenepath.js): {..., "aim":
+        {target: weight}} ("stage" or a scene ghost's ref, weights 0 to 1 that sum to at most 1) has its
+        focus moved that share of the way to each runner's eyes on his lightly smoothed path at frame
+        position `frame` (camera_rig.Track.aim, what the cinematic cameras aim at). Returns the camera
+        without "aim" and None; a runner with no place here (his path not read yet, another area, a
+        ghost gone) keeps the camera's own focus for its share, and the reason says why. Any other
+        camera comes back as it is. ValueError for weights that are not that."""
+        if not (isinstance(camera, dict) and "aim" in camera):
+            return camera, None
+        weights = camera["aim"]
+        if not (isinstance(weights, dict) and len(weights) <= stage_ghosts.MAX_GHOSTS + 1
+                and all(isinstance(target, str) and 0 < len(target) <= 512 and _number(weight) and 0 <= weight <= 1
+                        for target, weight in weights.items()) and sum(weights.values()) <= 1 + 1e-6):
+            raise ValueError("a camera's aim is {runner: weight}, weights 0 to 1 summing to at most 1")
+        own = {key: value for key, value in camera.items() if key != "aim"}
+        focus, reason = np.array(own.get("focus"), np.float64), None
+        if focus.shape != (3,):
+            raise ValueError("camera focus must be three finite world coordinates")
+        moved = focus.copy()
+        for target, weight in weights.items():
+            point, missing = self._aim_point(frame, target)
+            if point is None:
+                reason = reason or missing
+            else:
+                moved += weight * (point - focus)
+        if math.dist(moved, own["position"]) >= 1.0:          # never on its own place
+            own["focus"] = [float(value) for value in moved]
+        return own, reason
+
+    def _aim_point(self, frame: int, target: str):
+        """A runner's eyes on his lightly smoothed path at frame position `frame` (the point a cinematic
+        camera aims at), or None and why."""
+        runner = self._runner(target)
+        if isinstance(runner, str):
+            return None, runner
+        if frame >= len(runner):
+            return None, camera_rig.PATH_PENDING
+        track = self.rigs.track(camera_rig.Rig.of({"kind": "front", "target": target}, self._shipped_rig_tuning()), runner)
+        point = track.aim[frame]
+        return (point, None) if np.isfinite(point).all() else (None, runner.reason)
+
+    def recorded_blend(self, frame: int, camera) -> tuple[dict | None, str | None]:
+        """A camera path's camera on its way into or out of the recorded camera (ui/components/
+        scenepath.js): {"focus", "position", "roll", "fov", "recorded": weight} is drawn `weight` (0
+        to 1) of the way from that camera to frame `frame`'s recorded one (pose): place and aim in
+        straight lines, the roll the short way round, the lens evenly (blend_cameras). Returns the
+        camera to draw and None; any other camera comes back as it is. Where the frame has no
+        recorded camera to blend with, the path's own camera and the reason. ValueError for a weight
+        that is not 0 to 1."""
+        if not (isinstance(camera, dict) and "recorded" in camera):
+            return camera, None
+        weight = camera["recorded"]
+        if not (_number(weight) and 0 <= weight <= 1):
+            raise ValueError("a camera's recorded weight is a number from 0 to 1")
+        own = {key: value for key, value in camera.items() if key != "recorded"}
+        world_camera(own)
+        if weight == 0:
+            return own, None
+        answer = self.pose(frame)
+        if answer["pose"] is None:
+            return own, answer["reason"]
+        return blend_cameras(own, answer["pose"], float(weight)), None
 
     def pose(self, frame: int) -> dict:
         """The frame's recorded camera and Mario's position, or None and the reason."""

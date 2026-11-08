@@ -1616,10 +1616,19 @@ change (Play and Pause, Record and Stop, the [[frame]] numbers): each changing l
 size of its widest form, and notices and the [[cinematic camera]] on screen's settings show on the
 picture's foot. **HUD** (kept per
 viewer) leaves the game's on-screen counters and timer out of every picture, the one on screen at
-once. The **Cinematic** row's [[cinematic camera]]s (Front, Side, Orbit, Chase, Overhead, Tripod)
+once. Every picture the lab draws again shows Mario's most detailed model however far the camera
+is (the game itself picks a plainer one from about 600 units and a blocky one from about 1600).
+**Mario** beside HUD (for this visit only) leaves the stage's Mario out of every picture the
+lab draws again, his shadow and what he holds too, so only the [[stage ghost]]s show; the lab then
+draws the recorded camera's picture again from that camera, the same picture without him, and a
+level load or a menu, which it cannot draw again, keeps him and says so. The **Cinematic** row's [[cinematic camera]]s (Front, Side, Orbit, Chase, Overhead, Tripod)
 follow Mario or a [[stage ghost]] along his path. The [[tilt and lens]] row turns and zooms whichever
 camera is on screen. Under the camera controls, the **Cameras** strip keeps [[camera preset]]s in
-slots 1-9.
+slots 1-9, and the block under it holds the [[Play speed]], the **Action** row and the [[camera path]]
+of the course and area on screen. The Action row names, in plain words, what Mario (or the
+[[stage ghost]] Follow names) is doing on the [[frame]] on screen ("Mario: Dive"); its two buttons,
+or [ and ], pause on the
+[[frame]] where that action began (or the one before) and on the [[frame]] where the next one begins.
 The page takes the keyboard when you arrive (the sidebar or the [[ghost button]])
 and after a mouse click on its controls; a field that types keeps its keys, and
 Esc, leaving the window or the page lets go of every key.
@@ -1680,7 +1689,7 @@ its music and sound effects (why, with its numbers, goes to the logs). Each
 What the [[scene viewer]] showed while **Record** was on, kept by the page as
 one entry per screen refresh: the [[frame]] Play's clock was at (or the one on
 screen while paused), the camera asked for and the camera the server drew
-(recorded, free, a [[ghost's view]], a rig), the HUD switch, the [[stage ghost]]s
+(recorded, free, a [[ghost's view]], a rig), the HUD and Mario switches, the [[stage ghost]]s
 drawn, and the sound's switches, volume, mutes and the recorded time it played.
 It holds no pictures: making the [[scene clip]] draws each entry again, so a
 stall while recording never reaches the video. Recordings stop at 30 minutes.
@@ -1830,6 +1839,61 @@ restarts; a file it cannot read shows an empty strip and says so.
   (`src/sm64_events/ui/components/sceneviewer.js`)
 - **Not** -- a [[ghost's view]], which follows a [[stage ghost]]'s own camera
   as it moves; a camera preset stands still where you saved it
+
+### Camera path
+
+A [[scene viewer]] camera that moves through **keys** you set: each key is a
+camera on a [[frame]] of the scene (its place, aim, [[tilt and lens]]), or the
+**recorded camera** itself. **+ Key** keeps the [[frame]] on screen and the
+camera on screen; from the Recorded camera it keeps the recorded camera, which
+the path then eases out of and back into, blending with the game's own moving
+camera. Between two keys the camera follows a smooth curve and meets each key
+exactly on its [[frame]], gliding through a middle key without slowing; it
+slows to a stop only at the first and last keys, at either end of a hold, and
+at a key whose **Ease** is on. A key's **Aim** is its own point, or Mario or a
+[[stage ghost]]: then the camera keeps turning to his eyes as he moves (the
+point a [[cinematic camera]] aims at), easing between one key's aim and the
+next one's. Before the first key and after the last it stays on that key. A **hold** is a second key
+on the [[frame]] of the key before it (+ Key again on the same [[frame]]): Play
+stops the game on that [[frame]], silent, for the hold's length (2 s unless its
+row says otherwise) while the camera travels from the key before to it, then
+the game and its sound go on ("bullet time"). It is Orbit while paused for any
+camera move: a held [[frame]] that the camera circles or flies past, kept by
+Record. A key's speed (1x, ½x, ¼x) plays the stretch from it to the next key
+that much slower, the camera slowing with the game, as [[Play speed]] does for
+the whole play. **Path** puts it on
+screen, and Play, a step, a seek and Record all draw the same camera at the
+same time in the scene, because the viewer works the path out from its own
+clock alone. Each key's row jumps to it (the scene pauses on its [[frame]]),
+replaces it with the camera on screen, or deletes it. Each course and area keeps one
+path, as it keeps its [[camera preset]]s; a key's [[frame]] counts from the
+first [[frame]] of the scene that plays it. The idea came from Xander's
+SM64Scripts camera tools (credited in the app).
+
+- **Lives** -- the math (`src/sm64_events/ui/components/scenepath.js`); the
+  block and the viewer's side of it (`src/sm64_events/ui/components/scenepathbar.js`);
+  the file (`tools/scene_lab/camera_paths.py`, served by
+  `src/sm64_events/server/scene_lab_api.py`); the blends with the recorded
+  camera and with a runner's eyes (`tools/scene_lab/scene_session.py`)
+- **Not** -- a [[cinematic camera]], which follows Mario or a [[stage ghost]]
+  wherever he goes; a camera path stands where its keys say, and at most turns
+  to look at him
+
+### Play speed
+
+How fast the [[scene viewer]]'s Play goes: 1x (the recording's own pace), ½x
+or ¼x. Slower, each recorded picture stays on screen two or four times as
+long; Mario still moves in the game's own steps, but the free camera and a
+[[camera path]] move every screen refresh, so Record makes slow motion of
+both. Slower than 1x plays silent, music and sound effects alike, and the
+sound comes back at 1x (one switch in the code, so this can change later).
+A [[cinematic camera]] still moves once a recorded picture.
+
+- **Lives** -- the speed's clock and the sound's rule
+  (`src/sm64_events/ui/components/scenepath.js`); the row
+  (`src/sm64_events/ui/components/scenepathbar.js`)
+- **Not** -- the flight speed, which sets how fast W A S D move the free
+  camera; nor a key's speed, which slows one stretch of a [[camera path]]
 
 ### Ghost button
 

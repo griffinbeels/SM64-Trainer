@@ -45,11 +45,12 @@ class Cutter:
 
 
 def _recording(lease, folder):
-    """The served lab as main.py's is (live), with a lease double and a silent cutter, once the wrapper
-    writes: the cutter says it records."""
+    """The served lab as main.py's is (live, following the fixture's own tracker and so its journal),
+    with a lease double and a silent cutter, once the wrapper writes: the cutter says it records."""
     def rig(app, lab, seen):
         lab.live_on, lab.lease_factory, lab.cutter_factory = True, lambda root: lease, lambda folder, on_event: Cutter()
         lab._lab_root = lambda: folder
+        lab.follow_attempts(seen["tracker"])
         lab.scenes.recording = {"recording": True, "reason": None}
     return rig
 

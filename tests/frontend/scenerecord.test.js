@@ -138,7 +138,8 @@ test("Record, Stop, the video's progress, then Show in folder opens Explorer at 
   const posted = fetches.find((call) => call.url === "/api/scene-lab/export");
   expect(posted.method).toBe("POST");
   expect(posted.body.fps).toBe(60);
-  expect(posted.body.version).toBe(1);                 // the recording's format, which a reader checks
+  expect(posted.body.version).toBe(2);                 // the recording's format, which a reader checks
+  expect(posted.body.timeline.every((entry) => entry.mario === true)).toBe(true);    // version 2's Mario switch
   expect(posted.body.session).toBe(4);
   expect(posted.body.timeline.map((entry) => entry.t_ms)).toEqual([0, 16]);
   page.getByText(/Saved Bob - Star 2026-10-27 14.05.33.mp4/);
