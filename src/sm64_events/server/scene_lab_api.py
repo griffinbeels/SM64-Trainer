@@ -125,6 +125,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, WebSocket, WebSocketDisconnect
+from fastapi import Path as FastPath
 from pydantic import BaseModel, Field, model_validator
 
 log = logging.getLogger("sm64.scene_lab")
@@ -294,6 +295,7 @@ class SceneLab:
 
     ghosts = None                  # scene_ghosts.SceneGhosts: the stage and the ghost catalog (mount_scene_lab)
     refitter = None                # slotlibrary.refit.SlotRefitter: the live server's slots follow each spawn
+    _slot_loop = None              # the app's event loop, for the star sets' broadcasts from the slot worker
     heading = {"title": "Lab recording", "target": None}     # the open scene's, as _heading says it
 
     def __init__(self, config_path: Path, *, session_options: dict | None = None,
@@ -456,6 +458,7 @@ class SceneLab:
         """At server start: the lease that keeps the scene tap recording, the attempt scenes, and the slot
         refit's thread."""
         await asyncio.to_thread(self._start_live_blocking)
+        self._slot_loop = asyncio.get_running_loop()
         if self.refitter is not None:
             self.refitter.start()
 
@@ -502,7 +505,7 @@ class SceneLab:
         if broadcaster is not None and hasattr(broadcaster, "observe"):
             broadcaster.observe(scenes.observe_event)
 
-    def follow_spawns(self, tracker, *, game=None, library=_HIS_LIBRARY, log_file=None) -> None:
+    def follow_spawns(self, tracker, *, game=None, library=_HIS_LIBRARY, log_file=None, atlases=None) -> None:
         """After every spawn the event stream announces, the slots made for that place get Mario's new place
         (slotlibrary/refit.py). The observer only stamps a deadline; the refitter's own thread and reader do the
         work, started and stopped with the app. Tests inject the game, the library and the log file.
@@ -514,13 +517,34 @@ class SceneLab:
         if broadcaster is None or not hasattr(broadcaster, "observe"):
             return
         from sm64_events.slotlibrary import refit, usamune
+        from sm64_events.slotlibrary.atlas import default_store
+        from sm64_events.slotlibrary.coursesets import CourseSets
+        from sm64_events.slotlibrary.keeper import SetKeeper
         if library is _HIS_LIBRARY:
             from sm64_events.core.paths import slot_library_dir
             from sm64_events.slotlibrary.store import SlotLibrary
             library = SlotLibrary(slot_library_dir())
+            atlases = default_store() if atlases is None else atlases
+        keeper = None if library is None else SetKeeper(
+            library, CourseSets(library.root / "course-sets.json"), atlases,
+            target=lambda: getattr(tracker, "target", None), on_change=self._slot_sets_changed)
         self.refitter = refit.SlotRefitter(game or (lambda: usamune.attach(None)), library,
-                                           log_file=log_file or refit.log_path())
+                                           log_file=log_file or refit.log_path(), keeper=keeper)
         broadcaster.observe(self.refitter.observe)
+        self._slot_broadcaster = broadcaster
+
+    def _slot_sets_changed(self, payload: dict) -> None:
+        """From the slot worker's thread: the star sets' answer goes out on the app's socket, broadcast only."""
+        loop, broadcaster = self._slot_loop, getattr(self, "_slot_broadcaster", None)
+        if loop is None or broadcaster is None or loop.is_closed():
+            return
+        from sm64_events.core.events import Event
+        event = Event(type="slot_sets_changed", frame=0, timestamp_utc=datetime.now(timezone.utc), payload=payload)
+        asyncio.run_coroutine_threadsafe(broadcaster.publish(event), loop)
+
+    def slot_sets(self):
+        """The star sets' keeper, or None on a server that does not follow spawns."""
+        return None if self.refitter is None else self.refitter.keeper
 
     # ------------------------------------------------------------ status, open, close
 
@@ -1279,6 +1303,55 @@ class PathBody(BaseModel):
     keys: list = Field(max_length=64)
 
 
+class SlotMoveBody(BaseModel):
+    to: str = Field(pattern="^(star|course)$")
+
+
+NO_SLOT_SETS = "This server does not keep star sets: it does not follow the running game."
+
+
+def _mount_slot_set_routes(router: APIRouter, lab: SceneLab) -> None:
+    """The Ghost Lab's star sets strip (slotlibrary/keeper.py; the shape is frozen in docs/api.md):
+        GET    /slot-sets                     -> the current course and star, and Usamune's nine slots
+        POST   /slot-sets/{slot}/move {to}    -> the slot's state into the star's set or the course default
+        DELETE /slot-sets/{slot}?set=         -> the slot out of that set; the kept state and the game stay
+    Every answer is the GET body; `slot_sets_changed` carries it on the app's socket. Plain routes on the
+    threadpool; an edit wakes the slot worker, which writes the resolved set when it changed."""
+
+    def empty() -> dict:
+        return {"context": None, "game": None, "slots": [
+            {"slot": slot, "set": None, "state": None, "translated": None, "under": None} for slot in range(1, 10)]}
+
+    from sm64_events.slotlibrary.usamune import Refusal
+
+    def edit(work):
+        keeper = lab.slot_sets()
+        if keeper is None:
+            raise HTTPException(409, NO_SLOT_SETS)
+        try:
+            with keeper.lock:
+                payload = work(keeper)
+        except Refusal as refused:
+            raise HTTPException(409, f"{str(refused)[:1].upper()}{str(refused)[1:]}.") from None
+        except LookupError as missing:
+            raise HTTPException(404, f"{str(missing)[:1].upper()}{str(missing)[1:]}.") from None
+        lab.refitter.poke("slot_sets")
+        return payload
+
+    @router.get("/slot-sets")
+    def slot_sets():
+        keeper = lab.slot_sets()
+        return empty() if keeper is None else keeper.view()
+
+    @router.post("/slot-sets/{slot}/move")
+    def move_slot(body: SlotMoveBody, slot: int = FastPath(ge=1, le=9)):
+        return edit(lambda keeper: keeper.move(slot, body.to))
+
+    @router.delete("/slot-sets/{slot}")
+    def remove_slot(slot: int = FastPath(ge=1, le=9), set: str = Query(pattern="^(star|course)$")):  # noqa: A002
+        return edit(lambda keeper: keeper.remove(slot, set))
+
+
 def _mount_preset_routes(router: APIRouter, lab: SceneLab) -> None:
     """GET and PUT /camera-presets?level=&area=: the camera presets of one level and area, in the lab
     folder's camera-presets.json (tools/scene_lab/camera_presets.py owns the file and its checks).
@@ -1387,6 +1460,7 @@ def mount_scene_lab(app, config_path, **options) -> SceneLab:
     router = APIRouter(prefix="/api/scene-lab")
     _mount_ghost_routes(router, lab)
     _mount_preset_routes(router, lab)
+    _mount_slot_set_routes(router, lab)
     _mount_job_routes(router, lab, export_options, moment_options, resim_options)
 
     _mount_live_routes(router, lab)

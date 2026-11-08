@@ -216,6 +216,16 @@ def write_slot_bytes(memory: GameMemory, build: Build, index: int, data: bytes, 
         raise WriteFailed(f"slot {index} did not read back; it is now empty")
 
 
+def empty_slot(memory: GameMemory, index: int) -> None:
+    """The slot reads as empty: its occupied word to zero, the one word of the slot written. Usamune then neither
+    loads it nor counts it; the bytes behind the word stay. Zero is the value write_slot_bytes itself writes first,
+    never a Mario place, so this cannot set up a mismatched load (the 2026-11-05 crash)."""
+    occupied = slot_range(index)[0] + TRAILER_MARIO
+    memory.write(occupied, bytes(4))
+    if memory.read(occupied, 4) != bytes(4):
+        raise WriteFailed(f"slot {index} did not read back as empty")
+
+
 class Project64Game:
     """GameMemory over the attached Project64: it stores RDRAM as little-endian words."""
 

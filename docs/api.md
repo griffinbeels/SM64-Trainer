@@ -1132,6 +1132,19 @@ picture before it back and has it encoded. Owner: `server/scene_lab_api.py`.
 
 **Every frame's action.** `GET /api/scene-lab/actions?session=N&target=stage` (or a ghost's ref in the scene's set) answers once the stage Mario's path is read (the path reader reads his `gMarioStates.action` beside his place): `{target, actions: [code or null per frame], names: {code: plain words}, reason}`. A ghost's are its clip's `live_action` in the row its drawing shows; `names` are `memory/addresses.py::action_label`'s; `reason` is a sentence when there are none (no scene state, the path could not be read, a ghost not in the set). **409** when session `N` is not the open scene, **422** for an empty target. It is a route, not a socket question, so the socket carries only pictures and their questions. The page's step to the next or previous action change reads it (`ui/components/sceneactions.js`).
 
+**Star sets** (`slotlibrary/keeper.py`; the shape the Ghost Lab strip reads). `GET /api/scene-lab/slot-sets` answers
+`{context: null | {course_id, course, star_id, star}, game: null | {build: "us"|"jp"}, slots: [9 × {slot, set: "star"|"course"|null, state: null | {id, name, level, area, place, build, source, first_seen_utc}, translated: bool|null, under: null | state}]}`:
+the course Mario stands in and the star chosen there, and Usamune's nine slots as the course default with the star's set
+over it (`under` is the course default's state a star slot hides). `context` is null outside a course or before the slot
+worker has read the game; the nine entries are still there. `POST /api/scene-lab/slot-sets/{slot}/move {to: "star"|"course"}`
+moves the slot's state into the star's set or the course default at the same slot; `DELETE /api/scene-lab/slot-sets/{slot}?set=star|course`
+takes it out of that set (the kept state stays in the Slot Library and the game slot is not touched). Both answer the GET
+body; **409** with no course, or a star move with no star; **404** when the slot names nothing there; **422** for any other
+`to` or `set`. The app's `/ws` carries the same body as `{type: "slot_sets_changed", payload}` (broadcast only, never
+journaled) after a context change, an edit, a save of his that joined a set, and a context write.
+`POST /api/scene-lab/moment/{id}/write` also takes `course_id` and `star_id` (the watched ghost's star; `star_id` null is
+the course default) and answers `set: "star"|"course"|null`, the set the written state joined.
+
 ## Version sync — US vs JP coverage (source checkouts and installs alike)
 
 `/ui/sync.html` shows, per version-dependent thing the tracker relies on (a

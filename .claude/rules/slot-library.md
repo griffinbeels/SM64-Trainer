@@ -13,6 +13,7 @@ paths:
   - "tests/test_slot_refit.py"
   - "tests/test_slot_builds.py"
   - "tests/test_slot_translate.py"
+  - "tests/test_star_sets.py"
   - "tools/scene_lab/slot_atlas.py"
   - "tools/scene_lab/handoff_relocate.py"
 ---
@@ -21,13 +22,14 @@ paths:
 
 | To change... | Edit |
 |---|---|
-| Slot format, cartridge checks, the one write into game memory | `slotlibrary/usamune.py`. Every write goes through `write_slot_bytes`, inside one slot's range |
+| Slot format, cartridge checks, the one write into game memory | `slotlibrary/usamune.py`. Every write goes through `write_slot_bytes`, inside one slot's range; emptying a slot is `empty_slot` (its occupied word to zero) |
 | A save state from the other build (US in a JP game, or back) | `slotlibrary/translate.py::for_build`, the one door: `coursesets.place_states` and `handoff_try.install` call it when the state's build differs from the running one. `slotlibrary/atlas.py` owns the per-place atlas (format, `AtlasStore`, the hidden child); `tools/scene_lab/slot_atlas.py` builds one from cold boots of both ROMs (`cold_boot.py`). Static memory moves by `data/build_shifts.tsv` (`tools/import_stroop_maps.py`) |
 | Which Usamune build (US or JP) a slot belongs to | `slotlibrary/usamune.py`: `check_cartridge` returns the running `Build`, built from that version's layout rows; every reader and writer takes it. Module constants are slot-format offsets, the same in both builds. `KeptState.build` reads the cartridge name the record already holds, so no record changed |
 | Moving Mario inside a slot's data to the running game's place | `slotlibrary/relocate.py` (`to_live_place`); the simulation's evidence is `tools/scene_lab/handoff_relocate.py` |
 | How a kept state is stored, named or looked up | `slotlibrary/store.py`; `core/paths.py::slot_library_dir` says where. Nothing deletes a state |
-| What counts as a new save | `slotlibrary/watcher.py::watch_step` |
-| What goes into the slots on a course entry | `slotlibrary/coursesets.py` |
+| What counts as a new save | `slotlibrary/keeper.py::SetKeeper.watch` on the slot worker (every `refit.WATCH_SECONDS`); `watcher.py::watch_step` for the command line |
+| The course default and each star's set (a slot -> kept state map), the file | `slotlibrary/coursesets.py::CourseSets` (`course-sets.json` version 2; version 1 is read and converted) |
+| Which set applies (course, star), when it is written, his saves joining it, the Ghost Lab strip's answer | `slotlibrary/keeper.py::SetKeeper`; routes in `server/scene_lab_api.py::_mount_slot_set_routes` (shape in `docs/api.md`) |
 | The slot refit after each spawn: which slots, its trigger, what it keeps and logs | `slotlibrary/refit.py`; wired by `SceneLab.follow_spawns` (lab only, live server only) |
 | The `.sm64state` file and its refusals | `slotlibrary/sharefile.py` |
 | Driving it by hand | `tools/scene_lab/slot_library.py` |
@@ -44,9 +46,21 @@ Contracts the tests pin:
   structure. A pool address nothing explains refuses the write. A Mario already in place keeps the bytes as they are.
 - **The Mario place is read twice.** `write_slot_bytes(mario_place=)` reads gMarioObject again right before the
   occupied word goes in; a change leaves the slot empty (`MarioMoved`). Only putting a backup back passes None.
-- **Relocated bytes are new bytes.** The watcher, once wired, will keep a written relocated slot as a new state.
-  The slot refit writes relocated bytes on every reset, so wiring the watcher must skip the bytes the refitter
-  wrote (`SlotRefitter._wrote`), or each reset adds a state per slot.
+- **Relocated bytes are new bytes.** A slot's hash never names its kept state once the Trainer moved or translated
+  it, so `keeper.SlotLedger` holds what the Trainer last wrote into each slot (the kept state and the bytes' hash).
+  The set write, the refit and the Ghost Lab write record there; the watch, the refit's keeping and the capture
+  before a write skip those bytes, or each reset would add a state per slot and every write would join a set.
+- **One worker, one lock.** The set write on a context change, the refit after a spawn and the watch for his saves
+  run on the refitter's thread with its one reader, under `SetKeeper.lock`; the Ghost Lab's write takes the same
+  lock. The set write runs before the refit in the same pass.
+- **Star sets.** Context = (the course Mario stands in, a star). Entering a course takes the target's star when it is
+  in this course, else the course default; a star target pick (`target_changed`) or a star grab (`star_collected`) in
+  this course switches the star. A context change writes every slot the resolved set names (the course default
+  with the star's slots over it), empties a slot holding the Trainer's bytes for another set of this course, and
+  leaves anything else. A new save of his joins the current set at its slot; the first watch of a game only takes
+  stock. Every set starts empty, and nothing is written while none names anything. Simulation evidence
+  (2026-11-08): Usamune's own save into slot 5 of a cold-booted US BoB joined the star set at slot 5 on the next
+  watch (48 ms with the new state's compress; 0.2 ms idle).
 - **The slot refit touches only this place's slots.** After a spawn it refits occupied slots whose trailer level and
   area match the game's; a slot already in place is not written; a slot whose bytes changed since its first read is
   skipped (he may have just saved); a Mario that moves during a write stops the pass. His save joins the library
@@ -67,8 +81,5 @@ Contracts the tests pin:
 - **The watcher never runs on the poller's thread.** Nine slots cost 4.3 ms to read and 0.3 ms to hash, and a new
   state adds a compress and a disk write.
 
-The slot refit is the first wired piece: `SlotRefitter` owns its thread and reader, and the broadcaster's observer only
-stamps a deadline. The seam for wiring the rest: one worker thread with its own `usamune.attach()` reader (`rom_header` keeps per-reader
-state), a `SlotLibrary(slot_library_dir())`, and `watch_step` in a loop that keeps `result.seen`. A course entry
-calls `install_for_course` on that same worker. Not wired yet: the watcher and course sets (no poller hook, route
-or UI).
+`SlotRefitter` owns the one thread and reader; the broadcaster's observer only stamps a deadline (a spawn, a star pick
+or grab, an edit of the sets). The Ghost Lab strip reads `GET /api/scene-lab/slot-sets` and `slot_sets_changed`.

@@ -16,6 +16,7 @@ that was written joins the Slot Library (handoff_try.keep_built).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import importlib
 import json
 import logging
@@ -71,6 +72,10 @@ class MomentBody(BaseModel):
 
 class WriteBody(BaseModel):
     slot: int = Field(ge=1, le=9)
+    # The watched ghost's star: the written state joins its star set (or, with no star, the course default) at
+    # this slot (slotlibrary/keeper.py). Absent: the course and star the game is in now.
+    course_id: int | None = Field(default=None, ge=1, le=30)
+    star_id: int | None = Field(default=None, ge=0, le=7)
 
 
 def run_builder(config, path: Path, frame: int, register=lambda child: None) -> tuple[dict, bytes | None]:
@@ -241,7 +246,15 @@ class SceneMoments:
                 return {"refused": "check", "reason": verdict["reason"]}, None
             return {**answer, "checked": {"frames": verdict["frames"], "compared": verdict["compared"]}}, data
 
-    def _write_blocking(self, entry: dict, slot: int) -> dict:
+    def _write_blocking(self, entry: dict, slot: int, course_id: int | None = None, star_id: int | None = None) -> dict:
+        """The write and the star set it joins, under the star sets' lock when the server keeps them, so the slot
+        worker never reads this slot half written or takes it for a save of his."""
+        slot_sets = getattr(self.lab, "slot_sets", None)
+        keeper = slot_sets() if slot_sets is not None else None
+        with keeper.lock if keeper is not None else contextlib.nullcontext():
+            return self._write_locked(entry, slot, keeper, course_id, star_id)
+
+    def _write_locked(self, entry: dict, slot: int, keeper, course_id: int | None, star_id: int | None) -> dict:
         from sm64_events.core.paths import slot_library_dir
         from sm64_events.server.scene_lab_api import _lab_module
         tool = _lab_module("handoff_try")
@@ -277,19 +290,26 @@ class SceneMoments:
         except Exception:  # noqa: BLE001 - the slot is written; the library is a copy of it
             log.warning("A written save state did not join the Slot Library.", exc_info=True)
         written = {"written": True, "slot": slot, "frame": answer["frame"], "backup": installed.backup.name,
-                   "kept": kept, "build": build}
+                   "kept": kept, "build": build, "set": None}
+        if keeper is not None and kept is not None:
+            from sm64_events.slotlibrary.usamune import SLOT_BYTES, slot_address
+            try:
+                written["set"] = keeper.claim(slot - 1, kept, memory.read(slot_address(slot - 1), SLOT_BYTES),
+                                              course_id, star_id)
+            except Exception:  # noqa: BLE001 - the slot is written; the set is a list of it
+                log.warning("A written save state did not join its star set.", exc_info=True)
         translation = installed.translation
         if translation is not None:
             written["translated"] = {"from": translation.source, "to": translation.target,
                                      "words": translation.words(), "removed": len(translation.removed)}
         return written
 
-    async def write(self, token: str, slot: int) -> dict:
+    async def write(self, token: str, slot: int, course_id: int | None = None, star_id: int | None = None) -> dict:
         """LookupError: that build is gone. The game's own answer comes back as {refused, reason}."""
         entry = self.built.get(token)
         if entry is None:
             raise LookupError("That save state is gone. Press the slot again.")
-        return await asyncio.to_thread(self._write_blocking, entry, slot)
+        return await asyncio.to_thread(self._write_blocking, entry, slot, course_id, star_id)
 
 
 def game_sentence(text: str) -> str:
@@ -320,7 +340,7 @@ def mount_moment_routes(router: APIRouter, moments: SceneMoments) -> None:
     @router.post("/moment/{token}/write")
     async def write_moment(token: str, body: WriteBody):
         try:
-            return await moments.write(token, body.slot)
+            return await moments.write(token, body.slot, body.course_id, body.star_id)
         except LookupError as missing:
             raise HTTPException(404, str(missing)) from None
         except ConfigError as refused:

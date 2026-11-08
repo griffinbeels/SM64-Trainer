@@ -154,7 +154,7 @@ def test_a_save_state_written_into_the_other_versions_game_shows_its_flag_and_sa
 
     def crossed(app, lab, seen):
         rig(app, lab, seen)
-        lab.moments._write_blocking = lambda entry, slot: {
+        lab.moments._write_blocking = lambda entry, slot, *_set: {
             "written": True, "slot": slot, "frame": 7, "backup": "b.bin", "kept": None, "build": "us",
             "translated": {"from": "us", "to": "jp", "words": said["words"], "removed": 0}}
     folder = Path(tmp_path) / "shots"
