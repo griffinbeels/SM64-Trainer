@@ -1258,9 +1258,7 @@ def _warm_target(lab: SceneLab, course: int | None, star: int | None, tier: str)
     if lab.resim is None or course is None or star is None:
         return
     from sm64_events.server import scene_warm
-    from sm64_events.server.scene_resim import act_of_target
-    lab.resim.warm(course, act_of_target({"kind": "star", "entity_key": f"{course}-{star}"}),
-                   scene_warm.CURRENT if tier == "current" else scene_warm.LIST)
+    lab.resim.warm(course, star, scene_warm.CURRENT if tier == "current" else scene_warm.LIST)
 
 
 def _stage_open(found: dict, ghost: str | None) -> dict:
