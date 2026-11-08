@@ -28,3 +28,5 @@
   font-variant-numeric: tabular-nums; }
 .scene-lab-path-aim select, .scene-lab-path-speed { min-height: 28px; max-width: 160px; padding: 0 6px;
   background: var(--surface-2); font-size: .82rem; }
+/* Ease: a key the path always slows into (an end, a hold) says so in words; a chosen one is a switch. */
+.scene-lab-path-ease.is-fixed { padding: 0 4px; color: var(--muted); font-size: .8rem; white-space: nowrap; }

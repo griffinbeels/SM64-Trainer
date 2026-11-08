@@ -26,7 +26,6 @@ import { useEffect } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { Icon } from "./icons.js";
-import { ActionStep } from "./sceneactions.js";
 import { recordedTimes } from "./sceneclock.js";
 import { HOLD, MAX_KEYS, PLAY_SPEEDS, alwaysSettles, makeKey, orderedKeys, pathCamera, pathClock } from "./scenepath.js";
 import { ghostName } from "./sceneghosts.js";
@@ -271,7 +270,6 @@ export function PathBar({ link }) {
   // The note is one line, cut short with its whole sentence on hover, so a longer one never moves the row.
   return html`<div class="scene-lab-path" role="group" aria-label="Camera path">
     <div class="scene-lab-bar" aria-label="Path">
-      <span class="scene-lab-rigs-name">Path</span>
       <button type="button" aria-pressed=${!!link.pathOn} disabled=${!usable || !keys.length}
           title=${keys.length ? "Show the camera path: the camera moves through its keys as the scene plays"
             : "Add keys first"}
@@ -291,7 +289,7 @@ export function PathBar({ link }) {
   </div>`;
 }
 
-const SPEED_WORDS = { 1: "1x", 0.5: "½x", 0.25: "¼x" };
+export const SPEED_WORDS = { 1: "1x", 0.5: "½x", 0.25: "¼x" };
 const holdMs = (value) => Math.round(Math.min(HOLD.maxMs, Math.max(HOLD.minMs, (Number(value) || 0) * 1000)));
 
 // Where a key's camera looks: its own point, or a runner it turns to follow (Mario, a stage ghost; one
@@ -327,9 +325,10 @@ function KeyRow({ link, one, index, held, usable, count, fixed, jump, change, re
           onchange=${(event) => change(index, { aim: event.currentTarget.value || null })}>
         ${aimChoices(link, one).map(([value, words]) => html`<option key=${value} value=${value}>${words}</option>`)}
       </select></label>`}
-    <button type="button" aria-pressed=${fixed || one.ease} disabled=${!usable || fixed}
-        title=${EASE_WORDS[fixed ? "fixed" : one.ease ? "on" : "off"]}
-        onclick=${() => change(index, { ease: !one.ease })}>Ease</button>
+    ${fixed
+      ? html`<span class="scene-lab-path-ease is-fixed" title=${EASE_WORDS.fixed}>Always eases</span>`
+      : html`<button type="button" class="scene-lab-path-ease" aria-pressed=${!!one.ease} disabled=${!usable}
+          title=${EASE_WORDS[one.ease ? "on" : "off"]} onclick=${() => change(index, { ease: !one.ease })}>Ease</button>`}
     <select class="scene-lab-path-speed" value=${String(one.speed)} disabled=${!usable}
         title="How fast the game plays from this key to the next one (slower plays without sound)"
         aria-label=${`Speed after the key on frame ${one.frame + 1}`}
@@ -343,26 +342,13 @@ function KeyRow({ link, one, index, held, usable, count, fixed, jump, change, re
   </li>`;
 }
 
-// The Play speed: each game picture shows two or four times as long; slower than 1x plays silent
-// (scenepath.js soundPlays). Beside it, the step to the next or previous action change.
-function PlayRow({ link }) {
+// The Play speed (the play bar's three buttons): each game picture shows two or four times as long;
+// slower than 1x plays silent (scenepath.js soundPlays).
+export function PlaySpeeds({ link }) {
   const speed = link.playSpeed || 1;
-  return html`<div class="scene-lab-bar scene-lab-path-play" aria-label="Play speed and action">
-    <div class="scene-lab-path-speeds" role="group" aria-label="Play speed">
-      <span class="scene-lab-rigs-name">Play speed</span>
-      ${PLAY_SPEEDS.map((value) => html`<button type="button" key=${value} aria-pressed=${speed === value}
-          title=${value === 1 ? "Play at the recording's own speed, with its sound" : "Play slower, without sound"}
-          onclick=${() => setPlaySpeed(link, value)}>${SPEED_WORDS[value]}</button>`)}
-    </div>
-    <${ActionStep} link=${link} />
-  </div>`;
-}
-
-// The block under the Cameras strip, which moves as one: the Play speed and the action step, then the
-// camera path.
-export function PathPanel({ link }) {
-  return html`<div class="scene-lab-path-panel">
-    <${PlayRow} link=${link} />
-    <${PathBar} link=${link} />
+  return html`<div class="ghost-lab-speeds" role="group" aria-label="Play speed">
+    ${PLAY_SPEEDS.map((value) => html`<button type="button" key=${value} aria-pressed=${speed === value}
+        title=${value === 1 ? "Play at the recording's own speed, with its sound" : "Play slower, without sound"}
+        onclick=${() => setPlaySpeed(link, value)}>${SPEED_WORDS[value]}</button>`)}
   </div>`;
 }

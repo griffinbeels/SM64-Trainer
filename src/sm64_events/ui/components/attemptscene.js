@@ -22,7 +22,7 @@ import { Icon } from "./icons.js";
 
 const html = htm.bind(h);
 export const SCENE_POLL = { ms: 1000 };
-export const OPEN_IN_VIEWER = "Open in Scene viewer";
+export const OPEN_IN_VIEWER = "Open in Ghost Lab";
 export const SCENE_FINISHING = "Scene finishing…";
 
 // What a row's button shows for its scene: null (no button) when the lab knows nothing of it.

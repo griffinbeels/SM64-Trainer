@@ -2,11 +2,11 @@
 // action change (lab only).
 //
 // Xander's FrameAdvance runs a TAS until Mario's action changes, then pauses. Here the scene is
-// already recorded, so ◀ and ▶ (or [ and ]) jump straight to the frame where the action of whoever
-// Follow names (the stage's Mario, or a stage ghost) last changed or next changes: the frame a dive,
-// a kick or a wall kick begins. The block names that action on the frame on screen in plain words
-// ("Mario: Dive slide"), the name the rest of the Trainer gives it (memory/addresses.py action_label,
-// sent by the lab).
+// already recorded, so the play bar's two outer step buttons (or [ and ]) jump straight to the frame
+// where the action of whoever Follow names (the stage's Mario, or a stage ghost) last changed or next
+// changes: the frame a dive, a kick or a wall kick begins. The play bar's readout names that action on
+// the frame on screen in plain words ("Mario: Dive slide"), the name the rest of the Trainer gives it
+// (memory/addresses.py action_label, sent by the lab).
 //
 // The lab reads every frame's action once (GET /api/scene-lab/actions: the stage's Mario from his
 // path's reads, gMarioStates.action; a ghost from its clip's live_action; scene_session.actions) and
@@ -18,7 +18,6 @@ import htm from "htm";
 import { getJSON } from "../api.js";
 import { Icon } from "./icons.js";
 import { ghostName } from "./sceneghosts.js";
-import { SteadyText } from "./steadytext.js";
 
 const html = htm.bind(h);
 
@@ -68,8 +67,9 @@ export function stepAction(link, direction, time) {
   link.step(to - link.frame, time);
 }
 
-// The row's own words: the runner and the action on screen, or why there is none.
-function actionLine(link, answer) {
+// The play bar's words for the frame on screen: the runner and its action, or why there is none.
+export function actionLine(link) {
+  const answer = answerOf(link);
   const who = link.follow === "stage" ? "Mario" : ghostName(link.ghosts, link.follow);
   if (!answer) return { text: `${who}: ...`, title: "Reading the actions..." };
   const action = answer.actions[link.frame];
@@ -77,26 +77,27 @@ function actionLine(link, answer) {
   return { text: `${who}: ${action ? actionWords(answer.names[String(action)]) : "no action here"}`, title: null };
 }
 
+// Whether the step to an action change can run: the actions are read and there are some.
+export const actionsReady = (link) => !!answerOf(link)?.actions.length;
+
 // The name's place is as wide as Mario and the longest action name the Trainer knows (memory/
 // addresses.py action_label, 24 letters), whatever is on screen, so stepping never moves the buttons
 // (viewer round 9's SteadyText); a longer name or a ghost's is cut short, whole on hover.
-const NAME_SIZES = ["Mario: reading automatic dialog"];
+export const ACTION_SIZES = ["Mario: reading automatic dialog"];
 
-// An effect only when what it asks about changes: Preact runs effects after an animation frame, and
-// this page draws for every picture.
-export function ActionStep({ link }) {
+// Reads the actions of whoever Follow names once per scene, runner and length (the play bar calls it). An
+// effect only when what it asks about changes: Preact runs effects after an animation frame, and this page
+// draws for every picture.
+export function useActions(link) {
   useEffect(() => { loadActions(link); }, [link.scene, link.follow, link.scene?.frames.length]);
-  const answer = answerOf(link), line = actionLine(link, answer), usable = !!answer?.actions.length;
-  // The buttons come first, so the name's kept place trails at the row's end instead of opening a gap
-  // between them.
-  return html`<div class="scene-lab-action" role="group" aria-label="Action">
-    <button type="button" disabled=${!usable} onclick=${(event) => stepAction(link, -1, event.timeStamp)}
-        aria-label="Back to the last action change" title="Back to the frame this action began, or the one before ([)">
-      <${Icon} name="stepBack" size=${14} /></button>
-    <button type="button" disabled=${!usable} onclick=${(event) => stepAction(link, 1, event.timeStamp)}
-        aria-label="On to the next action change" title="On to the frame the next action begins (])">
-      <${Icon} name="stepForward" size=${14} /></button>
-    <output class="scene-lab-action-name" title=${line.title || line.text}>
-      <${SteadyText} text=${line.text} sizes=${NAME_SIZES} /></output>
-  </div>`;
+}
+
+// The two buttons that step to the last or next action change (or [ and ]).
+export function ActionButton({ link, direction }) {
+  const back = direction < 0;
+  return html`<button type="button" class="icon-button" disabled=${!actionsReady(link)}
+      onclick=${(event) => stepAction(link, direction, event.timeStamp)}
+      aria-label=${back ? "Back to the last action change" : "On to the next action change"}
+      title=${back ? "Back to where this move began, or the one before ([)" : "On to where the next move begins (])"}>
+    <${Icon} name=${back ? "actionBack" : "actionForward"} size=${16} /></button>`;
 }
