@@ -298,7 +298,7 @@ class CachedPopulation:
             assets = [(identifier, identifier in self._kept) for identifier in self._assets]
         found = []
         for identifier, kept in assets:
-            paths = [path for path in (self.root / (identifier + ".ghost"), self.root / (identifier + ".ghc1"))
+            paths = [path for path in (self.root / (identifier + suffix) for suffix in (".ghost", ".ghc1", ".start"))
                      if path.is_file()]
             try:
                 size = sum(path.stat().st_size for path in paths)
@@ -320,7 +320,7 @@ class CachedPopulation:
                     continue
                 gone = 0
                 try:
-                    for suffix in (".ghost", ".ghc1"):
+                    for suffix in (".ghost", ".ghc1", ".start"):  # a ghost's start goes with its ghost
                         path = self.root / (identifier + suffix)
                         if path.is_file():
                             size = path.stat().st_size

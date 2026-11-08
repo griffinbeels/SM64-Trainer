@@ -23,19 +23,23 @@ UPLOAD_FIELDS = {"target", "clock", "rom", "strategy", "frames", "raw_sha256", "
                  "encoded_bytes", "codec", "generation"}
 
 
+NOTICE = "beta-3"  # The first privacy notice that describes a ghost's start.
+
+
 class Service(Account):
     """The fake Worker: a public config with or without a start cap, and ghost
-    downloads that may name a start."""
-    def __init__(self, *, start_cap=64 * 1024, served_start=None):
+    downloads that may name a start. The account has accepted its notice."""
+    def __init__(self, *, start_cap=64 * 1024, served_start=None, notice=NOTICE):
         super().__init__()
-        self.start_cap, self.served_start = start_cap, served_start
+        self.start_cap, self.served_start, self.notice = start_cap, served_start, notice
+        self.state["privacy_version"] = NOTICE
         self.start_failure = None
 
     async def request_json(self, method, path, **kwargs):
         if path == "/v1/config":
             self.calls.append((method, path, kwargs))
             limits = {"encoded_bytes": 2 << 20} | ({} if self.start_cap is None else {"start_bytes": self.start_cap})
-            return {"v": 1, "protocol": 1, "limits": limits}
+            return {"v": 1, "protocol": 1, "limits": limits, "terms_version": "beta-2", "privacy_version": self.notice}
         return await super().request_json(method, path, **kwargs)
 
     async def request_bytes(self, method, path, **kwargs):
@@ -246,6 +250,19 @@ def test_the_cache_counts_a_start_in_its_byte_cap_and_evicts_it_with_its_ghost(t
         # A later copy without a start leaves no stale one behind.
         assert population.store_asset(second, encoded, native())
         assert population.start_of("2" * 64) is None and not (tmp_path / ("2" * 64 + ".start")).exists()
+    finally:
+        population.close()
+
+
+def test_settings_ghost_files_count_and_delete_a_kept_start_with_its_ghost(tmp_path):
+    population = CachedPopulation(Local(), root=tmp_path, account=Account())
+    try:
+        encoded = codec.encode(native())
+        population.store_asset(recording(), encoded, native(), start=START)
+        held = population.cached_holdings()
+        assert held[0]["bytes"] == len(encoded) + len(native()) + len(START)
+        assert population.drop_cached(["1" * 64])["bytes"] == held[0]["bytes"]
+        assert not list(tmp_path.glob("1" * 64 + ".*"))
     finally:
         population.close()
 

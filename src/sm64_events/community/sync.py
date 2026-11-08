@@ -24,6 +24,9 @@ logger = logging.getLogger(__name__)
 MAX_QUEUE = 32
 MAX_RETIRED = 256
 RETRACT_ROUTE = "/v1/recordings/retract"
+WAITING = ("active", "consent_required")
+"""Account states whose finished runs are saved for upload. Only an active account
+sends them: one that must accept a new notice keeps them until it does."""
 CONTRIBUTIONS = ("offer", "retract")  # Serial owner-bound work on the contribution task.
 
 
@@ -246,7 +249,8 @@ class CommunitySync:
         self._closing = False
         self._catalog, self._catalog_generation, self._catalog_until = {}, None, 0
         self._catalog_lock = asyncio.Lock()
-        self._start_cap, self._start_until = 0, 0  # The largest ghost's start the service accepts now.
+        # The largest ghost's start the service accepts now, and the privacy notice that describes it.
+        self._start_cap, self._start_privacy, self._start_read, self._start_until = 0, None, float("-inf"), 0
         self._local_jobs = set()
         self._search_task = None
         self._library_tasks = set()
@@ -441,7 +445,9 @@ class CommunitySync:
             return True
         return self._enqueue(("assets",), ("assets", identifiers))
 
-    def _freeze_source(self, source):
+    def _freeze_source(self, source, *, waiting=False):
+        """The offer this account may send, owner attached, or None. `waiting`
+        also takes an account that must accept a new notice first."""
         fields = {"target", "clock", "game_version", "strategy", "frames", "path", "raw_sha256", "full_start", "valid"}
         try:
             if (not isinstance(source, dict) or set(source) - {"bin"} != fields or source["full_start"] is not True
@@ -453,7 +459,7 @@ class CommunitySync:
             checked_hash(source["raw_sha256"])
             target = checked_target(source["target"])
             snapshot = self.account.snapshot()
-            if snapshot.get("status") != "active" or not snapshot.get("sharing"):
+            if snapshot.get("status") not in (WAITING if waiting else ("active",)) or not snapshot.get("sharing"):
                 return None
             frozen = {**source, "target": target, "path": str(Path(source["path"]).resolve()), "owner": snapshot.get("uid")}
             return {**checked_source(frozen), "consent_epoch": self._consent_epoch}
@@ -471,10 +477,14 @@ class CommunitySync:
         return frame_band(cutoffs, [(frames, frames)])[0] if cutoffs else None
 
     def contribution_context(self):
-        """Capture attribution and consent before native qualification starts."""
+        """Capture attribution and consent before native qualification starts.
+
+        A run finished while the account must accept a new notice (status
+        consent_required) is captured too: it is saved and waits. Nothing is
+        sent until the account accepts; signing out or sharing off drops it."""
         with self._lock:
             snapshot = self.account.snapshot()
-            if self._closing or snapshot.get("status") != "active" or not snapshot.get("sharing"):
+            if self._closing or snapshot.get("status") not in WAITING or not snapshot.get("sharing"):
                 return None
             return {"owner": snapshot.get("uid"), "consent_epoch": self._consent_epoch}
 
@@ -483,21 +493,25 @@ class CommunitySync:
 
         The owner was captured before qualification. A login/consent change
         during preservation refuses attribution instead of assigning a new UID.
+        An account that must accept a new notice keeps the offer in the outbox
+        only; recovery sends it once the account is active again.
         """
-        frozen = self._freeze_source(source)
+        frozen = self._freeze_source(source, waiting=True)
         if frozen is None or frozen["owner"] != owner:
             return False
         frozen["consent_epoch"] = consent_epoch
-        if not self._source_active(frozen):
+        if not self._source_active(frozen, waiting=True):
             return False
         try:
             self._outbox.remember({key: value for key, value in frozen.items() if key != "consent_epoch"})
         except (CommunityError, OSError):
             self.last_error = "A community contribution could not be saved for retry."
             return self._enqueue(source_key(frozen), ("offer", frozen))
-        if not self._source_active(frozen):
+        if not self._source_active(frozen, waiting=True):
             self._outbox.discard((frozen,))
             return False
+        if not self._source_active(frozen):
+            return True  # Saved; it waits for the new notice.
         return self._enqueue(source_key(frozen), ("offer", frozen))
 
     def retract_other_strategies(self, *, raw_sha256, keep_strategy):
@@ -548,11 +562,12 @@ class CommunitySync:
             self.last_error = "A community retraction could not be saved for retry."
         return self._enqueue(retraction_key(retraction), ("retract", retraction))
 
-    def _source_active(self, source):
+    def _source_active(self, source, *, waiting=False):
+        """Whether this offer may be sent now (or, `waiting`, kept for after a new notice)."""
         snapshot = self.account.snapshot()
         with self._lock:
             kept = self._retired.get(source["raw_sha256"], source["strategy"])
-        return (not self._closing and snapshot.get("status") == "active" and snapshot.get("sharing")
+        return (not self._closing and snapshot.get("status") in (WAITING if waiting else ("active",)) and snapshot.get("sharing")
                 and snapshot.get("uid") == source["owner"] and kept == source["strategy"]
                 and source.get("consent_epoch", self._consent_epoch) == self._consent_epoch)
 
@@ -563,8 +578,10 @@ class CommunitySync:
         outbox and go up at the recovery pace, like any other offer.
         """
         context = self.contribution_context()
-        terms = self.account.snapshot().get("terms_version")
-        if (context is None or self.earlier_sources is None or not terms or terms in OLDER_TERMS
+        snapshot = self.account.snapshot()
+        terms = snapshot.get("terms_version")
+        if (context is None or snapshot.get("status") != "active" or self.earlier_sources is None
+                or not terms or terms in OLDER_TERMS
                 or not self._earlier.open_to(context["owner"])):
             return
         sources = self.earlier_sources()
@@ -693,19 +710,28 @@ class CommunitySync:
             self._catalog_until = time.monotonic() + CATALOG_RENEW_S
 
     async def _start_limit(self):
-        """The largest ghost's start the service accepts, 0 when it accepts none.
+        """The largest ghost's start this account may send now, 0 when none.
 
         An older Worker advertises no `limits.start_bytes` and refuses unknown
         upload fields, so the trainer sends a start only after reading this
-        public config (no account ticket), held for the catalog's hour."""
-        if self._start_until > time.monotonic():
-            return self._start_cap
-        value = await self._json("GET", "/v1/config", authenticated=False)
-        limits = value.get("limits")
-        cap = limits.get("start_bytes") if isinstance(limits, dict) else None
-        self._start_cap = min(cap, ghost_start.MAX_BYTES) if type(cap) is int and cap > 0 else 0
-        self._start_until = time.monotonic() + CATALOG_RENEW_S
-        return self._start_cap
+        public config (no account ticket), held for the catalog's hour. A start
+        goes only from an account that accepted the privacy notice that config
+        names: the Worker that takes starts serves the notice that describes
+        them (beta-3, /policies#ghost-start). An account whose accepted version
+        differs from the held one reads the config again, at most once a minute,
+        so accepting the new notice is seen at the next upload."""
+        accepted = self.account.snapshot().get("privacy_version")
+        now = time.monotonic()
+        if self._start_until <= now or (accepted != self._start_privacy and self._start_read < now - 60):
+            value = await self._json("GET", "/v1/config", authenticated=False)
+            limits = value.get("limits")
+            cap = limits.get("start_bytes") if isinstance(limits, dict) else None
+            version = value.get("privacy_version")
+            self._start_cap = min(cap, ghost_start.MAX_BYTES) if type(cap) is int and cap > 0 else 0
+            self._start_privacy = version if isinstance(version, str) and version else None
+            self._start_read = time.monotonic()
+            self._start_until = self._start_read + CATALOG_RENEW_S
+        return self._start_cap if accepted is not None and accepted == self._start_privacy else 0
 
     def _query(self, identity):
         key = self.population.identity_key(identity)
