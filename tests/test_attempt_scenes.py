@@ -290,6 +290,34 @@ def test_finished_scenes_survive_a_restart_and_only_for_the_attempt_the_journal_
     assert (lab["folder"] / "12.sm64scene").is_file()           # and that server never touched them
 
 
+def test_every_journal_main_opens_records_and_a_server_with_none_says_why(lab, tmp_path):
+    """The journal shapes main.py's server can follow: a fresh profile's new Database and an isolated
+    practice profile's each get a folder of their own and a running cutter; a broadcast-only
+    second server (no journal open) keeps no scenes and its probe says so in one sentence, while
+    the recording switch still works."""
+    from sm64_events.storage.db import Database
+    from sm64_events.tracking.service import TrackerService
+    folders = []
+    for profile in ("fresh profile", "practice root"):
+        journal = Database(tmp_path / profile / "data" / "tracker.db")
+        app, server, cutters = _app(lab)
+        server.follow_attempts(TrackerService(journal, Broadcaster()))
+        with TestClient(app) as client:
+            live = client.get("/api/scene-lab").json()["live"]
+            assert (live["reason"], live["switch"], len(cutters)) == (attempt_scenes.STARTING, True, 1)
+            assert server.scenes.folder == attempt_scenes.journal_folder(lab["root"] / "attempts", journal)
+            folders.append(server.scenes.folder)
+        journal.close()
+    assert folders[0] != folders[1]
+    app, server, cutters = _app(lab)
+    server.follow_attempts(TrackerService(None, Broadcaster()))
+    with TestClient(app) as client:
+        live = client.get("/api/scene-lab").json()["live"]
+        assert (live["recording"], live["reason"], live["switch"], cutters) == (
+            False, attempt_scenes.NO_JOURNAL, True, [])
+        assert client.post("/api/scene-lab/recording", json={"on": False}).json()["live"]["on"] is False
+
+
 def test_a_purge_deletes_finished_scenes_skips_the_open_one_and_never_cuts_them_again(lab, recording):
     app, server, cutters, tracker = _server(lab)
     first, second = _attempt(21, 10), _attempt(22, 20)
