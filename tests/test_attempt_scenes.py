@@ -325,7 +325,7 @@ def test_a_published_spawn_refits_the_slots_while_the_app_runs_and_the_thread_en
         while server.refitter.passes == 0 and time.monotonic() < deadline:
             time.sleep(0.02)
         assert server.refitter.passes == 1
-        assert usamune.slot_facts(game.slot(0)) == usamune.live_facts(game)
+        assert usamune.slot_facts(game.slot(0)) == usamune.live_facts(game, usamune.US)
     assert not server.refitter._thread.is_alive()
 
 

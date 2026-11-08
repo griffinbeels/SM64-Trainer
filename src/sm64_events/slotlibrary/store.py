@@ -19,7 +19,7 @@ from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
-from sm64_events.slotlibrary.usamune import SEGMENT_BYTES, SLOT_BYTES, Refusal, slot_facts
+from sm64_events.slotlibrary.usamune import SEGMENT_BYTES, SLOT_BYTES, Refusal, build_of_rom, slot_facts
 
 log = logging.getLogger("sm64.slotlibrary")
 
@@ -64,6 +64,12 @@ class KeptState:
         if self.current_area is None or self.segments_hex is None:
             return None
         return LoadContext(self.current_area, bytes.fromhex(self.segments_hex))
+
+    @property
+    def build(self) -> str | None:
+        """"us" or "jp": the Usamune build that made these bytes, from the cartridge name the record has always
+        carried, so no record changes. None for a Usamune whose slot addresses this Trainer does not know."""
+        return build_of_rom(self.rom)
 
 
 @dataclass(frozen=True)

@@ -11,6 +11,7 @@ paths:
   - "tests/test_handoff_try.py"
   - "tests/test_slot_relocate.py"
   - "tests/test_slot_refit.py"
+  - "tests/test_slot_builds.py"
   - "tools/scene_lab/handoff_relocate.py"
 ---
 
@@ -19,6 +20,7 @@ paths:
 | To change... | Edit |
 |---|---|
 | Slot format, cartridge checks, the one write into game memory | `slotlibrary/usamune.py`. Every write goes through `write_slot_bytes`, inside one slot's range |
+| Which Usamune build (US or JP) a slot belongs to | `slotlibrary/usamune.py`: `check_cartridge` returns the running `Build`, built from that version's layout rows; every reader and writer takes it. Module constants are slot-format offsets, the same in both builds. `KeptState.build` reads the cartridge name the record already holds, so no record changed |
 | Moving Mario inside a slot's data to the running game's place | `slotlibrary/relocate.py` (`to_live_place`); the simulation's evidence is `tools/scene_lab/handoff_relocate.py` |
 | How a kept state is stored, named or looked up | `slotlibrary/store.py`; `core/paths.py::slot_library_dir` says where. Nothing deletes a state |
 | What counts as a new save | `slotlibrary/watcher.py::watch_step` |

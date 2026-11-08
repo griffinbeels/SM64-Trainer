@@ -36,27 +36,25 @@ from sm64_events.memory.addresses import (
 )
 from sm64_events.slotlibrary.usamune import (
     BODY_BYTES,
-    BODY_START,
-    CURRENT_AREA_POINTER,
-    MARIO_OBJECT,
     SLOT_BYTES,
     TRAILER_MARIO,
+    US,
+    Build,
     GameMemory,
     Refusal,
-    _us,
 )
 
-POOL_START = _us("object_pool")
-POOL_END = POOL_START + OBJECT_SIZE * OBJECT_COUNT
-SECOND_CAMERA_FOCUS = _us("second_camera_focus")
+POOL_BYTES = OBJECT_SIZE * OBJECT_COUNT
 
 # Where the slot body (a copy of the game from gMarioStates on) holds the globals that name objects. These are
-# offsets into Usamune US's slot format, like the trailer's; a build with another format fails the fingerprint.
+# offsets into Usamune's slot format, the same in both builds like the trailer's (usamune.py).
+POOL_IN_BODY = US.object_pool - US.body_start                            # gObjectPool
 LIST_HEADS_IN_BODY, LIST_HEAD_COUNT, LIST_HEAD_BYTES = 0x1A70, 13, 0x68   # gObjectListArray (STROOP map)
 FREE_LIST_IN_BODY = 0x25F80                                              # gFreeObjectList: one ObjectNode
-OBJECT_GLOBALS_IN_BODY = {MARIO_OBJECT - BODY_START: "gMarioObject",     # gLuigiObject and gCurrentObject
-                          MARIO_OBJECT - BODY_START + 4: "gLuigiObject",  # follow it in the map
-                          MARIO_OBJECT - BODY_START + 8: "gCurrentObject"}
+MARIO_OBJECT_IN_BODY = US.mario_object - US.body_start
+OBJECT_GLOBALS_IN_BODY = {MARIO_OBJECT_IN_BODY: "gMarioObject",          # gLuigiObject and gCurrentObject
+                          MARIO_OBJECT_IN_BODY + 4: "gLuigiObject",       # follow it in the map
+                          MARIO_OBJECT_IN_BODY + 8: "gCurrentObject"}
 MARIO_RIDDEN_OBJ_OFF, MARIO_MARIO_OBJ_OFF = 0x84, 0x88
 MARIO_STRUCT_BYTES = 0xC8
 
@@ -90,44 +88,43 @@ def _words(data: bytes) -> np.ndarray:
     return np.frombuffer(data, ">u4").astype(np.uint32)
 
 
-def in_pool(values: np.ndarray) -> np.ndarray:
-    return (values >= POOL_START) & (values < POOL_END)
+def in_pool(values: np.ndarray, pool: int) -> np.ndarray:
+    return (values >= pool) & (values < pool + POOL_BYTES)
 
 
-def object_index(address: int) -> int:
-    index, offset = divmod(address - POOL_START, OBJECT_SIZE)
+def object_index(address: int, pool: int) -> int:
+    index, offset = divmod(address - pool, OBJECT_SIZE)
     if offset or not 0 <= index < OBJECT_COUNT:
         raise ValueError(f"{address:08x} is not an object's start")
     return index
 
 
-def permutation(moves: list[tuple[int, int]]) -> np.ndarray:
+def permutation(moves: list[tuple[int, int]], pool: int) -> np.ndarray:
     """Each object's new place. A move names an object by where the slot holds it, and the place it goes;
     whatever is there takes the place it left."""
     place = np.arange(OBJECT_COUNT)
     for obj, target in moves:
-        here, there = int(place[object_index(obj)]), object_index(target)
+        here, there = int(place[object_index(obj, pool)]), object_index(target, pool)
         if here != there:
             holders_here, holders_there = place == here, place == there
             place[holders_here], place[holders_there] = there, here
     return place
 
 
-def map_pointers(values: np.ndarray, place: np.ndarray) -> np.ndarray:
+def map_pointers(values: np.ndarray, place: np.ndarray, pool: int) -> np.ndarray:
     """Pool addresses to their new place, keeping the offset inside the object."""
     out = values.copy()
-    hits = in_pool(values)
-    offsets = values[hits].astype(np.int64) - POOL_START
-    out[hits] = (POOL_START + place[offsets // OBJECT_SIZE] * OBJECT_SIZE + offsets % OBJECT_SIZE).astype(np.uint32)
+    hits = in_pool(values, pool)
+    offsets = values[hits].astype(np.int64) - pool
+    out[hits] = (pool + place[offsets // OBJECT_SIZE] * OBJECT_SIZE + offsets % OBJECT_SIZE).astype(np.uint32)
     return out
 
 
 def _structure(word: int) -> str | None:
-    """What a body word is, by where it sits, or None."""
+    """What a body word is, by where it sits, or None. Offsets only, so the same in both builds."""
     at = word * 4
-    pool_at = POOL_START - BODY_START
-    if pool_at <= at < pool_at + OBJECT_SIZE * OBJECT_COUNT:
-        return OBJECT_POINTERS.get((at - pool_at) % OBJECT_SIZE)
+    if POOL_IN_BODY <= at < POOL_IN_BODY + POOL_BYTES:
+        return OBJECT_POINTERS.get((at - POOL_IN_BODY) % OBJECT_SIZE)
     if at < MARIO_STRUCT_BYTES:
         return MARIO_POINTERS.get(at)
     if LIST_HEADS_IN_BODY <= at < LIST_HEADS_IN_BODY + LIST_HEAD_COUNT * LIST_HEAD_BYTES:
@@ -137,38 +134,39 @@ def _structure(word: int) -> str | None:
     return OBJECT_GLOBALS_IN_BODY.get(at)
 
 
-def relocate(data: bytes, moves: list[tuple[int, int]]) -> Relocated:
-    """The same slot with these objects moved and every pointer to them following. Raises Ambiguous."""
+def relocate(data: bytes, moves: list[tuple[int, int]], build: Build) -> Relocated:
+    """The same slot of this build with these objects moved and every pointer to them following. Raises Ambiguous."""
     if len(data) != SLOT_BYTES:
         raise Refusal(f"a slot is {SLOT_BYTES} bytes, this one {len(data)}")
-    place = permutation(moves)
+    pool = build.object_pool
+    place = permutation(moves, pool)
     body = _words(data[:BODY_BYTES])
-    pool_low = (POOL_START - BODY_START) // 4
+    pool_low = POOL_IN_BODY // 4
     found = Relocated(b"")
-    for word in np.flatnonzero(in_pool(body)).tolist():
+    for word in np.flatnonzero(in_pool(body, pool)).tolist():
         name = _structure(word)
         if name is not None:
             found.pointers[name] += 1
             continue
         offset = (word - pool_low) * 4 % OBJECT_SIZE
         index = (word - pool_low) * 4 // OBJECT_SIZE
-        if pool_low <= word < pool_low + OBJECT_SIZE * OBJECT_COUNT // 4 and RAW_DATA[0] <= offset < RAW_DATA[1]:
+        if pool_low <= word < pool_low + POOL_BYTES // 4 and RAW_DATA[0] <= offset < RAW_DATA[1]:
             behavior = int(body[pool_low + (index * OBJECT_SIZE + OBJECT_BEHAVIOR) // 4])
             found.raw_data.append((index, offset, behavior))
             found.pointers["rawData"] += 1
             continue
-        raise Ambiguous(f"{BODY_START + word * 4:08x} holds {int(body[word]):08x}, and nothing says what that word is")
-    mapped = map_pointers(body, place)
-    objects = mapped[pool_low:pool_low + OBJECT_SIZE * OBJECT_COUNT // 4].reshape(OBJECT_COUNT, OBJECT_SIZE // 4).copy()
+        raise Ambiguous(f"{build.body_start + word * 4:08x} holds {int(body[word]):08x}, and nothing says what that word is")
+    mapped = map_pointers(body, place, pool)
+    objects = mapped[pool_low:pool_low + POOL_BYTES // 4].reshape(OBJECT_COUNT, OBJECT_SIZE // 4).copy()
     moved = objects.copy()
     moved[place] = objects
-    mapped[pool_low:pool_low + OBJECT_SIZE * OBJECT_COUNT // 4] = moved.reshape(-1)
+    mapped[pool_low:pool_low + POOL_BYTES // 4] = moved.reshape(-1)
     out = bytearray(mapped.astype(">u4").tobytes()) + bytearray(data[BODY_BYTES:])
     occupied = struct.unpack_from(">I", data, TRAILER_MARIO)[0]
     if occupied:
-        struct.pack_into(">I", out, TRAILER_MARIO, int(map_pointers(np.array([occupied], np.uint32), place)[0]))
+        struct.pack_into(">I", out, TRAILER_MARIO, int(map_pointers(np.array([occupied], np.uint32), place, pool)[0]))
     found.data = bytes(out)
-    found.moved = {POOL_START + i * OBJECT_SIZE: POOL_START + int(p) * OBJECT_SIZE
+    found.moved = {pool + i * OBJECT_SIZE: pool + int(p) * OBJECT_SIZE
                    for i, p in enumerate(place.tolist()) if i != p}
     return found
 
@@ -177,51 +175,53 @@ def _word(memory: GameMemory, address: int) -> int:
     return int.from_bytes(memory.read(address, 4), "big")
 
 
-def _twin(objects: np.ndarray, memory: GameMemory, live: int) -> int | None:
+def _twin(objects: np.ndarray, memory: GameMemory, live: int, pool: int) -> int | None:
     """The slot's only active object with this live object's behavior and spawn parameters."""
     behavior, params = _word(memory, live + OBJECT_BEHAVIOR), _word(memory, live + OBJECT_BEH_PARAMS)
     twins = np.flatnonzero((objects[:, OBJECT_BEHAVIOR // 4] == behavior)
                            & (objects[:, OBJECT_BEH_PARAMS // 4] == params)
                            & ((objects[:, OBJECT_ACTIVE_FLAGS // 4] >> 16) != 0))
-    return POOL_START + int(twins[0]) * OBJECT_SIZE if twins.size == 1 else None
+    return pool + int(twins[0]) * OBJECT_SIZE if twins.size == 1 else None
 
 
-def live_named_objects(memory: GameMemory) -> list[int]:
+def live_named_objects(memory: GameMemory, build: Build) -> list[int]:
     """Objects the running game names from outside a slot: each warp node's object, and the camera's second focus."""
     named = []
-    area = _word(memory, CURRENT_AREA_POINTER)
+    area = _word(memory, build.current_area_pointer)
     node = _word(memory, area + AREA_WARP_NODES) if area else 0
     for _ in range(WARP_NODE_LIMIT):
         if not 0x80000000 < node < 0x80800000:
             break
         named.append(_word(memory, node + WARP_NODE_OBJECT))
         node = _word(memory, node + WARP_NODE_NEXT)
-    named.append(_word(memory, SECOND_CAMERA_FOCUS))
-    return [address for address in named if POOL_START <= address < POOL_END and (address - POOL_START) % OBJECT_SIZE == 0]
+    named.append(_word(memory, build.second_camera_focus))
+    pool = build.object_pool
+    return [address for address in named if pool <= address < pool + POOL_BYTES and (address - pool) % OBJECT_SIZE == 0]
 
 
-def to_live_place(memory: GameMemory, data: bytes) -> bytes:
-    """What the write path calls: the slot's bytes with Mario where the running game has him. A slot whose Mario
-    already matches, or an empty one, comes back unchanged. Raises Ambiguous."""
+def to_live_place(memory: GameMemory, data: bytes, build: Build) -> bytes:
+    """What the write path calls: the slot's bytes, made for the running build, with Mario where the running game
+    has him. A slot whose Mario already matches, or an empty one, comes back unchanged. Raises Ambiguous."""
     if len(data) != SLOT_BYTES:
         raise Refusal(f"a slot is {SLOT_BYTES} bytes, this one {len(data)}")
     ours = struct.unpack_from(">I", data, TRAILER_MARIO)[0]
-    live = _word(memory, MARIO_OBJECT)
+    live = _word(memory, build.mario_object)
     if ours == 0 or live == 0 or ours == live:
         return data
-    if not (POOL_START <= live < POOL_END and (live - POOL_START) % OBJECT_SIZE == 0):
+    pool = build.object_pool
+    if not (pool <= live < pool + POOL_BYTES and (live - pool) % OBJECT_SIZE == 0):
         raise Refusal(f"the game's gMarioObject {live:08x} is not an object")
-    object_index(ours)
-    return relocate(data, planned_moves(memory, data, ours, live)).data
+    object_index(ours, pool)
+    return relocate(data, planned_moves(memory, data, ours, live, build), build).data
 
 
-def planned_moves(memory: GameMemory, data: bytes, ours: int, live: int) -> list[tuple[int, int]]:
+def planned_moves(memory: GameMemory, data: bytes, ours: int, live: int, build: Build) -> list[tuple[int, int]]:
     """Mario to the live place first, then each live-named object's twin into that object's place."""
-    pool_low = (POOL_START - BODY_START) // 4
-    objects = _words(data[:BODY_BYTES])[pool_low:pool_low + OBJECT_SIZE * OBJECT_COUNT // 4].reshape(OBJECT_COUNT, OBJECT_SIZE // 4)
+    pool_low = POOL_IN_BODY // 4
+    objects = _words(data[:BODY_BYTES])[pool_low:pool_low + POOL_BYTES // 4].reshape(OBJECT_COUNT, OBJECT_SIZE // 4)
     moves = [(ours, live)]
-    for named in live_named_objects(memory):
-        twin = _twin(objects, memory, named)
+    for named in live_named_objects(memory, build):
+        twin = _twin(objects, memory, named, build.object_pool)
         if twin is not None and named != live and twin != ours and all(target != named for _o, target in moves):
             moves.append((twin, named))
     return moves

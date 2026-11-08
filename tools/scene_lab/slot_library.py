@@ -31,7 +31,8 @@ from sm64_events.slotlibrary.watcher import NEVER_SEEN, watch_step
 
 
 def describe(state: KeptState) -> str:
-    return (f"{state.id[:12]}  level {state.level} area {state.area}  mario {state.mario_object:08x}  "
+    build = (state.build or "unknown build").upper()
+    return (f"{state.id[:12]}  {build}  level {state.level} area {state.area}  mario {state.mario_object:08x}  "
             f"{state.source}  {state.first_seen_utc}  {state.name or '(no name)'}")
 
 
@@ -80,7 +81,8 @@ def list_all(library: SlotLibrary, sets: CourseSets) -> int:
 
 def accepted_fingerprints(args, library: SlotLibrary) -> set[str]:
     try:
-        return {routine_fingerprint(usamune.attach(args.pid).read)}
+        memory = usamune.attach(args.pid)
+        return {routine_fingerprint(memory.read, usamune.check_cartridge(memory))}
     except Refusal:
         held = {state.fingerprint for state in library.scan().states}
         if not held:

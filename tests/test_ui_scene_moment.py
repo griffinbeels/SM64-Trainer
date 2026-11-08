@@ -42,7 +42,7 @@ def _rigged(game, tmp_path, answers):
             if answers["refuse"]:
                 return answers["refuse"], None
             return ({**moments_test.ANSWER, "frame": frame, "worked_out": answers["older"],
-                     "fingerprint": tool.routine_fingerprint(game.read)}, moments_test.slot_bytes())
+                     "fingerprint": tool.routine_fingerprint(game.read, fakes.slots.US)}, moments_test.slot_bytes())
         lab.moments._source = source
         lab.moments.builder = builder
         lab.moments.game = lambda: game

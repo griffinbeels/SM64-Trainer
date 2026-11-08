@@ -21,10 +21,9 @@ from pathlib import Path
 from sm64_events.slotlibrary.relocate import to_live_place
 from sm64_events.slotlibrary.store import Damaged, KeptState, SlotLibrary, write_atomic
 from sm64_events.slotlibrary.usamune import (
-    CURRENT_AREA_POINTER,
     SEGMENT_BYTES,
-    SEGMENT_TABLE,
     SLOT_COUNT,
+    Build,
     GameMemory,
     Refusal,
     SlotFacts,
@@ -64,18 +63,18 @@ class InstallReport:
     failed: tuple[int, str] | None = None    # the slot whose write failed; slots after it were not attempted
 
 
-def _pointers_match(memory: GameMemory, state: KeptState) -> bool | None:
+def _pointers_match(memory: GameMemory, state: KeptState, build: Build) -> bool | None:
     context = state.context
     if context is None:
         return None
-    return (int.from_bytes(memory.read(CURRENT_AREA_POINTER, 4), "big") == context.current_area
-            and same_segments(memory.read(SEGMENT_TABLE, SEGMENT_BYTES), context.segments))
+    return (int.from_bytes(memory.read(build.current_area_pointer, 4), "big") == context.current_area
+            and same_segments(memory.read(build.segment_table, SEGMENT_BYTES), context.segments))
 
 
 def _checked_states(memory: GameMemory, library: SlotLibrary, placements: Mapping[int, str],
-                    transform: Transform | None) -> list[tuple[int, KeptState, bytes, SlotFacts]]:
+                    transform: Transform | None, build: Build) -> list[tuple[int, KeptState, bytes, SlotFacts]]:
     """Everything that could refuse, before anything is captured or written."""
-    fingerprint = routine_fingerprint(memory.read)
+    fingerprint = routine_fingerprint(memory.read, build)
     loaded = []
     for slot, identity in sorted(placements.items()):
         slot_range(slot)
@@ -87,7 +86,7 @@ def _checked_states(memory: GameMemory, library: SlotLibrary, placements: Mappin
             raise Refusal(f"state {identity} came from another Usamune build")
         if transform is not None:
             data = transform(state, data)
-        data = to_live_place(memory, data)
+        data = to_live_place(memory, data, build)
         loaded.append((slot, state, data, slot_facts(data)))
     return loaded
 
@@ -96,21 +95,22 @@ def place_states(memory: GameMemory, library: SlotLibrary, placements: Mapping[i
                  *, dry_run: bool = False, transform: Transform | None = None) -> InstallReport:
     """Checks everything, captures every occupied slot, then writes each state into its slot. A transform runs
     with the checks, so its refusal writes nothing, and the report describes the bytes it returned."""
-    check_cartridge(memory)
-    loaded = _checked_states(memory, library, placements, transform)
-    captured = () if dry_run else capture_all(memory, library)
-    live = live_facts(memory)
+    build = check_cartridge(memory)
+    loaded = _checked_states(memory, library, placements, transform, build)
+    captured = () if dry_run else capture_all(memory, library, build)
+    live = live_facts(memory, build)
     done: list[Placement] = []
     for slot, state, data, facts in loaded:
         written = not dry_run and read_slot(memory, slot) != data
         if written:
             try:
-                write_slot_bytes(memory, slot, data, mario_place=(
+                write_slot_bytes(memory, build, slot, data, mario_place=(
                     facts.mario_object if facts.mario_object == live.mario_object else None))
             except WriteFailed as error:
                 return InstallReport(tuple(done), captured, (slot, str(error)))
         done.append(Placement(slot, state.id, written, facts.mario_object == live.mario_object,
-                              (facts.level, facts.area) == (live.level, live.area), _pointers_match(memory, state)))
+                              (facts.level, facts.area) == (live.level, live.area),
+                              _pointers_match(memory, state, build)))
     return InstallReport(tuple(done), captured)
 
 

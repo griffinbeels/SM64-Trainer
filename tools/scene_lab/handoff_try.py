@@ -36,7 +36,7 @@ from sm64_events.slotlibrary.store import BUILT, KeptState, LoadContext, SlotLib
 from sm64_events.slotlibrary.relocate import Ambiguous, to_live_place  # noqa: E402
 from sm64_events.slotlibrary.usamune import (  # noqa: E402
     SEGMENT_BYTES,
-    SEGMENT_TABLE,
+    Build,
     GameMemory,
     Refusal,
     WriteFailed,
@@ -93,15 +93,15 @@ def check_image(image: SlotImage) -> None:
         raise Refusal("this slot is empty: its occupied word is zero")
 
 
-def check_game_matches(memory: GameMemory, image: SlotImage) -> None:
+def check_game_matches(memory: GameMemory, image: SlotImage, build: Build) -> None:
     """Usamune's own load gate, plus the two things that make the slot's pointers mean something."""
     mismatches, kinds = [], []
-    if routine_fingerprint(memory.read) != image.fingerprint:
+    if routine_fingerprint(memory.read, build) != image.fingerprint:
         kinds.append("build")
         mismatches.append("Usamune's save and load code differ from the build this slot came from")
-    level = struct.unpack(">h", memory.read(slots.CURR_LEVEL, 2))[0]
-    area = struct.unpack(">h", memory.read(slots.CURR_AREA, 2))[0]
-    mario = int.from_bytes(memory.read(slots.MARIO_OBJECT, 4), "big")
+    level = struct.unpack(">h", memory.read(build.curr_level, 2))[0]
+    area = struct.unpack(">h", memory.read(build.curr_area, 2))[0]
+    mario = int.from_bytes(memory.read(build.mario_object, 4), "big")
     if mario == 0:
         kinds.append("no-mario")
         mismatches.append("no Mario: enter the level first")
@@ -111,10 +111,10 @@ def check_game_matches(memory: GameMemory, image: SlotImage) -> None:
     if mario != image.mario_object:
         kinds.append("mario")
         mismatches.append(f"gMarioObject is {mario:08x}, the slot's is {image.mario_object:08x}")
-    if int.from_bytes(memory.read(slots.CURRENT_AREA_POINTER, 4), "big") != image.current_area:
+    if int.from_bytes(memory.read(build.current_area_pointer, 4), "big") != image.current_area:
         kinds.append("loaded")
         mismatches.append("the current-area pointer differs: this level loaded to other addresses")
-    if not same_segments(memory.read(SEGMENT_TABLE, SEGMENT_BYTES), image.segments):
+    if not same_segments(memory.read(build.segment_table, SEGMENT_BYTES), image.segments):
         kinds.append("loaded")
         mismatches.append("the segment table differs: this level loaded to other addresses")
     if mismatches:
@@ -125,12 +125,12 @@ def backups_folder() -> Path:
     return Path(os.environ["LOCALAPPDATA"]) / "SM64Trainer" / "scene-lab" / "handoff-backups"
 
 
-def save_backup(memory: GameMemory, index: int, folder: Path, note: str) -> Path:
+def save_backup(memory: GameMemory, build: Build, index: int, folder: Path, note: str) -> Path:
     """The slot's current bytes, read back from disk before any write may follow."""
     low, high = slot_range(index)
     data = memory.read(low, high - low)
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
-    meta = {"slot": index, "taken_utc": stamp, "note": note, "fingerprint": routine_fingerprint(memory.read),
+    meta = {"slot": index, "taken_utc": stamp, "note": note, "fingerprint": routine_fingerprint(memory.read, build),
             "sha256": hashlib.sha256(data).hexdigest()}
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / f"slot{index}-{stamp}.bin"
@@ -157,14 +157,14 @@ def keep_built(memory: GameMemory, image: SlotImage, library: SlotLibrary) -> tu
                        name=image.source, context=LoadContext(image.current_area, image.segments))
 
 
-def at_live_place(memory: GameMemory, image: SlotImage) -> SlotImage:
+def at_live_place(memory: GameMemory, image: SlotImage, build: Build) -> SlotImage:
     """The image with Mario moved inside its data to where the running game keeps him (slotlibrary/relocate.py),
     the same step every writer runs. A slot whose data nothing can read by structure is refused, not guessed."""
     try:
-        data = to_live_place(memory, image.data)
+        data = to_live_place(memory, image.data, build)
     except Ambiguous as unclear:
-        level = struct.unpack(">h", memory.read(slots.CURR_LEVEL, 2))[0]
-        area = struct.unpack(">h", memory.read(slots.CURR_AREA, 2))[0]
+        level = struct.unpack(">h", memory.read(build.curr_level, 2))[0]
+        area = struct.unpack(">h", memory.read(build.curr_area, 2))[0]
         raise GameDiffers(["unclear"], [str(unclear)], level, area) from unclear
     return image if data == image.data else replace(image, data=data)
 
@@ -174,14 +174,14 @@ def install(memory: GameMemory, image: SlotImage, folder: Path, *, dry_run: bool
     backup. The write refuses, leaving the slot empty, if Mario's place changes before the occupied word."""
     slot_range(image.index)
     check_image(image)
-    check_cartridge(memory)
-    image = at_live_place(memory, image)
-    check_game_matches(memory, image)
+    build = check_cartridge(memory)
+    image = at_live_place(memory, image, build)
+    check_game_matches(memory, image, build)
     if write_seed and image.seed is None:
         raise Refusal("this slot image carries no seed")
-    backup = save_backup(memory, image.index, folder, image.source)
+    backup = save_backup(memory, build, image.index, folder, image.source)
     if not dry_run:
-        write_slot_bytes(memory, image.index, image.data, mario_place=image.mario_object)
+        write_slot_bytes(memory, build, image.index, image.data, mario_place=image.mario_object)
         if write_seed:
             memory.write(slots.RANDOM_SEED, struct.pack(">H", image.seed))
     return backup
@@ -190,12 +190,12 @@ def install(memory: GameMemory, image: SlotImage, folder: Path, *, dry_run: bool
 def restore(memory: GameMemory, path: Path, folder: Path, *, dry_run: bool) -> Path:
     """Put a backup back. Only the cartridge and Usamune's build must match: a slot may belong to any level."""
     meta, data = read_backup(path)
-    check_cartridge(memory)
-    if routine_fingerprint(memory.read) != meta["fingerprint"]:
+    build = check_cartridge(memory)
+    if routine_fingerprint(memory.read, build) != meta["fingerprint"]:
         raise Refusal("this backup came from another Usamune build")
-    undo = save_backup(memory, meta["slot"], folder, f"before restoring {path.name}")
+    undo = save_backup(memory, build, meta["slot"], folder, f"before restoring {path.name}")
     if not dry_run:
-        write_slot_bytes(memory, meta["slot"], data, mario_place=None)   # a backup goes back exactly as it was
+        write_slot_bytes(memory, build, meta["slot"], data, mario_place=None)   # a backup goes back exactly as it was
     return undo
 
 

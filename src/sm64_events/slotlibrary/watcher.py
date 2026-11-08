@@ -17,11 +17,10 @@ from dataclasses import dataclass, field
 
 from sm64_events.slotlibrary.store import CAPTURED, Damaged, KeptState, LoadContext, SlotLibrary, state_id
 from sm64_events.slotlibrary.usamune import (
-    CURRENT_AREA_POINTER,
     SEGMENT_BYTES,
-    SEGMENT_TABLE,
     SLOT_BYTES,
     SLOT_COUNT,
+    Build,
     GameMemory,
     Refusal,
     check_cartridge,
@@ -55,23 +54,24 @@ def read_slot(memory: GameMemory, index: int) -> bytes:
     return memory.read(slot_address(index), SLOT_BYTES)
 
 
-def load_context(memory: GameMemory, data: bytes) -> LoadContext | None:
+def load_context(memory: GameMemory, data: bytes, build: Build) -> LoadContext | None:
     """The level's load addresses, if the game is still where this slot says it was saved."""
-    if live_facts(memory) != slot_facts(data):
+    if live_facts(memory, build) != slot_facts(data):
         return None
-    return LoadContext(int.from_bytes(memory.read(CURRENT_AREA_POINTER, 4), "big"),
-                       memory.read(SEGMENT_TABLE, SEGMENT_BYTES))
+    return LoadContext(int.from_bytes(memory.read(build.current_area_pointer, 4), "big"),
+                       memory.read(build.segment_table, SEGMENT_BYTES))
 
 
-def keep(memory: GameMemory, library: SlotLibrary, data: bytes) -> tuple[KeptState, bool]:
-    context = load_context(memory, data)
-    return library.add(data, source=CAPTURED, fingerprint=routine_fingerprint(memory.read),
+def keep(memory: GameMemory, library: SlotLibrary, data: bytes, build: Build) -> tuple[KeptState, bool]:
+    """Bytes the running game holds, made by its own build, into the library."""
+    context = load_context(memory, data, build)
+    return library.add(data, source=CAPTURED, fingerprint=routine_fingerprint(memory.read, build),
                        rom=rom_identity(memory), context=context)
 
 
 def watch_step(memory: GameMemory, library: SlotLibrary, seen: tuple[str | None, ...]) -> WatchResult:
     try:
-        check_cartridge(memory)
+        build = check_cartridge(memory)
     except Refusal as refused:
         return WatchResult(seen, not_ready=str(refused))
     result = WatchResult(tuple(seen))
@@ -87,16 +87,17 @@ def watch_step(memory: GameMemory, library: SlotLibrary, seen: tuple[str | None,
                 result.emptied.append(index)
         elif read_slot(memory, index) != data:
             result.unsettled.append(index)
-        elif _keep_changed(memory, library, index, data, result):
+        elif _keep_changed(memory, library, index, data, build, result):
             next_seen[index] = digest
     return WatchResult(tuple(next_seen), result.captured, result.known, result.emptied, result.unsettled,
                        result.rejected, result.failed)
 
 
-def _keep_changed(memory: GameMemory, library: SlotLibrary, index: int, data: bytes, result: WatchResult) -> bool:
+def _keep_changed(memory: GameMemory, library: SlotLibrary, index: int, data: bytes, build: Build,
+                  result: WatchResult) -> bool:
     """Files one changed slot in the result. True when the next step need not look at these bytes again."""
     try:
-        state, is_new = keep(memory, library, data)
+        state, is_new = keep(memory, library, data, build)
     except Refusal as refused:
         result.rejected.append((index, str(refused)))
         log.warning("slot library: slot %d not kept: %s", index, refused)
@@ -112,7 +113,7 @@ def _keep_changed(memory: GameMemory, library: SlotLibrary, index: int, data: by
     return True
 
 
-def capture_all(memory: GameMemory, library: SlotLibrary) -> tuple[KeptState, ...]:
+def capture_all(memory: GameMemory, library: SlotLibrary, build: Build) -> tuple[KeptState, ...]:
     """Keep every occupied slot now, whatever was seen before. Refuses rather than leave one uncaptured:
     its caller is about to overwrite slots. Returns the states that were new to the library."""
     added = []
@@ -123,7 +124,7 @@ def capture_all(memory: GameMemory, library: SlotLibrary) -> tuple[KeptState, ..
         if read_slot(memory, index) != data:
             raise Refusal(f"slot {index} is being written right now")
         try:
-            state, is_new = keep(memory, library, data)
+            state, is_new = keep(memory, library, data, build)
         except (OSError, Damaged) as error:
             raise Refusal(f"slot {index} could not be kept: {error}") from error
         if is_new:

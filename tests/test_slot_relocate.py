@@ -23,8 +23,8 @@ from sm64_events.slotlibrary import usamune  # noqa: E402
 from sm64_events.slotlibrary.coursesets import place_states  # noqa: E402
 from sm64_events.slotlibrary.store import SlotLibrary  # noqa: E402
 
-BODY = R.BODY_START
-OBJ = lambda i: R.POOL_START + i * R.OBJECT_SIZE  # noqa: E731
+BODY = usamune.US.body_start
+OBJ = lambda i: usamune.US.object_pool + i * R.OBJECT_SIZE  # noqa: E731
 SLOT_MARIO_PLACE, LIVE_PLACE, OTHER_PLACE, WARP_PLACE, WARP_TWIN_PLACE = 200, 50, 7, 30, 120
 SLOT_MARIO, LIVE, OTHER = OBJ(SLOT_MARIO_PLACE), OBJ(LIVE_PLACE), OBJ(OTHER_PLACE)
 HEAD = BODY + R.LIST_HEADS_IN_BODY
@@ -54,12 +54,12 @@ def activate(slot: bytearray, index: int, behavior: int, params: int = 0) -> Non
 def make_slot(mario: int = SLOT_MARIO, level: int = fakes.LEVEL, area: int = fakes.AREA) -> bytes:
     """A small world: Mario, an object he holds, the object sitting where the game now keeps Mario, a warp object."""
     slot = bytearray(usamune.SLOT_BYTES)
-    mario_place = (mario - R.POOL_START) // R.OBJECT_SIZE
+    mario_place = (mario - usamune.US.object_pool) // R.OBJECT_SIZE
     put(slot, BODY + R.MARIO_MARIO_OBJ_OFF, mario)
     put(slot, BODY + R.MARIO_HELD_OBJ_OFF, OTHER)
     put(slot, BODY + R.MARIO_INTERACT_OBJ_OFF, LIVE)
-    put(slot, usamune.MARIO_OBJECT, mario)
-    put(slot, usamune.MARIO_OBJECT + 8, mario)                   # gCurrentObject
+    put(slot, usamune.US.mario_object, mario)
+    put(slot, usamune.US.mario_object + 8, mario)                   # gCurrentObject
     put(slot, HEAD + 0x60, mario)
     put(slot, HEAD + 0x64, LIVE)
     put(slot, at(mario_place, 0x60), LIVE)
@@ -86,11 +86,11 @@ def make_slot(mario: int = SLOT_MARIO, level: int = fakes.LEVEL, area: int = fak
 # --- the relocation itself ------------------------------------------------------------------------
 
 def test_mario_takes_the_live_place_and_every_named_pointer_follows():
-    out = R.relocate(make_slot(), [(SLOT_MARIO, LIVE)]).data
+    out = R.relocate(make_slot(), [(SLOT_MARIO, LIVE)], usamune.US).data
     assert word(out, at(LIVE_PLACE, R.OBJECT_BEHAVIOR)) == BEHAVIOR_MARIO
     assert word(out, at(SLOT_MARIO_PLACE, R.OBJECT_BEHAVIOR)) == BEHAVIOR_ASIDE
     assert struct.unpack_from(">I", out, usamune.TRAILER_MARIO)[0] == LIVE
-    assert word(out, usamune.MARIO_OBJECT) == LIVE and word(out, usamune.MARIO_OBJECT + 8) == LIVE
+    assert word(out, usamune.US.mario_object) == LIVE and word(out, usamune.US.mario_object + 8) == LIVE
     assert word(out, BODY + R.MARIO_MARIO_OBJ_OFF) == LIVE
     assert word(out, BODY + R.MARIO_INTERACT_OBJ_OFF) == SLOT_MARIO, "the object moved aside is followed too"
     assert word(out, BODY + R.MARIO_HELD_OBJ_OFF) == OTHER
@@ -102,7 +102,7 @@ def test_mario_takes_the_live_place_and_every_named_pointer_follows():
 
 def test_the_order_of_every_list_stays_the_same():
     """The object loop and the free list run by links: the world must run in the same order after the move."""
-    out = R.relocate(make_slot(), [(SLOT_MARIO, LIVE)]).data
+    out = R.relocate(make_slot(), [(SLOT_MARIO, LIVE)], usamune.US).data
     assert word(out, HEAD + 0x60) == LIVE
     assert word(out, at(LIVE_PLACE, 0x60)) == SLOT_MARIO
     assert word(out, at(SLOT_MARIO_PLACE, 0x60)) == HEAD
@@ -111,27 +111,27 @@ def test_the_order_of_every_list_stays_the_same():
 
 def test_there_and_back_and_in_place_are_the_same_bytes():
     slot = make_slot()
-    assert R.relocate(slot, [(SLOT_MARIO, SLOT_MARIO)]).data == slot
-    assert R.relocate(R.relocate(slot, [(SLOT_MARIO, LIVE)]).data, [(LIVE, SLOT_MARIO)]).data == slot
+    assert R.relocate(slot, [(SLOT_MARIO, SLOT_MARIO)], usamune.US).data == slot
+    assert R.relocate(R.relocate(slot, [(SLOT_MARIO, LIVE)], usamune.US).data, [(LIVE, SLOT_MARIO)], usamune.US).data == slot
 
 
-@pytest.mark.parametrize("address", [at(OTHER_PLACE, 0x20), BODY + 0x1000, usamune.MARIO_OBJECT + 0x10],
+@pytest.mark.parametrize("address", [at(OTHER_PLACE, 0x20), BODY + 0x1000, usamune.US.mario_object + 0x10],
                          ids=["the drawn position", "a global nobody named", "a word after the object globals"])
 def test_a_pool_address_no_structure_explains_refuses(address):
     slot = bytearray(make_slot())
     put(slot, address, SLOT_MARIO)
     with pytest.raises(R.Ambiguous):
-        R.relocate(bytes(slot), [(SLOT_MARIO, LIVE)])
+        R.relocate(bytes(slot), [(SLOT_MARIO, LIVE)], usamune.US)
 
 
 def test_a_raw_data_pointer_is_reported_as_found_by_value():
-    found = R.relocate(make_slot(), [(SLOT_MARIO, LIVE)])
+    found = R.relocate(make_slot(), [(SLOT_MARIO, LIVE)], usamune.US)
     assert [(index, offset) for index, offset, _behavior in found.raw_data] == [(OTHER_PLACE, 0xF4)]
 
 
 def test_a_move_names_an_object_where_the_slot_holds_it():
     third = OBJ(90)
-    place = R.permutation([(SLOT_MARIO, LIVE), (LIVE, third)])
+    place = R.permutation([(SLOT_MARIO, LIVE), (LIVE, third)], usamune.US.object_pool)
     assert place[SLOT_MARIO_PLACE] == LIVE_PLACE and place[LIVE_PLACE] == 90 and place[90] == SLOT_MARIO_PLACE
 
 
@@ -139,19 +139,19 @@ def test_a_move_names_an_object_where_the_slot_holds_it():
 
 def live_world(game, *, live: int = LIVE, warp_object: int | None = None, focus: int = 0) -> None:
     """The running game's side: where Mario is, the area's one warp node, the camera's second focus."""
-    game.poke(usamune.MARIO_OBJECT, struct.pack(">I", live))
+    game.poke(usamune.US.mario_object, struct.pack(">I", live))
     area, node = 0x80100000, 0x80100100
-    game.poke(usamune.CURRENT_AREA_POINTER, struct.pack(">I", area))
+    game.poke(usamune.US.current_area_pointer, struct.pack(">I", area))
     if warp_object is not None:
         game.poke(area + R.AREA_WARP_NODES, struct.pack(">I", node))
         game.poke(node, struct.pack(">III", 0x0A09010A, warp_object, 0))
         game.poke(warp_object + R.OBJECT_BEHAVIOR, struct.pack(">I", BEHAVIOR_WARP))
         game.poke(warp_object + R.OBJECT_BEH_PARAMS, struct.pack(">I", WARP_PARAMS))
-    game.poke(R.SECOND_CAMERA_FOCUS, struct.pack(">I", focus))
+    game.poke(usamune.US.second_camera_focus, struct.pack(">I", focus))
 
 
 def install(game, data, tmp_path, **extra):
-    current_area = int.from_bytes(game.read(usamune.CURRENT_AREA_POINTER, 4), "big")
+    current_area = int.from_bytes(game.read(usamune.US.current_area_pointer, 4), "big")
     image = fakes.make_image(game, data=data, current_area=current_area, **extra)
     return tool.install(game, image, tmp_path, dry_run=False, write_seed=False), image
 
@@ -161,8 +161,8 @@ def test_a_moved_mario_is_written_relocated_and_usamunes_gate_sees_a_match(tmp_p
     live_world(game)
     install(game, make_slot(), tmp_path)
     written = game.read(usamune.slot_address(fakes.INDEX), usamune.SLOT_BYTES)
-    assert written == R.relocate(make_slot(), [(SLOT_MARIO, LIVE)]).data
-    facts, live = usamune.slot_facts(written), usamune.live_facts(game)
+    assert written == R.relocate(make_slot(), [(SLOT_MARIO, LIVE)], usamune.US).data
+    facts, live = usamune.slot_facts(written), usamune.live_facts(game, usamune.US)
     assert (facts.mario_object, facts.level, facts.area) == (live.mario_object, live.level, live.area)
 
 
@@ -187,7 +187,7 @@ class MovingGame(fakes.FakeGame):
     def write(self, address: int, data: bytes) -> None:
         super().write(address, data)
         if address == usamune.slot_address(fakes.INDEX):
-            self.poke(usamune.MARIO_OBJECT, struct.pack(">I", OBJ(77)))
+            self.poke(usamune.US.mario_object, struct.pack(">I", OBJ(77)))
 
 
 def test_mario_moving_between_the_check_and_the_write_leaves_the_slot_empty(tmp_path):
@@ -218,7 +218,7 @@ def test_a_course_set_moves_mario_through_the_same_step(tmp_path):
     state = libfakes.keep(library, game, make_slot())
     placed = place_states(game, library, {4: state.id}).placements[0]
     assert placed.written and placed.mario_matches and placed.loadable_now
-    assert game.slot(4) == R.relocate(make_slot(), [(SLOT_MARIO, LIVE)]).data
+    assert game.slot(4) == R.relocate(make_slot(), [(SLOT_MARIO, LIVE)], usamune.US).data
     assert library.read_bytes(state.id) == make_slot(), "the kept state never changes"
 
 
@@ -230,7 +230,7 @@ def test_a_course_set_refuses_when_mario_moves_during_its_write(tmp_path):
 
     def moves(address, _data):
         if address == usamune.slot_address(4) + usamune.TRAILER_MARIO + 4:
-            game.poke(usamune.MARIO_OBJECT, struct.pack(">I", OBJ(77)))
+            game.poke(usamune.US.mario_object, struct.pack(">I", OBJ(77)))
     game.on_write = moves
     report = place_states(game, library, {4: state.id})
     assert report.failed and report.failed[0] == 4

@@ -44,7 +44,7 @@ def slot_bytes() -> bytes:
 class Harness:
     def __init__(self, tmp_path):
         self.game = fakes.FakeGame()
-        self.answer = {**ANSWER, "fingerprint": tool.routine_fingerprint(self.game.read)}
+        self.answer = {**ANSWER, "fingerprint": tool.routine_fingerprint(self.game.read, slots.US)}
         self.calls = []
         self.library = SlotLibrary(tmp_path / "library")
         self.backups = tmp_path / "backups"

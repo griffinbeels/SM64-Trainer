@@ -29,7 +29,7 @@ from sm64_events.slotlibrary import relocate as R  # noqa: E402
 from sm64_events.slotlibrary.store import SlotLibrary  # noqa: E402
 
 HERE, ELSEWHERE = (libfakes.LEVEL, libfakes.AREA), (24, 1)
-FITTED = R.relocate(world.make_slot(), [(world.SLOT_MARIO, world.LIVE)]).data
+FITTED = R.relocate(world.make_slot(), [(world.SLOT_MARIO, world.LIVE)], usamune.US).data
 
 
 def game_with(slots: dict[int, bytes], *, live: int = world.LIVE, cls=libfakes.FakeGame):
@@ -57,7 +57,7 @@ def test_a_moved_mario_refits_this_places_slots_and_leaves_other_places_alone():
     report = refit.refit_slots(game)
     assert outcomes(report) == {0: (refit.REFIT, ""), 2: (refit.REFIT, "")}
     assert game.slot(0) == FITTED and game.slot(2) == FITTED
-    facts, live = usamune.slot_facts(game.slot(0)), usamune.live_facts(game)
+    facts, live = usamune.slot_facts(game.slot(0)), usamune.live_facts(game, usamune.US)
     assert facts == live, "Usamune's load gate now sees a match"
     assert game.slot(5) == other and writes_into(game, 5) == []
     assert all(writes_into(game, index) == [] for index in (1, 3, 4, 6, 7, 8))
@@ -114,7 +114,7 @@ def test_mario_moving_during_a_write_stops_the_pass_and_his_save_is_still_kept(t
 
     def moves(address, _data):
         if address == usamune.slot_address(0) + usamune.TRAILER_MARIO + 4:
-            game.poke(usamune.MARIO_OBJECT, struct.pack(">I", world.OBJ(77)))
+            game.poke(usamune.US.mario_object, struct.pack(">I", world.OBJ(77)))
     game.on_write = moves
     library = SlotLibrary(tmp_path / "library")
     report = refit.SlotRefitter(lambda: game, library, steady_seconds=0).run_once()

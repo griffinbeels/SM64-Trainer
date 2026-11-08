@@ -206,8 +206,10 @@ def game_sentence(text: str) -> str:
     """handoff_try's refusals that are about the game as a whole, for a person at the page."""
     if "no Project64" in text or "no cartridge" in text:
         return "Project64 is not running a game. Start the game, then press again."
-    if "not Usamune US" in text:
-        return "The running game is not Usamune US."
+    if "is not Usamune" in text:
+        return "The running game is not Usamune."
+    if "has not checked" in text:
+        return "This Trainer cannot write save states into this game's Usamune yet."
     if "8 MB" in text:
         return "The game runs without the 8 MB of RAM that Usamune's save states need."
     return "The game refused this save state: " + text
