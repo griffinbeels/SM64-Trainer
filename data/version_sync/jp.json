@@ -151,6 +151,26 @@
   "status": "verified",
   "value": 2150865952
  },
+ "address.second_camera_focus": {
+  "at": "2026-11-08T19:04:49.772111+00:00",
+  "evidence": "it holds zero or an object's start; only a boss or cutscene that sets it proves it",
+  "frames": null,
+  "measured": {
+   "value": 2150888792
+  },
+  "status": "verified",
+  "value": 2150813648
+ },
+ "address.segment_table": {
+  "at": "2026-11-08T19:04:49.486831+00:00",
+  "evidence": "the behaviour segment's entry equals the behaviour base found independently",
+  "frames": null,
+  "measured": {
+   "entry": 951072
+  },
+  "status": "verified",
+  "value": 2150867088
+ },
  "address.sound_code": {
   "at": "2026-10-17T04:06:04.352894+00:00",
   "evidence": "play_sound stores bits then source into 8-byte entries of this ring and publishes this u8 producer after both",
@@ -230,6 +250,36 @@
   "status": "verified",
   "value": 2151775546
  },
+ "address.usamune_slot_load": {
+  "at": "2026-11-08T19:04:48.908668+00:00",
+  "evidence": "code lies at this address in Usamune's copied code; only a save or load in the game proves it is the routine",
+  "frames": null,
+  "measured": {
+   "bytes": 1024
+  },
+  "status": "verified",
+  "value": 2151751044
+ },
+ "address.usamune_slot_save": {
+  "at": "2026-11-08T19:04:48.619041+00:00",
+  "evidence": "code lies at this address in Usamune's copied code; only a save or load in the game proves it is the routine",
+  "frames": null,
+  "measured": {
+   "bytes": 1024
+  },
+  "status": "verified",
+  "value": 2151692592
+ },
+ "address.usamune_slots_start": {
+  "at": "2026-11-08T19:04:49.197041+00:00",
+  "evidence": "every occupied word points past the object pool's start; only a save and a load in the game prove the format",
+  "frames": null,
+  "measured": {
+   "occupied": 0
+  },
+  "status": "verified",
+  "value": 2152726528
+ },
  "address.usamune_star_result": {
   "at": "2026-10-17T09:41:41.585023+00:00",
   "evidence": "written 1196 at the dance (counter 1195) and held while the counter ran 110 frames past it",
@@ -241,6 +291,26 @@
   },
   "status": "verified",
   "value": 2151775548
+ },
+ "address.usamune_state_end": {
+  "at": "2026-11-08T19:04:48.327911+00:00",
+  "evidence": "every verified Usamune setting and counter lie inside [0x80417c14, 0x80417d48); only the offline regeneration proves the span holds everything the renderer reads",
+  "frames": null,
+  "measured": {
+   "bytes": 308
+  },
+  "status": "verified",
+  "value": 2151775560
+ },
+ "address.usamune_state_start": {
+  "at": "2026-11-08T19:04:48.047057+00:00",
+  "evidence": "every verified Usamune setting and counter lie inside [0x80417c14, 0x80417d48); only the offline regeneration proves the span holds everything the renderer reads",
+  "frames": null,
+  "measured": {
+   "bytes": 308
+  },
+  "status": "verified",
+  "value": 2151775252
  },
  "address.usamune_stop": {
   "at": "2026-10-17T23:23:54.098534+00:00",

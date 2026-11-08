@@ -586,4 +586,5 @@ class AttemptScenes:
 
 
 def default_lab_root() -> Path:
-    return Path(os.environ.get("LOCALAPPDATA", Path.home())) / "SM64Trainer" / "scene-lab"
+    from sm64_events.core.paths import scene_lab_root
+    return scene_lab_root()
