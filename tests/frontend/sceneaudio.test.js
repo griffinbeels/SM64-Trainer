@@ -294,6 +294,7 @@ beforeEach(() => {
       ended: null, packages: [{ name: "sound.sm64scene", bytes: 1 << 20 }] });
     if (url === "/api/scene-lab/open") return respond(opened);
     if (url.startsWith("/api/scene-lab/audio/")) return respond({});
+    if (url === "/api/scene-lab/slots") return respond(SLOTS);
     return respond({}, 404);
   });
   HTMLCanvasElement.prototype.getContext = () => ({
@@ -303,8 +304,15 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
+// The Ghost Lab's nine save-state slots, all empty (scenestrip.js asks for them while the page shows).
+const SLOTS = { game: "us", reason: null, loaded: null, stamp: "s", slots: [1, 2, 3, 4, 5, 6, 7, 8, 9].map((slot) =>
+  ({ slot, state: "empty", level: null, area: null, place: null, version: null, translated: false, picture: null,
+    frame: null, mine: false })) };
+
+// The lab folder's recording, opened from the bar's More menu.
 async function openScene() {
   const page = render(h(SceneViewer, {}));
+  fireEvent.click(page.getByRole("button", { name: "More" }));
   const button = await waitFor(() => {
     const found = page.getByRole("button", { name: "Open" });
     expect(found.disabled).toBe(false);
@@ -317,9 +325,15 @@ async function openScene() {
   return { page, socket: sockets[0], root: page.container.querySelector(".scene-lab") };
 }
 
+// The play bar's Sound button opens the volume, Mute, Music and Sound effects (and the picture's sound note).
+function soundMenu(page) {
+  fireEvent.click(page.getByRole("button", { name: "Sound" }));
+}
+
 test("Mute and M silence the sound, the volume unmutes, and both persist for this viewer", async () => {
   localStorage.setItem(SCENE_SOUND.preference, JSON.stringify({ volume: 0.25, muted: false }));
   const { page, root } = await openScene();
+  soundMenu(page);
   const mute = page.getByRole("button", { name: "Mute" }), volume = page.getByLabelText("Volume");
   expect(volume.value).toBe("0.25");
   expect(mute.getAttribute("aria-pressed")).toBe("false");
@@ -341,6 +355,7 @@ test("storage that throws leaves the controls working for this page", async () =
   Storage.prototype.setItem = () => { throw new Error("denied"); };
   try {
     const { page } = await openScene();
+    soundMenu(page);
     const mute = page.getByRole("button", { name: "Mute" });
     expect(page.getByLabelText("Volume").value).toBe(String(SCENE_SOUND.volume));
     fireEvent.click(mute);
@@ -353,6 +368,8 @@ test("storage that throws leaves the controls working for this page", async () =
 test("a recording without sound says so instead of showing dead controls", async () => {
   opened.audio = { available: false, reason: "This recording has no sound." };
   const { page } = await openScene();
+  expect(page.getByRole("button", { name: "Sound" }).title).toBe("This recording has no sound.");   // said on hover
+  soundMenu(page);
   expect(page.container.querySelector(".scene-lab-sound-none").textContent).toBe("This recording has no sound.");
   expect(page.queryByRole("button", { name: "Mute" })).toBe(null);
   expect(page.queryByLabelText("Volume")).toBe(null);
@@ -438,6 +455,7 @@ test("a step or a seek is silent, and a lost or sound-less picture says so", asy
   fireEvent.keyDown(root, { key: "ArrowRight" });
   const stopped = nodes[0].messages.length;
   expect(nodes[0].messages.at(-1)).toEqual({ type: "stop" });
+  soundMenu(page);                                                     // the picture's sound note is in the Sound menu
   fireEvent.input(page.getByLabelText("Frame"), { target: { value: "2" } });
   await waitFor(() => expect(page.container.textContent).toContain("Sound lost here"));
   fireEvent.input(page.getByLabelText("Frame"), { target: { value: "4" } });
@@ -449,6 +467,7 @@ test("a scene without the split shows the switches disabled and says why, once",
   opened.audio.stems = { available: false, reason: "This scene was saved before music and sound effects could be split." };
   const { page, socket } = await openScene();
   await socket.picture(socket.sent[0]);
+  soundMenu(page);
   const music = page.getByRole("button", { name: "Music" }), effects = page.getByRole("button", { name: "Sound effects" });
   expect(music.disabled && effects.disabled).toBe(true);
   expect(music.getAttribute("aria-pressed")).toBe("true");
@@ -481,6 +500,7 @@ test("Music off plays the effects track from where the recording was, both off i
   await waitFor(() => expect(nodes.length).toBe(1));
   const node = nodes[0];
   await waitFor(() => expect(node.messages.some((message) => message.type === "clock")).toBe(true));
+  soundMenu(page);
   const music = page.getByRole("button", { name: "Music" });
   fireEvent.click(music);
   await waitFor(() => expect(music.getAttribute("aria-pressed")).toBe("false"));
@@ -505,5 +525,6 @@ test("a browser without WebAudio says it cannot play the sound", async () => {
   const { page, socket } = await openScene();
   await socket.picture(socket.sent[0]);
   fireEvent.click(page.getByRole("button", { name: "Play" }));
+  soundMenu(page);
   await waitFor(() => expect(page.container.textContent).toContain("This browser cannot play the recording's sound."));
 });

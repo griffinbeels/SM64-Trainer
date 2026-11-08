@@ -221,6 +221,10 @@ class FakeSocket {
 }
 
 const respond = (body, status = 200) => Promise.resolve({ ok: status < 300, status, json: () => Promise.resolve(body) });
+// The Ghost Lab's nine save-state slots, all empty (scenestrip.js asks for them while the page shows).
+const SLOTS = { game: "us", reason: null, loaded: null, stamp: "s", slots: [1, 2, 3, 4, 5, 6, 7, 8, 9].map((slot) =>
+  ({ slot, state: "empty", level: null, area: null, place: null, version: null, translated: false, picture: null,
+    frame: null, mine: false })) };
 const puts = () => fetches.filter(([url, method]) => url.startsWith(ROUTE) && method === "PUT")
   .map(([, , body]) => JSON.parse(body).keys);
 
@@ -246,6 +250,7 @@ beforeEach(() => {
     }
     if (url.startsWith(ROUTE)) return respond({ keys: saved.get("9:1") || [], problem: null });
     if (url.startsWith("/api/scene-lab/camera-presets")) return respond({ slots: [], problem: null });
+    if (url === "/api/scene-lab/slots") return respond(SLOTS);
     if (url.startsWith("/api/scene-lab/actions?")) {
       const target = new URL(url, "http://lab").searchParams.get("target");
       return respond({ target, reason: null, names: NAMES, actions: target === "stage" ? ACTIONS : ACTIONS.map(() => JUMP) });
@@ -293,6 +298,7 @@ async function answerAll(socket) {
 
 async function openScene() {
   const page = render(h(SceneViewer, {}));
+  fireEvent.click(page.getByRole("button", { name: "More" }));       // the lab's recordings sit in More
   const button = await until(() => {
     const found = page.getByRole("button", { name: "Open" });
     expect(found.disabled).toBe(false);
@@ -303,6 +309,7 @@ async function openScene() {
   const socket = sockets[0];
   socket.open();
   await answerAll(socket);
+  fireEvent.click(page.getByRole("tab", { name: /^Camera/ }));       // every camera choice is on the Camera tab
   const block = await until(() => page.getByRole("group", { name: "Camera path" }));
   await until(() => expect(within(block).getByRole("button", { name: "Key" }).disabled).toBe(false));
   return { page, socket, block: within(block) };
@@ -573,21 +580,21 @@ test("an action change is a frame whose action differs from the last known one",
   expect(actionWords("dive slide")).toBe("Dive slide");
 });
 
-test("the action row names the action on screen; its buttons and [ ] jump to the changes, paused", async () => {
+test("the play bar names the action on screen; its action steps and [ ] jump to the changes, paused", async () => {
   const { page, socket } = await openScene();
-  const row = within(page.getByRole("group", { name: "Action" }));
-  await until(() => expect(row.getByRole("button", { name: "On to the next action change" }).disabled).toBe(false));
+  const action = () => page.container.querySelector(".scene-lab-frame small").textContent;   // under the frame
+  await until(() => expect(page.getByRole("button", { name: "On to the next action change" }).disabled).toBe(false));
   const asked = fetches.filter(([url]) => url.startsWith("/api/scene-lab/actions?")).map(([url]) => url);
   expect(asked).toEqual(["/api/scene-lab/actions?session=1&target=stage"]);       // once, over HTTP
   expect(socket.sent.every((message) => message.kind !== "actions")).toBe(true);
-  expect(page.container.querySelector(".scene-lab-action-name").textContent).toBe("Mario: Walking");
-  fireEvent.click(row.getByRole("button", { name: "On to the next action change" }));
+  expect(action()).toBe("Mario: Walking");
+  fireEvent.click(page.getByRole("button", { name: "On to the next action change" }));
   await answerAll(socket);
   expect(socket.pictures().at(-1).frame).toBe(5);
-  expect(page.container.querySelector(".scene-lab-action-name").textContent).toBe("Mario: Jump");
+  expect(action()).toBe("Mario: Jump");
   await step(socket, page, "]");
   expect(socket.pictures().at(-1).frame).toBe(13);
-  expect(page.container.querySelector(".scene-lab-action-name").textContent).toBe("Mario: Dive");
+  expect(action()).toBe("Mario: Dive");
   await step(socket, page, "ArrowRight");
   await step(socket, page, "ArrowRight");
   await step(socket, page, "[");
@@ -596,7 +603,7 @@ test("the action row names the action on screen; its buttons and [ ] jump to the
   expect(socket.pictures().at(-1).frame).toBe(13);
   await until(() => page.getByText("No action change after this frame."));
   for (let k = 0; k < 3; k++) await step(socket, page, "ArrowLeft");
-  expect(page.container.querySelector(".scene-lab-action-name").textContent).toBe("Mario: no action here");
+  expect(action()).toBe("Mario: no action here");
   // Play, then a step to the next change: the scene pauses there.
   fireEvent.click(page.getByRole("button", { name: "Play" }));
   await answerAll(socket);

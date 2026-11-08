@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
-// The Scene viewer's Cameras strip (ui/components/scenepresets.js, drawn by sceneviewer.js) against a
-// scripted lab: saving the picture's camera into a slot, naming, renaming, deleting, dragging a slot
-// onto another, keys 1-9 and who keeps them, cutting while Play goes on, and a scene moving into
-// another area. The lab's preset routes are a Map here (GET and PUT /api/scene-lab/camera-presets);
-// the socket, canvas and animation frames are stand-ins as in sceneviewer.test.js.
+// The Ghost Lab's saved views (ui/components/scenepresets.js, the Camera tab's Views row, drawn by
+// sceneviewer.js) against a scripted lab: saving the picture's camera into a slot, naming, renaming,
+// deleting, dragging a slot onto another, Shift with 1-9 and who keeps those keys (plain 1-9 belong to
+// the save-state strip, scenestrip.test.js), cutting while Play goes on, and a scene moving into another
+// area. The lab's preset routes are a Map here (GET and PUT /api/scene-lab/camera-presets); the socket,
+// canvas and animation frames are stand-ins as in sceneviewer.test.js.
 import { h } from "preact";
 import { render, cleanup, fireEvent, within } from "@testing-library/preact";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
@@ -49,6 +50,10 @@ class FakeSocket {
 }
 
 const respond = (body, status = 200) => Promise.resolve({ ok: status < 300, status, json: () => Promise.resolve(body) });
+// The Ghost Lab's nine save-state slots, all empty (scenestrip.js asks for them while the page shows).
+const SLOTS = { game: "us", reason: null, loaded: null, stamp: "s", slots: [1, 2, 3, 4, 5, 6, 7, 8, 9].map((slot) =>
+  ({ slot, state: "empty", level: null, area: null, place: null, version: null, translated: false, picture: null,
+    frame: null, mine: false })) };
 const placeOfUrl = (url) => { const query = new URL(url, "http://lab").searchParams; return `${query.get("level")}:${query.get("area")}`; };
 const puts = () => fetches.filter(([url, method]) => url.startsWith(ROUTE) && method === "PUT")
   .map(([url, , body]) => ({ place: placeOfUrl(url), slots: JSON.parse(body).slots }));
@@ -76,6 +81,7 @@ beforeEach(() => {
       return respond({ slots, problem: null });
     }
     if (url.startsWith(ROUTE)) return respond(saved.get(placeOfUrl(url)) || { slots: [], problem: null });
+    if (url === "/api/scene-lab/slots") return respond(SLOTS);
     return respond({}, 404);
   });
   HTMLCanvasElement.prototype.getContext = () => ({
@@ -111,6 +117,7 @@ async function openScene({ free = true, filled = free } = {}) {
       : answer(url, options)));
   }
   const page = render(h(SceneViewer, {}));
+  fireEvent.click(page.getByRole("button", { name: "More" }));       // the lab's recordings sit in More
   const button = await until(() => {
     const found = page.getByRole("button", { name: "Open" });
     expect(found.disabled).toBe(false);
@@ -122,6 +129,7 @@ async function openScene({ free = true, filled = free } = {}) {
   socket.open();
   await until(() => expect(socket.sent.length).toBe(1));
   await socket.picture(socket.sent[0]);
+  fireEvent.click(page.getByRole("tab", { name: /^Camera/ }));       // the saved views are on the Camera tab
   const root = page.container.querySelector(".scene-lab");
   const strip = root.querySelector(".scene-lab-cameras");
   if (filled) await until(() => expect(strip.querySelector('[aria-label="Wide hall: camera 1"]')).toBeTruthy());
@@ -134,6 +142,10 @@ const names = (strip) => [...strip.querySelectorAll(".scene-lab-slot")].map((slo
 const pressed = (strip) => [...strip.querySelectorAll('.scene-lab-slot-cut[aria-pressed="true"]')]
   .map((button) => Number(button.closest(".scene-lab-slot").dataset.slot));
 const key = (root, name, init = {}) => fireEvent.keyDown(root, { key: name, ...init });
+// Shift with a number key, as a US keyboard sends it: the key is the shifted sign, the code names the digit.
+const SHIFTED = "!@#$%^&*(";
+const view = (root, number, init = {}) =>
+  fireEvent.keyDown(root, { key: SHIFTED[number - 1], code: `Digit${number}`, shiftKey: true, ...init });
 // The camera a cut to `camera` sends: the free camera rebuilt from it.
 const cutCamera = (camera) => cameraOf(orbitFromPose(camera.focus, camera.position, { roll: camera.roll, fov: camera.fov }));
 const close = (a, b) => a.forEach((value, i) => expect(value).toBeCloseTo(b[i], 6));
@@ -161,7 +173,9 @@ test("the strip shows the saved cameras of the area on screen, in slot order, an
   const { strip, root, socket } = await openScene();
   expect(names(strip)).toEqual(["Wide hall", "Low run", null, null, null, null, null, null, null]);
   expect(strip.querySelectorAll(".scene-lab-slot-save").length).toBe(7);
-  expect(strip.querySelector(".scene-lab-hint").textContent).toMatch(/Keys 1-9 cut/);
+  expect(strip.querySelector(".scene-lab-hint").textContent).toMatch(/^Shift with 1 to 9 cuts to a saved view\./);
+  expect([...strip.querySelectorAll("kbd")].map((sign) => sign.textContent))       // each slot shows its key
+    .toEqual(["⇧1", "⇧2", "⇧3", "⇧4", "⇧5", "⇧6", "⇧7", "⇧8", "⇧9"]);
   key(root, "ArrowRight");
   await socket.picture(socket.last());
   await settled();
@@ -182,9 +196,11 @@ test("an empty slot saves the free camera on screen for this area and asks for i
   expect(puts()[0].slots.map((entry) => entry.slot)).toEqual([1, 2, 4]);
   const field = await until(() => strip.querySelector(".scene-lab-slot-name-field"));
   await until(() => expect(document.activeElement).toBe(field));
-  key(field, "3");                                     // a field that types keeps the number keys
+  view(field, 3);                                      // a field that types keeps the number keys
+  key(field, "3", { code: "Digit3" });
   await settled();
   expect(socket.last().camera).toEqual(camera);
+  expect(fetches.some(([url]) => url.startsWith("/api/scene-lab/moment"))).toBe(false);
   fireEvent.input(field, { target: { value: "  Over   the bridge " } });
   key(field, "Enter");
   await until(() => expect(puts().length).toBe(2));
@@ -216,11 +232,11 @@ test("a camera the lab worked out saves from the picture's camera_used (a ghost'
 
 // ------------------------------------------------------------------ cutting
 
-test("keys 1-9 cut to that slot's camera as a free camera, and Play keeps playing", async () => {
+test("Shift with 1-9 cuts to that slot's camera as a free camera, and Play keeps playing", async () => {
   const { page, socket, strip, root, canvas } = await openScene();
   fireEvent.click(page.getByRole("button", { name: "Play" }));
   await until(() => expect(page.getByRole("button", { name: "Pause" })).toBeTruthy());
-  key(root, "2");
+  view(root, 2);
   await until(() => expect(socket.last().camera?.focus).toBeTruthy());
   const cut = socket.last().camera;
   close(cut.focus, LOW.focus);
@@ -230,7 +246,7 @@ test("keys 1-9 cut to that slot's camera as a free camera, and Play keeps playin
   expect(root.querySelector(".scene-lab-tag").textContent).toBe("Free camera");
   socket.picture(socket.last());                      // a play's picture waits for its display frame: not awaited
   expect(pressed(strip)).toEqual([2]);
-  key(root, "1");                                                           // straight to another
+  view(root, 1);                                                            // straight to another
   await until(() => expect(socket.last().camera.position[1]).toBeCloseTo(WIDE.position[1], 6));
   expect(pressed(strip)).toEqual([1]);
   socket.picture(socket.last());
@@ -249,10 +265,30 @@ test("a click on a slot cuts like its key, and a key on an empty slot says so", 
   fireEvent.click(page.getByRole("button", { name: "Wide hall: camera 1" }));
   await until(() => expect(socket.last().camera?.focus).toBeTruthy());
   expect(sameCamera(socket.last().camera, cutCamera(WIDE))).toBe(true);
-  key(root, "7");
+  view(root, 7);
   await settled();
-  expect(root.querySelector(".scene-lab-reason").textContent).toBe("No camera saved in slot 7 here yet.");
+  expect(root.querySelector(".scene-lab-notice").textContent).toBe("No camera saved in slot 7 here yet.");
   expect(pressed(strip)).toEqual([1]);
+});
+
+// His words: "prioritize 1-9 for save states, and then Shift 1-9 for camera views".
+test("plain 1-9 belong to the save-state strip: they save the frame and never cut to a view", async () => {
+  const answer = globalThis.fetch;                                    // a scene whose frames name their package frame
+  globalThis.fetch = vi.fn((url, options = {}) => (url === "/api/scene-lab/open"
+    ? (fetches.push([url, "POST", options.body]), respond({ session: 1, name: "bob-minute.sm64scene", fps: 30,
+      frames: FRAMES.map((row, i) => ({ ...row, package_frame: i })), renderer_pid: 7,
+      free_camera: { available: true, reason: null } }))
+    : answer(url, options)));
+  const { socket, strip, root } = await openScene();
+  key(root, "ArrowRight");                                            // frame 2: the first frame cannot be saved
+  await socket.picture(socket.last());
+  const before = socket.pictures().length;
+  vi.spyOn(HTMLCanvasElement.prototype, "toDataURL").mockImplementation(() => "data:image/jpeg;base64,PIC");
+  key(root, "2", { code: "Digit2" });
+  await until(() => expect(fetches.some(([url, method]) => url === "/api/scene-lab/moment" && method === "POST")).toBe(true));
+  await settled();
+  expect(socket.pictures().length).toBe(before);                      // no cut asked for a new picture
+  expect(pressed(strip)).toEqual([]);
 });
 
 test("a cut made while Free camera still waits for the recorded camera's pose stays where it cut", async () => {
@@ -260,7 +296,7 @@ test("a cut made while Free camera still waits for the recorded camera's pose st
   fireEvent.click(page.getByRole("button", { name: "Free camera" }));
   await until(() => expect(socket.last()).toMatchObject({ kind: "pose" }));
   const question = socket.last();
-  key(page.container.querySelector(".scene-lab"), "1");
+  view(page.container.querySelector(".scene-lab"), 1);
   await until(() => expect(socket.last().camera?.focus).toBeTruthy());
   socket.text({ id: question.id, kind: "pose", pose: POSE, reason: null });     // the late answer
   await settled();
@@ -270,20 +306,20 @@ test("a cut made while Free camera still waits for the recorded camera's pose st
 
 test("the number keys belong to typing fields and selects, not to a focused button or slider, and never with Ctrl", async () => {
   const { page, socket, root } = await openScene();
-  const pictures = root.querySelector(".scene-lab-quality select");
+  const pictures = root.querySelector(".scene-lab-quality select");                 // in the bar's More menu
   const before = socket.sent.length;
-  key(pictures, "2");
-  key(root, "2", { ctrlKey: true });
+  view(pictures, 2);
+  view(root, 2, { ctrlKey: true });
   await settled();
   expect(socket.sent.length).toBe(before);
-  const slider = root.querySelector('input[type="range"]');
+  const slider = page.getByRole("slider", { name: "Frame" });                        // the play bar's
   slider.focus();
-  key(slider, "2");                                    // a slider's own keys are its arrows
+  view(slider, 2);                                     // a slider's own keys are its arrows
   await until(() => expect(socket.last().camera?.position).toBeTruthy());
   expect(sameCamera(socket.last().camera, cutCamera(LOW))).toBe(true);
   const restart = page.getByRole("button", { name: /Restart/ });
   restart.focus();
-  key(restart, "1");                                   // a button's own keys are Space and Enter
+  view(restart, 1);                                    // a button's own keys are Space and Enter
   await until(() => expect(sameCamera(socket.last().camera, cutCamera(WIDE))).toBe(true));
 });
 
@@ -394,11 +430,11 @@ test("a scene moving into another area shows that area's cameras, and the keys c
   await socket.picture(socket.last());
   await until(() => expect(names(strip)[0]).toBe("Cannon"));
   expect(names(strip)).toEqual(["Cannon", null, null, null, null, null, null, null, null]);
-  key(root, "1");
+  view(root, 1);
   await until(() => expect(sameCamera(socket.last().camera, cutCamera(CANNON))).toBe(true));
-  key(root, "2");
+  view(root, 2);
   await settled();
-  expect(root.querySelector(".scene-lab-reason").textContent).toBe("No camera saved in slot 2 here yet.");
+  expect(root.querySelector(".scene-lab-notice").textContent).toBe("No camera saved in slot 2 here yet.");
   key(root, "Home");                                   // back in area 1: its own set, read once
   await socket.picture(socket.last());
   await until(() => expect(names(strip)[1]).toBe("Low run"));
@@ -446,7 +482,7 @@ test("a preset cut ends a cinematic camera: the cut is a still free camera", asy
   const { page, socket, strip, root } = await openScene();
   await frontOn(page, socket);
   expect(root.querySelector(".scene-lab-tag").textContent).toBe("Front · Mario");
-  key(root, "2");
+  view(root, 2);
   await until(() => expect(socket.last().camera?.focus).toBeTruthy());
   expect(socket.last().camera.rig).toBeUndefined();
   expect(sameCamera(socket.last().camera, cutCamera(LOW))).toBe(true);
@@ -488,12 +524,12 @@ test("a camera saved with a tilt and lens comes back with both, and a saved tilt
   key(root, "r");
   await until(() => expect(socket.last().camera).toBeNull());
   await socket.picture(socket.last());
-  key(root, "3");
+  view(root, 3);
   await until(() => expect(socket.last().camera?.focus).toBeTruthy());
   expect([socket.last().camera.roll, socket.last().camera.fov]).toEqual([rollOf(20), shown.fov]);
   await socket.picture(socket.last());
   // A turn keeps a saved camera's tilt: LOW's is its own, never levelled away as a recorded shake is.
-  key(root, "2");
+  view(root, 2);
   await until(() => expect(socket.last().camera.roll).toBe(LOW.roll));
   await socket.picture(socket.last());
   fireEvent.pointerDown(canvas, { button: 0, pointerId: 1, clientX: 100, clientY: 100 });
