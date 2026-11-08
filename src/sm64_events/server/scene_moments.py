@@ -11,11 +11,13 @@ The build runs in a hidden below-normal child (tools/scene_lab/moment_slot.py), 
 event loop nor the poller shares Python's lock with it: a build is about half a second of pure CPU. The route
 only reads the child's one line. The write goes through handoff_try.install, the one checked path: it takes the
 target slot's backup first, refuses unless the running game can take this state, and reads every byte back. A state
-that was written joins the Slot Library (handoff_try.keep_built).
+that was written joins the Slot Library (handoff_try.keep_built), with the picture of its frame when the Scene
+viewer has that scene open (SceneLab.frame_picture: the recorded camera's, drawn just before the write).
 """
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import importlib
 import json
 import logging
@@ -71,6 +73,10 @@ class MomentBody(BaseModel):
 
 class WriteBody(BaseModel):
     slot: int = Field(ge=1, le=9)
+    # The watched ghost's star: the written state joins its star set (or, with no star, the course default) at
+    # this slot (slotlibrary/keeper.py). Absent: the course and star the game is in now.
+    course_id: int | None = Field(default=None, ge=1, le=30)
+    star_id: int | None = Field(default=None, ge=0, le=7)
 
 
 def run_builder(config, path: Path, frame: int, register=lambda child: None) -> tuple[dict, bytes | None]:
@@ -184,8 +190,9 @@ class SceneMoments:
             async with self.turn:
                 done = await asyncio.to_thread(self._built_part_blocking, body, config, resim, api)
             if done is not None:
-                answer, data = done
-                return answer if data is None else self._keep(answer, data, f"Ghost frame {body.frame}", None)
+                answer, data, part = done
+                return answer if data is None else self._keep(answer, data, f"Ghost frame {body.frame}", None,
+                                                               (part, body.frame))
         path, title = await self._source(body)
         config = await asyncio.to_thread(api.LabConfig.load, self.lab.config_path)
         if config.map is None:
@@ -205,13 +212,14 @@ class SceneMoments:
                 if not verdict["ok"]:
                     return {"refused": "check", "reason": verdict["reason"]}
                 answer = {**answer, "checked": {"frames": verdict["frames"], "compared": verdict["compared"]}}
-            return self._keep(answer, data, f"{title} frame {body.frame}", key)
+            return self._keep(answer, data, f"{title} frame {body.frame}", key, (path, body.frame))
 
-    def _keep(self, answer: dict, data: bytes, source: str, key) -> dict:
+    def _keep(self, answer: dict, data: bytes, source: str, key, scene_frame: tuple | None = None) -> dict:
+        """scene_frame: (the package, its frame) the state was made from, whose picture the write keeps."""
         token = uuid.uuid4().hex
         answer = {**answer, "id": token, "exact": not answer.get("worked_out", False),
                   "build": answer.get("build", "us")}
-        self.built[token] = {"answer": answer, "data": data, "source": source}
+        self.built[token] = {"answer": answer, "data": data, "source": source, "scene_frame": scene_frame}
         if key is not None:
             self.by_frame[key] = token
         while len(self.built) > KEEP_BUILT:
@@ -230,18 +238,40 @@ class SceneMoments:
             path, info = part
             allowed = resim.allows(info, body.frame)
             if allowed.get("building"):
-                return {"refused": "building", "reason": allowed["reason"]}, None
+                return {"refused": "building", "reason": allowed["reason"]}, None, path
             if not allowed["allowed"]:
                 raise api.SceneRefused(allowed["reason"])
             answer, data = self.builder(config, path, body.frame, self._note_child)
             if data is None or allowed.get("check") != "load":
-                return answer, data
+                return answer, data, path
             verdict = resim.check_slot_blocking(body.ghost, path, body.frame, data, first_record=info.get("first_record", 1))
             if not verdict["ok"]:
-                return {"refused": "check", "reason": verdict["reason"]}, None
-            return {**answer, "checked": {"frames": verdict["frames"], "compared": verdict["compared"]}}, data
+                return {"refused": "check", "reason": verdict["reason"]}, None, path
+            return {**answer, "checked": {"frames": verdict["frames"], "compared": verdict["compared"]}}, data, path
 
-    def _write_blocking(self, entry: dict, slot: int) -> dict:
+    def _write_blocking(self, entry: dict, slot: int, course_id: int | None = None, star_id: int | None = None,
+                        picture: bytes | None = None) -> dict:
+        """The write and the star set it joins, under the star sets' lock when the server keeps them, so the slot
+        worker never reads this slot half written or takes it for a save of his. picture: the frame's, kept beside
+        the state it made."""
+        slot_sets = getattr(self.lab, "slot_sets", None)
+        keeper = slot_sets() if slot_sets is not None else None
+        with keeper.lock if keeper is not None else contextlib.nullcontext():
+            return self._write_locked(entry, slot, keeper, course_id, star_id, picture)
+
+    async def _frame_picture(self, entry: dict) -> bytes | None:
+        """The picture of the frame this state was made from, when the Scene viewer has that scene open."""
+        frame_picture = getattr(self.lab, "frame_picture", None)
+        if frame_picture is None or entry.get("scene_frame") is None:
+            return None
+        try:
+            return await frame_picture(*entry["scene_frame"])
+        except Exception:  # noqa: BLE001 - a picture is a nicety beside the save state
+            log.warning("A save state's frame picture could not be drawn.", exc_info=True)
+            return None
+
+    def _write_locked(self, entry: dict, slot: int, keeper, course_id: int | None, star_id: int | None,
+                      picture: bytes | None = None) -> dict:
         from sm64_events.core.paths import slot_library_dir
         from sm64_events.server.scene_lab_api import _lab_module
         tool = _lab_module("handoff_try")
@@ -271,25 +301,40 @@ class SceneMoments:
         except tool.WriteFailed:
             return {"refused": "write", "reason": f"Slot {slot} could not be written. It is empty now, and its old "
                                                   "save state is in the backup."}
+        from sm64_events.slotlibrary.keeper import picture_url
         kept = None
+        library = self.library or tool.SlotLibrary(slot_library_dir())
         try:
-            kept = tool.keep_built(memory, image, self.library or tool.SlotLibrary(slot_library_dir()))[0].id
+            kept = tool.keep_built(memory, image, library)[0].id
         except Exception:  # noqa: BLE001 - the slot is written; the library is a copy of it
             log.warning("A written save state did not join the Slot Library.", exc_info=True)
+        if kept is not None and picture is not None:
+            try:
+                library.put_picture(kept, picture)
+            except (OSError, ValueError, tool.Refusal):
+                log.warning("A written save state's picture was not kept.", exc_info=True)
         written = {"written": True, "slot": slot, "frame": answer["frame"], "backup": installed.backup.name,
-                   "kept": kept, "build": build}
+                   "kept": kept, "build": build, "set": None, "picture": picture_url(library, kept)}
+        if keeper is not None and kept is not None:
+            from sm64_events.slotlibrary.usamune import SLOT_BYTES, slot_address
+            try:
+                written["set"] = keeper.claim(slot - 1, kept, memory.read(slot_address(slot - 1), SLOT_BYTES),
+                                              course_id, star_id)
+            except Exception:  # noqa: BLE001 - the slot is written; the set is a list of it
+                log.warning("A written save state did not join its star set.", exc_info=True)
         translation = installed.translation
         if translation is not None:
             written["translated"] = {"from": translation.source, "to": translation.target,
                                      "words": translation.words(), "removed": len(translation.removed)}
         return written
 
-    async def write(self, token: str, slot: int) -> dict:
+    async def write(self, token: str, slot: int, course_id: int | None = None, star_id: int | None = None) -> dict:
         """LookupError: that build is gone. The game's own answer comes back as {refused, reason}."""
         entry = self.built.get(token)
         if entry is None:
             raise LookupError("That save state is gone. Press the slot again.")
-        return await asyncio.to_thread(self._write_blocking, entry, slot)
+        picture = await self._frame_picture(entry)        # before the write: the claim's answer then carries it
+        return await asyncio.to_thread(self._write_blocking, entry, slot, course_id, star_id, picture)
 
 
 def game_sentence(text: str) -> str:
@@ -320,7 +365,7 @@ def mount_moment_routes(router: APIRouter, moments: SceneMoments) -> None:
     @router.post("/moment/{token}/write")
     async def write_moment(token: str, body: WriteBody):
         try:
-            return await moments.write(token, body.slot)
+            return await moments.write(token, body.slot, body.course_id, body.star_id)
         except LookupError as missing:
             raise HTTPException(404, str(missing)) from None
         except ConfigError as refused:

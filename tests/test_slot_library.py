@@ -11,7 +11,7 @@ import pytest
 
 from sm64_events.core import paths
 from sm64_events.slotlibrary import sharefile, usamune
-from sm64_events.slotlibrary.coursesets import CourseSets, install_for_course, place_states
+from sm64_events.slotlibrary.coursesets import place_states
 from sm64_events.slotlibrary.store import (
     BUILT,
     CAPTURED,
@@ -98,6 +98,8 @@ def make_slot(fill: int, *, mario: int = MARIO, level: int = LEVEL, area: int = 
     data = bytearray(bytes([fill]) * usamune.SLOT_BYTES)
     struct.pack_into(">I", data, usamune.TRAILER_MARIO, mario)
     struct.pack_into(">hh", data, usamune.TRAILER_LEVEL, level, area)
+    for at in (0x26420, 0x26424, 0x26440):     # the session clocks (trailer +0x100, +0x104, +0x120): the game's
+        data[at:at + 4] = bytes(4)
     return bytes(data)
 
 
@@ -332,57 +334,6 @@ def test_a_slot_being_written_stops_the_capture(game, library):
     game.torn_reads[usamune.slot_address(0)] = 1
     with pytest.raises(Refusal):
         capture_all(game, library, usamune.US)
-
-
-def test_a_course_set_goes_in_order_and_leaves_later_slots_alone(game, library, tmp_path):
-    states = [keep(library, game, make_slot(0xD0 + n)) for n in range(3)]
-    game.save(5, make_slot(0xC5))
-    sets = CourseSets(tmp_path / "sets.json")
-    sets.assign(library, LEVEL, None, [state.id for state in states])
-    report = install_for_course(game, library, sets, LEVEL, None)
-    assert [placed.slot for placed in report.placements] == [0, 1, 2]
-    assert [game.slot(n) for n in range(3)] == [make_slot(0xD0 + n) for n in range(3)]
-    assert game.slot(5) == make_slot(0xC5)
-    low = usamune.slot_address(0)
-    assert all(low <= address and address + len(data) <= usamune.slot_address(2) + usamune.SLOT_BYTES
-               for address, data in game.writes)
-
-
-def test_a_course_entry_with_no_set_touches_nothing(game, library, tmp_path):
-    game.save(0, make_slot(0xC0))
-    assert install_for_course(game, library, CourseSets(tmp_path / "sets.json"), LEVEL, None) is None
-    assert game.writes == [] and library.scan().states == ()
-
-
-def test_a_stars_set_beats_its_levels_set(game, library, tmp_path):
-    level_state, star_state = keep(library, game, make_slot(1)), keep(library, game, make_slot(2))
-    sets = CourseSets(tmp_path / "sets.json")
-    sets.assign(library, LEVEL, None, [level_state.id])
-    sets.assign(library, LEVEL, "wild-blue", [star_state.id])
-    assert sets.lookup(LEVEL, "wild-blue") == [star_state.id]
-    assert sets.lookup(LEVEL, "other-star") == [level_state.id]
-    assert sets.lookup(LEVEL + 1, "wild-blue") is None
-    sets.assign(library, LEVEL, "wild-blue", [])
-    assert sets.lookup(LEVEL, "wild-blue") == [level_state.id]
-
-
-def test_a_set_holds_at_most_nine_kept_states(game, library, tmp_path):
-    state = keep(library, game, make_slot(1))
-    sets = CourseSets(tmp_path / "sets.json")
-    with pytest.raises(Refusal):
-        sets.assign(library, LEVEL, None, [state.id] * 10)
-    with pytest.raises(Refusal):
-        sets.assign(library, LEVEL, None, ["0" * 64])
-    assert not sets.path.exists()
-
-
-def test_an_unreadable_sets_file_is_not_overwritten(game, library, tmp_path):
-    state = keep(library, game, make_slot(1))
-    path = tmp_path / "sets.json"
-    path.write_text('{"version": 2, "sets": []}', encoding="utf-8")
-    with pytest.raises(Damaged):
-        CourseSets(path).assign(library, LEVEL, None, [state.id])
-    assert path.read_text(encoding="utf-8") == '{"version": 2, "sets": []}'
 
 
 def test_a_state_from_another_mario_place_is_moved_to_his_place_and_the_kept_state_stays(game, library):
@@ -730,9 +681,9 @@ def test_the_command_line_drives_the_whole_loop(driven, tmp_path, capsys):
     assert driven.writes == []
     assert cli.main([*root, "install", identity[:12], "--slot", "4"]) == 0
     assert driven.slot(4) == make_slot(0xF0)
-    assert cli.main([*root, "set-assign", str(LEVEL), identity[:12]]) == 0
+    assert cli.main([*root, "set-put", "1", "--slot", "1", identity[:12]]) == 0   # BoB is course 1
     driven.save(0, bytes(usamune.SLOT_BYTES))
-    assert cli.main([*root, "set-install", str(LEVEL)]) == 0
+    assert cli.main([*root, "set-install", "1"]) == 0
     assert driven.slot(0) == make_slot(0xF0)
     out_file = tmp_path / "cannon.sm64state"
     assert cli.main([*root, "export", identity[:12], str(out_file)]) == 0

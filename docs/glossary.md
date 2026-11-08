@@ -361,14 +361,20 @@ hash of its bytes, so the same bytes are always one kept state.
 
 ### Course set
 
-An ordered list of up to nine [[kept state]]s for a level, or for one [[star]]
-of that level. Position one goes to Usamune's first slot, and later slots keep
-what they hold. A [[star]]'s own list wins over its level's. The Trainer first
-captures every occupied slot, then writes the list. Each state goes through
-[[mario relocation]] on the way in, and each state reports whether Usamune will
-load it now.
+For one course, which [[kept state]] goes into which of Usamune's nine slots.
+Each course has a course default, and each [[star]] of it can have a set of its
+own. That set's slots replace the course default's at the same numbers; the
+other slots keep the course default. When you enter a course, the Trainer writes
+the course default, or the set of your [[target]] when that [[star]] is in this
+course. Picking or grabbing a [[star]] there writes its set. A slot that held
+another set's state of this course becomes empty, and anything else stays. When
+you save into a slot yourself, that save joins the set you are in. The Trainer
+first keeps every occupied slot, then writes. Each state goes through [[mario
+relocation]] on the way in. Every set starts empty.
 
-- **Lives** -- `src/sm64_events/slotlibrary/coursesets.py`
+- **Lives** -- `src/sm64_events/slotlibrary/coursesets.py` (the sets),
+  `src/sm64_events/slotlibrary/keeper.py` (which set applies, and when it is
+  written); lab only
 
 ### Mario relocation
 

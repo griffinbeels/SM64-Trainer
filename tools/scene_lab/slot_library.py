@@ -6,12 +6,16 @@
     list                        every kept state, oldest first, and the course sets
     rename ID NAME              name a kept state
     install ID --slot N [--dry-run]     write a kept state into slot N (0-8), capturing all slots first
-    set-assign LEVEL [--star S] [ID ...]    a course's ordered set; no ids removes it
-    set-install LEVEL [--star S] [--dry-run]    what entering that course will do
+    set-show COURSE [--star S]                  the course default, or that star's set over it, slot by slot
+    set-put COURSE [--star S] --slot N ID       this kept state at Usamune's slot N (1-9) of that set
+    set-remove COURSE [--star S] --slot N       slot N out of that set; the kept state stays
+    set-install COURSE [--star S] [--dry-run]   write that context's resolved set now, as the Trainer does on entry
     export ID FILE.sm64state    write a share file
     import FILE.sm64state       add a share file to the library, and write nothing to the game
 
-ID may be the start of an id. Only install and set-install write to game memory, each inside one slot's range.
+COURSE is the course number (Bob-omb Battlefield 1, Whomp's Fortress 2, ...); S the star as the Trainer counts it
+(0 is the course's first star). ID may be the start of an id. Only install and set-install write to game memory,
+each inside one slot's range.
 Import reads the game once for its Usamune fingerprint; with no game running it accepts the builds the library
 already holds.
 """
@@ -25,7 +29,8 @@ from pathlib import Path
 from sm64_events.core.paths import slot_library_dir
 from sm64_events.slotlibrary import usamune
 from sm64_events.slotlibrary.atlas import default_store
-from sm64_events.slotlibrary.coursesets import CourseSets, InstallReport, install_for_course, place_states
+from sm64_events.slotlibrary.coursesets import CourseSets, InstallReport, place_states
+from sm64_events.slotlibrary.keeper import Context, SetKeeper
 from sm64_events.slotlibrary.sharefile import export_state, import_state
 from sm64_events.slotlibrary.store import KeptState, SlotLibrary
 from sm64_events.slotlibrary.usamune import Refusal, WriteFailed, routine_fingerprint
@@ -87,9 +92,29 @@ def list_all(library: SlotLibrary, sets: CourseSets) -> int:
         print(describe(state))
     for identity in scan.damaged:
         print(f"DAMAGED record: {identity}", file=sys.stderr)
-    for entry in sets.all():
-        print(f"set: level {entry['level']} star {entry['star']}: " + " ".join(s[:12] for s in entry["states"]))
+    for course, record in sets.courses().items():
+        for star, slots in [(None, record.get("default", {})), *record.get("stars", {}).items()]:
+            named = " ".join(f"{slot}={identity[:12]}" for slot, identity in sorted(slots.items(), key=lambda s: int(s[0])))
+            print(f"set: course {course} {'default' if star is None else f'star {star}'}: {named}")
     return 2 if scan.damaged else 0
+
+
+def show_set(sets: CourseSets, course: int, star: int | None) -> int:
+    resolved = sets.resolved(course, star)
+    for slot in range(1, 10):
+        identity, which = resolved.get(slot, (None, None))
+        print(f"slot {slot}: " + (f"{identity[:12]} ({which})" if identity else "-"))
+    return 0
+
+
+def install_set(args, library: SlotLibrary, sets: CourseSets) -> int:
+    keeper = SetKeeper(library, sets, default_store())
+    report = keeper.apply(usamune.attach(args.pid), dry_run=args.dry_run, context=Context(args.course, args.star))
+    print(f"{'dry run for' if args.dry_run else 'wrote'} {keeper.words(report.context)}: slots {report.written}; "
+          f"his saves kept first: {report.captured}")
+    for slot, why in report.refused:
+        print(f"slot {slot} NOT written: {why}", file=sys.stderr)
+    return 2 if report.refused else 0
 
 
 def accepted_fingerprints(args, library: SlotLibrary) -> tuple[set[str], str | None]:
@@ -121,13 +146,17 @@ def run(args, library: SlotLibrary, sets: CourseSets) -> int:
                                   dry_run=args.dry_run, atlases=atlases)
             print_timing(started, attached, atlases)
             return print_report(report, args.dry_run)
-        case "set-assign":
-            sets.assign(library, args.level, args.star, [library.resolve(identity) for identity in args.ids])
-            print(f"level {args.level} star {args.star}: {len(args.ids)} states")
+        case "set-show":
+            return show_set(sets, args.course, args.star)
+        case "set-put":
+            sets.put(library, args.course, args.star, args.slot, library.resolve(args.id))
+            return show_set(sets, args.course, args.star)
+        case "set-remove":
+            if not sets.remove(args.course, args.star, args.slot):
+                raise Refusal(f"slot {args.slot} is not in that set")
+            return show_set(sets, args.course, args.star)
         case "set-install":
-            report = install_for_course(usamune.attach(args.pid), library, sets, args.level, args.star,
-                                        dry_run=args.dry_run, atlases=default_store())
-            return print_report(report, args.dry_run)
+            return install_set(args, library, sets)
         case "export":
             print(export_state(library, library.resolve(args.id), args.file))
         case "import":
@@ -150,14 +179,16 @@ def build_parser() -> argparse.ArgumentParser:
     install.add_argument("id")
     install.add_argument("--slot", type=int, required=True)
     install.add_argument("--dry-run", action="store_true")
-    assign = commands.add_parser("set-assign")
-    assign.add_argument("level", type=int)
-    assign.add_argument("--star")
-    assign.add_argument("ids", nargs="*")
-    install_set = commands.add_parser("set-install")
-    install_set.add_argument("level", type=int)
-    install_set.add_argument("--star")
-    install_set.add_argument("--dry-run", action="store_true")
+    for name in ("set-show", "set-put", "set-remove", "set-install"):
+        command = commands.add_parser(name)
+        command.add_argument("course", type=int)
+        command.add_argument("--star", type=int)
+        if name in ("set-put", "set-remove"):
+            command.add_argument("--slot", type=int, required=True)
+        if name == "set-put":
+            command.add_argument("id")
+        if name == "set-install":
+            command.add_argument("--dry-run", action="store_true")
     export = commands.add_parser("export")
     export.add_argument("id")
     export.add_argument("file", type=Path)
