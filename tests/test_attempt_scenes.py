@@ -394,6 +394,7 @@ def test_a_published_spawn_refits_the_slots_while_the_app_runs_and_the_thread_en
     app, server, _cutters = _app(lab)
     tracker = _tracker(lab)
     server.follow_spawns(tracker, game=lambda: game, library=None, log_file=tmp_path / refit.LOG_NAME)
+    assert server.refitter.library is None, "None keeps nothing: this test's fake slot once landed in his library"
     with TestClient(app):
         asyncio.run(tracker.broadcaster.publish(Event("spawned", 700, T0, {"level": 9, "area": 1})))
         deadline = time.monotonic() + 10

@@ -129,6 +129,7 @@ MAX_QUESTIONS_WAITING = 8     # poses and picks a socket holds; the oldest is an
 PICTURES_IN_FLIGHT = 2        # pictures a socket has begun and not yet sent (the page keeps as many)
 GROW_SECONDS = 0.25           # how often an open scene still being written takes its newest frames
 GROW_FAILURES = 3             # publications in a row it cannot read before it stops growing
+_HIS_LIBRARY = object()       # follow_spawns' default: the Slot Library in his user data
 WARM_WAIT_SECONDS = 30.0      # how long a scene's first picture waits for an idle page to warm the free camera
 WARM_QUIET_SECONDS = 0.5      # idle = no picture asked for this long (Play asks one every frame, so it never is)
 WARM_POLL_SECONDS = 0.1
@@ -479,15 +480,19 @@ class SceneLab:
         if broadcaster is not None and hasattr(broadcaster, "observe"):
             broadcaster.observe(scenes.observe_event)
 
-    def follow_spawns(self, tracker, *, game=None, library=None, log_file=None) -> None:
+    def follow_spawns(self, tracker, *, game=None, library=_HIS_LIBRARY, log_file=None) -> None:
         """After every spawn the event stream announces, the slots made for that place get Mario's new place
         (slotlibrary/refit.py). The observer only stamps a deadline; the refitter's own thread and reader do the
-        work, started and stopped with the app. Tests inject the game, the library and the log file."""
+        work, started and stopped with the app. Tests inject the game, the library and the log file.
+
+        library=None keeps nothing, as SlotRefitter reads it; only leaving it out means his own Slot Library. Until
+        2026-11-08 None meant his library too, and the attempt-scenes test's fake slot (fake fingerprint d3fca85f)
+        landed in his real library as a captured BoB state."""
         broadcaster = getattr(tracker, "broadcaster", None)
         if broadcaster is None or not hasattr(broadcaster, "observe"):
             return
         from sm64_events.slotlibrary import refit, usamune
-        if library is None:
+        if library is _HIS_LIBRARY:
             from sm64_events.core.paths import slot_library_dir
             from sm64_events.slotlibrary.store import SlotLibrary
             library = SlotLibrary(slot_library_dir())
