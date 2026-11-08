@@ -66,7 +66,7 @@ class Runner:
             "save_states": {"allowed": allowed, "reason": None if allowed else "a reset"}}}
 
 
-def _lab(recording, tmp_path, monkeypatch, runner, builder=None):
+def _lab(recording, tmp_path, monkeypatch, runner, builder=None, target=None):
     monkeypatch.setattr(gpu_gate, "HOLD", tmp_path / "no-hold.txt")
     (tmp_path / "Plugin").mkdir(exist_ok=True)
     (tmp_path / "packages").mkdir(exist_ok=True)
@@ -78,7 +78,7 @@ def _lab(recording, tmp_path, monkeypatch, runner, builder=None):
     app = FastAPI()
     options = {"builder": builder} if builder else {}
     lab = scene_lab_api.mount_scene_lab(
-        app, path, watch_seconds=0.05, ghost_loader=lambda ref: {"clip": CLIP, "label": ref},
+        app, path, watch_seconds=0.05, ghost_loader=lambda ref: {"clip": CLIP, "label": ref, "target": target},
         session_options={"host_factory": scene_session.command_host(fake_viewer_host.command())},
         resim_options={"runner": runner, "starts_root": tmp_path / "population"}, moment_options=options)
     return app, lab
@@ -106,6 +106,26 @@ def test_a_ghost_opens_as_its_re_simulated_scene(recording, tmp_path, monkeypatc
     assert scenes == [tmp_path / "lab" / "attempts"]          # no journal open here: the legacy folder only
     assert Path(_value(args, "--starts")) == tmp_path / "population"
     assert Path(_value(args, "--cache")) == tmp_path / "lab" / "resim"
+
+
+@pytest.mark.parametrize("target,act", [
+    ({"kind": "star", "entity_key": "2-2", "strat": "Standard", "scope": "strategy"}, "3"),   # star 3: act 3
+    ({"kind": "star", "entity_key": "2-0", "strat": "Standard", "scope": "strategy"}, "1"),
+    ({"kind": "star", "entity_key": "2-6", "strat": "100c", "scope": "strategy"}, None),       # 100 coins: any act
+    ({"kind": "star", "entity_key": "16-0", "strat": "Standard", "scope": "strategy"}, None),  # a castle star
+    ({"kind": "segment", "entity_key": "7", "strat": "Standard", "scope": "strategy"}, None),
+    (None, None),
+])
+def test_a_ghost_is_simulated_in_its_stars_act(recording, tmp_path, monkeypatch, target, act):
+    """Mario alone cannot pick the act (another player's Whomp's Fortress ghost kept every pose in acts 1
+    and 2), so the act comes from the listed ghost's star; without one the build chooses and says so."""
+    runner = Runner(recording["package"])
+    app, _lab_ = _lab(recording, tmp_path, monkeypatch, runner, target=target)
+    with TestClient(app) as client:
+        assert client.post("/api/scene-lab/open", json={"ghost": "ghost-1"}).status_code == 200
+        client.post("/api/scene-lab/close")
+    (args,) = runner.calls
+    assert (_value(args, "--act") if "--act" in args else None) == act
 
 
 def test_a_stage_opens_by_course_and_act(recording, tmp_path, monkeypatch):

@@ -13,10 +13,12 @@ Packages and stages are cached under the lab root's `resim` folder; a ghost's st
 beside the ghost recordings (sm64_events/ghost/start_frame.py, the ghost population's `starts`
 folder), never in a clip and never uploaded.
 
-`info` is what the page shows: "start" (ghost_start | own_scene | another_reset | simulated_reset),
+`info` is what the page shows: "start" (ghost_start | downloaded_start | own_scene | another_reset |
+simulated_reset),
 "parting_frame" (the first ghost record where the simulated Mario leaves the recorded pose; None: never),
-"first_record" (the package's frame 0 is that ghost record), "exact" (bytes | mario) and "save_states"
-(ghost_resim.SAVE_STATES, the one switch).
+"first_record" (the package's frame 0 is that ghost record), "exact" (bytes | mario), "recorded_on" and
+"simulated_on" (the ghost's cartridge and the lab's: "us" | "jp") and "save_states" (ghost_resim.SAVE_STATES,
+the one switch).
 """
 from __future__ import annotations
 
@@ -38,6 +40,23 @@ NO_SIMULATION = "The ghost could not be re-simulated. The Trainer's log says why
 
 class ResimRefused(Exception):
     """This ghost or stage cannot become a scene; the sentence says why."""
+
+
+def act_of_target(target) -> int | None:
+    """The act a star ghost was played in: a course's stars 1-6 (entity_key "course-star", star from 0) are
+    its acts. None for the 100-coin star, a castle star and a segment, which name no act (the build then
+    takes the act of his reset of that level, else act 1, and says the act was assumed).
+
+    Measured 2026-11-08 on another player's Whomp's Fortress ghost from the community cache: acts 1 and 2
+    both kept Mario on all 318 recorded poses (act 4 parted at record 115), so the poses cannot pick the
+    act; only the star can, and the wrong act draws the wrong objects around an exact Mario."""
+    if not isinstance(target, dict) or target.get("kind") != "star":
+        return None
+    try:
+        course, star = (int(part) for part in str(target.get("entity_key", "")).split("-"))
+    except ValueError:
+        return None
+    return star + 1 if 1 <= course <= 15 and 0 <= star <= 5 else None
 
 
 class SceneResim:
@@ -139,9 +158,11 @@ class SceneResim:
 
     # ---------------------------------------------------------------- scenes
     def ghost_scene_blocking(self, ref, *, act: int | None = None) -> tuple[Path, dict]:
-        """A listed ghost's re-simulated scene (LookupError: no such ghost; ResimRefused: it cannot be one)."""
+        """A listed ghost's re-simulated scene (LookupError: no such ghost; ResimRefused: it cannot be one).
+        The act is the ghost's star's (act_of_target), so another player's ghost of a course he never
+        reset in that act still gets that act's objects."""
         loaded = self.lab._load_ghost(ref)
-        return self.clip_scene_blocking(loaded["clip"], act=act)
+        return self.clip_scene_blocking(loaded["clip"], act=act or act_of_target(loaded.get("target")))
 
     def check_slot_blocking(self, ref, package: Path, frame: int, slot: bytes) -> dict:
         """The Save states row's load check for one frame of a ghost's rebuilt scene (ghost_resim.check_slot_load):

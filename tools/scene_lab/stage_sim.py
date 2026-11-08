@@ -247,6 +247,11 @@ class Stages:
             return usamune.routine_fingerprint(read, usamune.build_for("us"))
         return usamune.routine_fingerprint(read)
 
+    def region(self) -> str | None:
+        """The cartridge this lab simulates, from its ROM header ("us" | "jp"; None: neither)."""
+        from sm64_events.memory.version_probe import version_from_header  # noqa: PLC0415
+        return version_from_header(self.rom[:0x40])
+
     def has_reset(self, level: int, area: int, act: int) -> bool:
         """Whether that reset is cached (made before), so asking for it costs a file read."""
         try:

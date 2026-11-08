@@ -112,3 +112,17 @@ def test_a_byte_exact_scene_already_made_is_the_answer(tmp_path):
 
 def test_every_start_has_a_switch_row_and_an_exactness():
     assert set(gr.SAVE_STATES) == set(gr.STARTS) == set(gr.EXACT)
+
+
+def test_a_scene_names_the_cartridge_its_ghost_was_recorded_on_and_the_one_it_ran_on():
+    """Another player's JP ghost kept Mario exact on the US cartridge; the scene says both, never one for the
+    other (a clip's rom_layout, and the lab ROM's header country)."""
+    from sm64_events.ghost.clip import ROM_LAYOUTS
+    assert sorted(gr.REGION_OF_LAYOUT[layout] for layout in ROM_LAYOUTS) == ["jp", "us"]
+    header = bytearray(0x40)
+    header[:4] = bytes.fromhex("80371240")
+    header[0x20:0x34] = b"SM64 USAMUNE v1.93j "
+    for country, region in ((ord("J"), "jp"), (ord("E"), "us")):
+        header[0x3E] = country
+        stages = SimpleNamespace(rom=bytes(header) + bytes(64))
+        assert stage_sim.Stages.region(stages) == region

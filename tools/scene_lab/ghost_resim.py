@@ -21,6 +21,11 @@ Every re-simulated frame's Mario (his object's drawn position and his action) is
 ghost's recorded pose; the first record where they part is reported (None: they never part). The
 package holds the ghost's records 1.. (record 0 is the start itself, whose display list no start holds).
 
+Another player's ghost (2026-11-08, two Whomp's Fortress ghosts copied from the installed Trainer's
+community cache, neither his): both re-simulated from his act-1 reset take with Mario on every recorded
+pose (318 and 324), 27-34 s each. One was recorded on the JP cartridge and still kept Mario exact on this
+US one; the scene says both cartridges ("recorded_on", "simulated_on") instead of implying either.
+
 The Save states row's one switch is SAVE_STATES (below); his decision, pending since 2026-11-08.
 """
 from __future__ import annotations
@@ -46,6 +51,9 @@ import start_check  # noqa: E402
 from sm64_events.ghost import start_frame  # noqa: E402
 from sm64_events.ghost.clip import decode_clip  # noqa: E402
 from sm64_events.ghost.native_layout import POSE_AT, VALID_POSE  # noqa: E402
+from sm64_events.memory.ghost_layout import ROM_LAYOUTS  # noqa: E402
+
+REGION_OF_LAYOUT = {layout: region for region, layout in ROM_LAYOUTS.items()}   # a clip's rom_layout: "us" | "jp"
 
 RESIM_VERSION = 2                    # 2: every frame shown (VI registers) at the game's 30 fps
 GHOST_START, OWN_SCENE, ANOTHER_RESET, SIMULATED_RESET = "ghost_start", "own_scene", "another_reset", "simulated_reset"
@@ -408,6 +416,7 @@ class GhostScenes:
             raise
         return {"version": RESIM_VERSION, "ghost_sha256": clip_sha, "start": started.kind, "start_detail": started.detail,
                 "exact": started.detail.get("exact") or EXACT[started.kind],
+                "recorded_on": REGION_OF_LAYOUT.get(clip.rom_layout), "simulated_on": self.stages.region(),
                 "records": len(clip.frames), "first_record": 1, "parting_frame": parting,
                 "parting_global_timer": clip.frames[parting].global_timer if parting is not None else None,
                 "poses_compared": compared, "mario_farthest_units": farthest,

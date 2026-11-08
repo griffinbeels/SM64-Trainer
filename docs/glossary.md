@@ -1511,10 +1511,13 @@ and act, even one he never played (a stage). The lab compares every simulated
 first record where they part. From his own [[attempt scene]] or a start file
 the scene matches to the byte; from a [[reset]] Mario stays exact, but moving
 platforms and enemies may stand at another point in their cycle, so such a
-scene makes no save state until Griffin decides (one switch: `SAVE_STATES` in
-`tools/scene_lab/ghost_resim.py`). Three of his Whomp's Fortress [[ghost]]s
-(2026-11-08): no parting record from any start, about 30-45 s to make, a cache
-read after that.
+scene makes a save state only before the parting record, and only after the
+slot passes a load check in the simulation (one switch: `SAVE_STATES` in
+`tools/scene_lab/ghost_resim.py`). Another player's [[ghost]] works the same
+way: the act is its [[star]]'s, and the scene names the cartridge its player
+recorded it on beside the one it ran on. Three of his Whomp's Fortress [[ghost]]s and two
+other players' (2026-11-08): no parting record from any start, about 25-45 s
+to make, a cache read after that.
 
 - **Lives** -- `tools/scene_lab/ghost_resim.py` (from a ghost),
   `tools/scene_lab/stage_sim.py` (a stage), `tools/scene_lab/sim_scene.py`
