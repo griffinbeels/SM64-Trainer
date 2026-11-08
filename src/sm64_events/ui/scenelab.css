@@ -125,32 +125,56 @@
 @media (prefers-reduced-motion: reduce) { .ghost-lab-build-fill { transition: none; } }
 
 /* ---- The save-state strip (components/scenestrip.js): nine tiles in the order of Usamune's slots and the
-   number keys, then the one line that says what a press did or why it cannot. */
+   number keys, then the one line that says what a press did or why it cannot, with the course and star the
+   slots follow at its right end. A tile is three rows over its picture: its number (and ▶ when loaded last);
+   the place's name when it has no picture (one line, all of it on hover); its flag (and ★ for the star's own
+   set) with ⇄ at the right. Its menu button sits on the top right corner (seen on hover, focus or while open). */
 .ghost-lab-strip { display: grid; gap: 4px; min-width: 0; }
 .ghost-lab-slots { display: grid; grid-template-columns: repeat(9, minmax(0, 1fr)); gap: 6px; margin: 0; padding: 0; list-style: none; }
-.ghost-lab-slot { display: grid; min-width: 0; }
-.ghost-lab-slot > button { position: relative; display: grid; place-items: center; min-width: 0; height: 58px; min-height: 0;
-  padding: 0; overflow: hidden; border-radius: 6px; background: #0a1522; }
+.ghost-lab-slot { position: relative; display: grid; min-width: 0; }
+.ghost-lab-slot > button { position: relative; display: grid; grid-template: auto minmax(0, 1fr) auto / minmax(0, 1fr);
+  align-items: center; justify-content: stretch; min-width: 0; height: 58px; min-height: 0; padding: 3px; overflow: hidden;
+  border-radius: 6px; background: #0a1522; }
 .ghost-lab-slot.is-empty > button, .ghost-lab-slot.is-unknown > button { border-style: dashed; background: transparent; }
 .ghost-lab-slot.is-unknown > button { opacity: .7; }
 .ghost-lab-slot-picture { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
-.ghost-lab-slot-place { padding: 14px 6px 4px; overflow: hidden; color: var(--text); font-size: .72rem; line-height: 1.2;
-  text-align: center; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-.ghost-lab-slot kbd { position: absolute; top: 3px; left: 3px; background: rgba(0,0,0,.7); color: var(--text); }
-.ghost-lab-slot.is-empty kbd, .ghost-lab-slot.is-unknown kbd { position: static; background: transparent; color: var(--muted); }
-.ghost-lab-slot-marks { position: absolute; left: 3px; right: 3px; bottom: 3px; display: flex; align-items: center;
-  justify-content: space-between; pointer-events: none; }
-.ghost-lab-slot-marks .region-flag { margin-right: auto; box-shadow: 0 0 0 1px rgba(0,0,0,.6); }
+.ghost-lab-slot-top, .ghost-lab-slot-marks { position: relative; display: flex; align-items: center; gap: 3px; min-width: 0; }
+.ghost-lab-slot-top { grid-row: 1; justify-self: start; }
+.ghost-lab-slot-place { grid-row: 2; min-width: 0; padding: 0 3px; overflow: hidden; color: var(--text); font-size: .72rem;
+  line-height: 1.2; text-align: center; white-space: nowrap; text-overflow: ellipsis; }
+.ghost-lab-slot kbd { background: rgba(0,0,0,.7); color: var(--text); }
+.ghost-lab-slot.is-empty .ghost-lab-slot-top, .ghost-lab-slot.is-unknown .ghost-lab-slot-top { grid-row: 1 / -1; justify-self: center; }
+.ghost-lab-slot.is-empty kbd, .ghost-lab-slot.is-unknown kbd { background: transparent; color: var(--muted); }
+.ghost-lab-slot-marks { grid-row: 3; justify-content: space-between; pointer-events: none; }
+.ghost-lab-slot-from { display: inline-flex; align-items: center; gap: 3px; margin-right: auto; }
+.ghost-lab-slot-marks .region-flag { box-shadow: 0 0 0 1px rgba(0,0,0,.6); }
+.ghost-lab-slot-star { padding: 0 3px; border-radius: 4px; background: rgba(0,0,0,.72); color: var(--gold); font-size: .72rem;
+  line-height: 1.35; }
 .ghost-lab-slot-crossed { padding: 0 4px; border-radius: 4px; background: rgba(0,0,0,.72); color: var(--blue); font-size: .78rem; line-height: 1.3; }
 .ghost-lab-slot.is-loaded > button { border: 2px solid var(--gold); }
-.ghost-lab-slot-loaded { position: absolute; top: 3px; right: 3px; padding: 0 4px; border-radius: 4px; background: var(--gold);
-  color: #1b1300; font-size: .62rem; line-height: 1.5; }
+.ghost-lab-slot-loaded { padding: 0 4px; border-radius: 4px; background: var(--gold); color: #1b1300; font-size: .62rem; line-height: 1.5; }
 .ghost-lab-slot.is-busy > button { border-color: var(--gold); border-style: solid; }
 .ghost-lab-slot.is-busy > button::after { content: ""; position: absolute; inset: 0; background: rgba(240,189,50,.18); }
-.ghost-lab-strip-line { display: flex; align-items: center; gap: 6px; min-height: 1.5em; margin: 0; overflow: hidden;
-  text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: .8rem; line-height: 1.5; }
+/* A saved tile's menu: which stars use the slot. Its button sits on the tile's corner; the menu lines up with
+   the tile's own edge (the near one for the far slots) and opens upward, over the player, so it covers no tab. */
+.ghost-lab-slot-menu { display: contents; }
+.ghost-lab-slot-more { position: absolute; top: 3px; right: 3px; z-index: 2; width: 22px; height: 20px; min-width: 0;
+  min-height: 0; padding: 0; justify-content: center; border-radius: 4px; background: rgba(0,0,0,.72); opacity: 0; }
+.ghost-lab-slot:hover .ghost-lab-slot-more, .ghost-lab-slot-more:focus-visible,
+.ghost-lab-slot-menu.is-open .ghost-lab-slot-more { opacity: 1; }
+.ghost-lab-slot-pop { top: auto; right: auto; bottom: calc(100% + 6px); left: 0; gap: 2px; padding: 6px; }
+.ghost-lab-slot-pop.is-end { right: 0; left: auto; }
+.ghost-lab-slot-pop button { justify-content: flex-start; gap: 6px; min-height: 30px; padding: 0 10px; border-color: transparent;
+  background: transparent; white-space: nowrap; }
+.ghost-lab-slot-pop button:hover:not(:disabled) { background: var(--surface-2); }
+.ghost-lab-slot-check { width: 1em; color: var(--gold); text-align: center; }
+.ghost-lab-strip-foot { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.ghost-lab-strip-line { display: flex; flex: 1 1 0; align-items: center; gap: 6px; min-width: 0; min-height: 1.5em; margin: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: .8rem; line-height: 1.5; }
 .ghost-lab-strip-line.is-bad { color: var(--coral); }
 .ghost-lab-strip-line .region-flag { flex: none; }
+.ghost-lab-strip-context { flex: 0 1 auto; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--muted); font-size: .8rem; line-height: 1.5; }
 
 /* ---- The tray: two tabs that each name their job and what they hold now, and a panel of fixed height
    (it scrolls inside), so changing tab never moves the page. */

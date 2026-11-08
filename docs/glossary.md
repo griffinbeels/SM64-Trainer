@@ -1610,7 +1610,12 @@ the picture's foot.
   translation]] changed it for this game, and a gold edge with ▶ on the slot Usamune loaded last
   (from the [[journal]]'s load, not yet checked live). A click on slot N, or the key N, saves the
   [[frame]] on screen there, over what was there, as Usamune's own save does; the line under the
-  slots says what happened or why the page cannot save that [[frame]].
+  slots says what happened or why the page cannot save that [[frame]]. Each [[star]] may keep its own
+  slots over the course's: a ★ marks a slot from that [[star]]'s own set, and a plain slot comes from
+  the course's set; hover names the course save under it, and the line's right end names the course
+  and the [[star]]. A saved slot's small menu gives it to that [[star]] alone or to the whole course,
+  or takes it out of its set (the game keeps the slot). A save from the page joins the set of the
+  [[star]] you watch.
 - **The [[ghost]]s tab**: "In the scene" (the one you watch, then each [[stage ghost]] shown beside it with its
   [[ghost's view]], its Mute and its eye) beside one list: **Top** (each player's best, with its
   place: first across **All strategies**, each row naming its [[strategy]], or one [[strategy]]
