@@ -129,7 +129,8 @@ class SceneResim:
             log.warning("A ghost re-simulation ended with %s: %s", child.returncode, "".join(errors)[-800:])
             raise ResimRefused(NO_SIMULATION)
         answer = json.loads(last)
-        if "error" in answer:
+        if "error" in answer:                         # the page shows the sentence; the log keeps the child's detail
+            log.info("A ghost re-simulation refused: %s %s", answer["error"], "".join(errors)[-800:])
             raise ResimRefused(answer["error"])
         return answer
 

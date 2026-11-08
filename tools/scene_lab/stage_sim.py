@@ -66,6 +66,10 @@ VI_MODE_BYTES = 0x50             # sizeof(OSViMode): type, 9 common registers, 2
 VI_GAMMA, VI_ANTIALIAS, VI_DITHER_FILTER = 0x0008, 0x0300, 0x10000
 
 
+JP_NOT_YET = "The lab cannot play scenes on the JP cartridge yet, only on the US one."
+JP_SLOTS_NOT_YET = "The lab cannot make or check save states for the JP cartridge yet, only for the US one."
+
+
 class StageError(RuntimeError):
     """Why no stage could be made, in a sentence the page can show."""
 
@@ -191,10 +195,15 @@ class Stages:
     def vi(self) -> dict:
         return vi_of_mode(self.boot()[0], self.symbols)
 
+    def simulates(self) -> None:
+        """StageError unless this build's scenes can be simulated: the US one only, this round (frame_sim's fixed
+        thread frames and handoff_slot's call site are the US build's; the JP map lacks sCurrentCmd)."""
+        if self.version() != "us":
+            raise StageError(JP_NOT_YET)
+
     def machine(self, ram: np.ndarray):
         """A machine that steps this build's thread 5 from `ram`."""
-        if self.version() != "us":
-            raise StageError("Scenes on the JP cartridge cannot be simulated yet; the lab simulates the US one.")
+        self.simulates()
         return Machine(ram, self.rom, self.symbols, COLD_FCSR)
 
     # ---------------------------------------------------------------- course and act
@@ -224,7 +233,8 @@ class Stages:
         import start_check  # noqa: PLC0415
         key = (level, area, act)
         if key not in self._references:
-            self._references[key] = start_check.Reference.of(self.reset(level, area, act), self.symbols, self.map_path)
+            self._references[key] = start_check.Reference.of(self.reset(level, area, act), self.symbols, self.map_path,
+                                                             self.version())
         return self._references[key]
 
     def reference_for_slot(self, slot: bytes):
@@ -246,8 +256,7 @@ class Stages:
         try:
             build = usamune.build_for(self.version())
         except LayoutIncomplete:                          # memory/layout.py: JP's slot addresses are not verified yet
-            raise StageError(f"The {self.version().upper()} Usamune build's save state addresses are not "
-                             "verified yet, so its save states cannot be named.") from None
+            raise StageError(JP_SLOTS_NOT_YET) from None
         return usamune.routine_fingerprint(read, build)
 
     def reset(self, level: int, area: int, act: int) -> np.ndarray:

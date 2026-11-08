@@ -66,8 +66,12 @@ def test_a_reset_is_named_by_its_build_and_rom_so_two_cartridges_never_share_one
 
 def test_the_jp_cartridge_makes_resets_but_refuses_to_simulate_and_another_rom_makes_nothing(tmp_path):
     jp = _stages(tmp_path, _rom(tmp_path, "J", b"SM64 USAMUNE v1.93j "))
-    with pytest.raises(stage_sim.StageError, match="JP cartridge"):
-        jp.machine(np.zeros(16, np.uint8))
+    for refusal in (jp.simulates, lambda: jp.machine(np.zeros(16, np.uint8))):
+        with pytest.raises(stage_sim.StageError) as refused:
+            refusal()
+        assert str(refused.value) == stage_sim.JP_NOT_YET
+    us = _stages(tmp_path, _rom(tmp_path, "E"))
+    us.simulates()                                                            # the US cartridge plays
     other = _stages(tmp_path, _rom(tmp_path, "E", b"SOME OTHER GAME     "))
     with pytest.raises(stage_sim.StageError, match="not a Usamune"):
         other.reset(24, 1, 1)

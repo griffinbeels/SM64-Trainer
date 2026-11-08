@@ -28,7 +28,7 @@ SYMBOLS = Symbols(gObjectPool=POOL, gObjectListArray=LISTS, gMarioStates=MARIO, 
 
 def reference() -> sc.Reference:
     ram = np.zeros(8 << 20, np.uint8)
-    return sc.Reference(ram, SYMBOLS, [(0x246000, 0x32D560), (0x378800, 0x385F90), sc.USAMUNE_IMAGE], BEHAVIORS,
+    return sc.Reference(ram, SYMBOLS, [(0x246000, 0x32D560), (0x378800, 0x385F90), sc.usamune_image("us")], BEHAVIORS,
                         (SCRIPTS, SCRIPTS + 0x5AA4), {0, GRAPH}, {0, COLLISION}, {LISTS + i * sc.NODE_BYTES for i in range(16)})
 
 
@@ -93,6 +93,26 @@ def test_a_word_into_code_or_a_protected_place_is_refused(value, refused):
     assert bool(reasons) == refused, reasons
     if refused:
         assert "gGameVblankHandler" in reasons[0]
+
+
+def test_usamunes_image_ends_at_each_builds_own_state_block():
+    """The image counts as code up to that build's state block, from memory/layout.py's rows; JP's block starts
+    later (0x417C14, its usamune_stop - 1), so JP code between the two bounds is code too. cold_boot.py read the
+    same two addresses off Usamune's own code (its "settings"): two sources, one answer."""
+    import cold_boot
+    for version in ("us", "jp"):
+        begin, end = sc.usamune_image(version)
+        assert begin == cold_boot.USAMUNE_IMAGE & 0x1FFFFFFF
+        assert end == cold_boot.USAMUNE[version]["settings"] & 0x1FFFFFFF
+    assert sc.usamune_image("us")[1] < sc.usamune_image("jp")[1]
+    jp_code = 0x80417B60                                     # past US's bound, before JP's
+    ref = reference()
+    ref.code = ref.code[:-1] + [sc.usamune_image("jp")]
+    begin = 0x33AF90
+    words = np.zeros(0x200, np.int64)
+    words[(0x8033B048 & 0x1FFFFFFF) - begin >> 2] = jp_code
+    assert sc.check_words(words, begin, ref)                 # refused on JP
+    assert sc.check_words(words, begin, reference()) == []   # US: that address is Usamune's state, not code
 
 
 def test_a_function_pointer_the_game_itself_keeps_passes():

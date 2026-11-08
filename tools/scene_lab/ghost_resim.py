@@ -334,6 +334,7 @@ class GhostScenes:
         exact = self._cached_exact(clip_sha)
         if exact is not None:
             return exact
+        self.stages.simulates()                     # one sentence for the whole cartridge, not one per start
         refused = self.refusals = []
         if progress is not None:
             progress("choosing a start", 0, 0)
@@ -355,7 +356,9 @@ class GhostScenes:
                 self.cache.mkdir(parents=True, exist_ok=True)
                 note.write_text(json.dumps(info, indent=1), encoding="utf-8")
                 return out, info
-        raise stage_sim.StageError(f"No start could run this ghost: {refused}")
+        log_refusals = "; ".join(f"{row['start']}: {row['reason']}" for row in refused)
+        print(f"no start could run {clip_sha[:16]}: {log_refusals}", file=sys.stderr)
+        raise stage_sim.StageError("No start could play this ghost in the simulation, so it cannot become a scene.")
 
     def _cached_exact(self, clip_sha: str) -> tuple[Path, dict] | None:
         """A byte-exact scene of this ghost made before (its own scene or its start file): no start can do better."""
@@ -463,8 +466,7 @@ def check_slot_load(package_path: Path, frame: int, slot: bytes, clip, stages: s
     import handoff_slot  # noqa: PLC0415 - Usamune's own load at its own site
     from sm64_events.slotlibrary.usamune import BODY_BYTES, slot_address  # noqa: PLC0415
     if stages.region() != "us":                    # handoff_slot's call site and frame_sim's frames are the US build's
-        return {"ok": False, "frames": 0, "compared": 0,
-                "reason": "Save states from a JP scene cannot be checked yet, so none is offered."}
+        return {"ok": False, "frames": 0, "compared": 0, "reason": stage_sim.JP_SLOTS_NOT_YET}
     reasons = start_check.check_slot(slot, stages.reference_for_slot(slot), BODY_BYTES)
     if reasons:
         return {"ok": False, "reason": reasons[0], "frames": 0, "compared": 0}

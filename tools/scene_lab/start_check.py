@@ -39,14 +39,28 @@ OBJECT_BYTES, OBJECT_COUNT = sim.OBJECT_BYTES, sim.OBJECT_COUNT
 LIST_COUNT, NODE_BYTES = 13, 0x68
 FIELD = {"next": 0x60, "prev": 0x64, "graph": 0x14, "behavior": 0x20C, "command": 0x208, "stack": 0x1D0,
          "stack_end": 0x1F0, "collision": 0x218}
-USAMUNE_IMAGE = (0x400000, 0x417B4C)        # Usamune's code and data below its settings: code, for these checks
+USAMUNE_IMAGE_BEGIN = 0x400000             # where Usamune's entry code copies its image (cold_boot.USAMUNE_IMAGE)
 # Not the exception vectors: 0x80000000 is also the float -0.0, which matrices and speeds hold all the time.
 NEVER = ((0x1FF200, 0x207D00), (0x38F800, 0x400000), (0x500000, 0x800000))
 #        thread stacks          frame buffers       Usamune's slots and above
 BEHAVIOR_TAIL = 0x400                       # past the last bhv* symbol, for its own script
 
 
-def code_ranges(map_path: Path) -> list[tuple[int, int]]:
+def usamune_image(version: str) -> tuple[int, int]:
+    """Physical [begin, end) of Usamune's code and data below its state block, which count as code here. The
+    end is that build's state block (memory/layout.py's usamune_state_start; where that row is not verified
+    yet, JP, its own definition: usamune_stop - 1): US 0x417B4C, JP 0x417C14."""
+    from sm64_events.memory.layout import layout_for  # noqa: PLC0415
+    layout = layout_for(version)
+    start = layout.usamune_state_start
+    if start is None and layout.usamune_stop is not None:
+        start = layout.usamune_stop - 1
+    if start is None:
+        raise ValueError(f"The {version.upper()} layout does not place Usamune's state block.")
+    return USAMUNE_IMAGE_BEGIN, sim.phys(start)
+
+
+def code_ranges(map_path: Path, version: str = "us") -> list[tuple[int, int]]:
     """Physical [begin, end) of every .text section the map names, merged, plus Usamune's image."""
     text = Path(map_path).read_text(encoding="utf-8", errors="replace")
     spans = sorted((int(a, 16), int(a, 16) + int(n, 16)) for name, a, n in
@@ -60,7 +74,7 @@ def code_ranges(map_path: Path) -> list[tuple[int, int]]:
     # The menus' and the head's code load into the main pool only while those screens run; in a level the same
     # addresses hold the level's own data, so they are not code here (the pool itself is never taken from a start).
     pool = (sim.POOL_BEGIN, sim.POOL_BEGIN + sim.POOL_BYTES)
-    return [tuple(span) for span in merged if not (pool[0] <= span[0] and span[1] <= pool[1])] + [USAMUNE_IMAGE]
+    return [tuple(span) for span in merged if not (pool[0] <= span[0] and span[1] <= pool[1])] + [usamune_image(version)]
 
 
 def behavior_offsets(map_path: Path) -> list[int]:
@@ -89,8 +103,8 @@ class Reference:
     heads: set = field(default_factory=set)
 
     @classmethod
-    def of(cls, ram: np.ndarray, symbols: sim.Symbols, map_path: Path) -> Reference:
-        reference = cls(ram, symbols, code_ranges(map_path))
+    def of(cls, ram: np.ndarray, symbols: sim.Symbols, map_path: Path, version: str = "us") -> Reference:
+        reference = cls(ram, symbols, code_ranges(map_path, version))
         base = _u32(ram, symbols["sSegmentTable"] + 0x13 * 4) | 0x80000000
         offsets = behavior_offsets(map_path)
         reference.behaviors = {base + offset for offset in offsets}
