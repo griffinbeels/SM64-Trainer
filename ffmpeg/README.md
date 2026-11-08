@@ -47,7 +47,10 @@ only what the app's command lines name. These are:
 TLS is Windows' own Schannel, so no TLS library is linked. The external
 libraries are x264, dav1d, libvpl, NVIDIA's and AMD's headers, and zlib.
 The MinGW-w64 runtime, winpthreads and the GCC runtime (libvpl is C++) are
-linked statically. Each one's license text is in `licenses/ffmpeg/`.
+linked statically. Each one's license text is in `licenses/ffmpeg/`. Their
+source is not in the release's source archive: they are the compiler's own
+runtime, a System Library under GPL v3 section 1, and their licenses ask for
+notices only (`licenses/third-party-sources.json`, `not_attached`).
 
 `test_components` adds what the tests' own ffmpeg command lines build their
 fixtures with: the lavfi input and its `color`, `testsrc`, `testsrc2`,

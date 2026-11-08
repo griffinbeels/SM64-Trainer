@@ -94,6 +94,14 @@ def readme(name: str, archive: dict) -> str:
         if item.get("note"):
             lines.append(f"  note     {item['note']}")
         lines.append("")
+    if skipped := archive.get("not_attached"):
+        lines += ["Not attached: " + skipped["why"], ""]
+        for title, quotes in skipped["quotes"].items():
+            lines += [f"{title}:", *(f'  "{quote}"' for quote in quotes), ""]
+        for item in skipped["sources"]:
+            lines += [f"{filename(item)}", f"  from     {item['url']}", f"  sha256   {item['sha256']}",
+                      f"  license  {item['license']}", f"  used in  {', '.join(item['used_in'])}",
+                      *(f"  notice   _internal/{path} in the app" for path in item["notices"]), ""]
     return "\n".join(lines)
 
 

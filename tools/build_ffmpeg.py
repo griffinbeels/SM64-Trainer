@@ -310,8 +310,8 @@ def notices_text(spec: dict | None = None) -> str:
     cannot ship with a stale notice."""
     spec = spec or inputs()
     attached = json.loads((REPO / "licenses" / "third-party-sources.json").read_text(encoding="utf-8"))
-    runtime = [item for item in attached["archives"][SOURCE_ARCHIVE]["sources"]
-               if "ffmpeg.exe" in item["used_in"] and item["url"].startswith("https://repo.msys2.org/")]
+    runtime = [item for item in attached["archives"][SOURCE_ARCHIVE]["not_attached"]["sources"]
+               if "ffmpeg.exe" in item["used_in"]]
     lines = [
         "ffmpeg.exe for SM64 Trainer",
         "",
@@ -333,7 +333,11 @@ def notices_text(spec: dict | None = None) -> str:
     ]
     for name, item in spec["sources"].items():
         lines += [f"  {name}: {item['url']}", f"    sha256 {item['sha256']}"]
-    lines += ["", "The runtime that is linked into the program (MSYS2 source packages):"]
+    lines += ["", "The compiler's runtime, linked into the program (libgcc, libstdc++, winpthreads, the",
+              "MinGW-w64 C runtime), is a System Library under GPL v3 section 1 and carries the GCC",
+              "Runtime Library Exception or MIT- and BSD-style licenses, so its source is not attached",
+              "(third-party-sources.json, not_attached, quotes why). Its texts are in this folder.",
+              "Its source packages are:"]
     for item in runtime:
         lines += [f"  {item['url']}", f"    sha256 {item['sha256']}"]
     lines += ["", "Inside ffmpeg.exe, with the license texts in this folder:"]

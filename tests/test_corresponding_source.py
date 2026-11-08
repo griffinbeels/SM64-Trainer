@@ -83,6 +83,31 @@ def test_every_pin_is_complete():
             assert item["license"] and item["used_in"], item
 
 
+def _words(text: str) -> str:
+    return " ".join(text.split())
+
+
+def test_what_is_not_attached_is_a_system_library_with_its_notices_shipped():
+    """Lead decision 2026-11-08: the compiler's runtime (GCC's, winpthreads,
+    the MinGW-w64 C runtime) leaves the mirror. The reason is quoted from the
+    license texts themselves, so each quote must be in the tracked text it
+    names, and each package's notices must ship."""
+    for archive in sources.load()["archives"].values():
+        skipped = archive.get("not_attached")
+        if not skipped:
+            continue
+        for title, quotes in skipped["quotes"].items():
+            text = _words((ROOT / re.search(r"\((licenses/[^)]+)\)", title)[1]).read_text(encoding="utf-8"))
+            for quote in quotes:
+                assert _words(quote) in text, (title, quote[:60])
+        attached = {item["sha256"] for item in archive["sources"]}
+        for item in skipped["sources"]:
+            assert item["sha256"] not in attached
+            assert re.search(r"/mingw-w64-(gcc|winpthreads)-", item["url"]), "only the compiler's runtime"
+            for notice in item["notices"]:
+                assert (ROOT / notice).is_file(), notice
+
+
 def test_every_source_the_shipped_binaries_are_built_from_is_attached():
     """Drift guard: a pinned build input that is not in the attached archives
     would ship a binary whose source no release offers."""

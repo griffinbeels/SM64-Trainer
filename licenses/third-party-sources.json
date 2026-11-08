@@ -49,7 +49,7 @@
       ]
     },
     "SM64Trainer-third-party-source-ffmpeg.tar": {
-      "about": "FFmpeg's and its libraries' sources: ffmpeg.exe, which tools/build_ffmpeg.py builds with this release's tag, and the FFmpeg libraries inside PyAV's wheel (av.libs), built by pyav-ffmpeg 8.1.1-2 (https://github.com/PyAV-Org/pyav-ffmpeg/tree/8.1.1-2, whose scripts are the build recipe). The MSYS2 source packages hold the MinGW runtime built into ffmpeg.exe and copied into PyAV's wheel.",
+      "about": "FFmpeg's and its libraries' sources: ffmpeg.exe, which tools/build_ffmpeg.py builds with this release's tag, and the FFmpeg libraries inside PyAV's wheel (av.libs), built by pyav-ffmpeg 8.1.1-2 (https://github.com/PyAV-Org/pyav-ffmpeg/tree/8.1.1-2, whose scripts are the build recipe). The MSYS2 source packages are the libraries PyAV's wheel carries as separate DLLs (libiconv, zlib). The compiler's own runtime is not attached: see not_attached.",
       "sources": [
         {
           "url": "https://ffmpeg.org/releases/ffmpeg-8.1.1.tar.xz",
@@ -182,33 +182,6 @@
           ]
         },
         {
-          "url": "https://repo.msys2.org/mingw/sources/mingw-w64-gcc-16.2.0-6.src.tar.zst",
-          "sha256": "a901d8afb78438abcff9ed020cd9aa9431db76de1992171c2454c3c07ad289e8",
-          "license": "GPL-3.0-or-later WITH GCC-exception-3.1",
-          "used_in": [
-            "ffmpeg.exe"
-          ],
-          "note": "libgcc and libstdc++ linked statically into ffmpeg.exe"
-        },
-        {
-          "url": "https://repo.msys2.org/mingw/sources/mingw-w64-winpthreads-14.0.0.r598.ge3d18511f-1.src.tar.zst",
-          "sha256": "1da3dad4f6916d0c23e8fe76c38ed79946fb32078f94047c0475229b8112a1db",
-          "license": "MIT AND BSD-3-Clause AND ZPL-2.1",
-          "used_in": [
-            "ffmpeg.exe"
-          ],
-          "note": "the mingw-w64 tree at e3d18511f: winpthreads and the C runtime start-up code in ffmpeg.exe"
-        },
-        {
-          "url": "https://repo.msys2.org/mingw/sources/mingw-w64-gcc-15.2.0-13.src.tar.zst",
-          "sha256": "a676171fe0f41ad46e6b0db2c218f3870199ac7ba01940dea7b540355878b06e",
-          "license": "GPL-3.0-or-later WITH GCC-exception-3.1",
-          "used_in": [
-            "av.libs (PyAV)"
-          ],
-          "note": "libgcc_s_seh-1.dll and libstdc++-6.dll in PyAV's wheel (their code matches gcc-libs 15.2.0-13)"
-        },
-        {
           "url": "https://repo.msys2.org/mingw/sources/mingw-w64-libiconv-1.19-1.src.tar.zst",
           "sha256": "74428280c17094da5b702c29b2e1a0abae59556ea5dfdd65705cc8ccc1e000fb",
           "license": "LGPL-2.1-or-later",
@@ -225,17 +198,76 @@
             "av.libs (PyAV)"
           ],
           "note": "zlib1.dll in PyAV's wheel (its code matches zlib 1.3.2-1 and 1.3.2-2)"
-        },
-        {
-          "url": "https://repo.msys2.org/mingw/sources/mingw-w64-winpthreads-14.0.0.r14.g4761eabdd-1.src.tar.zst",
-          "sha256": "9a71ee4b17a23905ec9990ce0474b49e51a5b4a584ad3bdfbda2172786b0fed3",
-          "license": "MIT AND BSD-3-Clause AND ZPL-2.1",
-          "used_in": [
-            "av.libs (PyAV)"
-          ],
-          "note": "libwinpthread-1.dll in PyAV's wheel (its code matches 14.0.0.r1 to r14)"
         }
-      ]
+      ],
+      "not_attached": {
+        "why": "The compiler's runtime, which the linker puts into ffmpeg.exe and which PyAV's wheel carries as DLLs: libgcc and libstdc++ (GCC), winpthreads and the MinGW-w64 C runtime start-up code. Each is part of the normal packaging of the compiler, a Major Component, and serves only to let the work run with it, so it is a System Library, which GPL v3 section 1 leaves out of the Corresponding Source. libgcc and libstdc++ are also under the GCC Runtime Library Exception, and winpthreads and the C runtime are under MIT- and BSD-style licenses, which ask for their notices, not their source. Their license texts ship in the app (each entry's notices). Lead decision 2026-11-08; the quotes are from the tracked texts.",
+        "quotes": {
+          "GPL v3 section 1 (licenses/ffmpeg/FFmpeg/COPYING.GPLv3)": [
+            "The \"System Libraries\" of an executable work include anything, other than the work as a whole, that (a) is included in the normal form of packaging a Major Component, but which is not part of that Major Component, and (b) serves only to enable use of the work with that Major Component, or to implement a Standard Interface for which an implementation is available to the public in source code form.",
+            "A \"Major Component\", in this context, means a major essential component (kernel, window system, and so on) of the specific operating system (if any) on which the executable work runs, or a compiler used to produce the work, or an object code interpreter used to run it.",
+            "However, it does not include the work's System Libraries, or general-purpose tools or generally available free programs which are used unmodified in performing those activities but which are not part of the work."
+          ],
+          "GCC Runtime Library Exception 3.1 (licenses/ffmpeg/gcc-runtime/COPYING.RUNTIME)": [
+            "You have permission to propagate a work of Target Code formed by combining the Runtime Library with Independent Modules, even if such propagation would otherwise violate the terms of GPLv3, provided that all Target Code was generated by Eligible Compilation Processes."
+          ],
+          "winpthreads (licenses/ffmpeg/winpthreads/COPYING)": [
+            "The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software."
+          ]
+        },
+        "sources": [
+          {
+            "url": "https://repo.msys2.org/mingw/sources/mingw-w64-gcc-16.2.0-6.src.tar.zst",
+            "sha256": "a901d8afb78438abcff9ed020cd9aa9431db76de1992171c2454c3c07ad289e8",
+            "license": "GPL-3.0-or-later WITH GCC-exception-3.1",
+            "used_in": [
+              "ffmpeg.exe"
+            ],
+            "note": "libgcc and libstdc++ linked statically into ffmpeg.exe",
+            "notices": [
+              "licenses/ffmpeg/gcc-runtime/COPYING.RUNTIME"
+            ]
+          },
+          {
+            "url": "https://repo.msys2.org/mingw/sources/mingw-w64-winpthreads-14.0.0.r598.ge3d18511f-1.src.tar.zst",
+            "sha256": "1da3dad4f6916d0c23e8fe76c38ed79946fb32078f94047c0475229b8112a1db",
+            "license": "MIT AND BSD-3-Clause AND ZPL-2.1",
+            "used_in": [
+              "ffmpeg.exe"
+            ],
+            "note": "the mingw-w64 tree at e3d18511f: winpthreads and the C runtime start-up code in ffmpeg.exe",
+            "notices": [
+              "licenses/ffmpeg/winpthreads/COPYING",
+              "licenses/ffmpeg/mingw-w64-runtime/COPYING.MinGW-w64-runtime.txt"
+            ]
+          },
+          {
+            "url": "https://repo.msys2.org/mingw/sources/mingw-w64-gcc-15.2.0-13.src.tar.zst",
+            "sha256": "a676171fe0f41ad46e6b0db2c218f3870199ac7ba01940dea7b540355878b06e",
+            "license": "GPL-3.0-or-later WITH GCC-exception-3.1",
+            "used_in": [
+              "av.libs (PyAV)"
+            ],
+            "note": "libgcc_s_seh-1.dll and libstdc++-6.dll in PyAV's wheel (their code matches gcc-libs 15.2.0-13)",
+            "notices": [
+              "licenses/pyav-ffmpeg/gcc-runtime/COPYING.RUNTIME"
+            ]
+          },
+          {
+            "url": "https://repo.msys2.org/mingw/sources/mingw-w64-winpthreads-14.0.0.r14.g4761eabdd-1.src.tar.zst",
+            "sha256": "9a71ee4b17a23905ec9990ce0474b49e51a5b4a584ad3bdfbda2172786b0fed3",
+            "license": "MIT AND BSD-3-Clause AND ZPL-2.1",
+            "used_in": [
+              "av.libs (PyAV)"
+            ],
+            "note": "libwinpthread-1.dll in PyAV's wheel (its code matches 14.0.0.r1 to r14)",
+            "notices": [
+              "licenses/pyav-ffmpeg/winpthreads/COPYING",
+              "licenses/ffmpeg/mingw-w64-runtime/COPYING.MinGW-w64-runtime.txt"
+            ]
+          }
+        ]
+      }
     }
   }
 }

@@ -36,8 +36,18 @@ each release, on its page on GitHub, beside the installer:
   plugin is built from (the pinned GLideN64 tree, Qt, FreeType, libpng,
   zlib);
 - `SM64Trainer-third-party-source-ffmpeg.tar`: the sources of `ffmpeg.exe`
-  and of PyAV's FFmpeg libraries, with the MinGW runtime sources that end up
-  inside them.
+  and of PyAV's FFmpeg libraries, with the libiconv and zlib that PyAV's
+  wheel carries as DLLs.
+
+The compiler's own runtime is not in them: libgcc and libstdc++ (GCC),
+winpthreads and the MinGW-w64 C runtime, which the linker puts into
+`ffmpeg.exe` and PyAV's wheel carries as DLLs. Each is part of the
+compiler's normal packaging and serves only to let the program run with
+it, a System Library that GPL v3 section 1 leaves out of the Corresponding
+Source. Their own licenses (the GCC Runtime Library Exception; MIT- and
+BSD-style) ask for their notices, which are in `ffmpeg/` and
+`pyav-ffmpeg/`. `third-party-sources.json` names each package under
+`not_attached`, with the passages that decide it.
 
 Each has a `.sha256` file beside it. `tools/corresponding_source.py` writes
 them from `third-party-sources.json`, which pins every archive by URL and

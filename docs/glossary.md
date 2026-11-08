@@ -1323,8 +1323,10 @@ One of the two tar files every release attaches beside its installer:
 `SM64Trainer-third-party-source-plugin.tar` (the sources our build tools make
 the [[renderer]] plugin from: the pinned GLideN64 tree, Qt, FreeType, libpng
 and zlib) and `SM64Trainer-third-party-source-ffmpeg.tar` (the sources of the
-bundled ffmpeg.exe and of PyAV's FFmpeg, with the MinGW runtime sources their
-linkers put inside them). Each carries a `.sha256`. The GPL asks that the complete source come
+bundled ffmpeg.exe and of PyAV's FFmpeg). Each carries a `.sha256`. The
+compiler's own runtime (GCC's, winpthreads, the MinGW-w64 C runtime) stays
+out: the GPL v3 counts it as a System Library, and its notices ship in the
+app instead. The GPL asks that the complete source come
 from the same place as the program; these are that source, byte for byte the
 pinned archives. Since 2026-11-08 the trainer builds its own ffmpeg.exe so
 that one archive covers it.

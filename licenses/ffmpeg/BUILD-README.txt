@@ -30,7 +30,11 @@ Sources:
   ffmpeg: https://ffmpeg.org/releases/ffmpeg-8.1.1.tar.xz
     sha256 b6863adde98898f42602017462871b5f6333e65aec803fdd7a6308639c52edf3
 
-The runtime that is linked into the program (MSYS2 source packages):
+The compiler's runtime, linked into the program (libgcc, libstdc++, winpthreads, the
+MinGW-w64 C runtime), is a System Library under GPL v3 section 1 and carries the GCC
+Runtime Library Exception or MIT- and BSD-style licenses, so its source is not attached
+(third-party-sources.json, not_attached, quotes why). Its texts are in this folder.
+Its source packages are:
   https://repo.msys2.org/mingw/sources/mingw-w64-gcc-16.2.0-6.src.tar.zst
     sha256 a901d8afb78438abcff9ed020cd9aa9431db76de1992171c2454c3c07ad289e8
   https://repo.msys2.org/mingw/sources/mingw-w64-winpthreads-14.0.0.r598.ge3d18511f-1.src.tar.zst
