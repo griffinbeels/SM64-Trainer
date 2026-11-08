@@ -350,8 +350,9 @@ static const char k_about[] =
     "and its contributors, and credits Orkin (glN64), yongzh (gles2n64),\n"
     "Hiroshi Morii (GlideHQ) and ziggy (z64).\n\n"
     "This build adds the Practice Replay capture hooks. Like GLideN64 it is\n"
-    "licensed under the GNU GPL v2; the modified source and the build recipe\n"
-    "are published at https://github.com/griffinbeels/SM64-Trainer\n\n"
+    "licensed under the GNU GPL v2. Its complete source, with every library it\n"
+    "links, is in the source archives on the page of the SM64 Trainer release\n"
+    "it came with: https://github.com/griffinbeels/SM64-Trainer/releases\n\n"
     "Build " GFXWRAP_BUILD_ID;
 EXPORT void CALL DllAbout(HWND parent) {
     MessageBoxA(parent, k_about, "About " GFXWRAP_PLUGIN_NAME, MB_OK | MB_ICONINFORMATION);

@@ -3,7 +3,7 @@
 
 The app's own LICENSE plus three sources, one folder:
 
-- the tracked `licenses/` folder: everything vendored by hand (ffmpeg.exe,
+- the tracked `licenses/` folder: everything vendored or built by hand (ffmpeg.exe,
   PyAV's FFmpeg libraries, the renderer and the Qt inside it, the NVIDIA
   header, Preact, htm, WebView2). `licenses/README.md` names each one's
   license and where its source is;
@@ -19,7 +19,9 @@ dependency bump cannot ship with missing or stale notices.
 `tools/build_exe.py` calls it after PyInstaller; the zip and manifest are
 made from the finished folder, so the notices reach installs and updates.
 """
+import hashlib
 import importlib.metadata as metadata
+import json
 import re
 import shutil
 import subprocess
@@ -101,15 +103,33 @@ def recorded_version(folder: Path, readme: str) -> str:
     return match.group(1)
 
 
+def ffmpeg_sha256(ffmpeg: Path) -> str:
+    return hashlib.sha256(ffmpeg.read_bytes()).hexdigest()
+
+
+def pinned_ffmpeg() -> str:
+    """The SHA-256 of the one ffmpeg.exe the app ships: the build
+    tools/build_ffmpeg.py makes from ffmpeg/build-inputs.json, whose sources
+    each release attaches (tools/corresponding_source.py)."""
+    return json.loads((REPO / "ffmpeg" / "build-inputs.json").read_text(encoding="utf-8"))["expected_sha256"]
+
+
 def check_recorded_builds(ffmpeg: Path | None, licenses: Path = LICENSES) -> None:
-    """Refuse an ffmpeg.exe or PyAV that `licenses/` does not describe."""
+    """Refuse an ffmpeg.exe or PyAV that `licenses/` does not describe. For
+    ffmpeg.exe that is exactly one binary: the attached source archive holds
+    the source of that build and no other."""
     if ffmpeg is not None:
         shipped, described = ffmpeg_version(ffmpeg), recorded_version(licenses / "ffmpeg", "BUILD-README.txt")
         if shipped != described:
             raise RuntimeError(
                 f"the bundled ffmpeg is {shipped}, but licenses/ffmpeg describes {described}. "
-                "Replace licenses/ffmpeg/LICENSE and BUILD-README.txt with the new build's "
-                "LICENSE and README.txt, and update its row in licenses/README.md.")
+                "Bundle the build tools/build_ffmpeg.py makes; after changing its inputs, "
+                "regenerate licenses/ffmpeg/BUILD-README.txt (tools/build_ffmpeg.py --notices).")
+        if ffmpeg_sha256(ffmpeg) != pinned_ffmpeg():
+            raise RuntimeError(
+                f"the bundled ffmpeg ({ffmpeg}) is not the pinned build {pinned_ffmpeg()}: the source "
+                "archive attached to the release is the source of that build only. Bundle "
+                "tools/build_ffmpeg.py's result.")
     shipped, described = metadata.version("av"), recorded_version(licenses / "pyav-ffmpeg", "README.md")
     if shipped != described:
         raise RuntimeError(

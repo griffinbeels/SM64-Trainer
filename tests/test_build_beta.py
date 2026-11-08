@@ -245,7 +245,10 @@ def test_builder_reexec_relays_failure_diagnostics(monkeypatch, tmp_path, capsys
 
 
 def test_builder_requires_ffmpeg_instead_of_silent_replay_fallback(monkeypatch):
-    monkeypatch.setattr(build_beta.shutil, "which", lambda name: None)
+    def not_built(*, build_missing):
+        assert build_missing is False, "the prerequisite check must never compile ffmpeg"
+        raise RuntimeError("ffmpeg.exe for these inputs is not built yet")
+    monkeypatch.setattr(build_beta, "pinned_ffmpeg", not_built)
     with pytest.raises(RuntimeError, match="FFmpeg is required"):
         build_beta.check_prerequisites(None)
 

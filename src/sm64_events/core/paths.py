@@ -442,11 +442,25 @@ def install_root() -> Path:
     return Path(sys.executable).resolve().parent
 
 
+#: The pinned ffmpeg.exe in a checkout: tools/build_ffmpeg.py places its build
+#: here (git ignores it), the way tools/build_natives.py places the natives.
+SOURCE_FFMPEG = Path(__file__).resolve().parent.parent / "data" / "ffmpeg" / "ffmpeg.exe"
+
+
 def bundled_ffmpeg() -> str | None:
-    """Absolute path to the ffmpeg.exe bundled beside a frozen exe, else None.
-    PyInstaller unpacks --add-binary files into ``sys._MEIPASS``."""
+    """Absolute path to the ffmpeg.exe that ships with the trainer, else None.
+
+    Frozen: the one beside the exe (PyInstaller unpacks --add-binary files
+    into ``sys._MEIPASS``). From a checkout: the pinned build in
+    `SOURCE_FFMPEG`, so a source run (run-test-server.bat) runs the very
+    binary a release bundles, not whichever ffmpeg is on PATH."""
     if is_frozen():
         cand = Path(getattr(sys, "_MEIPASS", "")) / "ffmpeg.exe"
-        if cand.exists():
-            return str(cand)
-    return None
+        return str(cand) if cand.exists() else None
+    return str(SOURCE_FFMPEG) if SOURCE_FFMPEG.is_file() else None
+
+
+def ffmpeg_program() -> str | None:
+    """THE answer to which ffmpeg runs: the bundled one (`bundled_ffmpeg`),
+    else the one on PATH, else None."""
+    return bundled_ffmpeg() or shutil.which("ffmpeg")

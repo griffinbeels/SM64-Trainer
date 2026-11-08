@@ -89,7 +89,7 @@ export const CREDIT_GROUPS = [
         url: "https://github.com/FFmpeg/nv-codec-headers",
         what: "Hardware video encoding on NVIDIA cards. MIT.",
         covers: ["native:SM64GpuEncoderV1.dll"], notices: "licenses/nvidia-video-codec-headers" },
-      { name: "FFmpeg", by: "the FFmpeg developers; the bundled build is gyan.dev's", url: "https://ffmpeg.org",
+      { name: "FFmpeg", by: "the FFmpeg developers; the trainer builds its own copy from FFmpeg 8.1.1", url: "https://ffmpeg.org",
         what: "Compresses and decodes replay video through PyAV, and converts comparison videos. GPL-3.0.",
         notices: "licenses/ffmpeg" },
       { name: "cxd4", by: "Iconoclast, kept by the mupen64plus team", url: "https://github.com/mupen64plus/mupen64plus-rsp-cxd4",
@@ -101,7 +101,7 @@ export const CREDIT_GROUPS = [
     id: "libraries",
     eyebrow: "Open source",
     title: "Libraries",
-    lead: "Every license text, and where to get the source of each GPL part, ships with the trainer in its _internal\\licenses folder.",
+    lead: "Every license text ships with the trainer, in its _internal\\licenses folder. The full source code of each GPL part is in the source archives on this version's release page on GitHub.",
     compact: true,
     items: [
       { name: "FastAPI", by: "Sebastián Ramírez", url: "https://github.com/fastapi/fastapi",

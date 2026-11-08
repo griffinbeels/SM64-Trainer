@@ -112,8 +112,10 @@ instead of two cut the median browser job by 11% and not the wall
 files, whose tests share a page (about three minutes each), plus setup.
 
 Per job: `uv sync --frozen` from uv's cache, Node 24 and the pinned Node tools
-(cached), ffmpeg (the gyan.dev build the desktop app bundles, pinned by
-`FFMPEG_BUILD`, cached: a newer build broke the CFR sink's audio), and on
+(cached), ffmpeg (the pinned build the desktop app bundles, with the
+ffprobe.exe the tests count with: the `ffmpeg` job makes it with
+`tools/build_ffmpeg.py`, about 20 minutes when its recipe changes and a cache
+hit otherwise, and hands it to every job), and on
 browser jobs only Chromium (cached) and uilab at `UILAB_REF` (bump it after
 pushing uilab). A test running past five minutes prints every thread's stack.
 A newer push to main cancels an older run on main; nightly runs and other

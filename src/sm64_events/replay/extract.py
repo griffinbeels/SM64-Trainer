@@ -30,7 +30,6 @@ import os
 from contextlib import nullcontext, closing
 from sm64_events.core.profiling import measured
 import math
-import shutil
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -38,7 +37,7 @@ from pathlib import Path
 from typing import Callable
 
 from sm64_events.core.childproc import quiet_spawn_kwargs
-from sm64_events.core.paths import bundled_ffmpeg
+from sm64_events.core.paths import ffmpeg_program
 from sm64_events.replay.config import (CLIP_MAXRATE, ReplayConfig,
                                        video_quality_args)
 from sm64_events.replay.mediaprobe import (frame_times_of, native_packet_index,
@@ -128,7 +127,7 @@ class ClipExtractor:
         self.fragments = fragments
         self._cfg = cfg
         self._codec = codec
-        self._ffmpeg = ffmpeg or bundled_ffmpeg() or shutil.which("ffmpeg")
+        self._ffmpeg = ffmpeg or ffmpeg_program()
         self._picture_feed = bool(getattr(cfg, "picture_feed", False))
 
     @property

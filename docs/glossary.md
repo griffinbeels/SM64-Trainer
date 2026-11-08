@@ -1317,6 +1317,27 @@ Defender's scanner it says so and the build continues.
 - **Not** -- code signing: the natives ship unsigned, his decision on
   2026-11-06
 
+### Third-party source archive
+
+One of the two tar files every release attaches beside its installer:
+`SM64Trainer-third-party-source-plugin.tar` (the sources our build tools make
+the [[renderer]] plugin from: the pinned GLideN64 tree, Qt, FreeType, libpng
+and zlib) and `SM64Trainer-third-party-source-ffmpeg.tar` (the sources of the
+bundled ffmpeg.exe and of PyAV's FFmpeg). Each carries a `.sha256`. The
+compiler's own runtime (GCC's, winpthreads, the MinGW-w64 C runtime) stays
+out: the GPL v3 counts it as a System Library, and its notices ship in the
+app instead. The GPL asks that the complete source come
+from the same place as the program; these are that source, byte for byte the
+pinned archives. Since 2026-11-08 the trainer builds its own ffmpeg.exe so
+that one archive covers it.
+
+- **Lives** -- `licenses/third-party-sources.json` pins every archive;
+  `tools/corresponding_source.py` writes them; `tools/release.py` attaches
+  them; `tools/build_ffmpeg.py` and `tools/build_renderer_libs.py` build
+  from the same pins
+- **Not** -- the trainer's own source: that is the repository at the
+  release's tag
+
 ### Task closure
 
 Every byte of game memory the [[renderer]] reads while it draws one SM64

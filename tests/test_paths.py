@@ -76,9 +76,14 @@ def test_installation_record_is_shared_between_worktrees_without_sharing_practic
     assert legacy.exists()  # Migration copies; it never removes old metadata.
 
 
-def test_bundled_ffmpeg_none_from_source(monkeypatch):
+def test_bundled_ffmpeg_from_source_is_the_placed_pinned_build_or_none(monkeypatch, tmp_path):
+    """Since 2026-11-08 a checkout runs the pinned build tools/build_ffmpeg.py
+    places (tests/test_ffmpeg_resolver.py); without it, nothing is bundled."""
     monkeypatch.setattr(paths, "is_frozen", lambda: False)
+    monkeypatch.setattr(paths, "SOURCE_FFMPEG", tmp_path / "ffmpeg.exe")
     assert paths.bundled_ffmpeg() is None
+    (tmp_path / "ffmpeg.exe").write_text("x")
+    assert paths.bundled_ffmpeg() == str(tmp_path / "ffmpeg.exe")
 
 
 def test_bundled_ffmpeg_found_when_frozen(monkeypatch, tmp_path):

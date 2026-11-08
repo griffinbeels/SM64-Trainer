@@ -79,6 +79,20 @@ class ReleaseSelectionTests(unittest.TestCase):
             with self.subTest(name=name), self.assertRaises(builder.ReleaseNotReady):
                 builder.select_release(release, POLICY)
 
+    def test_the_attached_source_archives_are_accepted_and_never_linked(self):
+        """Every release attaches its third-party source archives beside the six
+        (tools/corresponding_source.py); the site must still build from it."""
+        release = complete_release()
+        for index, name in enumerate(("SM64Trainer-third-party-source-ffmpeg.tar",
+                                      "SM64Trainer-third-party-source-ffmpeg.tar.sha256")):
+            release["assets"].append({**copy.deepcopy(release["assets"][0]), "id": 100 + index, "name": name})
+        selected = builder.select_release(release, POLICY)
+        self.assertEqual(set(selected["assets"]), set(NAMES))
+        unknown = complete_release()
+        unknown["assets"].append({**copy.deepcopy(unknown["assets"][0]), "id": 200, "name": "notes.txt"})
+        with self.assertRaises(builder.ReleaseNotReady):
+            builder.select_release(unknown, POLICY)
+
     def test_duplicates_extras_and_invalid_asset_fields_are_rejected(self):
         duplicate = complete_release()
         duplicate["assets"][-1] = copy.deepcopy(duplicate["assets"][0])

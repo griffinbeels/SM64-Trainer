@@ -29,6 +29,9 @@ ROOT_DATA_FILES = frozenset({
     "error-reporting.json", "release-version.json",
 })
 NATIVE_FILES = BUNDLED_NATIVES  # owned by core/update_plan.py
+# Build outputs git ignores in the data folder. Neither is copied as data:
+# the natives are bundled by name, ffmpeg.exe by build_exe's --add-binary.
+BUILT_FOLDERS = frozenset({"plugin", "ffmpeg"})
 COLLECTION_NAME = "griffman1212.sm64ghosts"
 SEED_DESCRIPTOR = "beta-ghost-seed.json"
 VENDOR_HIDDEN = {
@@ -59,9 +62,9 @@ def data_inputs(directory: Path) -> tuple[Path, ...]:
     if directory.is_symlink() or directory.is_junction():
         raise ValueError("unexpected first-party data input")
     for entry in directory.iterdir():
-        if (entry.is_symlink() or entry.is_junction() or entry.name not in DATA_FILES | {"plugin"}
+        if (entry.is_symlink() or entry.is_junction() or entry.name not in DATA_FILES | BUILT_FOLDERS
                 or entry.name in DATA_FILES and not entry.is_file()
-                or entry.name == "plugin" and not entry.is_dir()):
+                or entry.name in BUILT_FOLDERS and not entry.is_dir()):
             raise ValueError("unexpected first-party data input")
     files = tuple(directory / name for name in sorted(DATA_FILES))
     if any(not path.is_file() for path in files):

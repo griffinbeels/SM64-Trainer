@@ -11,7 +11,7 @@ merge check passes, and the commit's full run on GitHub passed (it waits
 for one still running). The verification lane and tools/build_exe.py build
 the three natives from this commit and refuse a stale one
 (tools/build_natives.py). Builds the onedir app + bootstrap installer via
-tools/build_exe.py (ffmpeg must be on PATH so it gets bundled), zips the
+tools/build_exe.py (which bundles tools/build_ffmpeg.py's pinned ffmpeg.exe), zips the
 onedir tree, emits the per-file update manifest, and publishes SIX assets
 the incremental updater + bootstrap consume:
 
@@ -20,6 +20,10 @@ the incremental updater + bootstrap consume:
     SM64Trainer.exe(.sha256)        the BOOTSTRAP installer under the
                                     load-bearing name old shipped updaters
                                     can install (their migration vehicle)
+
+Beside those six, every release attaches the third-party source archives
+(tools/corresponding_source.py, `source_assets`), so the complete source of
+every binary it ships is on the same page; the updater never reads them.
 
 Private preparation never tags, pushes, deploys or publishes. Draft and publish
 require exact human QA approval, source/verification gates and six downloaded
@@ -105,6 +109,24 @@ def release_assets(dist: Path) -> list[Path]:
     return [dist / ZIP_ASSET, dist / (ZIP_ASSET + ".sha256"),
             dist / MANIFEST_ASSET, dist / (MANIFEST_ASSET + ".sha256"),
             dist / BOOTSTRAP_ASSET, dist / (BOOTSTRAP_ASSET + ".sha256")]
+
+
+def source_assets(dist: Path) -> list[Path]:
+    """The third-party source archives every release attaches beside its
+    binaries (tools/corresponding_source.py), each with its `.sha256`."""
+    import corresponding_source
+    return [dist / name for name in corresponding_source.asset_names()]
+
+
+def candidate_assets(dist: Path) -> list[Path]:
+    """Everything a candidate holds and a release uploads: the six product
+    assets the updater and installer read, and the source archives."""
+    return release_assets(dist) + source_assets(dist)
+
+
+def _write_source_archives(destination: Path) -> list[Path]:
+    import corresponding_source
+    return corresponding_source.write_archives(destination)
 
 
 def compose_release_body(setup_header: str, patch_notes: str) -> str:
@@ -318,9 +340,10 @@ def prepare_candidate(version: str, destination: Path, *, config: Path,
     shutil.copyfile(work / "dist" / "SM64TrainerSetup.exe", destination / BOOTSTRAP_ASSET)
     for artifact in (zip_path, manifest_path, destination / BOOTSTRAP_ASSET):
         write_sha(artifact)
+    _write_source_archives(destination)
     _assert_build_source(source, lock_digest)
     record = record_candidate(destination, version=version, build=build,
-        artifacts=release_assets(destination), source_commit=source, lock=UV_LOCK, app=app,
+        artifacts=candidate_assets(destination), source_commit=source, lock=UV_LOCK, app=app,
         version_hook=work / "build" / "rthook_release_version.py", private=private,
         service_provenance=service_provenance, promoted_from=promoted_from)
     if private:
@@ -333,8 +356,8 @@ def verify_candidate(directory: Path, *, app: Path | None = None) -> Path:
     """Recheck immutable artifacts and the actual embedded runtime baseline."""
     from release_candidate import (verify_artifacts, frozen_self_check, record_verification,
                                    digest, read_record)
-    record = verify_artifacts(directory, expected_assets=[p.name for p in release_assets(directory)])
-    checks = ["six artifact digests", "complete per-file manifest and ZIP ranges",
+    record = verify_artifacts(directory, expected_assets=[p.name for p in candidate_assets(directory)])
+    checks = ["six artifact digests and the source archives", "complete per-file manifest and ZIP ranges",
               "normal identity and public configuration", "native provenance"]
     import tempfile
     import zipfile
@@ -387,7 +410,7 @@ def publication_preflight(directory: Path, *, approval: Path | None = None) -> d
     """Public publication reuses gates and never rebuilds prepared artifacts."""
     from release_candidate import verify_artifacts, digest, require_approval, write_once
     from release_lineage import verify_publication
-    record = verify_artifacts(directory, expected_assets=[p.name for p in release_assets(directory)])
+    record = verify_artifacts(directory, expected_assets=[p.name for p in candidate_assets(directory)])
     if record["distribution"] != "public":
         raise ValueError("private QA candidates must never be uploaded to GitHub")
     if approval is None:
@@ -435,14 +458,14 @@ def draft_candidate(directory: Path, *, notes_file: Path, approval: Path) -> Non
         if not re.search(r"\bHTTP 404\b", existing.stderr or ""):
             raise ValueError("draft discovery failed; existing assets cannot be changed safely")
         flags = ["--prerelease"] if record["channel"] == "beta" else []
-        _run(["gh", "release", "create", tag, *[str(p) for p in release_assets(directory)],
+        _run(["gh", "release", "create", tag, *[str(p) for p in candidate_assets(directory)],
               "--repo", REPOSITORY, "--draft", "--target", record["source_commit"], "--title", tag,
               "--notes-file", str(body_file), *flags])
     verify_draft(record, _run)
     import tempfile
     with tempfile.TemporaryDirectory(prefix="sm64-draft-check-") as temporary:
         _run(["gh", "release", "download", tag, "--repo", REPOSITORY, "--dir", temporary])
-        for asset in release_assets(directory):
+        for asset in candidate_assets(directory):
             if not (Path(temporary) / asset.name).is_file() or digest(Path(temporary) / asset.name) != digest(asset):
                 raise ValueError("draft assets do not match the verified candidate")
     write_once(directory / "draft-upload.json", {"schema": 1, "tag": tag,
@@ -462,7 +485,7 @@ def publish_candidate(directory: Path, *, approval: Path) -> None:
     import tempfile
     with tempfile.TemporaryDirectory(prefix="sm64-publish-check-") as temporary:
         _run(["gh", "release", "download", "v" + record["version"], "--repo", REPOSITORY, "--dir", temporary])
-        for asset in release_assets(directory):
+        for asset in candidate_assets(directory):
             if digest(Path(temporary) / asset.name) != digest(asset):
                 raise ValueError("draft asset changed before publication")
     verify_draft(record, _run)

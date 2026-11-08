@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Callable
 
 from sm64_events.core.childproc import quiet_spawn_kwargs
-from sm64_events.core.paths import bundled_ffmpeg
+from sm64_events.core.paths import ffmpeg_program
 from sm64_events.core.timefmt import format_igt_short
 from sm64_events.memory.addresses import course_name, star_name
 from sm64_events.replay.config import CLIP_MAXRATE, video_quality_args
@@ -52,7 +52,7 @@ class CompilationBuilder:
         self._extractor = extractor
         self._codec = codec
         self._fps = fps
-        self._ffmpeg = ffmpeg or bundled_ffmpeg() or shutil.which("ffmpeg")
+        self._ffmpeg = ffmpeg or ffmpeg_program()
 
     def build(self, specs, ring, tmp_dir: Path, out_path: Path,
               resolve_saved, progress_cb) -> CompilationResult:
