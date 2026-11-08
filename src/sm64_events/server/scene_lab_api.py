@@ -32,8 +32,6 @@ one reader, and without it this module is never imported and no route is added. 
                                   (server/scene_exports.py)
     POST /api/scene-lab/moment, POST /moment/{id}/write   one frame as a Usamune save state, into a slot of the
                                   running game (server/scene_moments.py; the lab's one write to game memory)
-    GET  /api/scene-lab/slots, /slots/picture/{name}      what the nine slots hold, read only, and a Lab
-                                  write's picture (server/scene_slots.py, the Ghost Lab's save-state strip)
 
 The lab config is a private JSON file of absolute paths: {"rom", "packages" (a folder of
 .sm64scene files), "pj64_plugin", "map" (the free camera's MappingUS.map), and optionally
@@ -127,6 +125,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, WebSocket, WebSocketDisconnect
+from fastapi import Path as FastPath
 from pydantic import BaseModel, Field, model_validator
 
 log = logging.getLogger("sm64.scene_lab")
@@ -296,6 +295,7 @@ class SceneLab:
 
     ghosts = None                  # scene_ghosts.SceneGhosts: the stage and the ghost catalog (mount_scene_lab)
     refitter = None                # slotlibrary.refit.SlotRefitter: the live server's slots follow each spawn
+    _slot_loop = None              # the app's event loop, for the star sets' broadcasts from the slot worker
     heading = {"title": "Lab recording", "target": None}     # the open scene's, as _heading says it
 
     def __init__(self, config_path: Path, *, session_options: dict | None = None,
@@ -458,6 +458,7 @@ class SceneLab:
         """At server start: the lease that keeps the scene tap recording, the attempt scenes, and the slot
         refit's thread."""
         await asyncio.to_thread(self._start_live_blocking)
+        self._slot_loop = asyncio.get_running_loop()
         if self.refitter is not None:
             self.refitter.start()
 
@@ -504,7 +505,7 @@ class SceneLab:
         if broadcaster is not None and hasattr(broadcaster, "observe"):
             broadcaster.observe(scenes.observe_event)
 
-    def follow_spawns(self, tracker, *, game=None, library=_HIS_LIBRARY, log_file=None) -> None:
+    def follow_spawns(self, tracker, *, game=None, library=_HIS_LIBRARY, log_file=None, atlases=None) -> None:
         """After every spawn the event stream announces, the slots made for that place get Mario's new place
         (slotlibrary/refit.py). The observer only stamps a deadline; the refitter's own thread and reader do the
         work, started and stopped with the app. Tests inject the game, the library and the log file.
@@ -516,17 +517,54 @@ class SceneLab:
         if broadcaster is None or not hasattr(broadcaster, "observe"):
             return
         from sm64_events.slotlibrary import refit, usamune
+        from sm64_events.slotlibrary.atlas import default_store
+        from sm64_events.slotlibrary.coursesets import CourseSets
+        from sm64_events.slotlibrary.keeper import SetKeeper
         if library is _HIS_LIBRARY:
             from sm64_events.core.paths import slot_library_dir
             from sm64_events.slotlibrary.store import SlotLibrary
             library = SlotLibrary(slot_library_dir())
-        slots = getattr(getattr(self, "moments", None), "slots", None)     # the Ghost Lab's strip (scene_slots.py)
+            atlases = default_store() if atlases is None else atlases
+        keeper = None if library is None else SetKeeper(
+            library, CourseSets(library.root / "course-sets.json"), atlases,
+            target=lambda: getattr(tracker, "target", None), on_change=self._slot_sets_changed)
         self.refitter = refit.SlotRefitter(game or (lambda: usamune.attach(None)), library,
-                                           log_file=log_file or refit.log_path(),
-                                           on_report=slots.observe_refit if slots is not None else None)
+                                           log_file=log_file or refit.log_path(), keeper=keeper)
         broadcaster.observe(self.refitter.observe)
-        if slots is not None:
-            broadcaster.observe(slots.observe_event)          # a state_loaded names the slot loaded last
+        self._slot_broadcaster = broadcaster
+
+    def _slot_sets_changed(self, payload: dict) -> None:
+        """From the slot worker's thread: the star sets' answer goes out on the app's socket, broadcast only."""
+        loop, broadcaster = self._slot_loop, getattr(self, "_slot_broadcaster", None)
+        if loop is None or broadcaster is None or loop.is_closed():
+            return
+        from sm64_events.core.events import Event
+        event = Event(type="slot_sets_changed", frame=0, timestamp_utc=datetime.now(timezone.utc), payload=payload)
+        asyncio.run_coroutine_threadsafe(broadcaster.publish(event), loop)
+
+    def slot_sets(self):
+        """The star sets' keeper, or None on a server that does not follow spawns."""
+        return None if self.refitter is None else self.refitter.keeper
+
+    async def frame_picture(self, path, package_frame: int) -> bytes | None:
+        """The open scene's picture of one of its package's frames, the recorded camera's, as a JPEG: the picture a
+        save state made from that frame keeps (server/scene_moments.py). None when that package is not the open
+        scene, the frame is not in it, or the renderer could not draw it. It goes through the session's worker and
+        delivery thread like any picture the page asks for, so it never meets one of the page's halfway."""
+        session, generation, delivery = self.session, self.generation, self.delivery
+        if session is None or delivery is None or self.open_path is None or Path(self.open_path) != Path(path):
+            return None
+        try:
+            position = list(session.frames).index(package_frame)
+        except (AttributeError, TypeError, ValueError):
+            return None
+        try:
+            pending = await self._run(generation, "begin", position, None, "jpeg", True, True)
+            header, payload = await asyncio.get_running_loop().run_in_executor(delivery, session.finish, pending)
+        except (SceneClosed, ValueError, RuntimeError) as failed:
+            log.info("A save state's frame picture was not drawn: %s", failed)
+            return None
+        return payload if header.get("encoding") == "jpeg" and payload else None
 
     # ------------------------------------------------------------ status, open, close
 
@@ -1285,6 +1323,68 @@ class PathBody(BaseModel):
     keys: list = Field(max_length=64)
 
 
+class SlotMoveBody(BaseModel):
+    to: str = Field(pattern="^(star|course)$")
+
+
+NO_SLOT_SETS = "This server does not keep star sets: it does not follow the running game."
+
+
+def _mount_slot_set_routes(router: APIRouter, lab: SceneLab) -> None:
+    """The Ghost Lab's star sets strip (slotlibrary/keeper.py; the shape is frozen in docs/api.md):
+        GET    /slot-sets                     -> the current course and star, and Usamune's nine slots
+        POST   /slot-sets/{slot}/move {to}    -> the slot's state into the star's set or the course default
+        DELETE /slot-sets/{slot}?set=         -> the slot out of that set; the kept state and the game stay
+        GET    /slot-sets/pictures/{state}    -> the frame picture a kept state was made from (JPEG)
+    Every answer is the GET body; `slot_sets_changed` carries it on the app's socket. Plain routes on the
+    threadpool; an edit wakes the slot worker, which writes the resolved set when it changed."""
+    from fastapi.responses import FileResponse
+
+    from sm64_events.slotlibrary.keeper import empty_view
+    from sm64_events.slotlibrary.usamune import Refusal
+
+    def empty() -> dict:
+        return empty_view()
+
+    def edit(work):
+        keeper = lab.slot_sets()
+        if keeper is None:
+            raise HTTPException(409, NO_SLOT_SETS)
+        try:
+            with keeper.lock:
+                payload = work(keeper)
+        except Refusal as refused:
+            raise HTTPException(409, f"{str(refused)[:1].upper()}{str(refused)[1:]}.") from None
+        except LookupError as missing:
+            raise HTTPException(404, f"{str(missing)[:1].upper()}{str(missing)[1:]}.") from None
+        lab.refitter.poke("slot_sets")
+        return payload
+
+    @router.get("/slot-sets")
+    def slot_sets():
+        keeper = lab.slot_sets()
+        return empty() if keeper is None else keeper.view()
+
+    @router.post("/slot-sets/{slot}/move")
+    def move_slot(body: SlotMoveBody, slot: int = FastPath(ge=1, le=9)):
+        return edit(lambda keeper: keeper.move(slot, body.to))
+
+    @router.delete("/slot-sets/{slot}")
+    def remove_slot(slot: int = FastPath(ge=1, le=9), set: str = Query(pattern="^(star|course)$")):  # noqa: A002
+        return edit(lambda keeper: keeper.remove(slot, set))
+
+    @router.get("/slot-sets/pictures/{state}")       # keeper.PICTURE_ROUTE names it to the page
+    def slot_picture(state: str):
+        keeper = lab.slot_sets()
+        try:
+            path = None if keeper is None else keeper.library.picture_path(state)
+        except Refusal:
+            path = None
+        if path is None:
+            raise HTTPException(404, "This save state has no picture.")
+        return FileResponse(path, media_type="image/jpeg")
+
+
 def _mount_preset_routes(router: APIRouter, lab: SceneLab) -> None:
     """GET and PUT /camera-presets?level=&area=: the camera presets of one level and area, in the lab
     folder's camera-presets.json (tools/scene_lab/camera_presets.py owns the file and its checks).
@@ -1393,6 +1493,7 @@ def mount_scene_lab(app, config_path, **options) -> SceneLab:
     router = APIRouter(prefix="/api/scene-lab")
     _mount_ghost_routes(router, lab)
     _mount_preset_routes(router, lab)
+    _mount_slot_set_routes(router, lab)
     _mount_job_routes(router, lab, export_options, moment_options, resim_options)
 
     _mount_live_routes(router, lab)

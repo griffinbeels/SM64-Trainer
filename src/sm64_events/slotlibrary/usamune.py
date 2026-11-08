@@ -44,6 +44,7 @@ class Build:
     current_area_pointer: int
     segment_table: int
     second_camera_focus: int
+    settings: int                # Usamune's own state block; part of it rides in each slot's trailer
 
     @property
     def rom(self) -> str:
@@ -54,7 +55,7 @@ _LAYOUT_FIELDS = {"save": "usamune_slot_save", "load": "usamune_slot_load", "slo
                   "body_start": "mario_struct", "object_pool": "object_pool", "mario_object": "mario_object",
                   "curr_level": "curr_level", "curr_area": "curr_area",
                   "current_area_pointer": "current_area_pointer", "segment_table": "segment_table",
-                  "second_camera_focus": "second_camera_focus"}
+                  "second_camera_focus": "second_camera_focus", "settings": "usamune_state_start"}
 
 
 @cache
@@ -82,6 +83,18 @@ OS_MEM_SIZE, EXPANSION_BYTES = 0x80000318, 0x800000
 SEGMENT_BYTES = 64
 SEGMENT_OF_GFX_POOL = 1              # alternates every frame, so it cannot identify a level
 LEVEL_RANGE, AREA_RANGE = range(1, 39), range(1, 9)
+# Usamune's save copies part of its own state block (Build.settings) into the trailer, and its load puts it back
+# (read off both builds' save and load code; a cold boot of each confirms the three below, 2026-11-08). Three of
+# those words are the session's own clocks: settings +0x90 and +0x94 (since power-on, 60 a second) and +0xEC (the
+# game time his pause screen shows, 30 a second). A slot saved in another session, the other game or a recording
+# carries that session's clocks: his JP state set a one-hour-old US game's clock to 11h25 ("it looks like the overall
+# usamune timer is messed up ... we shouldn't copy over the overall session timer clock", 2026-11-08). Every write
+# of the Trainer's keeps the running game's clocks in those words (`with_live_clocks`).
+SESSION_CLOCKS = ((0x90, BODY_BYTES + 0x100), (0x94, BODY_BYTES + 0x104), (0xEC, BODY_BYTES + 0x120))
+# The slot index (0-8) Usamune's load reads from its state block, and leaves there after the load. Simulation, both
+# builds (2026-11-08): with only this byte set, its load put Mario where that slot's bytes had him, 0.00 units off.
+# VERIFY live: that his own load (the button or the menu) sets this byte before it loads.
+LOAD_SLOT = 0x118
 # Where any build keeps the body, for checking a slot's own bytes before anyone says which build made them.
 _BODIES = tuple(layout_for(version).mario_struct for version in VERSIONS if layout_for(version).mario_struct)
 
@@ -190,6 +203,21 @@ def live_facts(memory: GameMemory, build: Build) -> SlotFacts:
                      struct.unpack(">h", memory.read(build.curr_area, 2))[0])
 
 
+def with_live_clocks(memory: GameMemory, build: Build, data: bytes) -> bytes:
+    """The slot's bytes with the running game's session clocks in its trailer, so loading it leaves his clocks as
+    they are (at most rolled back to this write, as with a save of his own)."""
+    out = bytearray(data)
+    for field, at in SESSION_CLOCKS:
+        out[at:at + 4] = memory.read(build.settings + field, 4)
+    return bytes(out)
+
+
+def load_slot(memory: GameMemory, build: Build) -> int | None:
+    """The slot index (0-8) Usamune's load reads, so the one a load just read; None for a byte out of range."""
+    index = memory.read(build.settings + LOAD_SLOT, 1)[0]
+    return index if index < SLOT_COUNT else None
+
+
 def same_segments(live: bytes, recorded: bytes) -> bool:
     keep = [at for at in range(0, SEGMENT_BYTES, 4) if at != SEGMENT_OF_GFX_POOL * 4]
     return all(live[at:at + 4] == recorded[at:at + 4] for at in keep)
@@ -214,6 +242,16 @@ def write_slot_bytes(memory: GameMemory, build: Build, index: int, data: bytes, 
     if memory.read(low, high - low) != data:
         memory.write(occupied, bytes(4))
         raise WriteFailed(f"slot {index} did not read back; it is now empty")
+
+
+def empty_slot(memory: GameMemory, index: int) -> None:
+    """The slot reads as empty: its occupied word to zero, the one word of the slot written. Usamune then neither
+    loads it nor counts it; the bytes behind the word stay. Zero is the value write_slot_bytes itself writes first,
+    never a Mario place, so this cannot set up a mismatched load (the 2026-11-05 crash)."""
+    occupied = slot_range(index)[0] + TRAILER_MARIO
+    memory.write(occupied, bytes(4))
+    if memory.read(occupied, 4) != bytes(4):
+        raise WriteFailed(f"slot {index} did not read back as empty")
 
 
 class Project64Game:

@@ -515,6 +515,23 @@ def test_an_answer_is_never_taken_for_another_requests_picture(lab, recording):
     assert session.close() == 0 and time.monotonic() - started < 5
 
 
+def test_a_save_states_picture_is_the_one_the_page_is_shown_of_its_frame(lab, recording):
+    """SceneLab.frame_picture, the picture a Ghost Lab save state keeps (server/scene_moments.py): the open scene's
+    JPEG of the row whose package frame the state was made from, drawn through the same worker and delivery thread
+    as the page's pictures; None for a frame the scene does not show or another package."""
+    app, server = _app(lab)
+    with TestClient(app) as client:
+        opened = client.post("/api/scene-lab/open", json={"package": "scene-a.sm64scene"}).json()
+        with client.websocket_connect("/api/scene-lab/ws") as socket:
+            socket.send_json({"id": 1, "session": opened["session"], "frame": 4, "camera": None, "encoding": "jpeg"})
+            shown = _reply(socket)["payload"]
+        kept = client.portal.call(server.frame_picture, server.open_path, SHOWN[4])
+        assert kept[:2] == b"\xff\xd8" and kept == shown
+        assert client.portal.call(server.frame_picture, server.open_path, 4) is None, "no present showed task 4"
+        other = lab["dir"] / "packages" / "scene-b.sm64scene"
+        assert client.portal.call(server.frame_picture, other, SHOWN[4]) is None
+
+
 class _Shared:
     """The desktop window's shared-memory pictures (webview_pictures.WebView2Pictures), recorded."""
 

@@ -361,14 +361,20 @@ hash of its bytes, so the same bytes are always one kept state.
 
 ### Course set
 
-An ordered list of up to nine [[kept state]]s for a level, or for one [[star]]
-of that level. Position one goes to Usamune's first slot, and later slots keep
-what they hold. A [[star]]'s own list wins over its level's. The Trainer first
-captures every occupied slot, then writes the list. Each state goes through
-[[mario relocation]] on the way in, and each state reports whether Usamune will
-load it now.
+For one course, which [[kept state]] goes into which of Usamune's nine slots.
+Each course has a course default, and each [[star]] of it can have a set of its
+own. That set's slots replace the course default's at the same numbers; the
+other slots keep the course default. When you enter a course, the Trainer writes
+the course default, or the set of your [[target]] when that [[star]] is in this
+course. Picking or grabbing a [[star]] there writes its set. A slot that held
+another set's state of this course becomes empty, and anything else stays. When
+you save into a slot yourself, that save joins the set you are in. The Trainer
+first keeps every occupied slot, then writes. Each state goes through [[mario
+relocation]] on the way in. Every set starts empty.
 
-- **Lives** -- `src/sm64_events/slotlibrary/coursesets.py`
+- **Lives** -- `src/sm64_events/slotlibrary/coursesets.py` (the sets),
+  `src/sm64_events/slotlibrary/keeper.py` (which set applies, and when it is
+  written); lab only
 
 ### Mario relocation
 
@@ -1605,10 +1611,10 @@ the picture's foot.
   **Loop** (kept per viewer) and **Sound** (Mute, the volume, **Music** and **Sound effects**). Moving
   the camera never pauses Play; only Pause, Space, a step or the slider do.
 - **The save-state strip**: Usamune's nine slots as they are in the running game, read only: each
-  shows its number, a picture of the [[frame]] this page put there (a state saved in the game
-  itself shows its place's name), the flag of the version that made it, ⇄ when [[Save state
-  translation]] changed it for this game, and a gold edge with ▶ on the slot Usamune loaded last
-  (from the [[journal]]'s load, not yet checked live). A click on slot N, or the key N, saves the
+  shows its number, a picture of the [[frame]] a save from this page came from (the lab draws it with
+  the recorded camera; a state saved in the game itself shows its place's name), the flag of the
+  version that made it, ⇄ when [[Save state translation]] changed it for this game, and a gold edge
+  with ▶ on the slot Usamune loaded last. A click on slot N, or the key N, saves the
   [[frame]] on screen there, over what was there, as Usamune's own save does; the line under the
   slots says what happened or why the page cannot save that [[frame]]. Each [[star]] may keep its own
   slots over the course's: a ★ marks a slot from that [[star]]'s own set, and a plain slot comes from
@@ -1678,8 +1684,8 @@ its own sound effects, under the same volume and Mute.
   (`tools/scene_lab/scene_session.py`) and its sound (`tools/scene_lab/scene_audio.py`);
   the page (`src/sm64_events/ui/components/sceneviewer.js`), its play bar
   (`src/sm64_events/ui/components/sceneplaybar.js`), save-state strip
-  (`src/sm64_events/ui/components/scenestrip.js`, read through
-  `src/sm64_events/server/scene_slots.py`), build progress
+  (`src/sm64_events/ui/components/scenestrip.js`, read through the star sets'
+  `src/sm64_events/slotlibrary/keeper.py`), build progress
   (`src/sm64_events/ui/components/scenebuild.js`), stage picker
   (`src/sm64_events/ui/components/scenestage.js`) and [[ghost]]s tab
   (`src/sm64_events/ui/components/sceneghosts.js`), the recording's

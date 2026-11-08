@@ -13,6 +13,7 @@ reads agree; if they differ the slot stays unseen, and the next step tries again
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from sm64_events.slotlibrary.store import CAPTURED, Damaged, KeptState, LoadContext, SlotLibrary, state_id
@@ -113,13 +114,15 @@ def _keep_changed(memory: GameMemory, library: SlotLibrary, index: int, data: by
     return True
 
 
-def capture_all(memory: GameMemory, library: SlotLibrary, build: Build) -> tuple[KeptState, ...]:
+def capture_all(memory: GameMemory, library: SlotLibrary, build: Build,
+                ours: Mapping[int, str] | None = None) -> tuple[KeptState, ...]:
     """Keep every occupied slot now, whatever was seen before. Refuses rather than leave one uncaptured:
-    its caller is about to overwrite slots. Returns the states that were new to the library."""
+    its caller is about to overwrite slots. Returns the states that were new to the library.
+    ours: slot -> hash of bytes the Trainer wrote there itself (a placed state moved or translated); skipped."""
     added = []
     for index in range(SLOT_COUNT):
         data = read_slot(memory, index)
-        if not is_occupied(data):
+        if not is_occupied(data) or (ours and ours.get(index) == state_id(data)):
             continue
         if read_slot(memory, index) != data:
             raise Refusal(f"slot {index} is being written right now")

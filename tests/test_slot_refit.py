@@ -26,7 +26,7 @@ import what_happened  # noqa: E402
 from sm64_events.server.broadcaster import Broadcaster  # noqa: E402
 from sm64_events.slotlibrary import refit, usamune  # noqa: E402
 from sm64_events.slotlibrary import relocate as R  # noqa: E402
-from sm64_events.slotlibrary.store import SlotLibrary  # noqa: E402
+from sm64_events.slotlibrary.store import SlotLibrary, state_id  # noqa: E402
 
 HERE, ELSEWHERE = (libfakes.LEVEL, libfakes.AREA), (24, 1)
 FITTED = R.relocate(world.make_slot(), [(world.SLOT_MARIO, world.LIVE)], usamune.US).data
@@ -120,7 +120,7 @@ def test_mario_moving_during_a_write_stops_the_pass_and_his_save_is_still_kept(t
     report = refit.SlotRefitter(lambda: game, library, steady_seconds=0).run_once()
     assert outcomes(report) == {0: (refit.REFUSED, refit.MOVED)}, "slot 1 is not tried for the old place"
     assert game.read(usamune.slot_address(0) + usamune.TRAILER_MARIO, 4) == bytes(4)
-    assert [state.id for state in library.scan().states] == [refit.state_id(world.make_slot())]
+    assert [state.id for state in library.scan().states] == [state_id(world.make_slot())]
 
 
 # ---- what it keeps and records ----------------------------------------------------------------------------

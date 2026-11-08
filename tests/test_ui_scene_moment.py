@@ -1,6 +1,6 @@
 """The save-state strip on the real page (round 9, item 5): the fixture's Ghost Lab, the lab's real routes, a
-stand-in builder and a fake game (test_handoff_try.FakeGame), which the strip reads its nine slots from too. Nothing
-attaches to a process. A tile or the key N saves the frame on screen in slot N; the line under the tiles says what
+stand-in builder and a fake game (test_handoff_try.FakeGame). Nothing attaches to a process (the strip's star sets
+are test_ui_scene_slot_sets.py's). A tile or the key N saves the frame on screen in slot N; the line under the tiles says what
 happened. The strip at both supported widths, with the longest sentence the lab says.
 """
 import sys
@@ -52,7 +52,6 @@ def _rigged(game, tmp_path, answers):
         lab.moments._source = source
         lab.moments.builder = builder
         lab.moments.game = lambda: game
-        lab.moments.slots.game = lambda: game              # the strip reads the same game
         lab.moments.library = SlotLibrary(tmp_path / "slot-library")
         lab.moments.backups = tmp_path / "slot-backups"
     return rig
@@ -82,8 +81,6 @@ def _walk_the_row(page, base, game, answers, folder) -> None:
     address = fakes.slots.slot_address(8) - 0x80000000
     assert bytes(game.ram[address:address + fakes.slots.SLOT_BYTES]) == moments_test.slot_bytes()
     assert answers["frames"] == [1]
-    page.wait_for_function(f"document.querySelector(\"{ROW} .ghost-lab-slot[data-slot='9']\").classList.contains('is-saved')",
-                           timeout=20000)                   # the strip read the game again: slot 9 holds it
     fakes.set_mario(game)                      # a practice reset moved Mario: the write moves him in the slot too
     page.keyboard.press("ArrowRight")
     page.wait_for_function(f"!document.querySelector({STATUS!r}).textContent.includes('is in slot 9')")   # it left with its frame
@@ -174,7 +171,7 @@ def test_a_save_state_written_into_the_other_versions_game_shows_its_flag_and_sa
 
     def crossed(app, lab, seen):
         rig(app, lab, seen)
-        lab.moments._write_blocking = lambda entry, slot: {
+        lab.moments._write_blocking = lambda entry, slot, *_set: {
             "written": True, "slot": slot, "frame": 7, "backup": "b.bin", "kept": None, "build": "us",
             "translated": {"from": "us", "to": "jp", "words": said["words"], "removed": 0}}
     folder = Path(tmp_path) / "shots"

@@ -26,6 +26,7 @@ is never a journal event.
 """
 from __future__ import annotations
 
+import functools
 import logging
 import threading
 import time
@@ -34,8 +35,9 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
+from sm64_events.slotlibrary.keeper import SetKeeper, SlotLedger
 from sm64_events.slotlibrary.relocate import Ambiguous, to_live_place
-from sm64_events.slotlibrary.store import Damaged, SlotLibrary, state_id
+from sm64_events.slotlibrary.store import Damaged, SlotLibrary
 from sm64_events.slotlibrary.usamune import (
     SLOT_COUNT,
     Build,
@@ -47,6 +49,7 @@ from sm64_events.slotlibrary.usamune import (
     is_occupied,
     live_facts,
     slot_facts,
+    with_live_clocks,
     write_slot_bytes,
 )
 from sm64_events.slotlibrary.watcher import keep, read_slot
@@ -62,6 +65,7 @@ SETTLE_SECONDS = 0.25        # quiet after the last spawn event: one reset's eve
 STEADY_SECONDS = 0.05        # Mario's place must read the same across this gap
 STEADY_TRIES = 20            # about a second of an unsettled game before the pass gives up
 IDLE = ("idle",)             # _quiet's answer when a pass already took every trigger
+WATCH_SECONDS = 0.5          # how often the slots are read for his new saves (nine slots: about 5 ms a read)
 LOG_NAME = "slot_refit.jsonl"
 LOG_MAX_RECORDS, LOG_TRIM_ABOVE_BYTES = 2000, 500_000
 
@@ -82,18 +86,23 @@ class RefitReport:
     originals: tuple[tuple[int, bytes], ...] = field(default=(), repr=False)   # bytes before each attempted write
     written: tuple[tuple[int, bytes], ...] = field(default=(), repr=False)     # bytes each refit slot now holds
     build: Build | None = field(default=None, repr=False)                      # the running game's, when it ran
+    trainers: tuple[int, ...] = field(default=(), repr=False)   # slots whose bytes before the write were the Trainer's
 
     def count(self, outcome: str) -> int:
         return sum(1 for slot in self.slots if slot.outcome == outcome)
 
 
-def refit_slots(memory: GameMemory) -> RefitReport:
+def refit_slots(memory: GameMemory, ledger: SlotLedger | None = None) -> RefitReport:
     """One pass over the nine slots. Writes only slots made for the game's current level and area whose Mario sits
-    elsewhere; stops at a Mario that moves during a write, because every later slot would be made for the old place."""
+    elsewhere; stops at a Mario that moves during a write, because every later slot would be made for the old place.
+    ledger: what the Trainer itself wrote into each slot; a refit slot keeps its kept state there, as new bytes."""
+    ledger = ledger if ledger is not None else SlotLedger()
+    trainers: list[int] = []
     try:
         build = check_cartridge(memory)
     except Refusal as refused:
         return RefitReport(not_ready=str(refused))
+    ledger.use_build(build.version)
     live = live_facts(memory, build)
     if live.mario_object == 0:
         return RefitReport(live.level, live.area, not_ready="Mario is not in a level")
@@ -116,7 +125,7 @@ def refit_slots(memory: GameMemory) -> RefitReport:
             outcomes.append(SlotOutcome(index, ALREADY_FIT))
             continue
         try:
-            fitted = to_live_place(memory, data, build)
+            fitted = with_live_clocks(memory, build, to_live_place(memory, data, build))
         except Refusal as refused:
             log.debug("slot refit: slot %d refused: %s", index, refused)
             outcomes.append(SlotOutcome(index, REFUSED, UNCLEAR if isinstance(refused, Ambiguous) else GAME))
@@ -125,20 +134,34 @@ def refit_slots(memory: GameMemory) -> RefitReport:
             outcomes.append(SlotOutcome(index, CHANGED))
             continue
         originals.append((index, data))
-        try:
-            write_slot_bytes(memory, build, index, fitted, mario_place=live.mario_object)
-        except MarioMoved as moved:
-            log.debug("slot refit: %s", moved)
-            outcomes.append(SlotOutcome(index, REFUSED, MOVED))
+        if ledger.ours(index, data):
+            trainers.append(index)
+        outcome = _write_fitted(memory, build, index, data, fitted, live.mario_object, ledger)
+        outcomes.append(outcome)
+        if outcome.outcome == REFIT:
+            written.append((index, fitted))
+        elif outcome.why == MOVED:
             break
-        except WriteFailed as failed:
-            log.debug("slot refit: %s", failed)
-            outcomes.append(SlotOutcome(index, REFUSED, WRITE))
-            continue
-        outcomes.append(SlotOutcome(index, REFIT))
-        written.append((index, fitted))
     return RefitReport(live.level, live.area, tuple(outcomes), originals=tuple(originals), written=tuple(written),
-                       build=build)
+                       build=build, trainers=tuple(trainers))
+
+
+def _write_fitted(memory: GameMemory, build: Build, index: int, original: bytes, fitted: bytes, mario: int,
+                  ledger: SlotLedger) -> SlotOutcome:
+    """One refit write; the ledger follows: the slot keeps its kept state as new bytes, or is forgotten."""
+    kept_state = ledger.state_in(index, original)
+    try:
+        write_slot_bytes(memory, build, index, fitted, mario_place=mario)
+    except MarioMoved as moved:
+        log.debug("slot refit: %s", moved)
+        ledger.forget(index)
+        return SlotOutcome(index, REFUSED, MOVED)
+    except WriteFailed as failed:
+        log.debug("slot refit: %s", failed)
+        ledger.forget(index)
+        return SlotOutcome(index, REFUSED, WRITE)
+    ledger.wrote(index, kept_state, fitted)
+    return SlotOutcome(index, REFIT)
 
 
 def log_path() -> Path:
@@ -171,15 +194,18 @@ def describe(report: RefitReport) -> str:
 class SlotRefitter:
     """The spawn trigger: `observe` is the broadcaster's observer, `start`/`stop` own the one worker thread.
 
-    game() attaches a reader of the worker's own; library may be None (nothing is kept). Tests pass a clock-free
-    short settle and call `run_once` directly."""
+    game() attaches a reader of the worker's own; library may be None (nothing is kept). With a keeper
+    (keeper.SetKeeper) the same thread also writes a star set when the context changes, before the refit, and
+    watches the slots every `watch_seconds` for his new saves; everything it does to the game runs under the
+    keeper's lock. Tests pass a clock-free short settle and call `run_once` and `watch_once` directly."""
 
     def __init__(self, game: Callable[[], GameMemory], library: SlotLibrary | None, *, log_file: Path | None = None,
                  settle_seconds: float = SETTLE_SECONDS, steady_seconds: float = STEADY_SECONDS,
-                 on_report: Callable[[RefitReport], None] | None = None):
+                 on_report: Callable[[RefitReport], None] | None = None, keeper: SetKeeper | None = None,
+                 watch_seconds: float = WATCH_SECONDS):
         self.game, self.library, self.log_file = game, library, log_file
         self.settle_seconds, self.steady_seconds = settle_seconds, steady_seconds
-        self.on_report = on_report
+        self.on_report, self.keeper, self.watch_seconds = on_report, keeper, watch_seconds
         self.passes = 0
         self._lock = threading.Lock()
         self._due: float | None = None
@@ -189,18 +215,27 @@ class SlotRefitter:
         self._stopping = threading.Event()
         self._thread: threading.Thread | None = None
         self._memory: GameMemory | None = None
-        self._wrote: dict[int, str] = {}        # slot -> id of the bytes this refitter last wrote there
+        self._own_ledger = SlotLedger()          # without a keeper: what this refitter itself wrote
+
+    @property
+    def ledger(self) -> SlotLedger:
+        return self.keeper.ledger if self.keeper is not None else self._own_ledger
 
     def observe(self, event) -> None:
-        """Bounded work on the event loop: stamp the deadline and wake the worker."""
+        """Bounded work on the event loop: stamp the deadline and wake the worker. A star pick or grab counts too,
+        when there is a keeper: it may change which star set belongs in the slots."""
         kind = getattr(event, "type", None)
-        if kind not in TRIGGERS:
+        if kind not in TRIGGERS and not (self.keeper is not None and self.keeper.observe(event)):
             return
+        self.poke(kind, getattr(event, "frame", None))
+
+    def poke(self, kind: str = "edit", frame: int | None = None) -> None:
+        """A pass soon: after a spawn, a star pick, or an edit of the sets."""
         with self._lock:
             self._due = time.monotonic() + self.settle_seconds
             if kind not in self._triggers:
                 self._triggers.append(kind)
-            self._frame = getattr(event, "frame", None)
+            self._frame = frame
         self._wake.set()
 
     def start(self) -> None:
@@ -217,18 +252,24 @@ class SlotRefitter:
 
     def _run(self) -> None:
         while not self._stopping.is_set():
-            self._wake.wait()
+            woken = self._wake.wait(self.watch_seconds if self.keeper is not None else None)
             self._wake.clear()
+            if not woken:
+                self._try(self.watch_once, "The slot watch failed; it tries again.")
+                continue
             taken = self._quiet()
             if taken is None:
                 return
             if taken is IDLE:
                 continue
-            try:
-                self.run_once(*taken)
-            except Exception:  # noqa: BLE001 - a refit never costs tracking; the next spawn tries again
-                log.warning("Slot refit failed; the next spawn tries again.", exc_info=True)
-                self._drop_reader()
+            self._try(functools.partial(self.run_once, *taken), "Slot refit failed; the next spawn tries again.")
+
+    def _try(self, work: Callable[[], object], words: str) -> None:
+        try:
+            work()
+        except Exception:  # noqa: BLE001 - a slot pass never costs tracking; the next one tries again
+            log.warning(words, exc_info=True)
+            self._drop_reader()
 
     def _quiet(self):
         """Waits until no trigger came for settle_seconds: the (triggers, frame) it coalesced, IDLE when a pass
@@ -251,6 +292,9 @@ class SlotRefitter:
                 self._memory = self.game()
             except Refusal:
                 return None
+            if self.keeper is not None:
+                with self.keeper.lock:
+                    self.keeper.forget_game()     # a new reader may be a new game: take stock again
         return self._memory
 
     def _drop_reader(self) -> None:
@@ -275,7 +319,22 @@ class SlotRefitter:
             return RefitReport(not_ready=str(refused))
         if not self._steady(memory, build):
             return RefitReport(not_ready="the game did not settle after the spawn")
-        return refit_slots(memory)
+        if self.keeper is None:
+            return refit_slots(memory, self.ledger)
+        with self.keeper.lock:
+            self.keeper.apply(memory)
+            return refit_slots(memory, self.ledger)
+
+    def watch_once(self) -> list:
+        """His new saves into the current star set (keeper.SetKeeper.watch); nothing without a keeper or a game."""
+        memory = self._reader()
+        if self.keeper is None or memory is None:
+            return []
+        try:
+            with self.keeper.lock:
+                return self.keeper.watch(memory)
+        except Refusal:
+            return []
 
     def run_once(self, triggers: tuple[str, ...] = (), frame: int | None = None) -> RefitReport:
         started = time.perf_counter()
@@ -298,17 +357,20 @@ class SlotRefitter:
         return report
 
     def _keep_originals(self, memory: GameMemory, report: RefitReport) -> int:
-        """His saves, before their first refit, into the library. Bytes this refitter wrote are a move of a state
-        already kept, so they are skipped: a reset adds no file."""
+        """His saves, before their first refit, into the library. Bytes the Trainer wrote are a move of a state
+        already kept, so they are skipped: a reset adds no file. A kept save stays the state its slot holds."""
         kept = 0
         if self.library is not None and report.build is not None:
+            fitted = dict(report.written)
             for index, data in report.originals:
-                if self._wrote.get(index) == state_id(data):
+                if index in report.trainers:
                     continue
                 try:
-                    kept += keep(memory, self.library, data, report.build)[1]
+                    state, is_new = keep(memory, self.library, data, report.build)
                 except (Refusal, OSError, Damaged) as error:
                     log.warning("slot refit: slot %d was not kept: %s", index, error)
-        for index, data in report.written:
-            self._wrote[index] = state_id(data)
+                    continue
+                kept += is_new
+                if index in fitted:
+                    self.ledger.wrote(index, state.id, fitted[index])
         return kept

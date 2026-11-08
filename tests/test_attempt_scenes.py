@@ -403,10 +403,8 @@ def test_main_feeds_the_lab_from_its_own_tracker_only(monkeypatch, lab):
     app = main._mount_scene_lab(FastAPI(), tracker=tracker)
     assert app.state.scene_lab.live_on and tracker.on_replay_history is not replay_hook
     refitter = app.state.scene_lab.refitter
-    slots = app.state.scene_lab.moments.slots                       # the Ghost Lab's save-state strip (scene_slots.py)
     assert refitter is not None and tracker.broadcaster._observers == {app.state.scene_lab.scenes.observe_event,
-                                                                       refitter.observe, slots.observe_event}
-    assert refitter.on_report == slots.observe_refit
+                                                                       refitter.observe}
     fixture_app = main._mount_scene_lab(FastAPI())                   # the UI fixture: the viewer alone
     assert not fixture_app.state.scene_lab.live_on and fixture_app.state.scene_lab.refitter is None
 
