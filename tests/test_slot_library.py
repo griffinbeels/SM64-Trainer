@@ -98,6 +98,8 @@ def make_slot(fill: int, *, mario: int = MARIO, level: int = LEVEL, area: int = 
     data = bytearray(bytes([fill]) * usamune.SLOT_BYTES)
     struct.pack_into(">I", data, usamune.TRAILER_MARIO, mario)
     struct.pack_into(">hh", data, usamune.TRAILER_LEVEL, level, area)
+    for at in (0x26420, 0x26424, 0x26440):     # the session clocks (trailer +0x100, +0x104, +0x120): the game's
+        data[at:at + 4] = bytes(4)
     return bytes(data)
 
 

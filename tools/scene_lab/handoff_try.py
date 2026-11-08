@@ -50,6 +50,7 @@ from sm64_events.slotlibrary.usamune import (  # noqa: E402
     routine_fingerprint,
     same_segments,
     slot_range,
+    with_live_clocks,
     write_slot_bytes,
 )
 
@@ -221,6 +222,7 @@ def install(memory: GameMemory, image: SlotImage, folder: Path, *, dry_run: bool
     build = check_cartridge(memory)
     image, translation = for_running_build(memory, image, build, atlases)
     image = at_live_place(memory, image, build)
+    image = replace(image, data=with_live_clocks(memory, build, image.data))   # his session clocks stay his
     check_game_matches(memory, image, build)
     if write_seed and image.seed is None:
         raise Refusal("this slot image carries no seed")
@@ -239,8 +241,8 @@ def restore(memory: GameMemory, path: Path, folder: Path, *, dry_run: bool) -> P
     if routine_fingerprint(memory.read, build) != meta["fingerprint"]:
         raise Refusal("this backup came from another Usamune build")
     undo = save_backup(memory, build, meta["slot"], folder, f"before restoring {path.name}")
-    if not dry_run:
-        write_slot_bytes(memory, build, meta["slot"], data, mario_place=None)   # a backup goes back exactly as it was
+    if not dry_run:   # a backup goes back as it was, except his session clocks, which stay the running game's
+        write_slot_bytes(memory, build, meta["slot"], with_live_clocks(memory, build, data), mario_place=None)
     return undo
 
 

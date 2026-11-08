@@ -44,6 +44,7 @@ class Build:
     current_area_pointer: int
     segment_table: int
     second_camera_focus: int
+    settings: int                # Usamune's own state block; part of it rides in each slot's trailer
 
     @property
     def rom(self) -> str:
@@ -54,7 +55,7 @@ _LAYOUT_FIELDS = {"save": "usamune_slot_save", "load": "usamune_slot_load", "slo
                   "body_start": "mario_struct", "object_pool": "object_pool", "mario_object": "mario_object",
                   "curr_level": "curr_level", "curr_area": "curr_area",
                   "current_area_pointer": "current_area_pointer", "segment_table": "segment_table",
-                  "second_camera_focus": "second_camera_focus"}
+                  "second_camera_focus": "second_camera_focus", "settings": "usamune_state_start"}
 
 
 @cache
@@ -82,6 +83,14 @@ OS_MEM_SIZE, EXPANSION_BYTES = 0x80000318, 0x800000
 SEGMENT_BYTES = 64
 SEGMENT_OF_GFX_POOL = 1              # alternates every frame, so it cannot identify a level
 LEVEL_RANGE, AREA_RANGE = range(1, 39), range(1, 9)
+# Usamune's save copies part of its own state block (Build.settings) into the trailer, and its load puts it back
+# (read off both builds' save and load code; a cold boot of each confirms the three below, 2026-11-08). Three of
+# those words are the session's own clocks: settings +0x90 and +0x94 (since power-on, 60 a second) and +0xEC (the
+# game time his pause screen shows, 30 a second). A slot saved in another session, the other game or a recording
+# carries that session's clocks: his JP state set a one-hour-old US game's clock to 11h25 ("it looks like the overall
+# usamune timer is messed up ... we shouldn't copy over the overall session timer clock", 2026-11-08). Every write
+# of the Trainer's keeps the running game's clocks in those words (`with_live_clocks`).
+SESSION_CLOCKS = ((0x90, BODY_BYTES + 0x100), (0x94, BODY_BYTES + 0x104), (0xEC, BODY_BYTES + 0x120))
 # Where any build keeps the body, for checking a slot's own bytes before anyone says which build made them.
 _BODIES = tuple(layout_for(version).mario_struct for version in VERSIONS if layout_for(version).mario_struct)
 
@@ -188,6 +197,15 @@ def live_facts(memory: GameMemory, build: Build) -> SlotFacts:
     return SlotFacts(int.from_bytes(memory.read(build.mario_object, 4), "big"),
                      struct.unpack(">h", memory.read(build.curr_level, 2))[0],
                      struct.unpack(">h", memory.read(build.curr_area, 2))[0])
+
+
+def with_live_clocks(memory: GameMemory, build: Build, data: bytes) -> bytes:
+    """The slot's bytes with the running game's session clocks in its trailer, so loading it leaves his clocks as
+    they are (at most rolled back to this write, as with a save of his own)."""
+    out = bytearray(data)
+    for field, at in SESSION_CLOCKS:
+        out[at:at + 4] = memory.read(build.settings + field, 4)
+    return bytes(out)
 
 
 def same_segments(live: bytes, recorded: bytes) -> bool:

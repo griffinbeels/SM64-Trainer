@@ -47,6 +47,7 @@ from sm64_events.slotlibrary.usamune import (
     is_occupied,
     live_facts,
     slot_facts,
+    with_live_clocks,
     write_slot_bytes,
 )
 from sm64_events.slotlibrary.watcher import keep, read_slot
@@ -116,7 +117,7 @@ def refit_slots(memory: GameMemory) -> RefitReport:
             outcomes.append(SlotOutcome(index, ALREADY_FIT))
             continue
         try:
-            fitted = to_live_place(memory, data, build)
+            fitted = with_live_clocks(memory, build, to_live_place(memory, data, build))
         except Refusal as refused:
             log.debug("slot refit: slot %d refused: %s", index, refused)
             outcomes.append(SlotOutcome(index, REFUSED, UNCLEAR if isinstance(refused, Ambiguous) else GAME))
