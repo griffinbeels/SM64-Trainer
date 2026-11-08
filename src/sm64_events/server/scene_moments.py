@@ -110,6 +110,7 @@ class SceneMoments:
         self.turn = asyncio.Lock()
         self.child: subprocess.Popen | None = None
         self.child_lock = threading.Lock()
+        self.checks: dict[str, bool] = {}          # package path -> its frames need the load check
 
     def _note_child(self, child) -> None:
         with self.child_lock:
@@ -150,6 +151,7 @@ class SceneMoments:
         allowed = await asyncio.to_thread(self.lab.resim.allows, info, body.frame)
         if not allowed["allowed"]:
             raise api.SceneRefused(allowed["reason"])
+        self.checks[str(path)] = allowed.get("check") == "load"
         return path, "Ghost"
 
     async def build(self, body: MomentBody) -> dict:
@@ -170,6 +172,11 @@ class SceneMoments:
             answer, data = await asyncio.to_thread(self.builder, config, path, body.frame, self._note_child)
             if data is None:
                 return answer
+            if body.ghost is not None and self.checks.get(str(path)):     # a rebuilt start: load it in the simulation first
+                verdict = await asyncio.to_thread(self.lab.resim.check_slot_blocking, body.ghost, path, body.frame, data)
+                if not verdict["ok"]:
+                    return {"refused": "check", "reason": verdict["reason"]}
+                answer = {**answer, "checked": {"frames": verdict["frames"], "compared": verdict["compared"]}}
             token = uuid.uuid4().hex
             answer = {**answer, "id": token, "exact": not answer.get("worked_out", False)}
             self.built[token] = {"answer": answer, "data": data, "source": f"{title} frame {body.frame}"}

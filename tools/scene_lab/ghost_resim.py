@@ -41,6 +41,7 @@ import frame_sim as sim  # noqa: E402
 import package  # noqa: E402
 import sim_scene  # noqa: E402
 import stage_sim  # noqa: E402
+import start_check  # noqa: E402
 
 from sm64_events.ghost import start_frame  # noqa: E402
 from sm64_events.ghost.clip import decode_clip  # noqa: E402
@@ -48,12 +49,20 @@ from sm64_events.ghost.native_layout import POSE_AT, VALID_POSE  # noqa: E402
 
 RESIM_VERSION = 2                    # 2: every frame shown (VI registers) at the game's 30 fps
 GHOST_START, OWN_SCENE, ANOTHER_RESET, SIMULATED_RESET = "ghost_start", "own_scene", "another_reset", "simulated_reset"
-STARTS = (GHOST_START, OWN_SCENE, ANOTHER_RESET, SIMULATED_RESET)
+DOWNLOADED_START = "downloaded_start"     # a start that came with someone else's ghost: checked, never trusted
+STARTS = (GHOST_START, DOWNLOADED_START, OWN_SCENE, ANOTHER_RESET, SIMULATED_RESET)
 # THE switch for the Save states row of a re-simulated scene. Griffin decides (2026-11-08: Mario is exact
 # from a reset, moving platforms are at another phase). True: every frame; "before parting": frames
 # before the first parting frame only; False: none.
-SAVE_STATES = {GHOST_START: True, OWN_SCENE: True, ANOTHER_RESET: False, SIMULATED_RESET: False}
-EXACT = {GHOST_START: "bytes", OWN_SCENE: "bytes", ANOTHER_RESET: "mario", SIMULATED_RESET: "mario"}
+# "checked" (his decision 2026-11-08, "As long as it works with the system without breaking anything, then it's
+# fine"): frames before the first parting frame only, and each slot first passes LOAD_CHECK_FRAMES of a load
+# check in the simulation (check_slot_load).
+SAVE_STATES = {GHOST_START: True, OWN_SCENE: True, DOWNLOADED_START: "checked", ANOTHER_RESET: "checked",
+               SIMULATED_RESET: "checked"}
+EXACT = {GHOST_START: "bytes", OWN_SCENE: "bytes", DOWNLOADED_START: "objects", ANOTHER_RESET: "mario",
+         SIMULATED_RESET: "mario"}
+LOAD_CHECK_FRAMES = 60
+LOAD_INDEX = 3                       # the simulated slot a load check uses (the running game is never touched)
 GAME_TIMER, AREA_COUNTER, MARIO_OBJECT = "gGlobalTimer", "gAreaUpdateCounter", stage_sim.MARIO_OBJECT   # map names
 POSE_ACTION = POSE_AT + 40           # gc_pose: position[3], scale[3], angles[3], 3 animation s16, 2 u16, action
 GFX_POS = 0x20                       # an object's header.gfx.pos: where the game draws it
@@ -64,10 +73,11 @@ def save_states(start: str, frame: int | None = None, parting: int | None = None
     rule = SAVE_STATES.get(start, False)
     if rule is True:
         return {"allowed": True, "reason": None}
-    if rule == "before parting":
+    if rule in ("before parting", "checked"):
         if frame is None or parting is None or frame < parting:
-            return {"allowed": True, "reason": None, "until": parting}
-        return {"allowed": False, "reason": "The simulated run parts from the ghost before this frame."}
+            return {"allowed": True, "reason": None, "until": parting, "check": "load" if rule == "checked" else None}
+        return {"allowed": False, "reason": "From this frame on the rebuilt run no longer matches the ghost, "
+                "so it makes no save state."}
     return {"allowed": False, "reason": "This stage was rebuilt from a practice reset: Mario is exact, but moving "
             "platforms and enemies may be at another point in their cycle, so it makes no save states."}
 
@@ -173,6 +183,7 @@ class GhostScenes:
         self.symbols, self.rom_path = stages.symbols, stages.rom_path
         self.locks: dict[str, threading.Lock] = {}
         self.probes: dict[str, dict] = {}
+        self.refusals: list = []
         self.guard = threading.Lock()
 
     # ---------------------------------------------------------------- scenes he recorded
@@ -222,6 +233,9 @@ class GhostScenes:
                 saved = None
             if saved is not None:
                 yield self._from_start_file(saved, clip_sha)
+            downloaded = self._downloaded(clip, clip_sha)
+            if downloaded is not None:
+                yield downloaded
         resets = []
         for path, stamp, words in self._scenes():
             if words_match(words, clip):
@@ -241,6 +255,40 @@ class GhostScenes:
             detail["act_assumed"] = True
         yield Start(SIMULATED_RESET, lambda: self._with_clocks(self.stages.reset(first.level, first.area, chosen).copy(), first),
                     f"{SIMULATED_RESET}:{self.stages.key(first.level, first.area, chosen)}", detail)
+
+    def _downloaded(self, clip, clip_sha: str) -> Start | None:
+        """A start that came with someone else's ghost (start_frame.accept_start_blob kept it apart), once it
+        passes every check: its format and binding again, this ROM and Usamune build, then start_check over
+        the state it would make. Its main-pool changes are never applied (start_check.py says why). A start
+        that fails is skipped; its sentence goes to the scene's refused starts."""
+        try:
+            saved = start_frame.read_start(self.starts_dir, clip_sha, downloaded=True)
+            if saved is None:
+                return None
+            start_frame.bind(saved, clip.frames[0])
+        except start_frame.StartError as error:
+            self.refusals.append({"start": DOWNLOADED_START, "reason": str(error)})
+            return None
+        if saved.rom_sha256 != hashlib.sha256(self.stages.rom).hexdigest():
+            self.refusals.append({"start": DOWNLOADED_START, "reason": "This ghost's start was made on another ROM."})
+            return None
+        if saved.usamune_fingerprint != self.stages.fingerprint():
+            self.refusals.append({"start": DOWNLOADED_START, "reason": "This ghost's start was made on another Usamune build."})
+            return None
+        try:
+            reference = self.stages.reset(saved.level, saved.area, saved.act)
+        except stage_sim.StageError as error:
+            self.refusals.append({"start": DOWNLOADED_START, "reason": str(error)})
+            return None
+        ram = reference.copy()
+        for begin, data in saved.regions:
+            ram[begin:begin + len(data)] = np.frombuffer(data, np.uint8)
+        reasons = start_check.check_state(ram, self.stages.reference(saved.level, saved.area, saved.act),
+                                          start_frame.allowed_spans(saved.game_version))
+        if reasons:
+            self.refusals.append({"start": DOWNLOADED_START, "reason": reasons[0], "more": len(reasons) - 1})
+            return None
+        return Start(DOWNLOADED_START, ram, f"{DOWNLOADED_START}:{clip_sha}:{saved.made_utc}", {"exact": "objects"})
 
     def _from_start_file(self, saved: start_frame.StartFrame, clip_sha: str) -> Start:
         """Regions over the simulated reset of its level, area and act; its pool delta too when that reset
@@ -275,7 +323,7 @@ class GhostScenes:
         exact = self._cached_exact(clip_sha)
         if exact is not None:
             return exact
-        refused = []
+        refused = self.refusals = []
         for started in self.starts(clip, clip_sha, act):
             key = hashlib.sha256(f"{RESIM_VERSION}|{clip_sha}|{started.identity}".encode()).hexdigest()[:20]
             out = self.cache / f"ghost-{clip_sha[:16]}-{started.kind}-{key}.sm64scene"
@@ -352,7 +400,7 @@ class GhostScenes:
             writer.abandon()
             raise
         return {"version": RESIM_VERSION, "ghost_sha256": clip_sha, "start": started.kind, "start_detail": started.detail,
-                "exact": EXACT[started.kind] if started.kind != GHOST_START else started.detail["exact"],
+                "exact": started.detail.get("exact") or EXACT[started.kind],
                 "records": len(clip.frames), "first_record": 1, "parting_frame": parting,
                 "parting_global_timer": clip.frames[parting].global_timer if parting is not None else None,
                 "poses_compared": compared, "mario_farthest_units": farthest,
@@ -371,8 +419,10 @@ def capture_start(scene_path: Path, clip_bytes: bytes, starts_dir: Path, stages:
         return None
     act = act_of(regions, symbols) or 1
     first = clip.frames[0]
-    saved = start_frame.StartFrame(clip_sha, first.global_timer, first.level, first.area, act,
-                                   [(begin, data.tobytes()) for begin, data in regions])
+    saved = start_frame.StartFrame(clip_sha, "us", first.global_timer, first.area_update_counter, first.level,
+                                   first.area, act, [(begin, data.tobytes()) for begin, data in regions],
+                                   hashlib.sha256(Path(rom_path).read_bytes()).hexdigest(),
+                                   stages.fingerprint() if stages is not None else "0" * 64)
     if stages is not None:
         try:
             base = stages.reset(first.level, first.area, act)
@@ -391,6 +441,55 @@ def capture_start(scene_path: Path, clip_bytes: bytes, starts_dir: Path, stages:
     return start_frame.write_start(starts_dir, saved)
 
 
+# ---------------------------------------------------------------- the load check
+def check_slot_load(package_path: Path, frame: int, slot: bytes, clip, stages: stage_sim.Stages,
+                    first_record: int = 1) -> dict:
+    """Does a save state built at this package frame load and play on? In the simulation only: the scene's
+    state at that frame, the slot written into a simulated slot, Usamune's own load at its own call site on
+    the next frame, then the ghost's pads for LOAD_CHECK_FRAMES frames. It passes when nothing stops the
+    game and Mario stands where the ghost's recorded pose has him on every frame the ghost covers.
+    {"ok": bool, "reason": sentence or None, "frames": played, "compared": poses compared}."""
+    import handoff_slot  # noqa: PLC0415 - Usamune's own load at its own site
+    from sm64_events.slotlibrary.usamune import BODY_BYTES, slot_address  # noqa: PLC0415
+    reasons = start_check.check_slot(slot, stages.reference_for_slot(slot), BODY_BYTES)
+    if reasons:
+        return {"ok": False, "reason": reasons[0], "frames": 0, "compared": 0}
+    pkg = package.open_package(package_path, stages.rom_path)
+    _fields, _extras, spans, level, _known = pkg.scene_regions(frame)
+    ram = stages.boot()[0].copy()
+    for begin, data in spans:
+        if len(data) != sim.TAIL_BYTES:
+            ram[begin:begin + len(data)] = sim.be32(bytes(data))
+    ram[sim.POOL_BEGIN:sim.POOL_BEGIN + sim.POOL_BYTES] = sim.be32(bytes(level[sim.POOL_BEGIN:sim.POOL_BEGIN + sim.POOL_BYTES]))
+    low = sim.phys(slot_address(LOAD_INDEX))
+    ram[low:low + len(slot)] = np.frombuffer(slot, np.uint8)
+    _base, fcsr = stages.boot()
+    machine = stage_sim.Machine(ram, stages.rom, stages.symbols, fcsr, cpu_class=handoff_slot.SlotCpu)
+    cpu = machine.cpu
+    template = ram[sim.phys(stages.symbols["gControllerPads"]):sim.phys(stages.symbols["gControllerPads"]) + 24].tobytes()
+    record = frame + first_record
+    records = clip.frames
+    cpu.pending = lambda: cpu.load_slot(LOAD_INDEX)
+    played = compared = 0
+    try:
+        machine.step(pads_of(records[record], template))       # the frame Usamune's load runs in
+        for index in range(record + 1, record + 1 + LOAD_CHECK_FRAMES):
+            covered = index < len(records)
+            machine.step(pads_of(records[index], template) if covered else stage_sim.pads(0, 0, 0, template))
+            played += 1
+            pose = pose_of(records[index]) if covered else None
+            if pose is not None:
+                compared += 1
+                position, action = sim_mario(machine.ram, stages.symbols)
+                if action != pose[1] or not np.array_equal(position, pose[0]):
+                    return {"ok": False, "frames": played, "compared": compared,
+                            "reason": "After this save state loads, Mario does not go on the way the ghost did."}
+    except stage_sim.StageError:
+        return {"ok": False, "frames": played, "compared": compared,
+                "reason": "The game stopped after this save state loaded, so it is not offered."}
+    return {"ok": True, "reason": None, "frames": played, "compared": compared}
+
+
 # ---------------------------------------------------------------- the server's child (scene_resim.py)
 def main(argv=None) -> int:
     """One build in a child of its own, so the server's interpreter never runs the simulation: prints one
@@ -398,7 +497,7 @@ def main(argv=None) -> int:
     import argparse  # noqa: PLC0415
 
     parser = argparse.ArgumentParser(description="Ghost Handoff re-simulation: one build, one JSON line.")
-    parser.add_argument("command", choices=("build", "stage", "capture"))
+    parser.add_argument("command", choices=("build", "stage", "capture", "check-slot"))
     parser.add_argument("--lab-root", required=True)
     parser.add_argument("--cache", required=True)
     parser.add_argument("--rom", required=True)
@@ -411,9 +510,14 @@ def main(argv=None) -> int:
     parser.add_argument("--course", type=int)
     parser.add_argument("--area", type=int, default=1)
     parser.add_argument("--frames", type=int, default=150)
+    parser.add_argument("--package")
+    parser.add_argument("--frame", type=int)
+    parser.add_argument("--slot")
+    parser.add_argument("--first-record", type=int, default=1)
     args = parser.parse_args(argv)
     symbols = sim.Symbols(Path(args.map))
-    stages = stage_sim.Stages(Path(args.lab_root), Path(args.cache) / "stages", rom_path=Path(args.rom), symbols=symbols)
+    stages = stage_sim.Stages(Path(args.lab_root), Path(args.cache) / "stages", rom_path=Path(args.rom), symbols=symbols,
+                              map_path=Path(args.map))
     try:
         if args.command == "build":
             scenes = GhostScenes(Path(args.lab_root), Path(args.cache), scenes_dir=Path(args.scenes) if args.scenes else None,
@@ -426,6 +530,9 @@ def main(argv=None) -> int:
                       "info": {"course": args.course, "level": level, "area": args.area, "act": act, "frames": args.frames,
                                "start": SIMULATED_RESET, "first_record": 0, "parting_frame": None,
                                "exact": EXACT[SIMULATED_RESET], "save_states": save_states(SIMULATED_RESET)}}
+        elif args.command == "check-slot":
+            answer = check_slot_load(Path(args.package), args.frame, Path(args.slot).read_bytes(),
+                                     decode_clip(Path(args.clip).read_bytes()), stages, args.first_record)
         else:
             written = capture_start(Path(args.scene), Path(args.clip).read_bytes(), Path(args.starts), stages,
                                     Path(args.rom), symbols)

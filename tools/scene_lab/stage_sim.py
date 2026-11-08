@@ -62,8 +62,8 @@ class Machine:
     """frame_sim's thread 5 over one RAM image; step(pads) runs a game frame to the scene tap's moment,
     two VIs a frame (a ghost records no VI count; only Usamune's lag counter can tell)."""
 
-    def __init__(self, ram: np.ndarray, rom: bytes, symbols: sim.Symbols, fcsr: int):
-        self.cpu = sim.GameCpu(ram, rom, symbols, fcsr)
+    def __init__(self, ram: np.ndarray, rom: bytes, symbols: sim.Symbols, fcsr: int, cpu_class=None):
+        self.cpu = (cpu_class or sim.GameCpu)(ram, rom, symbols, fcsr)
         self.symbols = symbols
         self.cpu.enter_resume(self.cpu.u32(symbols["sCurrentCmd"]))
         self.cpu.scheduler_model()
@@ -117,8 +117,10 @@ def find_painting(session: Path, symbols: sim.Symbols) -> int | None:
 
 
 class Stages:
-    def __init__(self, lab_root: Path, cache: Path, *, rom_path: Path | None = None, symbols: sim.Symbols | None = None):
-        config = lab_config() if rom_path is None or symbols is None else {}
+    def __init__(self, lab_root: Path, cache: Path, *, rom_path: Path | None = None, symbols: sim.Symbols | None = None,
+                 map_path: Path | None = None):
+        config = lab_config() if rom_path is None or symbols is None or map_path is None else {}
+        self.map_path = Path(map_path or config["map"])
         self.lab_root, self.cache = Path(lab_root), Path(cache)
         self.rom_path = Path(rom_path or config["rom"])
         self.rom = self.rom_path.read_bytes()
@@ -127,6 +129,7 @@ class Stages:
         self._painting: Painting | None = None
         self._boot: tuple[np.ndarray, int] | None = None
         self._vi: dict | None = None
+        self._references: dict = {}
 
     # ---------------------------------------------------------------- the castle and its painting
     def sessions(self) -> list[Path]:
@@ -214,6 +217,35 @@ class Stages:
     def key(self, level: int, area: int, act: int) -> str:
         painting = self.painting()
         return f"v{STAGE_VERSION}-{painting.session}-{painting.frame}-{level}-{area}-{act}"
+
+    def reference(self, level: int, area: int, act: int):
+        """What a start someone else made is checked against: this machine's own reset of that place
+        (start_check.Reference), made from his ROM."""
+        import start_check  # noqa: PLC0415
+        key = (level, area, act)
+        if key not in self._references:
+            self._references[key] = start_check.Reference.of(self.reset(level, area, act), self.symbols, self.map_path)
+        return self._references[key]
+
+    def reference_for_slot(self, slot: bytes):
+        """The reference for a slot's own level and area (its trailer) and act (its body)."""
+        from sm64_events.slotlibrary.usamune import TRAILER_AREA, TRAILER_LEVEL  # noqa: PLC0415
+        level, area = struct.unpack_from(">hh", slot, TRAILER_LEVEL)[0], struct.unpack_from(">h", slot, TRAILER_AREA)[0]
+        act_at = sim.phys(self.symbols["gCurrActNum"]) - sim.phys(self.symbols["gMarioStates"])
+        act = struct.unpack_from(">h", slot, act_at)[0] or 1
+        return self.reference(level, area, act)
+
+    def fingerprint(self) -> str:
+        """The Usamune build this lab runs, as its slots name it (slotlibrary/usamune.py)."""
+        import inspect  # noqa: PLC0415
+        from sm64_events.slotlibrary import usamune  # noqa: PLC0415
+        ram = self.boot()[0]
+
+        def read(address: int, size: int) -> bytes:
+            return ram[sim.phys(address):sim.phys(address) + size].tobytes()
+        if len(inspect.signature(usamune.routine_fingerprint).parameters) > 1:    # the build-aware form
+            return usamune.routine_fingerprint(read, usamune.build_for("us"))
+        return usamune.routine_fingerprint(read)
 
     def has_reset(self, level: int, area: int, act: int) -> bool:
         """Whether that reset is cached (made before), so asking for it costs a file read."""

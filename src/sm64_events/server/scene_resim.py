@@ -118,6 +118,20 @@ class SceneResim:
         loaded = self.lab._load_ghost(ref)
         return self.clip_scene_blocking(loaded["clip"], act=act)
 
+    def check_slot_blocking(self, ref, package: Path, frame: int, slot: bytes) -> dict:
+        """The Save states row's load check for one frame of a ghost's rebuilt scene (ghost_resim.check_slot_load):
+        {"ok", "reason", "frames", "compared"}. Run in the child; the running game is never touched."""
+        loaded = self.lab._load_ghost(ref)
+        config = self._config()
+        _path, info = self.clip_scene_blocking(loaded["clip"])
+        with tempfile.TemporaryDirectory(prefix="sm64-resim-") as folder:
+            clip_path, slot_path = Path(folder) / "ghost.clip", Path(folder) / "state.slot"
+            clip_path.write_bytes(loaded["clip"])
+            slot_path.write_bytes(slot)
+            return self.runner(["check-slot", *self._common(config), "--package", str(package), "--frame", str(frame),
+                                "--slot", str(slot_path), "--clip", str(clip_path),
+                                "--first-record", str(info.get("first_record", 1))])
+
     def clip_scene_blocking(self, clip: bytes, *, act: int | None = None) -> tuple[Path, dict]:
         config = self._config()
         with tempfile.TemporaryDirectory(prefix="sm64-resim-") as folder:

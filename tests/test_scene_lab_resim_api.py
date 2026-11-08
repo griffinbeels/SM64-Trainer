@@ -42,8 +42,8 @@ def recording(tmp_path_factory):
 class Runner:
     """ghost_resim.py's CLI as the server sees it: one answer per command, the arguments kept."""
 
-    def __init__(self, package: Path, start: str = "own_scene", refuse: str | None = None):
-        self.package, self.start, self.refuse = package, start, refuse
+    def __init__(self, package: Path, start: str = "own_scene", refuse: str | None = None, load_ok: bool = True):
+        self.package, self.start, self.refuse, self.load_ok = package, start, refuse, load_ok
         self.calls: list[list[str]] = []
         self.clips: list[bytes] = []
         self.done = threading.Event()
@@ -57,6 +57,9 @@ class Runner:
         if args[0] == "capture":
             self.done.set()
             return {"path": "start"}
+        if args[0] == "check-slot":
+            return {"ok": self.load_ok, "frames": 60, "compared": 60,
+                    "reason": None if self.load_ok else "After this save state loads, Mario does not go on the way the ghost did."}
         allowed = self.start in ("own_scene", "ghost_start")
         return {"path": str(self.package), "info": {
             "start": self.start, "parting_frame": 120 if not allowed else None, "first_record": 1, "exact": "bytes",
@@ -130,25 +133,40 @@ def test_a_ghost_the_simulation_refuses_says_why(recording, tmp_path, monkeypatc
         assert refused.status_code == 409 and "No start could run" in refused.json()["detail"]
 
 
-@pytest.mark.parametrize("start, allowed", [("simulated_reset", False), ("another_reset", False), ("own_scene", True)])
-def test_the_save_states_switch_holds_at_the_moment_route(recording, tmp_path, monkeypatch, start, allowed):
-    """A reset's scene makes no save state (ghost_resim.SAVE_STATES); his own scene's does."""
+@pytest.mark.parametrize("start, frame, load_ok, outcome", [
+    ("own_scene", 3, True, "written"),                    # his own scene: no check
+    ("simulated_reset", 3, True, "checked"),              # before the parting frame (120), and the load check passes
+    ("another_reset", 3, False, "check refused"),         # the load check fails: the row says why
+    ("simulated_reset", 119, True, "parted"),             # package frame 119 is record 120: the run parted there
+])
+def test_the_save_states_switch_holds_at_the_moment_route(recording, tmp_path, monkeypatch, start, frame, load_ok, outcome):
+    """His decision (2026-11-08): a rebuilt start makes save states before its parting frame, each after a load
+    check in the simulation (ghost_resim.SAVE_STATES); his own scene's need none."""
     built = []
 
     def builder(config, path, frame, register=lambda child: None):
         built.append((path, frame))
         return {"level": 24, "area": 1}, b"slot"
 
-    runner = Runner(recording["package"], start=start)
+    runner = Runner(recording["package"], start=start, load_ok=load_ok)
     app, _lab_ = _lab(recording, tmp_path, monkeypatch, runner, builder=builder)
     with TestClient(app) as client:
-        answer = client.post("/api/scene-lab/moment", json={"ghost": "ghost-1", "frame": 3})
-        if allowed:
-            assert answer.status_code == 200, answer.text
-            assert built == [(recording["package"], 3)]
-        else:
-            assert answer.status_code == 409 and "platforms" in answer.json()["detail"]
-            assert built == []
+        answer = client.post("/api/scene-lab/moment", json={"ghost": "ghost-1", "frame": frame})
+    checks = [args for args in runner.calls if args[0] == "check-slot"]
+    if outcome == "parted":
+        assert answer.status_code == 409 and "no longer matches the ghost" in answer.json()["detail"]
+        assert built == [] and checks == []
+        return
+    assert answer.status_code == 200, answer.text
+    assert built == [(recording["package"], frame)]
+    if outcome == "written":
+        assert checks == [] and "refused" not in answer.json()
+    elif outcome == "checked":
+        (args,) = checks
+        assert args[args.index("--frame") + 1] == str(frame) and args[args.index("--first-record") + 1] == "1"
+        assert answer.json()["checked"] == {"frames": 60, "compared": 60}
+    else:
+        assert answer.json() == {"refused": "check", "reason": "After this save state loads, Mario does not go on the way the ghost did."}
 
 
 def test_a_ready_scene_keeps_its_runs_start(recording, tmp_path, monkeypatch):

@@ -79,15 +79,17 @@ def test_a_recorded_pose_reads_position_and_action():
 
 
 def test_save_states_follow_the_one_switch(monkeypatch):
+    """His decision (2026-11-08): every start makes save states; a rebuilt or downloaded one only before its
+    parting frame, and only after each slot's load check."""
     for start in (gr.GHOST_START, gr.OWN_SCENE):
-        assert gr.save_states(start)["allowed"] is True
-    for start in (gr.ANOTHER_RESET, gr.SIMULATED_RESET):
-        refused = gr.save_states(start)
-        assert refused["allowed"] is False and "platforms" in refused["reason"]
-    monkeypatch.setitem(gr.SAVE_STATES, gr.SIMULATED_RESET, "before parting")
-    assert gr.save_states(gr.SIMULATED_RESET, frame=10, parting=20)["allowed"] is True
-    assert gr.save_states(gr.SIMULATED_RESET, frame=20, parting=20)["allowed"] is False
-    assert gr.save_states(gr.SIMULATED_RESET, frame=500, parting=None)["allowed"] is True
+        assert gr.save_states(start) == {"allowed": True, "reason": None}
+    for start in (gr.ANOTHER_RESET, gr.SIMULATED_RESET, gr.DOWNLOADED_START):
+        assert gr.save_states(start, frame=10, parting=20) == {"allowed": True, "reason": None, "until": 20, "check": "load"}
+        assert gr.save_states(start, frame=500, parting=None)["check"] == "load"
+        refused = gr.save_states(start, frame=20, parting=20)
+        assert refused["allowed"] is False and "no longer matches the ghost" in refused["reason"]
+    monkeypatch.setitem(gr.SAVE_STATES, gr.SIMULATED_RESET, False)
+    assert gr.save_states(gr.SIMULATED_RESET, frame=1, parting=None)["allowed"] is False
 
 
 def test_a_byte_exact_scene_already_made_is_the_answer(tmp_path):
