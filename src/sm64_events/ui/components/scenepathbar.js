@@ -25,6 +25,7 @@ import { useEffect } from "preact/hooks";
 import htm from "htm";
 import { getJSON, send } from "../api.js";
 import { Icon } from "./icons.js";
+import { ActionStep } from "./sceneactions.js";
 import { recordedTimes } from "./sceneclock.js";
 import { HOLD, MAX_KEYS, PLAY_SPEEDS, makeKey, orderedKeys, pathCamera, pathClock } from "./scenepath.js";
 
@@ -321,21 +322,25 @@ function KeyRow({ link, one, index, held, usable, count, jump, change, replace, 
 }
 
 // The Play speed: each game picture shows two or four times as long; slower than 1x plays silent
-// (scenepath.js soundPlays).
-function SpeedRow({ link }) {
+// (scenepath.js soundPlays). Beside it, the step to the next or previous action change.
+function PlayRow({ link }) {
   const speed = link.playSpeed || 1;
-  return html`<div class="scene-lab-bar scene-lab-path-play" role="group" aria-label="Play speed">
-    <span class="scene-lab-rigs-name">Play speed</span>
-    ${PLAY_SPEEDS.map((value) => html`<button type="button" key=${value} aria-pressed=${speed === value}
-        title=${value === 1 ? "Play at the recording's own speed, with its sound" : "Play slower, without sound"}
-        onclick=${() => setPlaySpeed(link, value)}>${SPEED_WORDS[value]}</button>`)}
+  return html`<div class="scene-lab-bar scene-lab-path-play">
+    <div class="scene-lab-path-speeds" role="group" aria-label="Play speed">
+      <span class="scene-lab-rigs-name">Play speed</span>
+      ${PLAY_SPEEDS.map((value) => html`<button type="button" key=${value} aria-pressed=${speed === value}
+          title=${value === 1 ? "Play at the recording's own speed, with its sound" : "Play slower, without sound"}
+          onclick=${() => setPlaySpeed(link, value)}>${SPEED_WORDS[value]}</button>`)}
+    </div>
+    <${ActionStep} link=${link} />
   </div>`;
 }
 
-// The block under the Cameras strip, which moves as one: the Play speed, then the camera path.
+// The block under the Cameras strip, which moves as one: the Play speed and the action step, then the
+// camera path.
 export function PathPanel({ link }) {
   return html`<div class="scene-lab-path-panel">
-    <${SpeedRow} link=${link} />
+    <${PlayRow} link=${link} />
     <${PathBar} link=${link} />
   </div>`;
 }

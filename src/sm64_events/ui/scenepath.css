@@ -2,7 +2,11 @@
    with the lab switched off the browser never fetches it). One block under the Cameras strip: the
    Play speed row, the Path row, then one row per key. It lays out by wrapping, never by the viewport. */
 .scene-lab-path-panel { display: grid; gap: 8px; min-width: 0; }
-.scene-lab-path-play button { min-width: 44px; justify-content: center; }
+.scene-lab-path-play { column-gap: 18px; }
+.scene-lab-path-speeds, .scene-lab-action { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
+.scene-lab-path-speeds button { min-width: 44px; justify-content: center; }
+.scene-lab-action button { width: 34px; justify-content: center; padding: 0; }
+.scene-lab-action-name { min-width: 16ch; max-width: 34ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .scene-lab-path { display: grid; gap: 6px; min-width: 0; }
 .scene-lab-path-speed { min-height: 28px; padding: 0 6px; background: var(--surface-2); font-size: .82rem; }
 .scene-lab-path > .scene-lab-bar .scene-lab-hint { flex: 1 1 260px; min-width: 0; }

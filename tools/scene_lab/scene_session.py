@@ -482,6 +482,7 @@ class SceneSession:
         self._rig_tuning: dict | None = None             # the registry's rows a rig request may leave out
         self._runners: dict = {}                         # target -> (what it was read from, camera_rig.Runner)
         self._stage_reads: dict[int, tuple] = {}         # package frame -> the stage Mario's (position, yaw)
+        self._stage_actions: dict[int, int | None] = {}  # package frame -> his action (gMarioStates.action)
         self.path_reader_factory = rig_path.PathReader   # open() may name another (tests: InProcessReader)
         self._path_reader = None                         # the reader of his path, once a rig asked for it
         self._path_reading: tuple | None = None          # (future, the package frames it reads)
@@ -1227,6 +1228,32 @@ class SceneSession:
             return
         for index, row in zip(reading[1], rows, strict=True):
             self._stage_reads[index] = None if np.isnan(row[0]) else ([float(v) for v in row[:3]], int(row[3]))
+            self._stage_actions[index] = int(row[4]) if len(row) > 4 and np.isfinite(row[4]) else None
+
+    def actions(self, target: str = "stage") -> dict:
+        """Each frame position's action, for the Scene viewer's step to the next or previous action
+        change: the stage's Mario's ("stage", gMarioStates.action from the frames his path has been read
+        for, from the first: prepare_path) or a scene ghost's (its clip's live_action in the row its
+        drawing shows). {"actions": [code or None], "names": {code: the action's name in plain words
+        (memory/addresses.py action_label)}, "reason": why there are none, or None}."""
+        from sm64_events.memory.addresses import action_label
+        if target == "stage":
+            self._take_path()
+            if self._path_problem or self.package.states is None:
+                return {"actions": [], "names": {}, "reason": self._path_problem or camera_rig.NO_STATE}
+            codes = []
+            for index in self.frames:
+                if index not in self._stage_reads:            # not read yet
+                    break
+                codes.append(self._stage_actions.get(index))
+        else:
+            rows = self.ghosts.rows(target)
+            if rows is None:
+                return {"actions": [], "names": {}, "reason": stage_ghosts.VIEW_GONE}
+            codes = [None if (ghost_frame := self._ghost_frame(index)) is None else rows.action(ghost_frame)
+                     for index in self.frames]
+        names = {str(code): action_label(code) for code in sorted({code for code in codes if code})}
+        return {"actions": codes, "names": names, "reason": None}
 
     def _mario_offset(self) -> int | None:
         """gMarioStates' RDRAM offset on this ROM (US or JP), None on another."""

@@ -99,6 +99,7 @@ import { heardInto, pictureAt, recordedTimes } from "./sceneclock.js";
 import { CinematicBar, orbitFolded, orbitPhase, rigChanged, rigHint, rigName, rigRequest, seenOnScreen,
   startRig } from "./scenerigs.js";
 import { CameraPaths, PathPanel, pathCameraNow, pathPlayTick, pathStopped, playSound, playTiming } from "./scenepathbar.js";
+import { stepAction } from "./sceneactions.js";
 
 const html = htm.bind(h);
 const ROOT = "/api/scene-lab";
@@ -1337,6 +1338,8 @@ const KEYS = {
   r: (link, event) => link.recorded(event.timeStamp),
   m: (link) => link.sound.toggleMute(),
   x: (link, event) => link.level(event.timeStamp),
+  "[": (link, event) => stepAction(link, -1, event.timeStamp),
+  "]": (link, event) => stepAction(link, 1, event.timeStamp),
   ...Object.fromEntries([1, 2, 3, 4, 5, 6, 7, 8, 9].map((slot) =>
     [String(slot), (link, event) => link.recallSlot(slot, event.timeStamp)])),
 };

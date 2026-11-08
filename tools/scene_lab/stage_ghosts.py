@@ -184,6 +184,7 @@ class GhostCameras:
         self.places = [(frame.level, frame.area) for _coordinate, frame in rows]
         self.cameras = [self._free(frame.camera) for _coordinate, frame in rows]
         self.poses = [self._pose(frame) for _coordinate, frame in rows]
+        self.actions = [frame.live_action or None for _coordinate, frame in rows]
 
     @staticmethod
     def _pose(frame) -> tuple | None:
@@ -201,9 +202,19 @@ class GhostCameras:
         or None where that row has no pose or stands in another place than the stage's `place`."""
         if not self.coordinates:
             return None
-        row = max(0, bisect.bisect_right(self.coordinates, self.coordinates[0] + max(0, frame)) - 1)
+        row = self._shown_row(frame)
         found = self.poses[row]
         return found if found is not None and (place is None or self.places[row] == place) else None
+
+    def _shown_row(self, frame: int) -> int:
+        """The row the ghost's drawing shows `frame` game frames after its first (pose's choice)."""
+        return max(0, bisect.bisect_right(self.coordinates, self.coordinates[0] + max(0, frame)) - 1)
+
+    def action(self, frame: int) -> int | None:
+        """The ghost's own action (its clip's live_action) in the row its drawing shows `frame` game
+        frames after its first, None where the row has none: the Scene viewer's step to the next
+        action change follows it."""
+        return self.actions[self._shown_row(frame)] if self.coordinates else None
 
     @staticmethod
     def _free(camera: dict | None) -> dict | None:

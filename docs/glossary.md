@@ -1557,8 +1557,11 @@ viewer) leaves the game's on-screen counters and timer out of every picture, the
 once. The **Cinematic** row's [[cinematic camera]]s (Front, Side, Orbit, Chase, Overhead, Tripod)
 follow Mario or a [[stage ghost]] along his path. The [[tilt and lens]] row turns and zooms whichever
 camera is on screen. Under the camera controls, the **Cameras** strip keeps [[camera preset]]s in
-slots 1-9, and the block under it holds the [[Play speed]] and the [[camera path]] of the course and
-area on screen.
+slots 1-9, and the block under it holds the [[Play speed]], the **Action** row and the [[camera path]]
+of the course and area on screen. The Action row names, in plain words, what Mario (or the
+[[stage ghost]] Follow names) is doing on the [[frame]] on screen ("Mario: Dive"); its two buttons,
+or [ and ], pause on the
+[[frame]] where that action began (or the one before) and on the [[frame]] where the next one begins.
 The page takes the keyboard when you arrive (the sidebar or the [[ghost button]])
 and after a mouse click on its controls; a field that types keeps its keys, and
 Esc, leaving the window or the page lets go of every key.
