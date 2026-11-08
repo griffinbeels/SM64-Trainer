@@ -31,7 +31,8 @@ BUILT = ROOT / "src/sm64_events/data/plugin"
 
 
 def backup_dir() -> Path:
-    return Path(os.environ["LOCALAPPDATA"]) / "SM64Trainer" / "scene-lab" / "plugin-backup"
+    from sm64_events.core.paths import scene_lab_root
+    return scene_lab_root() / "plugin-backup"
 
 
 def digest(path: Path) -> str:

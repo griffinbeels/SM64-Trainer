@@ -14,6 +14,7 @@ import argparse
 import json
 import struct
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -92,14 +93,23 @@ def standing_in(version: str, level: int, area: int, config=None) -> cold_boot.C
     return game
 
 
+SECONDS: dict[str, float] = {}     # what the last build spent, by step: printed with its answer
+
+
 def build(level: int, area: int, config=None) -> A.Atlas:
-    games = {version: standing_in(version, level, area, config) for version in ("us", "jp")}
+    games = {}
+    for version in ("us", "jp"):
+        started = time.perf_counter()
+        games[version] = standing_in(version, level, area, config)
+        SECONDS[f"boot {version}"] = round(time.perf_counter() - started, 1)
+    started = time.perf_counter()
     worlds = {version: world_of(game) for version, game in games.items()}
     rams = {version: game.cpu.ram for version, game in games.items()}
     bodies = {version: (game.body[0], cold_boot.BODY_BYTES) for version, game in games.items()}
     pairs = {source: A.learn_pairs(rams[source], rams[target], worlds[source], worlds[target], bodies[source],
                                    bodies[target])
              for source, target in (("us", "jp"), ("jp", "us"))}
+    SECONDS["learn"] = round(time.perf_counter() - started, 1)
     return A.Atlas(level, area, worlds, pairs)
 
 
@@ -118,7 +128,7 @@ def main() -> int:
         return 2
     write_atomic(args.out, A.to_json(atlas))
     print(json.dumps({"atlas": str(args.out), "pairs": {v: len(p) for v, p in atlas.pairs.items()},
-                      "blocks": {v: len(w.blocks) for v, w in atlas.worlds.items()}}))
+                      "blocks": {v: len(w.blocks) for v, w in atlas.worlds.items()}, "seconds": SECONDS}))
     return 0
 
 

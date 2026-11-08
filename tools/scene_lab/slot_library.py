@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from pathlib import Path
 
 from sm64_events.core.paths import slot_library_dir
@@ -54,6 +55,15 @@ def print_report(report: InstallReport | None, dry_run: bool) -> int:
         print(f"FAILED at slot {report.failed[0]}: {report.failed[1]}", file=sys.stderr)
         return 2
     return 0
+
+
+def print_timing(started: float, attached: float, atlases) -> None:
+    """Where an install's time went, on stderr: finding Project64, then the checks, translation and write, and of
+    those the atlas build when this place had none yet."""
+    built = "".join(f"; of that, building the atlas for level {level} area {area}: {seconds:.1f} s"
+                    for (level, area), seconds in atlases.built.items())
+    print(f"timing: attach {attached - started:.1f} s, place {time.perf_counter() - attached:.1f} s{built}",
+          file=sys.stderr)
 
 
 def capture(args, library: SlotLibrary) -> int:
@@ -104,8 +114,12 @@ def run(args, library: SlotLibrary, sets: CourseSets) -> int:
         case "rename":
             print(describe(library.rename(library.resolve(args.id), args.name)))
         case "install":
-            report = place_states(usamune.attach(args.pid), library, {args.slot: library.resolve(args.id)},
-                                  dry_run=args.dry_run, atlases=default_store())
+            atlases, started = default_store(), time.perf_counter()
+            memory = usamune.attach(args.pid)
+            attached = time.perf_counter()
+            report = place_states(memory, library, {args.slot: library.resolve(args.id)},
+                                  dry_run=args.dry_run, atlases=atlases)
+            print_timing(started, attached, atlases)
             return print_report(report, args.dry_run)
         case "set-assign":
             sets.assign(library, args.level, args.star, [library.resolve(identity) for identity in args.ids])

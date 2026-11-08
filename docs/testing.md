@@ -205,6 +205,16 @@ A whole-suite run (each full-run job) fails on a skip whose reason is not in
 `tests/skip_inventory.py`; a narrowed run may skip freely. Add a row only for
 something the machine genuinely cannot run, saying what would lift it.
 
+## His real user data is fenced off
+
+Every test's per-user roots (the app's user data, the Slot Library, the scene lab and the shared installation
+record) land in that test's own temporary folder: `tests/conftest.py::_fence_user_data` rebinds
+`core/paths.py::local_app_data`, the one door they all join their folders to, while LOCALAPPDATA still names his
+real folder. A test that sets its own LOCALAPPDATA keeps it. A test that must reach his real data says so with
+`@pytest.mark.real_user_data(reason=...)`. The fence does not reach a child process or a module that reads
+LOCALAPPDATA itself, which is why every per-user root goes through `core/paths.py`. Why: on 2026-11-08 his Slot
+Library held this suite's fake slot as a captured state. `tests/test_user_data_fence.py` holds the fence.
+
 ## Native host builds
 
 Every test that compiles a native host goes through `tools/build_plugin.py::_cl`,

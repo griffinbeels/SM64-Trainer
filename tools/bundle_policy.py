@@ -14,7 +14,7 @@ from sm64_events.core.childproc import quiet_spawn_kwargs
 from sm64_events.core.update_plan import BUNDLED_NATIVES
 
 DATA_FILES = frozenset({
-    "behaviours_jp.tsv", "behaviours_us.tsv", "defaults.seed.json",
+    "behaviours_jp.tsv", "behaviours_us.tsv", "build_shifts.tsv", "defaults.seed.json",
     "error-reporting.json", "library_overrides.json", "oracle_glyphs_us.npz",
     "pad_glyphs_us.npz", "pad_icons_us.npz", "rank_standards.seed.json",
     "ranking_policy.json", "rom_candidates_jp.tsv", "segments.authored.json",

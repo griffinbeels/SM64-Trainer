@@ -91,6 +91,7 @@ packages = ["src/sm64_events"]
 addopts = ["--ignore=data", "--ignore=replays", "--ignore=logs"]
 markers = [
     "spread: each case of this test is its own worker group under pytest-xdist loadgroup instead of staying with its file (tests/conftest.py::pytest_collection_modifyitems)",
+    "real_user_data(reason): this test reaches his real %LOCALAPPDATA% user data on purpose, so the per-test fence steps aside (tests/conftest.py::_fence_user_data)",
 ]
 
 [tool.ruff]
