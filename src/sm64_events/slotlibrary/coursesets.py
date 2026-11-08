@@ -7,7 +7,8 @@ game, so every placement reports whether those match. Every state's bytes go thr
 after any `Transform`: Mario moves to the running game's place inside the slot data, and the kept state never
 changes. Patching only the occupied word crashes the game on the load frame in the simulation. Griffin's rule
 (2026-11-05): Ghost Handoff writes data only, inside slot ranges, and never adds or patches code in the game or
-Usamune.
+Usamune. A state the other Usamune build made (US in a JP game, or back) goes through `translate.for_build`
+before anything else, with its place's atlas; its placement says so in words.
 
 Before the first write, every occupied slot is captured. A failure there writes nothing.
 """
@@ -18,13 +19,14 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from sm64_events.slotlibrary.atlas import AtlasStore
 from sm64_events.slotlibrary.relocate import to_live_place
 from sm64_events.slotlibrary.store import Damaged, KeptState, SlotLibrary, write_atomic
+from sm64_events.slotlibrary.translate import Translation, for_build
 from sm64_events.slotlibrary.usamune import (
-    CURRENT_AREA_POINTER,
     SEGMENT_BYTES,
-    SEGMENT_TABLE,
     SLOT_COUNT,
+    Build,
     GameMemory,
     Refusal,
     SlotFacts,
@@ -51,6 +53,8 @@ class Placement:
     mario_matches: bool      # Usamune refuses the load when this is False: re-enter the level and try again
     place_matches: bool      # level and area; Usamune refuses the load when this is False too
     pointers_match: bool | None  # the level's load addresses against the save's; None when the save has no record
+    translated_from: str | None = None   # the other build the state came from ("us" or "jp"), when it was translated
+    words: str = ""                      # what translating it changed, in plain words
 
     @property
     def loadable_now(self) -> bool:
@@ -64,18 +68,32 @@ class InstallReport:
     failed: tuple[int, str] | None = None    # the slot whose write failed; slots after it were not attempted
 
 
-def _pointers_match(memory: GameMemory, state: KeptState) -> bool | None:
+def _pointers_match(memory: GameMemory, state: KeptState, build: Build) -> bool | None:
     context = state.context
     if context is None:
         return None
-    return (int.from_bytes(memory.read(CURRENT_AREA_POINTER, 4), "big") == context.current_area
-            and same_segments(memory.read(SEGMENT_TABLE, SEGMENT_BYTES), context.segments))
+    return (int.from_bytes(memory.read(build.current_area_pointer, 4), "big") == context.current_area
+            and same_segments(memory.read(build.segment_table, SEGMENT_BYTES), context.segments))
+
+
+def _translated(memory: GameMemory, build: Build, state: KeptState, data: bytes,
+                atlases: AtlasStore | None) -> Translation:
+    """A state the other build made, as the running build's (slotlibrary/translate.py); a pointer with no place
+    there refuses it."""
+    if atlases is None:
+        raise Refusal(f"state {state.id} is from Usamune {state.build.upper()}, and nothing here can translate it")
+    translation = for_build(memory, build, data, state.build, atlases.get(state.level, state.area))
+    if translation.unmapped:
+        raise Refusal(f"state {state.id}: {len(translation.unmapped)} pointers have no place in the "
+                      f"{build.version.upper()} game")
+    return translation
 
 
 def _checked_states(memory: GameMemory, library: SlotLibrary, placements: Mapping[int, str],
-                    transform: Transform | None) -> list[tuple[int, KeptState, bytes, SlotFacts]]:
+                    transform: Transform | None, build: Build, atlases: AtlasStore | None,
+                    ) -> list[tuple[int, KeptState, bytes, SlotFacts, Translation | None]]:
     """Everything that could refuse, before anything is captured or written."""
-    fingerprint = routine_fingerprint(memory.read)
+    fingerprint = routine_fingerprint(memory.read, build)
     loaded = []
     for slot, identity in sorted(placements.items()):
         slot_range(slot)
@@ -83,34 +101,42 @@ def _checked_states(memory: GameMemory, library: SlotLibrary, placements: Mappin
             state, data = library.get(identity), library.read_bytes(identity)
         except Damaged as error:
             raise Refusal(str(error)) from error
+        translation = None
         if state.fingerprint != fingerprint:
-            raise Refusal(f"state {identity} came from another Usamune build")
+            if state.build is None or state.build == build.version:
+                raise Refusal(f"state {identity} came from another Usamune build")
+            translation = _translated(memory, build, state, data, atlases)
+            data = translation.data
         if transform is not None:
             data = transform(state, data)
-        data = to_live_place(memory, data)
-        loaded.append((slot, state, data, slot_facts(data)))
+        data = to_live_place(memory, data, build)
+        loaded.append((slot, state, data, slot_facts(data), translation))
     return loaded
 
 
 def place_states(memory: GameMemory, library: SlotLibrary, placements: Mapping[int, str],
-                 *, dry_run: bool = False, transform: Transform | None = None) -> InstallReport:
+                 *, dry_run: bool = False, transform: Transform | None = None,
+                 atlases: AtlasStore | None = None) -> InstallReport:
     """Checks everything, captures every occupied slot, then writes each state into its slot. A transform runs
-    with the checks, so its refusal writes nothing, and the report describes the bytes it returned."""
-    check_cartridge(memory)
-    loaded = _checked_states(memory, library, placements, transform)
-    captured = () if dry_run else capture_all(memory, library)
-    live = live_facts(memory)
+    with the checks, so its refusal writes nothing, and the report describes the bytes it returned. A state from
+    the other Usamune build is translated first, with the atlas `atlases` holds or builds for its place."""
+    build = check_cartridge(memory)
+    loaded = _checked_states(memory, library, placements, transform, build, atlases)
+    captured = () if dry_run else capture_all(memory, library, build)
+    live = live_facts(memory, build)
     done: list[Placement] = []
-    for slot, state, data, facts in loaded:
+    for slot, state, data, facts, translation in loaded:
         written = not dry_run and read_slot(memory, slot) != data
         if written:
             try:
-                write_slot_bytes(memory, slot, data, mario_place=(
+                write_slot_bytes(memory, build, slot, data, mario_place=(
                     facts.mario_object if facts.mario_object == live.mario_object else None))
             except WriteFailed as error:
                 return InstallReport(tuple(done), captured, (slot, str(error)))
         done.append(Placement(slot, state.id, written, facts.mario_object == live.mario_object,
-                              (facts.level, facts.area) == (live.level, live.area), _pointers_match(memory, state)))
+                              (facts.level, facts.area) == (live.level, live.area),
+                              True if translation else _pointers_match(memory, state, build),
+                              translation.source if translation else None, translation.words() if translation else ""))
     return InstallReport(tuple(done), captured)
 
 
@@ -158,9 +184,9 @@ class CourseSets:
 
 
 def install_for_course(memory: GameMemory, library: SlotLibrary, sets: CourseSets, level: int, star: str | None,
-                       *, dry_run: bool = False) -> InstallReport | None:
+                       *, dry_run: bool = False, atlases: AtlasStore | None = None) -> InstallReport | None:
     """What a course entry calls. None when this course has no set, and then nothing was touched."""
     states = sets.lookup(level, star)
     if states is None:
         return None
-    return place_states(memory, library, dict(enumerate(states)), dry_run=dry_run)
+    return place_states(memory, library, dict(enumerate(states)), dry_run=dry_run, atlases=atlases)

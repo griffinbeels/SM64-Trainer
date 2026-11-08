@@ -20,3 +20,6 @@
 0x80332f40	sNumProcessedSoundRequests
 0x80332f44	sSoundRequestCount
 0x80361498	sSoundRequests
+# sSegmentTable/gSecondCameraFocus: STROOP @ 6771197ad0f50718d3d4a13387e01d1e6d9c0d1a, fetched 2026-11-08; candidates, not live verification
+0x8033b400	sSegmentTable
+0x8032df30	gSecondCameraFocus

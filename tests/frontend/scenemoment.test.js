@@ -92,3 +92,22 @@ test("a server error shows in place", async () => {
   fireEvent.click(within(container).getByRole("button", { name: "Put this frame in slot 1" }));
   await waitFor(() => expect(container.querySelector(".is-bad")?.textContent).toMatch(/scene is gone/));
 });
+
+const CROSSED = "The Trainer changed it from the US version to your JP game.";
+
+test("a save state written into the other version's game shows its own flag and says so", async () => {
+  answers = [{ id: "abc", exact: true, build: "us" },
+    { written: true, slot: 3, build: "us", translated: { from: "us", to: "jp", words: CROSSED, removed: 0 } }];
+  const { container } = render(h(SaveStates, { link: link() }));
+  fireEvent.click(within(container).getByRole("button", { name: "Put this frame in slot 3" }));
+  await waitFor(() => expect(within(container).getByRole("status").textContent).toBe(`Frame 2 is in slot 3. ${CROSSED}`));
+  const flag = within(container).getByRole("status").querySelector("img.region-flag");
+  expect(flag.getAttribute("alt")).toBe("US");
+  expect(flag.getAttribute("src")).toMatch(/flag_us/);
+});
+
+test("a save state of the game's own version shows its flag and no translation words", async () => {
+  answers = [{ id: "abc", exact: true, build: "jp" }, { written: true, slot: 3, build: "jp" }];
+  const said = await saveMoment(scene(), scene().frames[1], 2, 3);
+  expect(said).toEqual({ bad: false, text: "Frame 2 is in slot 3.", build: "jp" });
+});

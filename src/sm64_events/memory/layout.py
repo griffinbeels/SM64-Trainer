@@ -181,10 +181,10 @@ LAYOUT_ROWS: tuple[LayoutRow, ...] = (
               "VERIFY: the word holding gRandomSeed16; a load does not restore it", optional=True),
     LayoutRow("random_seed_end", None, "linker_map_symbols",
               "VERIFY: end (exclusive) of that word", optional=True),
-    LayoutRow("segment_table", None, "linker_map_symbols",
+    LayoutRow("segment_table", "sSegmentTable", None,
               "VERIFY: where the level's segments loaded; a slot's pointers mean something only "
               "under the table it was saved with", optional=True),
-    LayoutRow("second_camera_focus", None, "linker_map_symbols",
+    LayoutRow("second_camera_focus", "gSecondCameraFocus", None,
               "VERIFY: gSecondCameraFocus off STROOP's US map, an object pointer outside the slot; a relocated slot moves its twin here "
               "(slotlibrary/relocate.py)", optional=True),
     # Audio spans the scene tap copies at every VI (M4 stems, lab only:

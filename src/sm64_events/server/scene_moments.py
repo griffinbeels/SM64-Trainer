@@ -50,7 +50,10 @@ GAME_WORDS = {
     "mario": "Mario's place in the game's memory changed while the Trainer checked it. Press again.",
     "unclear": "This save state has a part the Trainer cannot move to Mario's new place safely. Nothing was written.",
     "loaded": "This level loaded in a different way. Leave the level, enter it again, then press again.",
+    "version": "This save state is from the {source} version. The Trainer could not change it to work in your "
+               "{target} game, so nothing was written.",
 }
+REGION_WORDS = {"us": "US", "jp": "JP"}
 
 
 class MomentBody(BaseModel):
@@ -103,25 +106,40 @@ def run_builder(config, path: Path, frame: int, register=lambda child: None) -> 
 class SceneMoments:
     """The built states a page can still write, and the one build running."""
 
-    def __init__(self, lab, *, builder=run_builder, game=None, library=None, backups: Path | None = None):
+    def __init__(self, lab, *, builder=run_builder, game=None, library=None, backups: Path | None = None,
+                 atlases=None):
         self.lab, self.builder, self.game, self.library, self.backups = lab, builder, game, library, backups
         self.built: OrderedDict[str, dict] = OrderedDict()
         self.by_frame: dict[tuple, str] = {}
         self.turn = asyncio.Lock()
         self.child: subprocess.Popen | None = None
+        self.atlas_child: subprocess.Popen | None = None
         self.child_lock = threading.Lock()
         self.checks: dict[str, bool] = {}          # package path -> its frames need the load check
+        self._atlases = atlases
 
     def _note_child(self, child) -> None:
         with self.child_lock:
             self.child = child
 
-    def shutdown(self) -> None:
-        """The one child this owns, by its handle."""
+    def _note_atlas_child(self, child) -> None:
         with self.child_lock:
-            child = self.child
-        if child is not None and child.poll() is None:
-            child.kill()
+            self.atlas_child = child
+
+    def atlases(self):
+        """Where a save state from the other Usamune build finds its atlas; built in a child on first use."""
+        if self._atlases is None:
+            from sm64_events.slotlibrary.atlas import default_store
+            self._atlases = default_store(self._note_atlas_child)
+        return self._atlases
+
+    def shutdown(self) -> None:
+        """The children this owns, by their handles."""
+        with self.child_lock:
+            children = (self.child, self.atlas_child)
+        for child in children:
+            if child is not None and child.poll() is None:
+                child.kill()
 
     async def _source(self, body: MomentBody) -> tuple[Path, str]:
         api = importlib.import_module("sm64_events.server.scene_lab_api")   # the module in sys.modules, as the routes catch
@@ -178,7 +196,8 @@ class SceneMoments:
                     return {"refused": "check", "reason": verdict["reason"]}
                 answer = {**answer, "checked": {"frames": verdict["frames"], "compared": verdict["compared"]}}
             token = uuid.uuid4().hex
-            answer = {**answer, "id": token, "exact": not answer.get("worked_out", False)}
+            answer = {**answer, "id": token, "exact": not answer.get("worked_out", False),
+                      "build": answer.get("build", "us")}
             self.built[token] = {"answer": answer, "data": data, "source": f"{title} frame {body.frame}"}
             self.by_frame[key] = token
             while len(self.built) > KEEP_BUILT:
@@ -191,17 +210,23 @@ class SceneMoments:
         from sm64_events.server.scene_lab_api import _lab_module
         tool = _lab_module("handoff_try")
         answer = entry["answer"]
+        build = answer.get("build", "us")
         image = tool.SlotImage(entry["data"], slot - 1, answer.get("seed"), bytes.fromhex(answer["segments"]),
-                               answer["current_area"], answer["fingerprint"], entry["source"])
+                               answer["current_area"], answer["fingerprint"], entry["source"], build)
         try:
             memory = self.game() if self.game is not None else tool.attach(None)
-            backup = tool.install(memory, image, self.backups or tool.backups_folder(), dry_run=False, write_seed=False)
+            installed = tool.install(memory, image, self.backups or tool.backups_folder(), dry_run=False,
+                                     write_seed=False, atlases=self.atlases())
         except tool.GameDiffers as differs:
             kind = differs.kinds[0]
             seen = differs.seen
+            if kind == "version":
+                log.warning("A %s save state was not translated: %s", build.upper(), differs)
             return {"refused": kind, "reason": GAME_WORDS[kind].format(
                 place=place_name(image.level, image.area),
-                live_place=place_name(seen.get("live_level"), seen.get("live_area")))}
+                live_place=place_name(seen.get("live_level"), seen.get("live_area")),
+                source=REGION_WORDS.get(build, build.upper()),
+                target=REGION_WORDS["jp" if build == "us" else "us"])}
         except tool.Refusal as refused:
             return {"refused": "game", "reason": game_sentence(str(refused))}
         except MarioMoved:
@@ -215,7 +240,13 @@ class SceneMoments:
             kept = tool.keep_built(memory, image, self.library or tool.SlotLibrary(slot_library_dir()))[0].id
         except Exception:  # noqa: BLE001 - the slot is written; the library is a copy of it
             log.warning("A written save state did not join the Slot Library.", exc_info=True)
-        return {"written": True, "slot": slot, "frame": answer["frame"], "backup": backup.name, "kept": kept}
+        written = {"written": True, "slot": slot, "frame": answer["frame"], "backup": installed.backup.name,
+                   "kept": kept, "build": build}
+        translation = installed.translation
+        if translation is not None:
+            written["translated"] = {"from": translation.source, "to": translation.target,
+                                     "words": translation.words(), "removed": len(translation.removed)}
+        return written
 
     async def write(self, token: str, slot: int) -> dict:
         """LookupError: that build is gone. The game's own answer comes back as {refused, reason}."""
@@ -229,8 +260,10 @@ def game_sentence(text: str) -> str:
     """handoff_try's refusals that are about the game as a whole, for a person at the page."""
     if "no Project64" in text or "no cartridge" in text:
         return "Project64 is not running a game. Start the game, then press again."
-    if "not Usamune US" in text:
-        return "The running game is not Usamune US."
+    if "is not Usamune" in text:
+        return "The running game is not Usamune."
+    if "has not checked" in text:
+        return "This Trainer cannot write save states into this game's Usamune yet."
     if "8 MB" in text:
         return "The game runs without the 8 MB of RAM that Usamune's save states need."
     return "The game refused this save state: " + text

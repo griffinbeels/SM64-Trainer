@@ -116,6 +116,7 @@
 .scene-lab-slots { display: grid; grid-template-columns: repeat(9, minmax(0, 1fr)); gap: 6px; margin: 0; padding: 0; list-style: none; }
 /* The Save states row (components/scenemoment.js): nine numbers on the Cameras strip's grid. */
 .scene-lab-moment { display: grid; gap: 6px; min-width: 0; }
+.scene-lab-moment-flag { margin-right: 6px; }    /* the written save state's own version, before its words */
 .scene-lab-moment-slots { display: grid; grid-template-columns: repeat(9, minmax(0, 1fr)); gap: 6px; margin: 0; padding: 0; list-style: none; }
 .scene-lab-moment-slots li { display: grid; min-width: 0; }
 .scene-lab-moment-slots button { justify-content: center; min-height: 34px; padding: 3px 7px; }

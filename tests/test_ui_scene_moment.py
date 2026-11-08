@@ -42,7 +42,7 @@ def _rigged(game, tmp_path, answers):
             if answers["refuse"]:
                 return answers["refuse"], None
             return ({**moments_test.ANSWER, "frame": frame, "worked_out": answers["older"],
-                     "fingerprint": tool.routine_fingerprint(game.read)}, moments_test.slot_bytes())
+                     "fingerprint": tool.routine_fingerprint(game.read, fakes.slots.US)}, moments_test.slot_bytes())
         lab.moments._source = source
         lab.moments.builder = builder
         lab.moments.game = lambda: game
@@ -131,3 +131,65 @@ def _keep_folder():
     return Path(named) if named else None
 
 
+
+
+CHANGED = "The Trainer changed it from the US version to your JP game."
+CROSSED = (f"{CHANGED} It left out a music trigger, which the JP game does not have. Your JP game has a yellow coin "
+           "there instead.")
+
+
+def _hint_fits(page) -> bool:
+    return page.evaluate("(() => { const p = document.querySelector(%r); return p.scrollWidth <= p.clientWidth; })()"
+                         % STATUS)
+
+
+@pytest.mark.parametrize("width", [850, 1280])
+def test_a_save_state_written_into_the_other_versions_game_shows_its_flag_and_says_so(width, tmp_path, monkeypatch):
+    """Under the flag of the version the save state came from: the usual words fit the row's one line, and the
+    longest (an object left out) keep all of it on hover."""
+    game = fakes.FakeGame()
+    answers = {"frames": [], "refuse": None, "older": False}
+    rig = _rigged(game, tmp_path, answers)
+    said = {"words": CHANGED}
+
+    def crossed(app, lab, seen):
+        rig(app, lab, seen)
+        lab.moments._write_blocking = lambda entry, slot: {
+            "written": True, "slot": slot, "frame": 7, "backup": "b.bin", "kept": None, "build": "us",
+            "translated": {"from": "us", "to": "jp", "words": said["words"], "removed": 0}}
+    folder = Path(tmp_path) / "shots"
+    folder.mkdir()
+    with attempt_scene._served(tmp_path, monkeypatch, lab_on=True, extra=crossed) as (base, _seen), \
+            sync_playwright() as play:
+        browser = play.chromium.launch(headless=True, args=["--disable-gpu"])
+        try:
+            page = browser.new_page(viewport={"width": width, "height": 1100})
+            page.add_init_script(CAMERAS)
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            _open(page, base)
+            page.keyboard.press("ArrowRight")
+            _says(page, "Press a number")
+            page.get_by_role("button", name="Put this frame in slot 3").click()
+            _says(page, CHANGED)
+            flag = page.locator(f"{STATUS} img.region-flag")
+            assert flag.get_attribute("alt") == "US" and flag.is_visible()
+            box, text = flag.bounding_box(), page.locator(STATUS).bounding_box()
+            assert box["height"] >= 10 and text["x"] <= box["x"], "the flag starts the line it belongs to"
+            assert _hint_fits(page), "the usual words fit the one line"
+            page.locator(ROW).screenshot(path=str(folder / "translated.png"))
+            said["words"] = CROSSED
+            page.get_by_role("button", name="Put this frame in slot 4").click()
+            _says(page, "Your JP game has a yellow coin there instead.")
+            assert page.locator(STATUS).get_attribute("title") == f"Frame 2 is in slot 4. {CROSSED}"
+            overflow = page.evaluate("(() => { const row = document.querySelector('.scene-lab-moment');"
+                                     "return row.scrollWidth - row.clientWidth; })()")
+            assert overflow <= 0
+            page.locator(ROW).screenshot(path=str(folder / "translated-long.png"))
+            assert errors == []
+        finally:
+            browser.close()
+    target = _keep_folder()
+    if target:
+        for shot in folder.iterdir():
+            shot.replace(target / f"{width}-{shot.name}")

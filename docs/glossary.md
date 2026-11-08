@@ -333,7 +333,8 @@ slot, and checks the rest of the [[frame]] against the recording. A [[frame]] Us
 the row says why. So does a game in another level, or a level that loaded in another way. If Mario sits in another
 place in the game's memory, the write uses [[mario relocation]] first. A recording made before
 this feature lacks a few small values, so the row says it may not be exact. A state the row writes joins the
-[[slot library]].
+[[slot library]]. After a write the row shows the flag of the version the save state came from; one written into
+the other version's game says so in words ([[save state translation]]).
 
 - **Lives** -- `tools/scene_lab/moment_slot.py`, `src/sm64_events/server/scene_moments.py`,
   `src/sm64_events/ui/components/scenemoment.js`; lab only
@@ -382,6 +383,26 @@ through is not written.
 - **Lives** -- `src/sm64_events/slotlibrary/relocate.py`; every write runs it
 - **Not** -- changing Usamune's check, which Griffin ruled out (2026-11-05)
 
+### Save state translation
+
+A save state made by Usamune US, written into a game running Usamune JP, or the other way round. Both versions save
+the same bytes in the same order. Only the addresses inside differ, so the Trainer rewrites each address to the place
+the other version keeps the same thing. The game must stand in the save state's level and area. The Trainer leaves
+out an object the other version does not have, and the page says what is there instead. The Trainer writes nothing
+when an address has no place in the other version. Then the Trainer moves Mario with [[mario relocation]], as for
+any save state. The [[kept state]] keeps its own version's bytes.
+
+- **Lives** -- `src/sm64_events/slotlibrary/translate.py`; every write path calls it when the versions differ
+- **Not** -- a change to the game or Usamune: the data changes, the code does not
+
+### Atlas
+
+For one level and area, which address in the US game holds the same level data as which address in the JP game. The
+Trainer makes one the first time a [[save state translation]] needs it, by starting both games from their cartridges
+in its simulator, about 10 seconds. It keeps the atlas beside the [[slot library]]. Making one needs both ROMs.
+
+- **Lives** -- `src/sm64_events/slotlibrary/atlas.py`, built by `tools/scene_lab/slot_atlas.py`; lab only
+
 ### Slot refit
 
 After every spawn (a practice [[reset]], entering a level or an area), the Trainer gives each Usamune save state
@@ -397,7 +418,9 @@ not written again. The pass skips a state he saves over while it works. Before i
 
 One [[kept state]] as a `.sm64state` file you can send to a friend. Opening one
 adds it to the [[slot library]] and writes nothing to the game. The Trainer
-refuses a damaged or oversized file, and one from another Usamune build.
+refuses a damaged or oversized file, and one from another Usamune build. While
+the game is running, the Trainer keeps a file from the other version (US or JP),
+because [[save state translation]] can place it.
 
 - **Lives** -- `src/sm64_events/slotlibrary/sharefile.py`
 

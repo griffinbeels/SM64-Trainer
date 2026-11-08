@@ -32,19 +32,18 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import frame_sim as sim  # noqa: E402
 from sm64_events.slotlibrary.usamune import (  # noqa: E402
-    CURR_AREA,
-    CURR_LEVEL,
-    CURRENT_AREA_POINTER,
     FINGERPRINT_BYTES,
-    LOAD,
-    MARIO_OBJECT,
-    SAVE,
     SLOT_BYTES,
     TRAILER_AREA,
     TRAILER_LEVEL,
     TRAILER_MARIO,
+    US,
     slot_address,
 )
+
+# This simulator replays US recordings (frame_sim), so its game is Usamune US.
+CURR_AREA, CURR_LEVEL, CURRENT_AREA_POINTER = US.curr_area, US.curr_level, US.current_area_pointer
+LOAD, MARIO_OBJECT, SAVE = US.load, US.mario_object, US.save
 
 SITE = 0x802CB248                    # the jal into Usamune's save and load dispatcher
 SETTINGS = 0x80417B4C
