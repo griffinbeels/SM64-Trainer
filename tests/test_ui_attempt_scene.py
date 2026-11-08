@@ -129,8 +129,9 @@ def _stub_attempt_api(app, lab, seen: dict) -> None:
 @contextmanager
 def _served(tmp_path, monkeypatch, *, lab_on: bool, extra=None):
     """The real app on the UI fixture; with the lab on, `extra(app, lab, seen)` may add stubs of its own
-    after this file's (a later route wins)."""
-    seen = {"asks": [], "cutting_asks": {}, "opened": [], "host_pids": []}
+    after this file's (a later route wins). seen["tracker"] is the fixture's own tracker (its journal
+    a scratch Database), for an `extra` that runs the lab live the way main.py does (follow_attempts)."""
+    seen = {"asks": [], "cutting_asks": {}, "opened": [], "host_pids": [], "tracker": None}
     if lab_on:
         config = _lab(tmp_path / "lab")
         monkeypatch.setattr(gpu_gate, "HOLD", tmp_path / "no-hold.txt")
@@ -139,6 +140,7 @@ def _served(tmp_path, monkeypatch, *, lab_on: bool, extra=None):
 
         def create_app(*args, **kwargs):
             app = original(*args, **kwargs)
+            seen["tracker"] = kwargs.get("service")
             lab = scene_lab_api.mount_scene_lab(app, config, session_options={
                 "host_factory": scene_session.command_host(fake_viewer_host.command()),
                 "evaluator_factory": lambda package, rom: fake_viewer_host.FakeEvaluator()})
