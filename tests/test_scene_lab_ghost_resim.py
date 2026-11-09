@@ -110,6 +110,33 @@ def test_a_byte_exact_scene_already_made_is_the_answer(tmp_path):
     assert lab._cached_exact(sha) is None                     # another version's scene is not this one's
 
 
+def test_a_scene_start_lies_over_its_levels_reset_so_the_level_draws(tmp_path, monkeypatch):
+    """The first real pictures (2026-11-09): a scene's start laid over the castle's boot RAM drew the level black (its
+    textures load outside the scene's regions and main pool; 0 of 396 frames drew his recording's bytes, 28 with
+    the reset under it and 4,787 bytes off in all). His own scene and another take lie over the reset of their
+    level, area and act; the boot only where no reset is made."""
+    words = {"timer": 3489, "counter": 2194, "level": 24, "area": 1, "action": 0x1924, "buttons": 0x20, "act": 2}
+    (tmp_path / "take-1.sm64scene").write_bytes(b"scene")
+    monkeypatch.setattr(gr.package, "open_package", lambda path, rom: None)
+    monkeypatch.setattr(gr, "first_state", lambda pkg: ([], None))
+    monkeypatch.setattr(gr, "probe", lambda regions, symbols: dict(words))
+    asked = []
+    reset = np.full(16, 7, np.uint8)
+
+    class Stages(SimpleNamespace):
+        def reset(self, level, area, act):
+            asked.append((level, area, act))
+            return reset
+
+        def boot(self):
+            return np.zeros(16, np.uint8), 0
+
+    scenes = gr.GhostScenes(tmp_path, tmp_path / "cache", scenes_dir=[tmp_path], starts_dir=None,
+                            stages=Stages(symbols=SYMBOLS, rom_path=tmp_path / "rom", map_path=tmp_path / "map"))
+    own = next(scenes.starts(clip(), "ab" * 32))
+    assert own.kind == gr.OWN_SCENE and own.ram.tolist() == reset.tolist() and asked == [(24, 1, 2)]
+
+
 def test_every_start_has_a_switch_row_and_an_exactness():
     assert set(gr.SAVE_STATES) == set(gr.STARTS) == set(gr.EXACT)
 

@@ -58,7 +58,8 @@ from sm64_events.memory.version_probe import version_from_header  # noqa: E402
 
 REGION_OF_LAYOUT = {layout: region for region, layout in ROM_LAYOUTS.items()}   # a clip's rom_layout: "us" | "jp"
 
-RESIM_VERSION = 2                    # 2: every frame shown (VI registers) at the game's 30 fps
+RESIM_VERSION = 3                    # 2: every frame shown (VI registers) at the game's 30 fps; 3: a scene's start
+                                     # lies over its level's reset, so the level draws (it was black over the boot)
 GHOST_START, OWN_SCENE, ANOTHER_RESET, SIMULATED_RESET = "ghost_start", "own_scene", "another_reset", "simulated_reset"
 DOWNLOADED_START = "downloaded_start"     # a start that came with someone else's ghost: checked, never trusted
 STARTS = (GHOST_START, DOWNLOADED_START, OWN_SCENE, ANOTHER_RESET, SIMULATED_RESET)
@@ -265,8 +266,16 @@ class GhostScenes:
         costs no more scene reads than it took."""
         first = clip.frames[0]
 
-        def base() -> np.ndarray:
-            return self.stages.boot()[0]
+        def base_of(words: dict):
+            """What a scene's first frame lies over: the reset of its own level, area and act, which holds the level's
+            data the game loaded outside the scene's regions and main pool (its textures; over the castle's boot
+            RAM the level drew black, the first real pictures showed, 2026-11-09); the boot where no reset is made."""
+            def base() -> np.ndarray:
+                try:
+                    return self.stages.reset(words["level"], words["area"], words["act"] or 1)
+                except stage_sim.StageError:
+                    return self.stages.boot()[0]
+            return base
 
         if self.starts_dir is not None:
             try:
@@ -281,14 +290,15 @@ class GhostScenes:
         resets = []
         for path, stamp, words in self._scenes():
             if words_match(words, clip):
-                yield Start(OWN_SCENE, lambda path=path: self._read_start(path, base), f"{OWN_SCENE}:{stamp}",
-                            {"scene": path.name})
+                yield Start(OWN_SCENE, lambda path=path, words=words: self._read_start(path, base_of(words)),
+                            f"{OWN_SCENE}:{stamp}", {"scene": path.name})
             elif words_reset(words, first):
                 resets.append((path, stamp, words))
         wanted = act if act is not None else next((words["act"] for _p, _s, words in resets), None)
         for path, stamp, words in resets:
             if wanted is None or words["act"] == wanted:
-                yield Start(ANOTHER_RESET, lambda path=path: self._with_clocks(self._read_start(path, base), first),
+                yield Start(ANOTHER_RESET,
+                            lambda path=path, words=words: self._with_clocks(self._read_start(path, base_of(words)), first),
                             f"{ANOTHER_RESET}:{stamp}",
                             {"scene": path.name, "act": words["act"], "seed": "the reset's own"})
         chosen = wanted or 1
