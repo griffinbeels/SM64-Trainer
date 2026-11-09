@@ -208,11 +208,15 @@ class RomStore:
 
     def copy_from_game(self) -> str | None:
         """Copy the cartridge Project64 is running, if it is one of the two Usamune builds. Returns its region.
-        Each (process, cartridge) pair is read once; finding Project64 is tried at most every 2 s."""
+        Finding Project64 with the store's own reader is tried at most every 2 s."""
         with self._lock:
             reader = self._game_reader()
-            if reader is None:
-                return None
+            return self.copy_from(reader) if reader is not None else None
+
+    def copy_from(self, reader) -> str | None:
+        """`copy_from_game` through a reader someone else attached (the setup observer keeps one per Project64
+        process). Each (process, cartridge) pair is read once; the reader is never detached here."""
+        with self._lock:
             head = reader.rom_header()
             if head is None:
                 return None
@@ -247,9 +251,10 @@ class RomStore:
 
     # -- B: Project64's folders ------------------------------------------------------------------------------
 
-    def scan_folders(self) -> list[str]:
+    def scan_folders(self, pj64_dir: Path | None = None) -> list[str]:
         """Look for each missing region in the files Project64 opened and its ROM folders. Returns the regions
-        found. Files are opened for reading only."""
+        found. `pj64_dir` is Project64's folder when the caller knows it (setup's own reading); otherwise setup's
+        record names it. Files are opened for reading only."""
         with self._lock:
             missing = [region for region in CARTRIDGES if self._intact(region) is None]
             now = self._clock()
@@ -257,7 +262,7 @@ class RomStore:
                 return []
             self._scanned_at = now
             found = []
-            for path in self._candidate_files():
+            for path in self._candidate_files(Path(pj64_dir) if pj64_dir else self._pj64_dir()):
                 image = self._read_candidate(path)
                 region = identify(image) if image is not None else None
                 if region in missing and region not in found:
@@ -267,10 +272,9 @@ class RomStore:
                     break
             return found
 
-    def _candidate_files(self) -> Iterable[Path]:
+    def _candidate_files(self, pj64: Path | None) -> Iterable[Path]:
         """Files Project64 last opened first, then each folder's files of exactly a ROM's size, each once."""
         files, folders = self._project64_settings()
-        pj64 = self._pj64_dir()
         if pj64 is not None:
             folders += [pj64 / "roms", pj64 / "Roms", pj64]
         seen: set[str] = set()

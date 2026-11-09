@@ -159,6 +159,17 @@ def test_one_cartridge_in_one_process_is_read_once(tmp_path):
     assert game.image_reads == 1 and game.attaches == 1
 
 
+def test_a_reader_someone_else_attached_is_used_and_kept_attached(tmp_path):
+    """The setup observer keeps one reader per Project64 process; the store borrows it and opens none."""
+    borrowed = FakeProject64(rom("jp"))
+    borrowed.detach = lambda: (_ for _ in ()).throw(AssertionError("the store must not detach a borrowed reader"))
+    own = FakeProject64(None)
+    store = store_for(tmp_path, game=own)
+    assert store.copy_from(borrowed) == "jp" and store.copy_from(borrowed) is None
+    assert borrowed.image_reads == 1 and own.attaches == 0
+    assert store.rom_for("jp").read_bytes() == rom("jp")
+
+
 def test_an_image_lost_mid_read_is_tried_again_and_never_kept(tmp_path):
     game = FakeProject64(rom("us"))
     game.torn = True
@@ -224,6 +235,13 @@ def test_the_folder_scan_finds_each_region_by_header_and_writes_nothing_there(tm
     assert records["us"]["source"] == records["jp"]["source"] == FOLDER
     assert records["us"]["from"] == str(elsewhere)
     assert (snapshot(tmp_path / "my games"), snapshot(project64)) == before
+
+
+def test_a_folder_the_caller_names_is_scanned_when_setup_has_no_record(tmp_path, project64):
+    (project64 / "roms" / "practice.v64").write_bytes(half_swapped(rom("us")))
+    store = store_for(tmp_path, pj64=None)
+    assert sorted(store.scan_folders(project64)) == ["jp", "us"]
+    assert store.rom_for("us").read_bytes() == rom("us") and store.rom_for("jp").read_bytes() == rom("jp")
 
 
 def test_a_scan_that_found_nothing_waits_before_the_next(tmp_path, project64):
