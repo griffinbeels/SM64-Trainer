@@ -12,14 +12,15 @@ Two sources, and this module is the one door to both:
   bundled with the app (core/paths.py::bundled_lab_file, interface I2) and the Plugin folder the setup screen
   found (the server passes it; a tool never needs it).
 
-`IN_APP` is the one switch for whether the installed app shows the Ghost Lab. Griffin's decision D2 (pending,
-2026-11-09): "Ghost Lab on by default as its own sidebar entry"; on, as recommended. A source checkout without
+`IN_APP` is the one switch for whether the installed app shows the Ghost Lab. Griffin's decision D2 (decided
+2026-11-09, "all recommended"): the Ghost Lab on by default as its own sidebar entry. A source checkout without
 `SM64_SCENE_LAB` stays without a lab, as before (`app_lab_on` is False there).
 
-The app's lab runs one ROM, US first: `app_inputs` picks the US ROM when the store has it and the JP ROM
-otherwise. Both cartridges re-simulate ghosts (tools/scene_lab/stage_sim.py, 2026-11-09). A scene package opens
-with the ROM it was written from and that region's map, whichever region the lab runs (scene_session.scene_inputs
-reads "roms" and "maps"). Every sentence here is shown to a player as it is.
+US preferred, JP fallback: `app_inputs` picks the US ROM when the store has it and the JP ROM otherwise, and both
+cartridges simulate (tools/scene_lab/stage_sim.py, 2026-11-09). A scene package opens with the ROM it was written
+from and that region's map (scene_session.scene_inputs reads "roms" and "maps"), and the installed app cuts attempt
+scenes with the ROM of the game being played (server/scene_lab_api.py RegionCutter). Every sentence here is shown to
+a player as it is.
 """
 from __future__ import annotations
 

@@ -93,10 +93,6 @@ AUDIO_SPANS = (("audio_heap_start", "audio_heap_end"), ("audio_globals_start", "
 # this tail of the task's own pool; the evaluator reports a task whose update allocated more.
 GFX_POOL_BYTES = 6400 * 8
 POOL_TAIL_BYTES = 4096
-HOST_SOURCES = (ROOT / "tools/scene_lab/tap_offline_host.cpp", ROOT / "plugin/gfxwrap/scene_tap.cpp",
-                ROOT / "plugin/gfxwrap/scene_spool.cpp", ROOT / "plugin/gfxwrap/scene_tap.h",
-                ROOT / "plugin/gfxwrap/scene_spool.h", ROOT / "plugin/gfxwrap/scene_closure.h",
-                ROOT / "plugin/gfxwrap/zilmar.h")
 TASK_FIELDS = ("refusals", "commands", "walk_ns", "copy_ns", "vi_origin", "runs", "extras",
                "closure_bytes", "last_cimg", "color_images", "task_index", "reserved")
 VI_NAMES = ("status", "origin", "width", "intr", "v_current", "burst", "v_sync", "h_sync",

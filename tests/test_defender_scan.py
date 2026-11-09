@@ -83,10 +83,14 @@ def test_a_release_build_scans_our_own_files_and_refuses_a_flagged_one(tmp_path,
     monkeypatch.setattr(defender_scan, "scan", lambda paths, **kwargs: scanned.extend(Path(p).name for p in paths) or [
         defender_scan.Verdict(Path(paths[0]), "threat", "Threat : Trojan:Win32/Bearfoos.A!ml"),
         *(defender_scan.Verdict(Path(p), "clean", "no threat") for p in paths[1:])])
+    import native_data_scan
+    model_scanned = []
+    monkeypatch.setattr(native_data_scan, "require_clean", lambda paths: model_scanned.extend(Path(p).name for p in paths))
     with pytest.raises(defender_scan.ThreatFound):
         build_exe.scan_built(app, "SM64Trainer")
     from sm64_events.core.update_plan import LAB_NATIVES
     assert scanned == ["SM64Trainer.exe", "sm64_trainer_gfx.dll", "SM64GpuEncoderV1.dll", *LAB_NATIVES]
+    assert model_scanned == scanned          # the model-data scan reads the same files (both programs when built)
 
 
 def test_a_beta_build_refuses_a_flagged_native_before_building(tmp_path, monkeypatch):

@@ -413,6 +413,10 @@ def scan_built(app_dir: Path, exe_name: str) -> None:
     and manifest are made, so they carry only scanned bytes. The files ship
     unsigned: Griffin decided against code signing (2026-11-06)."""
     import defender_scan
+    import native_data_scan
+    # No file we compiled carries Nintendo's model data: build_natives scans each native as it compiles, and the
+    # built app's own files (both programs, the natives, the Ghost Lab's natives) are scanned again as they ship.
+    native_data_scan.require_clean(our_files(app_dir, exe_name))
     defender_scan.require_clean(our_files(app_dir, exe_name), strict=True)
 
 

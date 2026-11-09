@@ -60,7 +60,6 @@ import tap  # noqa: E402
 from gpu_gate import require_gpu  # noqa: E402
 from sm64_events.core.childproc import quiet_spawn_kwargs  # noqa: E402
 
-SOURCES = (HERE / "viewer_host.c", HERE / "renderer_load.h", ROOT / "plugin/gfxwrap/zilmar.h")
 REQUEST = struct.Struct("<5I16I14I16d")
 RESPONSE = struct.Struct("<9I")
 REQUEST_MAGIC, RESPONSE_MAGIC = 0x51525756, 0x53525756

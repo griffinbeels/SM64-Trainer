@@ -136,7 +136,7 @@ def test_unseen_ghosts_with_a_different_setup_show_the_notice_and_open_the_check
         assert all(row["inside"] and not row["overflow"] for row in items), items
         graphics = next(row for row in items if row["id"] == "graphics_plugin")
         assert "Jabo_Direct3D8.dll" in graphics["text"] and graphics["link"].startswith("https://wermi")
-        assert "7 settings are different from the tested setup." in page.locator(CHECK).inner_text()
+        assert "7 items need your attention." in page.locator(CHECK).inner_text()
         page.wait_for_timeout(300)
         (tmp_path / f"setupbase-check-{width}.png").write_bytes(page.locator(".modal").screenshot())
         no_faults(seen)

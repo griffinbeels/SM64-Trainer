@@ -80,9 +80,6 @@ import scene_audio  # noqa: E402
 import stems_check as sc  # noqa: E402
 
 NATIVE = ROOT / "plugin/gfxwrap"
-SOURCES = (HERE / "ghost_sound_host.cpp", NATIVE / "ghost_audio.cpp", NATIVE / "ghost_audio.h",
-           NATIVE / "ghost_assets.cpp", NATIVE / "ghost_assets.h", NATIVE / "ghost_tuning.h",
-           NATIVE / "ghost_playback.h", ROOT / "renderer/model/audio.h")
 ENGINE_RATE = 32000            # SA_RATE
 GAME_FPS = 30
 NEAR = 400.0                   # GP_SOUND_NEAR: full gain this near the stage's Mario

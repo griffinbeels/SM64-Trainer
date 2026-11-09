@@ -45,7 +45,11 @@ the shape Defender flags. Why they are built this way, and what failed on the wa
   so committing a native edit changes the id once more. Two clean builds of
   one commit are the same bytes, each with a version resource; that module
   lists the compiler and linker switches and the measurement behind each.
-  The two DLLs are build outputs, never committed: `tools/build_natives.py`
+  The two DLLs, and the Ghost Lab's five natives (`core/update_plan.py`
+  `LAB_NATIVES`: `viewer_host.exe`, `tap_offline_host.exe`,
+  `ghost_sound_host.exe`, `scene_cpu_hooks.dll`, `scene_cxd4.dll`, the live
+  cxd4 split that was `stems_lle.dll`; one recipe each in `tools/build_lab.py`),
+  are build outputs, never committed: `tools/build_natives.py`
   rebuilds whichever is out of date (the launcher, wrap and release run it; a
   shared cache makes repeats instant) and the [[Defender gate]] scans each one
   it installs. Keep LF line endings, since the hash is over bytes. A source

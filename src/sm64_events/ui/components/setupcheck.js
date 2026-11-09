@@ -88,9 +88,11 @@ function FolderLine({ folder }) {
     ${" "}(${PLACES[folder.location] || folder.location}${folder.running ? "" : ", not running"})</p>`;
 }
 
+// The rows are Project64's settings and, for the Ghost Lab, whether the Trainer has the game's ROM: an item, not a
+// setting, so the count names neither.
 function summary(check) {
   const count = check.flagged.length;
-  if (count) return `${count} ${count === 1 ? "setting is" : "settings are"} different from the tested setup.`;
+  if (count) return `${count} ${count === 1 ? "item needs" : "items need"} your attention.`;
   return check.unknown ? "We couldn't check everything. The rest matches the tested setup."
     : "Your setup matches the tested setup.";
 }
@@ -130,7 +132,7 @@ export function SetupCheckNotes({ check }) {
   const flagged = check?.flagged || [];
   if (!flagged.length) return null;
   return html`<div class="setup-check-notes" data-testid="setup-check-notes">
-    <p>These settings are different from the tested setup. You can still practice.</p>
+    <p>These items need your attention. You can still practice.</p>
     <${SetupCheckList} check=${check} only=${flagged}/>
   </div>`;
 }
