@@ -56,7 +56,7 @@ MODULES = (
     "sm64_events.inputs", "sm64_events.inputs.frame",
     "sm64_events.memory", "sm64_events.memory.addresses", "sm64_events.memory.base", "sm64_events.memory.behaviours",
     "sm64_events.memory.ghost_layout", "sm64_events.memory.layout", "sm64_events.memory.objects",
-    "sm64_events.memory.version_probe", "sm64_events.scenelab", "sm64_events.scenelab.roms", "sm64_events.scenelab_code",
+    "sm64_events.memory.version_probe", "sm64_events.scenelab", "sm64_events.scenelab.probe", "sm64_events.scenelab.roms", "sm64_events.scenelab_code",
     "sm64_events.slotlibrary", "sm64_events.slotlibrary.atlas", "sm64_events.slotlibrary.relocate",
     "sm64_events.slotlibrary.store", "sm64_events.slotlibrary.usamune",
 )

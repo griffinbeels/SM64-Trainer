@@ -175,6 +175,15 @@ def _bundled_media_reads():
                 and mediaprobe.video_start_of(clip) == times[0])
 
 
+def _ghost_lab(report, check, fixture):
+    """The Ghost Lab's rows: its modules import here, Unicorn stays out of this program, and the simulation
+    program beside it passes its own check (scenelab/probe.py); its receipt rides along whole. Unit fixtures
+    have no simulation program beside them."""
+    if fixture is None:
+        from sm64_events.scenelab.probe import trainer_lab_checks
+        report["simulation_program"] = trainer_lab_checks(check)
+
+
 def collect_report(*, fixture: ProbeRuntime | None = None, importer=None):
     """Collect bounded checks. Unit fixtures are never selected by CLI or env."""
     report = {"schema": 1, "kind": "frozen-beta-self-check", "ok": False,
@@ -257,6 +266,7 @@ def collect_report(*, fixture: ProbeRuntime | None = None, importer=None):
             return all(callable(getattr(module, member, None)) for member in members)
         check("import:" + name, imported)
     check("reporting_tls", lambda: _reporting_tls(bundle, load))
+    _ghost_lab(report, check, fixture)
     report["ok"] = all(item["ok"] for item in report["checks"])
     return report
 

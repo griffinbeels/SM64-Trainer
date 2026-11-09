@@ -65,6 +65,13 @@ def isolated_python_child(script: Path, frozen_flag: str, args=()) -> list[str]:
     return [str(windowless), "-I", "-S", str(script), *args]
 
 
+def other_program_env(env: dict) -> dict:
+    """`env` for another PyInstaller program than this one (the simulation program beside the Trainer): without
+    this process's PyInstaller variables (`_MEI*`, `_PYI_*`), which name THIS program's contents folder and would
+    make the other one load from it (core/relaunch.py drops them for the same reason)."""
+    return {key: value for key, value in env.items() if not key.startswith(("_MEI", "_PYI"))}
+
+
 def python_child(module: str, frozen_flag: str, args=(), *,
                  site_packages: bool = False) -> tuple[list[str], dict]:
     """(argv, env) that run `module` as a direct child interpreter.
@@ -85,6 +92,7 @@ def python_child(module: str, frozen_flag: str, args=(), *,
         program = sys.executable
         if child_program(frozen_flag) == SIM_PROGRAM:
             program = str(Path(sys.executable).with_name(SIM_PROGRAM))
+            env = other_program_env(env)
         env.pop("__PYVENV_LAUNCHER__", None)
         return [program, frozen_flag, *args], env
     env["PYTHONPATH"] = os.pathsep.join(filter(None, (

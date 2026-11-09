@@ -36,7 +36,7 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))
 DATA_DIR = REPO / "src" / "sm64_events" / "data"
 SEP = ";" if os.name == "nt" else ":"
-from bundle_policy import (LAB_MODULES, SIM_CONTENTS, SIM_EXE, SIM_MODULES, check_programs,  # noqa: E402
+from bundle_policy import (LAB_MODULES, SIM_CONTENTS, SIM_EXE, SIM_IMPORTS, SIM_MODULES, check_programs,  # noqa: E402
                            data_inputs, map_inputs, ui_inputs)
 from sm64_events.core.update_plan import BUNDLED_NATIVES, LAB_NATIVES  # noqa: E402
 # Native/binary deps whose data files or submodules PyInstaller's auto
@@ -235,6 +235,7 @@ def sim_args(*, metadata_path: "Path | None" = None, version_hook: "Path | None"
         "--paths", str(REPO / "src"),
         "--paths", str(REPO / "tools" / "scene_lab"),
         *(arg for module in SIM_MODULES for arg in ("--hidden-import", module)),
+        *(arg for module in SIM_IMPORTS if module not in SIM_MODULES for arg in ("--hidden-import", module)),
         # OpenSSL is Apache-2.0, which cannot share a process with GPL-2.0-only
         # Unicorn; hashlib falls back to CPython's built-in hash modules and
         # the program needs no network (licenses/README.md, the simulation program).

@@ -12,7 +12,9 @@ import subprocess
 
 from sm64_events.core.childproc import quiet_spawn_kwargs
 from sm64_events.core.update_plan import BUNDLED_NATIVES, LAB_NATIVES
-from sm64_events.scenelab_code import SIM_PROGRAM, child_modules
+from sm64_events.core.paths import LAB_MAP_SHA256
+from sm64_events.scenelab_code import LAB_MODULES as _LAB_MODULES
+from sm64_events.scenelab_code import SIM_PROGRAM, child_modules, lab_module
 
 _REPO = Path(__file__).resolve().parents[1]
 
@@ -20,10 +22,7 @@ _REPO = Path(__file__).resolve().parents[1]
 #: tools/scene_lab/cold_boot.py pins (STROOP_COMMIT): byte for byte the maps
 #: the Ghost Lab has always read. A changed byte refuses the build.
 MAP_FOLDER = "maps"
-PINNED_MAPS = {
-    "MappingUS.map": "d942ba9781aafb500c5bd7a599d15a41a191c6e9fe65b95e6c384429bec2d3b1",
-    "MappingJP.map": "5e51852905862c90173e90cd6b58c591a82d735d63575cf5ffab04c148eec9f2",
-}
+PINNED_MAPS = LAB_MAP_SHA256     # core/paths.py owns the pins; the installed app checks them too
 #: The installed app's second program (sm64_events/scenelab_code.py): its exe
 #: beside the Trainer's and its own contents folder beside `_internal`.
 SIM_EXE = SIM_PROGRAM
@@ -34,6 +33,9 @@ SIM_ROOT_FILES = frozenset({"build-channel.json", "release-version.json"})
 #: The lab modules SIM_EXE runs as children, collected into it by name; it
 #: carries whatever they import, which SIM_FORBIDDEN bounds.
 SIM_MODULES = child_modules(SIM_PROGRAM)
+#: Every module a simulation process may import (tools/scene_lab/sim_boundary.py MODULES), named to the
+#: simulation program's build too: its self-check imports each by name (sm64_events/scenelab/probe.py).
+SIM_IMPORTS = lab_module("sim_boundary").MODULES
 #: Top-level modules each program must never hold (the license ruling,
 #: 2026-11-09; licenses/README.md and licenses/python/unicorn/README.md): Unicorn
 #: is GPL-2.0-only, so it stays out of the Trainer, which loads PyAV's GPL-3.0
@@ -59,24 +61,9 @@ DATA_FILES = frozenset({
     "setup_baseline.json", "sheet_ladders.seed.json", "sheet_library.seed.json.gz", "symbols_jp.tsv",
     "symbols_us.tsv", "video_checks.seed.json.gz",
 })
-#: THE list of Ghost Lab modules (tools/scene_lab) the installed app carries,
-#: by the bare names they import each other by (sm64_events/scenelab_code.py).
-#: It is the import closure of every lab module the app reaches;
-#: tests/test_scenelab_code.py recomputes that closure and fails on a module
-#: missing here, one listed but unreached, or a name that shadows another module.
-#: Left out on purpose: audio_bench, audio_sync_check, e1, e3_measure, fixture,
-#: handoff_relocate and slot_library, developer and evidence tools nothing reaches.
-LAB_MODULES = (
-    "attempt_cutter", "attempt_scenes", "attempt_span", "audio_capture", "audio_clock", "audio_layer",
-    "audio_session", "camera_paths", "camera_presets", "camera_rig", "camera_state", "closure",
-    "cold_boot", "cpu_hooks", "e2_georender", "evaluator", "evaluator_child", "export_sound", "fake_viewer_host",
-    "frame_sim", "ghost_resim", "ghost_sound", "gpu_gate", "handoff_slot", "handoff_try", "hud",
-    "live_audio", "live_spool", "moment_slot", "package", "pick", "picture_encoder", "provenance",
-    "recamera", "replay", "rig_path", "savestate_frames", "scene_audio", "scene_export",
-    "scene_session", "sim_boundary", "sim_scene", "slot_atlas", "stage_cache", "stage_ghosts", "stage_sim", "start_check",
-    "state_resolver", "stems_check", "stems_layer", "stems_live", "stems_probe", "tap", "viewer",
-    "webview_pictures",
-)
+#: The Ghost Lab modules the installed app carries: sm64_events/scenelab_code.py owns the list,
+#: which the frozen app's own self-check imports (desktop/lab_probe.py).
+LAB_MODULES = _LAB_MODULES
 ROOT_DATA_FILES = frozenset({
     "behaviours_jp.tsv", "behaviours_us.tsv", "defaults.seed.json",
     "library_overrides.json", "rank_standards.seed.json", "sheet_ladders.seed.json",

@@ -50,8 +50,8 @@ That code is:
   `inputs/frame.py`, `memory/__init__.py`, `memory/addresses.py`,
   `memory/base.py`, `memory/behaviours.py`, `memory/ghost_layout.py`,
   `memory/layout.py`, `memory/objects.py`, `memory/version_probe.py`,
-  `scenelab/__init__.py`, `scenelab/roms.py`, `scenelab_code.py`,
-  `slotlibrary/__init__.py`, `slotlibrary/atlas.py`,
+  `scenelab/__init__.py`, `scenelab/probe.py`, `scenelab/roms.py`,
+  `scenelab_code.py`, `slotlibrary/__init__.py`, `slotlibrary/atlas.py`,
   `slotlibrary/relocate.py`, `slotlibrary/store.py`,
   `slotlibrary/usamune.py`.
 

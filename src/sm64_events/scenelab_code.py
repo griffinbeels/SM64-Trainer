@@ -7,9 +7,10 @@ From a source checkout those modules are plain scripts beside each other and
 import each other by bare name (`import package`, `import replay`), so the
 folder goes on `sys.path` and a module is imported by that name. The installed
 app has no tools folder: tools/build_exe.py collects every module named in
-tools/bundle_policy.py's LAB_MODULES into the app under the same bare name, and
-here they are imported exactly as they are. LAB_MODULES is the one list of what
-the installed app carries; tests/test_scenelab_code.py proves it equals the
+LAB_MODULES (below) into the app under the same bare name, and here they are
+imported exactly as they are. LAB_MODULES is the one list of what the installed
+app carries (the build reads it through tools/bundle_policy.py, and the frozen
+app's own self-check imports each one, desktop/lab_probe.py); tests/test_scenelab_code.py proves it equals the
 import closure of what the app reaches, and that no bare name shadows a
 standard library, installed or app module.
 
@@ -29,6 +30,24 @@ import sys
 from pathlib import Path
 from types import ModuleType
 
+#: THE list of Ghost Lab modules (tools/scene_lab) the installed app carries,
+#: by the bare names they import each other by. It is the import closure of
+#: every lab module the app reaches; tests/test_scenelab_code.py recomputes that
+#: closure and fails on a module missing here, one listed but unreached, or a
+#: name that shadows another module. Left out on purpose: audio_bench,
+#: audio_sync_check, e1, e3_measure, fixture, handoff_relocate and slot_library,
+#: developer and evidence tools nothing reaches.
+LAB_MODULES = (
+    "attempt_cutter", "attempt_scenes", "attempt_span", "audio_capture", "audio_clock", "audio_layer",
+    "audio_session", "camera_paths", "camera_presets", "camera_rig", "camera_state", "closure",
+    "cold_boot", "cpu_hooks", "e2_georender", "evaluator", "evaluator_child", "export_sound", "fake_viewer_host",
+    "frame_sim", "ghost_resim", "ghost_sound", "gpu_gate", "handoff_slot", "handoff_try", "hud",
+    "live_audio", "live_spool", "moment_slot", "package", "pick", "picture_encoder", "provenance",
+    "recamera", "replay", "rig_path", "savestate_frames", "scene_audio", "scene_export",
+    "scene_session", "sim_boundary", "sim_scene", "slot_atlas", "stage_cache", "stage_ghosts", "stage_sim",
+    "start_check", "state_resolver", "stems_check", "stems_layer", "stems_live", "stems_probe", "tap", "viewer",
+    "webview_pictures",
+)
 #: tools/scene_lab in this checkout; absent from the installed app
 LAB_SOURCE = Path(__file__).resolve().parents[2] / "tools" / "scene_lab"
 #: the two programs of the installed app, by file name in its folder

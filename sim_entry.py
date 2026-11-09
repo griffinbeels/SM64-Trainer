@@ -14,6 +14,9 @@ import sys
 
 def main():
     from sm64_events.scenelab_code import SIM_PROGRAM, child_program, run_child
+    if len(sys.argv) > 1 and sys.argv[1] == "--sim-self-check":    # sm64_events/scenelab/probe.py SIM_FLAG
+        from sm64_events.scenelab.probe import sim_self_check
+        return sim_self_check(sys.argv[2:])
     if len(sys.argv) > 1 and child_program(sys.argv[1]) == SIM_PROGRAM:
         return run_child(sys.argv[1], sys.argv[2:])
     print("SM64TrainerSim.exe runs the Ghost Lab's simulation for SM64 Trainer; "

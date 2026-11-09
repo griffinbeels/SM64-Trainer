@@ -16,6 +16,10 @@ def main():
     # resolve paths or ports. No environment variable can select the channel.
     from sm64_events.core.build_channel import current_build
     current_build()
+    # The Ghost Lab's own self-check: its CPU work through the real child processes (scenelab/probe.py).
+    if len(sys.argv) > 1 and sys.argv[1] == '--lab-self-check':
+        from sm64_events.scenelab.probe import lab_self_check
+        return lab_self_check(sys.argv[2:])
     # The Ghost Lab's child processes re-enter this exe the same way, each
     # running one lab module as its main program (sm64_events/scenelab_code.py).
     # A child that runs Unicorn belongs to SM64TrainerSim.exe and never runs here.

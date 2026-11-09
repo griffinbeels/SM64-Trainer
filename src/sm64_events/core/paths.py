@@ -351,8 +351,14 @@ def bundled_encoder_dll() -> Path | None:
 
 #: STROOP's symbol maps for the two Usamune builds (the Ghost Lab's evaluator,
 #: cold boot and stage simulation read them): committed package data under
-#: ``sm64_events/data/maps``, pinned by sha256 in tools/bundle_policy.py.
-LAB_MAPS = ("MappingUS.map", "MappingJP.map")
+#: ``sm64_events/data/maps``, pinned by sha256 (LAB_MAP_SHA256).
+#: Each map's reviewed bytes (STROOP 6771197a): the build refuses another file
+#: (tools/bundle_policy.py) and the installed app's self-check reads them back.
+LAB_MAP_SHA256 = {
+    "MappingUS.map": "d942ba9781aafb500c5bd7a599d15a41a191c6e9fe65b95e6c384429bec2d3b1",
+    "MappingJP.map": "5e51852905862c90173e90cd6b58c591a82d735d63575cf5ffab04c148eec9f2",
+}
+LAB_MAPS = tuple(LAB_MAP_SHA256)
 
 
 def bundled_lab_file(name: str) -> Path | None:

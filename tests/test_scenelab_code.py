@@ -137,7 +137,8 @@ def test_the_simulation_program_carries_unicorn_and_the_children_that_run_it(tmp
     assert args[0].endswith("sim_entry.py") and args[args.index("--name") + 1] == "SM64TrainerSim"
     assert args[args.index("--contents-directory") + 1] == bundle_policy.SIM_CONTENTS == "_sim"
     hidden = {args[i + 1] for i, arg in enumerate(args) if arg == "--hidden-import"}
-    assert hidden == set(child_modules(SIM_PROGRAM)) == set(bundle_policy.SIM_MODULES)
+    assert set(child_modules(SIM_PROGRAM)) == set(bundle_policy.SIM_MODULES)
+    assert hidden == set(bundle_policy.SIM_MODULES) | set(bundle_policy.SIM_IMPORTS)     # its self-check imports each
     collected = {args[i + 1] for i, arg in enumerate(args) if arg == "--collect-all"}
     assert "unicorn" in collected and not collected & bundle_policy.SIM_FORBIDDEN
     excluded = {args[i + 1] for i, arg in enumerate(args) if arg == "--exclude-module"}
