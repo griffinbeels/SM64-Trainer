@@ -137,6 +137,91 @@ def test_the_installed_app_mounts_the_ghost_lab_with_no_lab_config(app_lab, monk
         assert client.get("/api/scene-lab").json() == {"lab": None}
 
 
+def test_only_the_installed_apps_lab_serves_the_rom_pick(app_lab, tmp_path):
+    """The no-ROM card's routes (server/lab_roms_api.py) come with the app's own lab; a developer's lab keeps its
+    lab.json's ROM and has no pick."""
+    app, _lab = _mount(app_lab["inputs"])
+    paths = {getattr(route, "path", None) for route in app.routes}
+    assert {"/api/scene-lab/roms", "/api/scene-lab/roms/pick"} <= paths
+    config = tmp_path / "lab.json"
+    config.write_text(json.dumps({"rom": str(app_lab["dir"] / "store" / "us.z64"), "map": str(tmp_path / "x.map"),
+                                  "packages": str(app_lab["root"] / "packages"),
+                                  "pj64_plugin": str(app_lab["dir"] / "Plugin")}), encoding="utf-8")
+    dev = FastAPI()
+    scene_lab_api.mount_scene_lab(dev, config)
+    assert "/api/scene-lab/roms" not in {getattr(route, "path", None) for route in dev.routes}
+
+
+class _Warmer:
+    def __init__(self):
+        self.asked = []
+
+    def ask_many(self, stages, tier):
+        self.asked.append((list(stages), tier))
+
+
+class _Tracker:
+    def __init__(self, payload):
+        self.payload = payload
+
+    def target_payload(self):
+        return self.payload
+
+
+def test_the_warm_starts_once_a_rom_is_known_with_the_practice_target_first(app_lab):
+    """A new player never opens the Ghost Lab before his first ghost: the installed app starts the stage warmer as
+    soon as its ROM store has a ROM, the Practice tab's target first (then his route, then every stage)."""
+    from sm64_events.server import scene_warm
+    empty = Store()
+    _app, lab = _mount(lambda: app_lab["inputs"](store=empty))
+    lab.resim.warmer = warmer = _Warmer()
+    lab.tracker = _Tracker({"kind": "star", "course_id": 1, "star_id": 2})
+    background = scene_lab_api._AppBackground(lab)
+    assert background.kick() is False and warmer.asked == []                  # no ROM yet: nothing starts
+    empty.roms["us"] = app_lab["store"].roms["us"]
+    assert background.kick() is True
+    assert warmer.asked == [([scene_warm.stage_of(1, 2)], scene_warm.CURRENT)]
+    lab.tracker = _Tracker({"kind": "segment", "segment_id": 4})
+    assert background.kick() is True and warmer.asked[-1] == ([], scene_warm.CURRENT)   # no star: route, then all
+
+
+def test_the_background_stops_the_rom_copy_it_started(app_lab):
+    stopped = []
+    _app, lab = _mount(app_lab["inputs"])
+    lab.resim.warmer = _Warmer()
+    background = scene_lab_api._AppBackground(lab, follow=lambda: lambda: stopped.append(True))
+    background.thread.start()
+    background.stop()
+    assert stopped == [True] and not background.thread.is_alive()
+
+
+def test_a_developer_lab_reads_its_own_rom_files_and_copies_nothing(tmp_path, monkeypatch):
+    """His test server (SM64_SCENE_LAB): I3 answers from the lab.json's ROM and the other cartridge beside it, found
+    by header; nothing is written under the lab root's roms/ and Project64 is never asked."""
+    from sm64_events.scenelab import roms
+    folder = tmp_path / "roms"
+    folder.mkdir()
+    def image(region):
+        kind = roms.CARTRIDGES[region]
+        data = bytearray(roms.ROM_BYTES)
+        data[:4] = roms.MAGIC_Z64
+        data[0x20:0x20 + len(kind.name)] = kind.name
+        data[0x3E] = kind.country
+        return bytes(data)
+    (folder / "Usamune US.z64").write_bytes(image("us"))
+    (folder / "other.bin").write_bytes(b"x" * 64)
+    (folder / "Usamune JP.n64").write_bytes(image("jp"))
+    config = tmp_path / "lab.json"
+    config.write_text(json.dumps({"rom": str(folder / "Usamune US.z64")}), encoding="utf-8")
+    monkeypatch.setenv("SM64_SCENE_LAB", str(config))
+    monkeypatch.setattr(roms, "default_store", lambda: pytest.fail("a developer's lab reached the ROM store"))
+    assert roms.identify(image("us")) == "us"                                    # the synthetic header reads as US
+    assert roms.rom_for("us") == folder / "Usamune US.z64" and roms.rom_for("jp") == folder / "Usamune JP.n64"
+    assert roms.missing_reason("us") is None
+    monkeypatch.delenv("SM64_SCENE_LAB")
+    assert roms.dev_lab_roms() is None
+
+
 def test_a_developer_lab_config_still_wins_in_the_installed_app(app_lab, monkeypatch, tmp_path):
     import sm64_events.main as main
     config = tmp_path / "dev-lab.json"
@@ -299,6 +384,34 @@ def test_a_stage_already_in_the_cache_starts_no_warm_child(app_lab, monkeypatch)
     assert lab.resim._spawn_warm(9, 1, 2) == "child" and spawned == [("9", True)]
     stage_sim.reset_file(stages, recipe, 9, 1, 1).unlink()                   # gone again: warmed again
     assert lab.resim._spawn_warm(9, 1, 1) == "child"
+
+
+def test_a_stage_a_warm_could_not_make_is_skipped_on_later_runs(app_lab, monkeypatch):
+    """A warm child that refused a stage (its own answer, not a stop) is remembered beside the cache, so the next
+    run's warmer starts no child for it; a stage that was made is never kept off, and a stop is no refusal."""
+    from sm64_events.memory import version_probe
+    from sm64_events.server.scene_resim import SceneResim
+    monkeypatch.setattr(version_probe, "version_from_header", lambda header: "us")
+    monkeypatch.setattr(SceneResim, "_spawn", staticmethod(lambda args, *, background=False: "child"))
+    _app, lab = _mount(app_lab["inputs"])
+    lab.resim._warm_answered((9, 1, 4), {"error": "This stage could not be made."})
+    lab.resim._warm_answered((9, 1, 5), {"path": "made"})
+    assert lab.resim._spawn_warm(9, 1, 4) is None                              # refused before: no child
+    assert lab.resim._spawn_warm(9, 1, 5) == "child"
+    _app2, later = _mount(app_lab["inputs"])                                     # another server run, same cache
+    assert later.resim._spawn_warm(9, 1, 4) is None and later.resim._spawn_warm(9, 1, 6) == "child"
+
+
+def test_the_servers_cache_check_never_imports_the_simulation(app_lab, monkeypatch):
+    """The stage cache's names come from stage_cache, which imports no frame_sim (Unicorn's module): the server's
+    process asks whether a stage is made without loading the simulation."""
+    from sm64_events.memory import version_probe
+    monkeypatch.setattr(version_probe, "version_from_header", lambda header: "us")
+    for name in ("stage_sim", "frame_sim"):
+        monkeypatch.delitem(sys.modules, name, raising=False)
+    _app, lab = _mount(app_lab["inputs"])
+    assert lab.resim._stage_made(app_lab["dir"] / "store" / "us.z64", 9, 1, 1) is False
+    assert "frame_sim" not in sys.modules and "stage_sim" not in sys.modules
 
 
 def test_the_cache_check_names_exactly_the_files_the_simulation_reads(tmp_path, monkeypatch):

@@ -43,7 +43,7 @@ MODULES = (
     # tools/scene_lab, by bare name
     "audio_clock", "audio_layer", "audio_session", "camera_state", "cold_boot", "cpu_hooks", "e2_georender",
     "evaluator", "evaluator_child", "frame_sim", "ghost_resim", "handoff_slot", "live_spool", "moment_slot",
-    "package", "pick", "provenance", "savestate_frames", "sim_boundary", "sim_scene", "slot_atlas", "stage_sim",
+    "package", "pick", "provenance", "savestate_frames", "sim_boundary", "sim_scene", "slot_atlas", "stage_cache", "stage_sim",
     "start_check", "state_resolver", "stems_check", "stems_layer", "stems_probe", "tap",
     # src/sm64_events
     "sm64_events", "sm64_events.core", "sm64_events.core.build_channel", "sm64_events.core.childproc",

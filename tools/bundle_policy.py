@@ -73,7 +73,7 @@ LAB_MODULES = (
     "frame_sim", "ghost_resim", "ghost_sound", "gpu_gate", "handoff_slot", "handoff_try", "hud",
     "live_audio", "live_spool", "moment_slot", "package", "pick", "picture_encoder", "provenance",
     "recamera", "replay", "rig_path", "savestate_frames", "scene_audio", "scene_export",
-    "scene_session", "sim_boundary", "sim_scene", "slot_atlas", "stage_ghosts", "stage_sim", "start_check",
+    "scene_session", "sim_boundary", "sim_scene", "slot_atlas", "stage_cache", "stage_ghosts", "stage_sim", "start_check",
     "state_resolver", "stems_check", "stems_layer", "stems_live", "stems_probe", "tap", "viewer",
     "webview_pictures",
 )

@@ -121,10 +121,12 @@ def _priority(child: subprocess.Popen, below_normal: bool) -> None:
 
 class StageWarmer:
     """The ordered queue and its one background child. `spawn(level, area, act)` starts the child (scene_resim builds
-    its arguments); `pace` is a GamePace or None; `route()` gives his route's "course:star" keys."""
+    its arguments); `pace` is a GamePace or None; `route()` gives his route's "course:star" keys; `answered(stage,
+    answer)` hears each warm child's own last line when it ended by itself (not ended by a stop or the time limit),
+    so a stage it could not make can be remembered past this run."""
 
-    def __init__(self, spawn, *, pace: GamePace | None = None, route=None):
-        self.spawn, self.pace, self.route = spawn, pace, route
+    def __init__(self, spawn, *, pace: GamePace | None = None, route=None, answered=None):
+        self.spawn, self.pace, self.route, self.answered = spawn, pace, route, answered
         self.lock = threading.Lock()
         self.queued: dict[tuple[int, int, int], tuple[int, int]] = {}   # stage -> (tier, order)
         self.done: set[tuple[int, int, int]] = set()                    # warmed or tried this run (or a build's)
@@ -251,10 +253,11 @@ class StageWarmer:
         said: list = []
         reader = threading.Thread(target=lambda: said.append(child.communicate()), daemon=True)
         reader.start()
-        began, suspended = time.monotonic(), False
+        began, suspended, ended = time.monotonic(), False, False
         while reader.is_alive():
             if time.monotonic() - began > WARM_SECONDS or self.stopped.is_set():
                 child.kill()
+                ended = True
                 break
             slow = self.pace is not None and not self.joined.is_set() and self.pace.hurts()
             if slow != suspended:
@@ -270,3 +273,8 @@ class StageWarmer:
         except ValueError:
             answer = {"error": line[0]}
         log.info("stage warmed (level %s area %s act %s): %s", *key, answer)
+        if not ended and self.answered is not None:
+            try:
+                self.answered(key, answer)
+            except Exception:  # noqa: BLE001 - remembering a result never stops the warm
+                log.warning("could not keep the result of warming level %s area %s act %s", *key, exc_info=True)

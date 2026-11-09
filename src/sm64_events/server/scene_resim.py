@@ -145,7 +145,7 @@ class SceneResim:
         self.stopped = threading.Event()
         self.building: Build | None = None            # the newest progressive build (one runs at a time)
         self._recipe: tuple | None = None             # ((rom path, size, mtime), stage_sim.recipe): the cache's names
-        self.warmer = StageWarmer(self._spawn_warm, pace=pace, route=self._route_stars)
+        self.warmer = StageWarmer(self._spawn_warm, pace=pace, route=self._route_stars, answered=self._warm_answered)
 
     # ---------------------------------------------------------------- where things live
     def starts_root(self) -> Path:
@@ -436,14 +436,15 @@ class SceneResim:
     def _spawn_warm(self, level: int, area: int, act: int) -> subprocess.Popen | None:
         """The warm child for that stage, or None when the stage cache already holds what it would make: each stage
         is asked once per server run, and before 2026-11-09 every one of the 102 started a child (an app start, in
-        the installed app) only to find its files made."""
+        the installed app) only to find its files made. A stage a warm could not make on an earlier run is skipped
+        too (stage_cache.failed): a build he clicks still tries it."""
         config = self._config()
         with Path(config.rom).open("rb") as handle:
             header = handle.read(0x40)
         from sm64_events.memory.version_probe import version_from_header
         if version_from_header(header) is None:
             raise ResimRefused("The lab's ROM is not a cartridge a stage can be made from.")
-        if self._stage_made(Path(config.rom), level, area, act):
+        if self._stage_made(Path(config.rom), level, area, act) or self._stage_failed(level, area, act):
             return None
         args = ["warm", *self._common(config), "--level", str(level), "--area", str(area), "--act", str(act),
                 *self._scene_args()]
@@ -452,14 +453,37 @@ class SceneResim:
     def _stage_made(self, rom: Path, level: int, area: int, act: int) -> bool:
         """Whether the stage cache holds that stage's boot and reset already (tools/scene_lab/stage_sim.py `made`, the
         names a warm writes). The ROM's recipe is read once per file version: it hashes the whole cartridge."""
+        recipe = self._recipe_of(rom)
+        return recipe is not None and self._stage_cache().made(self.cache() / "stages", recipe, level, area, act)
+
+    @staticmethod
+    def _stage_cache():
+        """tools/scene_lab/stage_cache.py: the cache's names without the simulation (the server never imports it)."""
         from sm64_events.server.scene_lab_api import _lab_module
-        stage_sim = _lab_module("stage_sim")
+        return _lab_module("stage_cache")
+
+    def _recipe_of(self, rom: Path) -> str | None:
         stat = rom.stat()
         key = (str(rom), stat.st_size, stat.st_mtime_ns)
         if self._recipe is None or self._recipe[0] != key:
-            self._recipe = (key, stage_sim.recipe(rom.read_bytes()))
-        recipe = self._recipe[1]
-        return recipe is not None and stage_sim.made(self.cache() / "stages", recipe, level, area, act)
+            self._recipe = (key, self._stage_cache().recipe(rom.read_bytes()))
+        return self._recipe[1]
+
+    def _stage_failed(self, level: int, area: int, act: int) -> bool:
+        config = self.lab.config()
+        recipe = self._recipe_of(Path(config.rom)) if config.rom is not None else None
+        return recipe is not None and (level, area, act) in self._stage_cache().failed(self.cache() / "stages", recipe)
+
+    def _warm_answered(self, stage: tuple[int, int, int], answer: dict) -> None:
+        """A warm child's answer: a stage it refused, and did not make, is kept off later runs' warms."""
+        if "error" not in answer:
+            return
+        config = self.lab.config()
+        if config.rom is None or self._stage_made(Path(config.rom), *stage):
+            return
+        recipe = self._recipe_of(Path(config.rom))
+        if recipe is not None:
+            self._stage_cache().fail(self.cache() / "stages", recipe, *stage)
 
     def _route_stars(self) -> list[str]:
         """His practice route's "course:star" keys (the tracker's active route), for the warmer's route tier."""

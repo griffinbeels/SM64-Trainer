@@ -1420,6 +1420,65 @@ def _mount_ghost_routes(router: APIRouter, lab: SceneLab) -> None:
         return await asyncio.to_thread(lab.ghosts.recording_item, target, recording)
 
 
+class _AppBackground:
+    """The installed app's lab work that needs no visit to the Ghost Lab (Griffin, 2026-11-09: "just be able to
+    immediately jump into all the functionality"): the ROM copied from the running game in the background
+    (scenelab/roms.py follow_game), and the stage warmer started as soon as a ROM is known, so a new player's first
+    ghost opens from a made stage. The warm begins with the star the Practice tab targets, then his route, then
+    every stage (scene_warm.StageWarmer's order: one idle child on one core, paused while his game runs slow).
+    A developer's lab (SM64_SCENE_LAB) runs none of this: its warm still starts on the first stage he opens."""
+
+    POLL_SECONDS = 5.0
+
+    def __init__(self, lab: SceneLab, follow=None):
+        self.lab, self.stopped = lab, threading.Event()
+        self.stop_follow = follow() if follow is not None else None
+        self.thread = threading.Thread(target=self._wait_for_rom, name="lab-first-warm", daemon=True)
+
+    @classmethod
+    def start(cls, lab: SceneLab) -> "_AppBackground":
+        from sm64_events.scenelab.roms import follow_game
+        background = cls(lab, follow=follow_game)
+        background.thread.start()
+        return background
+
+    def _wait_for_rom(self) -> None:
+        while not self.stopped.is_set():
+            if self.kick():
+                return
+            self.stopped.wait(self.POLL_SECONDS)
+
+    def kick(self) -> bool:
+        """Starts the warmer once the lab has a ROM and a map; True once started."""
+        try:
+            config = self.lab.config()
+        except Exception:  # noqa: BLE001 - a config that cannot be read yet is asked again
+            return False
+        if config.rom is None or config.map is None or self.lab.resim is None:
+            return False
+        from sm64_events.server import scene_warm
+        stage = scene_warm.stage_of(*self._target())
+        self.lab.resim.warmer.ask_many([stage] if stage is not None else [], scene_warm.CURRENT)
+        return True
+
+    def _target(self) -> tuple[int | None, int | None]:
+        """The star the Practice tab targets now (course, star), or (None, None)."""
+        tracker = self.lab.tracker
+        try:
+            target = tracker.target_payload() if tracker is not None else {}
+        except Exception:  # noqa: BLE001 - no target: the warm starts with his route
+            target = {}
+        if target.get("kind") != "star":
+            return None, None
+        return target.get("course_id"), target.get("star_id")
+
+    def stop(self) -> None:
+        self.stopped.set()
+        self.thread.join(timeout=5.0)
+        if self.stop_follow is not None:
+            self.stop_follow()
+
+
 def _warm_target(lab: SceneLab, course: int | None, star: int | None, tier: str) -> None:
     """A star target he is looking at: its stage made ahead (scene_warm.py; "current" for the stage he opened,
     "list" for a target on a list he is looking at). Never waits."""
@@ -1619,6 +1678,8 @@ def mount_scene_lab(app, config_path, **options) -> SceneLab:
     `options` are SceneLab's (tests and e3_measure.py inject doubles and short timers), and `ghost_sources`,
     what the stage and the ghost catalog read: {"tracker", "replay", "ghost", "community"} (scene_ghosts.py)."""
     sources = options.pop("ghost_sources", None) or {}
+    # The installed server's background (_AppBackground): main.py asks for it; tests and the UI fixture do not.
+    app_background = options.pop("app_background", False)
     export_options, moment_options, resim_options = (options.pop(name, None) or {} for name in (
         "export_options", "moment_options", "resim_options"))
     lab = SceneLab(Path(config_path) if config_path is not None else None, **options)
@@ -1673,6 +1734,11 @@ def mount_scene_lab(app, config_path, **options) -> SceneLab:
             raise HTTPException(422, f"This part of the recording's sound is damaged: {damaged}") from None
         return Response(data, media_type=media_type, headers={"Cache-Control": "no-store"})
 
+    in_app = config_path is None
+    if in_app:
+        # The installed app finds its own ROM (scenelab/roms.py): the no-ROM card's routes (ui/components/rompick.js).
+        from sm64_events.server.lab_roms_api import create_rom_router
+        app.include_router(create_rom_router())
     app.include_router(router)
     serving = app.router.lifespan_context
 
@@ -1680,9 +1746,12 @@ def mount_scene_lab(app, config_path, **options) -> SceneLab:
     async def lifespan(application):
         async with serving(application) as state:
             await lab.start_live()
+            background = _AppBackground.start(lab) if in_app and app_background else None
             try:
                 yield state
             finally:
+                if background is not None:
+                    await asyncio.to_thread(background.stop)
                 await asyncio.to_thread(lab.exports.shutdown)
                 lab.moments.shutdown()
                 await lab.shutdown()

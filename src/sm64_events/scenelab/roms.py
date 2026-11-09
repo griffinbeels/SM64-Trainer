@@ -21,6 +21,10 @@ C. A file the player chooses (`adopt`), only when neither found the US ROM: the 
 The copy lives at `<lab root>/roms/<region>.z64` in the N64's big-endian order, with a record beside it. Nothing
 here writes to Project64, its folders or its registry, and nothing here sends a byte off this computer.
 
+A developer's lab (`SM64_SCENE_LAB`, the override every Ghost Lab node keeps) is the one exception to the store:
+`rom_for` then answers from that lab.json's ROM and its neighbour (`dev_lab_roms`), main.py hands setup no store and
+the lab mount starts no copy, so a test server writes nothing under roms/.
+
 Measured 2026-11-09 on his machine, read-only (Project64 1.6, pid 61300): Project64 holds the image word-swapped,
 each 32-bit word reversed, the same order as RDRAM (`memory/base.py`). Swapped back, the 8,388,608 bytes are
 identical to `roms/Usamune US.z64` (sha256 7be459e5...). The image's region ends at exactly 8 MiB; one read took
@@ -447,11 +451,62 @@ def follow_game(store: RomStore | None = None, *, interval_s: float = FOLLOW_INT
     return stop_following
 
 
+DEV_LAB_ENV = "SM64_SCENE_LAB"
+_dev_found: dict = {}            # (lab.json, its mtime, the ROM folder's mtime) -> {region: Path | None}
+_dev_lock = threading.Lock()
+
+
+def dev_lab_roms() -> dict[str, Path | None] | None:
+    """A developer's lab (`SM64_SCENE_LAB` names its lab.json): each region's ROM read where that lab already
+    keeps it, never copied. The lab.json's "rom" is its own region's; the other region is the file of that
+    cartridge beside it, found by header as tools/scene_lab/cold_boot.py finds it. None without the variable.
+    So his test server behaves as before the store existed: nothing is written under the lab root's roms/."""
+    named = os.environ.get(DEV_LAB_ENV)
+    if not named:
+        return None
+    try:
+        lab_json = Path(named)
+        rom = Path(json.loads(lab_json.read_text(encoding="utf-8"))["rom"])
+        key = (str(lab_json), lab_json.stat().st_mtime_ns, rom.parent.stat().st_mtime_ns)
+    except (OSError, ValueError, KeyError, TypeError):
+        return {region: None for region in CARTRIDGES}
+    with _dev_lock:
+        if key not in _dev_found:
+            found: dict[str, Path | None] = {region: None for region in CARTRIDGES}
+            for path in [rom, *RomStore._listing(rom.parent)]:
+                wanted = [region for region, held in found.items() if held is None]
+                if not wanted:
+                    break
+                region = _header_region(path)
+                if region in wanted:
+                    found[region] = path
+            _dev_found.clear()
+            _dev_found[key] = found
+        return dict(_dev_found[key])
+
+
+def _header_region(path: Path) -> str | None:
+    """The Usamune region a ROM file's header names (its size checked, only the header read)."""
+    try:
+        if path.stat().st_size != ROM_BYTES:
+            return None
+        with path.open("rb") as file:
+            head = to_big_endian(file.read(HEADER_SIZE))
+    except OSError:
+        return None
+    return region_of_header(head) if head is not None else None
+
+
 def rom_for(region: str) -> Path | None:
-    """I3: the private copy of `region`'s Usamune ROM, or None."""
+    """I3: the private copy of `region`'s Usamune ROM, or None (a developer's lab: its own file, never copied)."""
+    dev = dev_lab_roms()
+    if dev is not None:
+        return dev[cartridge(region).region]
     return default_store().rom_for(region)
 
 
 def missing_reason(region: str) -> str | None:
     """I3: None when `rom_for(region)` has a ROM, else one plain sentence naming the exact ROM and the fix."""
+    if dev_lab_roms() is not None:
+        return None if rom_for(region) is not None else missing_sentence(region)
     return default_store().missing_reason(region)

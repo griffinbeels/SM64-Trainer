@@ -43,8 +43,9 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import frame_sim as sim  # noqa: E402
+# The cache's names live outside the simulation, so the server can read them without importing it.
+from stage_cache import STAGE_VERSION, boot_file, made, recipe, reset_file  # noqa: E402,F401
 
-STAGE_VERSION = 2                # the reset's recipe: a change makes every reset (and start-file base) anew
 PACKAGE_VERSION = 2              # a stage scene's own form: 2 shows every frame at the game's 30 fps
 RESET_BUTTON = 0x0020            # L: Usamune's practice reset
 ENTRY_NODE = 0x0A                # a course's painting entry
@@ -87,30 +88,6 @@ def lab_config() -> dict:
     app's own inputs otherwise (core/lab_inputs.py::tool_config)."""
     from sm64_events.core.lab_inputs import tool_config  # noqa: PLC0415
     return tool_config()
-
-
-def recipe(rom: bytes) -> str | None:
-    """What every cached boot and reset of this cartridge is named by (STAGE_VERSION, its build, its bytes); None for a
-    ROM that is neither Usamune build. Stages.key and `made` both read it, so a cache check outside the simulation
-    (server/scene_resim.py, before it starts a warm) names exactly the files a warm writes."""
-    from sm64_events.memory.version_probe import version_from_header  # noqa: PLC0415
-    version = version_from_header(rom[:0x40])
-    return None if version is None else f"v{STAGE_VERSION}-{version}-{hashlib.sha256(rom).hexdigest()[:12]}"
-
-
-def boot_file(cache: Path, recipe_name: str) -> Path:
-    return Path(cache) / f"boot-{recipe_name}.npz"
-
-
-def reset_file(cache: Path, recipe_name: str, level: int, area: int, act: int) -> Path:
-    return Path(cache) / f"reset-{recipe_name}-{level}-{area}-{act}.npz"
-
-
-def made(cache: Path, recipe_name: str, level: int, area: int, act: int) -> bool:
-    """Whether `cache` already holds what a warm of that stage makes first: the cold boot's RAM and that place's
-    practice reset. A warm's packer seed for the level comes with the reset (the build or warm that made the reset
-    packed that level's frames, sim_scene.Seed.keep)."""
-    return boot_file(cache, recipe_name).is_file() and reset_file(cache, recipe_name, level, area, act).is_file()
 
 
 class Machine:
