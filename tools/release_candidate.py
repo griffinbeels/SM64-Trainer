@@ -30,6 +30,9 @@ NATIVES = BUNDLED_NATIVES
 #: same way under lab_native_sha256: the installed app runs them, never
 #: compiles them, so their bytes are as much the candidate as the plugin's.
 LAB_FOLDER = "_internal/sm64_events/data/lab"
+#: The Ghost Lab's simulation program (sm64_events/scenelab_code.py SIM_PROGRAM), recorded as sim_program_sha256:
+#: it is the only program that runs Unicorn, so its bytes are recorded like the natives'.
+SIM_PROGRAM = "SM64TrainerSim.exe"
 
 
 def digest(path: Path) -> str:
@@ -87,6 +90,7 @@ def record_candidate(directory: Path, *, version: str, build, artifacts: list[Pa
              "native_sha256": {name: digest(app / "_internal" / "sm64_events" / "data" / "plugin" / name)
                                for name in NATIVES},
              "lab_native_sha256": {name: digest(app / LAB_FOLDER / name) for name in LAB_NATIVES},
+             "sim_program_sha256": digest(app / SIM_PROGRAM),
              "artifacts": {p.name: {"sha256": digest(p), "size": p.stat().st_size} for p in artifacts}}
     if promoted_from:
         if len(promoted_from) != 64 or any(c not in "0123456789abcdef" for c in promoted_from):
@@ -137,6 +141,13 @@ def _verify_identity(archive, record):
             found = None
         if found != recorded[name]:
             raise ValueError("candidate lab native provenance disagrees")
+    try:
+        with archive.open(SIM_PROGRAM) as stream:
+            program = hashlib.file_digest(stream, "sha256").hexdigest()
+    except KeyError:
+        program = None
+    if program is None or program != record.get("sim_program_sha256"):
+        raise ValueError("candidate simulation program provenance disagrees")
     for name in RETIRED_NATIVES:
         try:
             placeholder = archive.read(f"{NATIVE_FOLDER}/{name}")

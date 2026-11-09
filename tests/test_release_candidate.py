@@ -23,6 +23,7 @@ def prepared(tmp_path, *, private=True, version="1.10.0-beta.1", manifest_versio
     app = tmp_path / "app"
     files = _app_files(b"FROZEN-APP")
     files.update({f"{candidate.LAB_FOLDER}/{name}": b"LAB NATIVE " + name.encode() for name in LAB_NATIVES})
+    files[candidate.SIM_PROGRAM] = b"MZ SIMULATION PROGRAM"
     if placeholder is not None:
         files.update({f"{NATIVE_FOLDER}/{name}": placeholder for name in RETIRED_NATIVES})
     build = BuildChannel(channel="beta", build_id="qa-1", installation="normal")
@@ -79,6 +80,17 @@ def test_candidate_refuses_a_lab_native_other_than_the_one_it_recorded(tmp_path,
     (directory / candidate.RECORD).write_text(json.dumps(record))
     with pytest.raises(ValueError, match="lab native provenance"):
         candidate.verify_artifacts(directory, expected_assets=[p.name for p in release.candidate_assets(directory)])
+
+def test_candidate_refuses_a_simulation_program_other_than_the_one_it_recorded(tmp_path):
+    """SM64TrainerSim.exe is the only program that runs Unicorn: its bytes are recorded like the natives'."""
+    directory, _, _ = prepared(tmp_path)
+    record = candidate.read_record(directory)
+    assert len(record["sim_program_sha256"]) == 64
+    record["sim_program_sha256"] = "0" * 64
+    (directory / candidate.RECORD).write_text(json.dumps(record))
+    with pytest.raises(ValueError, match="simulation program provenance"):
+        candidate.verify_artifacts(directory, expected_assets=[p.name for p in release.candidate_assets(directory)])
+
 
 def test_candidate_detects_artifact_changed_after_preparation(tmp_path):
     directory, _, _ = prepared(tmp_path)
