@@ -422,4 +422,6 @@ def compare_command(args) -> int:
 
 
 if __name__ == "__main__":
+    import sim_boundary  # a simulation process: no (L)GPL-3.0 library from here on
+    sim_boundary.enter()
     raise SystemExit(main())
