@@ -159,7 +159,15 @@ def corpus(args) -> int:
     from sm64_events.ghost.clip import decode_clip
     stages = stages_for(args, args.version)
     symbols = stages.symbols
-    rows = []
+    class Rows(list):
+        def append(self, row) -> None:                                # kept as it goes: a stopped run keeps its rows
+            super().append(row)
+            if args.out:
+                args.out.write_text(json.dumps({"simulated_on": args.version, "clips": len(self), "partial": True,
+                                                "rows": self}, indent=0), encoding="utf-8")
+            print(json.dumps(row), flush=True)
+
+    rows = Rows()
     for path in sorted(args.clips.rglob("*.ghost")):
         try:
             clip = decode_clip(path.read_bytes())
@@ -196,7 +204,7 @@ def corpus(args) -> int:
         except stage_sim.StageError as error:
             row["stopped"] = str(error)[:100]
         rows.append({**row, "poses": compared, "parting": parting, "farthest": round(farthest, 3)})
-    summary = {"simulated_on": args.version, "clips": len(rows), "rows": rows}
+    summary = {"simulated_on": args.version, "clips": len(rows), "rows": list(rows)}
     text = json.dumps(summary, indent=0)
     if args.out:
         args.out.write_text(text, encoding="utf-8")

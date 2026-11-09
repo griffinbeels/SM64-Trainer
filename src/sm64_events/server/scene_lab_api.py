@@ -126,7 +126,7 @@ import time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -207,6 +207,8 @@ class LabConfig:
     in_app: bool = False               # from_app: the installed app's own inputs, no lab.json
     app_problems: tuple[str, ...] = ()   # from_app: what stops any scene, in the words the page shows
     rom_problem: str | None = None     # from_app: why there is no ROM yet
+    roms: dict = field(default_factory=dict)   # from_app: each region's ROM ({"us", "jp"}: Path or None)
+    maps: dict = field(default_factory=dict)   # from_app: each region's map; a scene opens with its own pair
 
     @classmethod
     def from_app(cls, inputs: dict) -> "LabConfig":
@@ -220,7 +222,9 @@ class LabConfig:
         return cls(rom, (root or scene_lab_root()) / "packages",
                    Path(inputs["pj64_plugin"]) if inputs.get("pj64_plugin") else None,
                    Path(inputs["map"]) if inputs.get("map") else None, lab_root=root, in_app=True,
-                   app_problems=tuple(inputs.get("problems") or ()), rom_problem=rom_problem)
+                   app_problems=tuple(inputs.get("problems") or ()), rom_problem=rom_problem,
+                   roms={region: Path(found) if found else None for region, found in (inputs.get("roms") or {}).items()},
+                   maps={region: Path(found) if found else None for region, found in (inputs.get("maps") or {}).items()})
 
     def require_rom(self) -> Path:
         """The ROM; ConfigError with the sentence why when there is none yet (the installed app before its ROM

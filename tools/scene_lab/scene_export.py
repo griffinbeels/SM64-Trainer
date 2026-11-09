@@ -218,7 +218,9 @@ def _session(job: dict, folder: Path):
     config = SimpleNamespace(rom=Path(job["config"]["rom"]), pj64_plugin=Path(job["config"]["pj64_plugin"]),
                              renderer=job["config"].get("renderer", "trainer"),
                              resolution=tuple(job["config"]["resolution"]) if job["config"].get("resolution") else None,
-                             map=Path(job["config"]["map"]) if job["config"].get("map") else None)
+                             map=Path(job["config"]["map"]) if job["config"].get("map") else None,
+                             roms={k: Path(v) for k, v in (job["config"].get("roms") or {}).items()},
+                             maps={k: Path(v) for k, v in (job["config"].get("maps") or {}).items()})
     options = {"encoder_factory": lambda: None}
     if job.get("host") == "fake":                      # tests: the protocol double, no renderer and no GPU
         import fake_viewer_host

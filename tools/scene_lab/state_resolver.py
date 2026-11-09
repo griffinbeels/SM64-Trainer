@@ -326,7 +326,7 @@ def _open(args, data: bytes):
     import evaluator
     import package
     rom = args.rom.read_bytes()
-    opened = evaluator.Evaluator(package.Package(data, rom), rom, e2_georender.load_map(args.map), cache=2)
+    opened = evaluator.Evaluator(package.Package(data, rom), rom, e2_georender.load_map(args.map, rom=rom), cache=2)
     opened.state_cache = 1                       # each frame is asked for once
     return opened
 

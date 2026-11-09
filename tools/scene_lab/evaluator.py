@@ -141,8 +141,8 @@ class Evaluator:
     @classmethod
     def open(cls, package_path: Path, rom_path: Path, map_path: Path, **options) -> Evaluator:
         import e2_georender as e2
-        symbols = e2.load_map(map_path)
         rom = rom_path.read_bytes()
+        symbols = e2.load_map(map_path, rom=rom)
         package = scene_package.open_package(package_path, rom_path)
         return cls(package, rom, symbols, source=package_path, **options)
 

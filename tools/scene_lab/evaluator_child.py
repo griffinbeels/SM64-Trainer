@@ -422,7 +422,7 @@ class Child:
         self.e2, self.pk = e2_georender, scene_package
         self.rom_path, self.map_path, self.source = args.rom, args.map, Path(args.source)
         self.rom = args.rom.read_bytes()
-        self.symbols = e2_georender.load_map(args.map)
+        self.symbols = e2_georender.load_map(args.map, rom=self.rom)
         self.memory = shared_memory.SharedMemory(name=args.memory, **({"track": False} if sys.version_info >= (3, 13) else {}))
         self.sink, self.write_lock = sink, threading.Lock()
         self.evaluator = None
