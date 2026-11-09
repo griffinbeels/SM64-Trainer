@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Runs in the simulation program (SM64TrainerSim.exe); licenses/README.md lists its GPL-2.0-or-later code.
 """Is a start someone else made safe to run, and is a save state built from it safe to write? (Ghost Handoff)
 
 A downloaded start becomes game state in the simulation and, through the Save states row, in a Usamune slot of

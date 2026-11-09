@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Runs in the simulation program (SM64TrainerSim.exe); licenses/README.md lists its GPL-2.0-or-later code.
 """Boot a Usamune ROM (US v1.93u or JP v1.93j) from its cartridge image inside Unicorn, with no recording (lab only).
 
     uv run --with unicorn==2.1.4 --with capstone python tools/scene_lab/cold_boot.py fetch-maps
