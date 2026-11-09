@@ -105,7 +105,7 @@ def painted(monkeypatch):
     data = block_with({0x100: top, 0x1100: bottom, 0x2100: quarter}, 0x3000)
     monkeypatch.setitem(ca.BLOCKS, "castle", frozenset({len(data)}))
     portraits = (recipe("bob", "castle", 64, ca._painting(0x100, 0x1100), data),
-                 recipe("rr", "castle", 64, ca._mirrored_quarter(0x2100), data))
+                 recipe("lll", "castle", 64, ca._mirrored_quarter(0x2100), data))
     rom, _ = cartridge(bytes(range(256)) * 40, data)
     return rom, portraits, (top, bottom, quarter)
 
@@ -137,7 +137,7 @@ def test_a_malformed_block_is_refused_rather_than_decoded_into_garbage():
 def test_a_painting_is_its_top_half_over_its_bottom_half_at_full_size(painted):
     rom, portraits, (top, bottom, _) = painted
     pictures = ca.extract(rom, portraits)
-    assert set(pictures) == {"bob", "rr"}
+    assert set(pictures) == {"bob", "lll"}
     image = Image.open(io.BytesIO(pictures["bob"])).convert("RGBA")
     assert image.size == (ca.OUTPUT_PIXELS, ca.OUTPUT_PIXELS)
     scale = ca.OUTPUT_PIXELS // 64
@@ -150,7 +150,7 @@ def test_a_painting_is_its_top_half_over_its_bottom_half_at_full_size(painted):
 
 def test_a_mirrored_quarter_fills_all_four_corners(painted):
     rom, portraits, (_, _, quarter) = painted
-    image = Image.open(io.BytesIO(ca.extract(rom, portraits)["rr"])).convert("RGBA")
+    image = Image.open(io.BytesIO(ca.extract(rom, portraits)["lll"])).convert("RGBA")
     scale = ca.OUTPUT_PIXELS // 64
     corner = rgba(int.from_bytes(quarter[:2], "big"))
     for x, y in ((0, 0), (63, 0), (0, 63), (63, 63)):
@@ -166,7 +166,7 @@ def test_bytes_that_do_not_match_the_known_picture_give_no_picture(painted):
 def test_a_block_of_an_unexpected_size_is_still_found_by_its_content(painted, monkeypatch):
     rom, portraits, _ = painted
     monkeypatch.setitem(ca.BLOCKS, "castle", frozenset({0x12345}))
-    assert set(ca.extract(rom, portraits)) == {"bob", "rr"}
+    assert set(ca.extract(rom, portraits)) == {"bob", "lll"}
 
 
 def test_every_shipped_recipe_fits_its_square_and_meets_the_grid_size():
@@ -192,7 +192,7 @@ def test_no_rom_lists_a_stand_in_for_every_portrait(tmp_path):
     assert art.refresh() is False
     listing = art.listing()
     assert listing["from_rom"] is False
-    assert listing["courses"] == {p.stem: f"standin/{p.stem}.svg" for p in ca.PORTRAITS}
+    assert listing["courses"] == {p.stem: f"standin/{p.stem}.svg" for p in ca.PORTRAITS} | SHIPPED_TAILS
     assert not (tmp_path / "art").exists()
 
 
@@ -205,11 +205,11 @@ def test_a_found_rom_is_cut_once_and_cached_by_its_hash(tmp_path, painted, monke
                     (rom_path if region == "us" else None), portraits=portraits)
     assert art.refresh() is True
     key = f"{hashlib.sha256(rom).hexdigest()[:16]}-v{ca.FORMAT_VERSION}"
-    assert art.listing() == {"courses": {"bob": f"{key}/bob.png", "rr": f"{key}/rr.png"},
+    assert art.listing() == {"courses": {"bob": f"{key}/bob.png", "lll": f"{key}/lll.png", **SHIPPED_TAILS},
                              "from_rom": True, "region": "us"}
     assert asked == ["us"]
     assert art.refresh() is False                      # same file: nothing to do
-    assert sorted(p.name for p in (tmp_path / "art" / key).iterdir()) == ["bob.png", "portraits.json", "rr.png"]
+    assert sorted(p.name for p in (tmp_path / "art" / key).iterdir()) == ["bob.png", "lll.png", "portraits.json"]
     # Only the cache folder was written: nothing beside it, nothing in the ROM's folder.
     assert sorted(p.name for p in tmp_path.iterdir()) == ["art", "us.z64"]
     assert sorted(p.name for p in (tmp_path / "art").iterdir()) == [key]
@@ -224,13 +224,13 @@ def test_a_portrait_the_rom_cannot_supply_keeps_its_stand_in(tmp_path, painted):
     rom, portraits, _ = painted
     rom_path = tmp_path / "jp.z64"
     rom_path.write_bytes(rom)
-    missing = Portrait("ttc", "TTC", "castle", 64, ca._painting(0x100, 0x1100), frozenset({"f" * 64}))
+    missing = Portrait("wdw", "WDW", "castle", 64, ca._painting(0x100, 0x1100), frozenset({"f" * 64}))
     art = CourseArt(tmp_path / "art", rom_for=lambda region: rom_path if region == "jp" else None,
                     portraits=portraits + (missing,))
     art.refresh()
     listing = art.listing()
     assert listing["region"] == "jp"
-    assert listing["courses"]["ttc"] == "standin/ttc.svg"
+    assert listing["courses"]["wdw"] == "standin/wdw.svg"
     assert listing["courses"]["bob"].endswith("/bob.png")
 
 
@@ -265,7 +265,7 @@ def test_only_a_cached_picture_name_can_be_served(tmp_path, painted):
     key = art.listing()["courses"]["bob"].split("/")[0]
     assert art.file(key, "bob.png") is not None
     for bad_key, bad_name in ((key, "../us.z64"), (key, "portraits.json"), ("..", "bob.png"),
-                              (key, "ttc.png"), ("standin", "bob.png"), (key, "BOB.PNG")):
+                              (key, "wdw.png"), ("standin", "bob.png"), (key, "BOB.PNG")):
         assert art.file(bad_key, bad_name) is None, (bad_key, bad_name)
 
 
@@ -320,7 +320,11 @@ def test_without_course_art_the_server_serves_stand_ins_and_never_looks_for_a_ro
         for stem, tail in body["courses"].items():
             response = client.get(f"/api/icons/course/{tail}")
             assert response.status_code == 200, stem
-            assert response.headers["content-type"].startswith("image/svg+xml")
+            kind = "image/webp" if stem in ca.SHIPPED else "image/svg+xml"
+            assert response.headers["content-type"].startswith(kind), stem
+        assert set(body["courses"]) >= set(ca.SHIPPED)
+        for bad in ("shipped/bob.webp", "shipped/..%2Fapp.js", "shipped/rr.png"):
+            assert client.get(f"/api/icons/course/{bad}").status_code == 404, bad
         assert client.get("/api/icons/course/standin/hmc.svg").status_code == 404
         assert client.get("/api/icons/course/0123456789abcdef-v1/bob.png").status_code == 404
 
@@ -370,8 +374,9 @@ def test_the_real_app_mounts_the_portrait_routes(tmp_path):
 
 # -- the Trainer ships no Nintendo pictures ------------------------------------------------------------------------
 
-# sha256 of the 13 course portraits the Trainer shipped until 2026-11-09 (ui/assets/course_icons), each the game's
-# own painting or a screenshot. Fingerprints, not pictures: they let this test recognise one coming back.
+# sha256 of the 11 course portraits the Trainer shipped until 2026-11-09 (ui/assets/course_icons) that were the
+# game's own paintings. Fingerprints, not pictures: they let this test recognise one coming back. Rainbow Ride's and
+# Tick Tock Clock's were Griffin's own screenshots and still ship (SHIPPED_PICTURES).
 REMOVED_NINTENDO_PICTURES = {
     "392f4d6ebedcbab1830bb292abb01f76af128267ab67e008ff7f7a7c7da605bf": "bbh.webp",
     "5079d99930ce71b8445429804d004f183df8046a98ddf209f2940f040b4a5d28": "bitfs.webp",
@@ -380,18 +385,18 @@ REMOVED_NINTENDO_PICTURES = {
     "024fc0c9825825dcbdde0fcb466132c13ea4017be8454b8a45251ab62b66d519": "jrb.webp",
     "caed74713f8073f603416d8e51675946aa1cbe6d92ae44953bb7ff6765f91cf1": "lll.webp",
     "01f445df09b2d7909f11f6565b463f64296a64cf43a2a93218b9cc91b9e37532": "princess_secret.webp",
-    "784189cf578e707cee315c064826d8b25726fb468d4c4a41a5234aa319afb5a1": "rr.webp",
     "9ca4faa6535e81261b981c23d9f0dd24f075b7f1a2f626c34f0a3f9ccaf834c4": "thi.webp",
-    "1a072c36694500f4722e3bd3924505bb12ce7b4ffd69856e24225a6390776ce2": "ttc.webp",
     "af962094e48122614f486a22edabbdd445f9c1b2239a83596e0a0dc69ab1b534": "ttm.webp",
     "c73d0ecf2b8cac6703a96c8d8aa126566c80bc33dd1339e7e0ec238d8ecd5c17": "wdw.webp",
     "4c040c89ea05d031d24bcc7940ea7866918e174088a0729ecf1de2db8592d41f": "wf.webp",
 }
-# Tracked copies that still exist on purpose, each waiting on a named decision. Empty is the goal.
-PENDING_DECISION = {
-    "website/assets/bob.webp": "the public website's ghost section art; Griffin decides its replacement "
-                               "(rom-art report, 2026-11-09)",
+# The course pictures the Trainer still ships, by their bytes: Griffin's own in-game screenshots (2026-11-09: "we
+# should use the icons we already have. Those are screenshots I personally took from in-game.").
+SHIPPED_PICTURES = {
+    "rr.webp": "784189cf578e707cee315c064826d8b25726fb468d4c4a41a5234aa319afb5a1",
+    "ttc.webp": "1a072c36694500f4722e3bd3924505bb12ce7b4ffd69856e24225a6390776ce2",
 }
+SHIPPED_TAILS = {stem: f"shipped/{name}" for stem, name in ca.SHIPPED.items()}
 _IMAGE = re.compile(r"\.(png|webp|jpe?g|gif|avif|bmp)$", re.I)
 
 
@@ -408,7 +413,7 @@ def test_no_tracked_file_is_a_removed_nintendo_picture():
             digest = hashlib.sha256(path.read_bytes()).hexdigest()
             if digest in REMOVED_NINTENDO_PICTURES:
                 found[name] = REMOVED_NINTENDO_PICTURES[digest]
-    assert found == {name: "bob.webp" for name in PENDING_DECISION}, (
+    assert found == {}, (
         "a course portrait came back into the repository; the app cuts them from the player's ROM "
         f"(sm64_events/course_art.py): {found}")
 
@@ -421,8 +426,12 @@ def test_the_frozen_app_bundles_no_course_portraits():
         from bundle_policy import ui_inputs
     finally:
         sys.path.remove(str(REPO / "tools"))
+    shipped = set()
     for path in ui_inputs(REPO):
         relative = path.relative_to(UI).as_posix()
-        assert not relative.startswith("assets/course_icons/"), relative
+        if relative.startswith("assets/course_icons/"):
+            shipped.add(relative.removeprefix("assets/course_icons/"))
+            assert SHIPPED_PICTURES.get(path.name) == hashlib.sha256(path.read_bytes()).hexdigest(), relative
         if _IMAGE.search(relative):
             assert hashlib.sha256(path.read_bytes()).hexdigest() not in REMOVED_NINTENDO_PICTURES, relative
+    assert shipped == set(SHIPPED_PICTURES) == set(ca.SHIPPED.values()), shipped   # exactly his two screenshots

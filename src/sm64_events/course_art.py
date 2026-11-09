@@ -26,9 +26,11 @@ Where the pictures are (decomp n64decomp/sm64 at 06ec56df, read 2026-11-09):
   0x6000-0x7800 and 0x8000-0x9800.
 - Big Boo's Haunt has no painting: its picture is the 32x32 Boo portrait on
   the mansion's wall, BBH segment 7 offset 0x1000.
-- Rainbow Ride has no painting either. The shipped art was a screenshot, which
-  no ROM holds; its stand-in is the flying carpet, `quarter_flying_carpet`
-  (RR segment 7 offset 0), mirrored into four as the game draws it.
+- Rainbow Ride and Tick Tock Clock keep the pictures the Trainer already
+  shipped (`SHIPPED`): screenshots Griffin took in the game himself, not the
+  game's own files. Griffin, 2026-11-09: "we should use the icons we already
+  have. Those are screenshots I personally took from in-game." (RR has no
+  painting; TTC's painting in the ROM has no clock hands.)
 
 A block is found by content, not by address: the MIO0 block whose decoded size
 is the block's, checked by the sha256 of every portrait's texture bytes (the
@@ -140,16 +142,25 @@ PORTRAITS: tuple[Portrait, ...] = (
         "6ef93ed5f54a6de6b4bfb981f8f8532092e7f30206f1ed07c1a9a6a2171cb18c")),
     Portrait("thi", "THI", "castle", 64, _painting(0x19800, 0x1A800), _d(
         "bc8317c7c0aa51b4f4230a296d7497c874effdfc7f23debea415f02f5069d53a")),
-    Portrait("ttc", "TTC", "castle", 64, _painting(0x1D800, 0x1E800), _d(
-        "16c005b0d53f4ce053e79495520530df32928ee3ffa7dfdcad648f2c986a0c8f")),
-    Portrait("rr", "RR", "rr", 64, _mirrored_quarter(0x0), _d(
-        "b62e45e7fd9fcfaaeab24d87850cbebf82f4b82fa5ca0e81492a3b67489badf7")),
     Portrait("bitfs", "BitFS", "castle", 64, _quad(0x8000, 0x8800, 0x9000, 0x9800), _d(
         "d311d2eb4af7620984d4f9d804fb874f83dbb167a0605332e677f0499a0b442d")),
     Portrait("princess_secret", "PSS", "castle", 64, _quad(0x6000, 0x6800, 0x7000, 0x7800), _d(
         "a98197f0466d39697883ab187ac564ba5c79f21a959d283d0a107ed2555da13d")),
 )
 PORTRAITS_BY_STEM = {p.stem: p for p in PORTRAITS}
+#: Course portraits the Trainer ships itself, by stem: Griffin's own in-game screenshots (ui/assets/course_icons),
+#: served as they are instead of a cut from the ROM. tests/test_course_art.py pins their bytes.
+SHIPPED = {"rr": "rr.webp", "ttc": "ttc.webp"}
+SHIPPED_KEY = "shipped"
+SHIPPED_DIR = Path(__file__).resolve().parent / "ui" / "assets" / "course_icons"
+
+
+def shipped_file(name: str) -> Path | None:
+    """One of SHIPPED's pictures by file name, or None for any other name."""
+    if name not in SHIPPED.values():
+        return None
+    path = SHIPPED_DIR / name
+    return path if path.is_file() else None
 
 
 # -- decoding ----------------------------------------------------------------------------------------------------
@@ -315,6 +326,11 @@ def default_rom_for(region: str) -> Path | None:
     return rom_for(region)
 
 
+def shipped_listing() -> dict[str, str]:
+    """SHIPPED's URL tails, which every listing carries, with or without a ROM."""
+    return {stem: f"{SHIPPED_KEY}/{name}" for stem, name in SHIPPED.items() if shipped_file(name) is not None}
+
+
 class CourseArt:
     """One cache folder of portraits, filled from whichever ROM `rom_for` names. Safe from any thread."""
 
@@ -343,6 +359,7 @@ class CourseArt:
             key, stems, region = self._key, set(self._stems), self._region
         courses = {p.stem: f"{key}/{p.stem}.png" if p.stem in stems else f"{STANDIN}/{p.stem}.svg"
                    for p in self._portraits}
+        courses |= shipped_listing()
         return {"courses": courses, "from_rom": bool(stems), "region": region if stems else None}
 
     def file(self, key: str, name: str) -> Path | None:

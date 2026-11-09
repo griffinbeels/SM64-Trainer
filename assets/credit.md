@@ -14,9 +14,11 @@ The course paintings are Nintendo's artwork, and the Trainer no longer ships
 them. `src/sm64_events/course_art.py` copies each one out of the player's own
 Usamune ROM on their computer when the app runs, and keeps the copies in their
 data folder (`data/course_art/`); without a ROM the app draws its own plain
-tile with the course's short name. The 13 files that used to live in
+tile with the course's short name. The 11 painting files that used to live in
 `ui/assets/course_icons/` are fingerprinted in `tests/test_course_art.py`, which
-fails if one comes back. Four main courses — HMC, SSL, DDD and SL — have no
+fails if one comes back. Two pictures still ship there: `rr.webp` and
+`ttc.webp`, Rainbow Ride and Tick Tock Clock, screenshots Griffin took in the
+game himself; the same test pins their bytes. Four main courses — HMC, SSL, DDD and SL — have no
 portrait, because their "painting" is a pool, a water ripple or a plain wall;
 they use a hand-picked star icon.
 

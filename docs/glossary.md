@@ -2163,9 +2163,12 @@ the rule holds with no trainer open.
 
 The picture the Trainer shows for a course: the castle painting you jump
 into, or a texture of the course itself where there is no painting (the BBH
-Boo portrait, the RR flying carpet, Peach's and Bowser's portraits for the
-slide and BitFS). The Trainer ships none of them (Griffin, 2026-11-09: "yes,
-let's do that if we can"): `course_art.py` cuts each one from the player's own
+Boo portrait, Peach's and Bowser's portraits for the slide and BitFS). The
+Trainer ships none of the game's own pictures (Griffin, 2026-11-09: "yes,
+let's do that if we can"). Rainbow Ride and Tick Tock Clock keep the pictures
+the Trainer always had, which are Griffin's own in-game screenshots ("we
+should use the icons we already have", `course_art.SHIPPED`). For the other
+eleven, `course_art.py` cuts each one from the player's own
 [[practice ROM]] while the app is open, checks its bytes against a pinned
 fingerprint, and keeps it in a cache folder named by the ROM's hash. Until the
 Trainer finds a ROM, the page shows a stand-in instead: our plain tile with
@@ -2912,16 +2915,16 @@ The game state a [[ghost]] begins from, saved with its recording. With it, the
 the [[scene state]] regions of that first record, and his own copy also keeps
 the main pool's difference from the simulated practice [[reset]] of that level
 and act. About 24 KB on his machine; about 17 KB travels, without the main-pool
-part, which no other machine applies. Its game data (.data) is kept and sent as
-its change from the ROM's boot image: the receiver's own ROM supplies the rest,
-and a start made on another ROM is refused with a plain sentence. The trainer saves one when an [[attempt
+part, which no other machine applies. The trainer keeps and sends its game data
+(.data) as its change from the ROM's boot image: the receiver's own ROM supplies the rest,
+and the lab refuses a start made on another ROM with a plain sentence. The trainer saves one when an [[attempt
 scene]] becomes ready while its recording's clip exists, and when the lab
 re-simulates a [[ghost]] from his own [[attempt scene]]. It uploads a [[community
 ghost]]'s start after the [[ghost]]'s own bytes when the cloud accepts one, at
 most 64 KiB. The cloud keeps the start in the same object as its [[ghost]],
 counts its bytes in every storage budget and deletes it with the [[ghost]]; on
 his machine a purge deletes a start when the last clip of its bytes goes. The
-cloud checks only a start's header before it stores one; neither it nor the
+cloud checks only a start's header before it keeps one; neither it nor the
 community client unpacks the game state inside. A downloaded start
 came from another player's trainer, so its owner checks its size, shape and
 binding to the [[ghost]]'s first record, keeps it apart from his own, and the

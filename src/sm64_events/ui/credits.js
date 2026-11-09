@@ -28,7 +28,7 @@ export const CREDIT_GROUPS = [
     title: "The game and its research",
     items: [
       { name: "Super Mario 64", by: "Nintendo",
-        what: "The game itself. The trainer ships none of its course pictures: it copies each course's painting out of your own ROM on your computer. Character renders in the trainer are Nintendo's, used in a free, non-commercial practice tool." },
+        what: "The game itself. SM64 Trainer is not affiliated with Nintendo. The trainer ships none of the game's course paintings: it copies them out of your own ROM on your computer. Character renders in the trainer are Nintendo's, used in a free, non-commercial practice tool." },
       { name: "Super Mario 64 decompilation", by: "the n64decomp team",
         url: "https://github.com/n64decomp/sm64",
         what: "The game's source code, rebuilt from the cartridge. It names what lives at each memory address, including every one of Mario's actions." },
