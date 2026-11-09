@@ -21,12 +21,13 @@ A ghost start (the game state a ghost begins from, kept so the lab can re-simula
 counts in the ghost that clip counts in, is kept and pinned with it, and goes only when every clip of its
 sha goes (a population row and his recorded run may share the bytes).
 
-"Keep PBs" keeps, besides every kept attempt's files: each PB (the latest visible save of every
-star and segment, per strategy and per ROM, so whichever ROM runs and whichever slot grades, the
-current PB keeps its ghost), every ghost he saved by hand (`ghost/saved.py`), the runs his input
-templates were marked from, and every imported ghost (an import is a choice, like a save). The
-other button deletes those too. A superseded PB loses its ghost to "keep PBs": an Undo then
-brings back a PB that ranks but races no ghost.
+"Keep PBs" keeps, besides every kept attempt's files: every PB he ever set (each saved pb row's run:
+the current PB of every star and segment, per strategy, timer and ROM, and every earlier PB it beat;
+his words, 2026-11-09: "I want to be able to see all of my past PB ghosts. That is, every time I broke
+my own record."), every ghost he saved by hand (`ghost/saved.py`), the runs his input templates were
+marked from, and every imported ghost (an import is a choice, like a save). The other button deletes
+those too. Measured on his test-server journal, 2026-11-09: 26 pb rows, 24 with a committed clip,
+22.8 MB, 14 of them (about 13 MB) earlier PBs that "keep PBs" deleted before; a new PB adds ~0.5-2 MB.
 
 Neither button ever deletes (counted in `total`, never in a button's number):
 - a file a pending community upload names (`CommunitySync.pending_upload_paths`): his uploads;
@@ -83,21 +84,16 @@ def _normal(path) -> str:
 
 
 def kept_attempts(database) -> set[int]:
-    """The attempts "keep PBs" keeps: each PB slot's latest visible save, hand-saved ghosts and
-    template runs. A slot is (star or segment, timer, strategy, ROM): every answer the practice
-    lookup (`tracking/views.py::current_pbs_by_strat`, `ghost/pb.py::current_pb_ghost`) can give
-    under any running ROM or region scope is the latest save of one of these slots."""
+    """The attempts "keep PBs" keeps: every PB he ever set (each saved pb row's run, the current one and
+    every one it beat, per star or segment, strategy, timer and ROM: his PB progression), hand-saved
+    ghosts and template runs. His words, 2026-11-09: "I want to be able to see all of my past PB ghosts.
+    That is, every time I broke my own record." A pb row on a hidden run (a save state, a cleared
+    attempt) is kept too: the row is still his (`db.pb_attempt_ids`, the startup prune's own set)."""
     from sm64_events.ghost.pb import attempt_id_of
     from sm64_events.ghost.saved import saved_ids
-    from sm64_events.tracking.views import pb_rom
     if database is None:
         return set()
-    latest = {}
-    for row in database.pbs():   # id order: later saves win
-        if row.get("attempt_id"):
-            latest[(row["course_id"], row["star_id"], row.get("segment_id"), row["timer_mode"],
-                    row.get("strat_tag"), pb_rom(row))] = row["attempt_id"]
-    kept = set(latest.values()) | set(saved_ids(database))
+    kept = set(database.pb_attempt_ids()) | set(saved_ids(database))
     templates = getattr(database, "input_templates", None)
     if templates is not None:
         for template in templates().all():

@@ -168,9 +168,9 @@ class Cutter:
 
 @pytest.fixture
 def world(tmp_path):
-    """His runs: 1 the current PB, 2 the PB it replaced, 3 a saved ghost, 4 a template's run,
-    5 a plain run, 6 an attempt with no strategy kept in the log only by its clip, 7 a run
-    the admission worker still owes, 8 a run a pending upload names."""
+    """His runs: 1 the current PB, 2 the earlier PB it beat (his PB progression), 3 a saved ghost,
+    4 a template's run, 5 a plain run, 6 an attempt with no strategy kept in the log only by its clip,
+    7 a run the admission worker still owes, 8 a run a pending upload names."""
     journal = Journal(tmp_path / "data" / "tracker.db")
     for number in range(1, 9):
         journal.rows[number] = _attempt(number, strat=None if number == 6 else "Standard")
@@ -216,20 +216,31 @@ def _natives(world) -> list[int]:
     return sorted(row["attempt"] for row in world.replay.native_holdings())
 
 
-def test_keep_pbs_keeps_exactly_the_pbs_saved_template_and_imported_ghosts(world):
-    assert kept_attempts(world.journal) == {1, 3, 4}            # 2 is the PB 1 replaced
+def test_keep_pbs_keeps_every_pb_he_ever_set_and_saved_template_and_imported_ghosts(world):
+    """His words, 2026-11-09: "I want to be able to see all of my past PB ghosts. That is, every time I
+    broke my own record." Run 2, the PB run 1 beat, keeps its ghost as run 1 does."""
+    assert kept_attempts(world.journal) == {1, 2, 3, 4}
     usage = world.storage.usage()
     result = world.storage.purge(keep_pbs=True)
-    assert _natives(world) == [1, 3, 4, 6, 7, 8]                # 6, 7, 8: the log, the owed run, the upload
-    assert sorted(row["id"] for row in world.store.holdings()) == [world.rows[1]]
+    assert _natives(world) == [1, 2, 3, 4, 6, 7, 8]             # 6, 7, 8: the log, the owed run, the upload
+    assert sorted(row["id"] for row in world.store.holdings()) == sorted([world.rows[1], world.rows[2]])
     assert sorted(row["attempt"] for row in world.scenes.holdings()) == [1, 3]
     assert [row["id"] for row in world.sharing.holdings()] == [world.imported]
     assert world.cache.cached_holdings() == []                  # a download comes back when a lineup asks
-    # The ghosts deleted: run 2 (clip + row), run 5 (clip + row + scene), the community download.
-    assert (result["deleted"], result["skipped"]) == (3, 0) and usage["except_pbs"]["ghosts"] == 3
+    # The ghosts deleted: run 5 (clip + row + scene), the community download.
+    assert (result["deleted"], result["skipped"]) == (2, 0) and usage["except_pbs"]["ghosts"] == 2
     recorded_run = 2 * 4 * KB + 2 * 64                         # a clip, its playback copy, their records
-    assert result["bytes"] == usage["except_pbs"]["bytes"] == 2 * recorded_run + 2 * 8 * KB + 16 * KB + 2 * 2 * KB
+    assert result["bytes"] == usage["except_pbs"]["bytes"] == recorded_run + 8 * KB + 16 * KB + 2 * 2 * KB
     assert world.journal.writes == []
+
+
+def test_a_pb_on_a_hidden_run_keeps_its_ghost_too(world):
+    """A pb row whose run is hidden (a save state, a cleared attempt) is still his: the startup prune's
+    own set (db.pb_attempt_ids), not only the visible rows (db.pbs)."""
+    world.journal.pbs = lambda: [dict(row) for row in world.journal.pb_rows if row["attempt_id"] != 2]
+    assert kept_attempts(world.journal) == {1, 2, 3, 4}
+    world.storage.purge(keep_pbs=True)
+    assert 2 in _natives(world)
 
 
 def test_delete_all_leaves_replays_scene_clips_save_states_uploads_and_the_journal(world):
@@ -340,8 +351,8 @@ def test_a_clip_two_rows_share_frees_its_bytes_only_when_both_rows_go(world):
     assert (world.store.root / "clips" / f"{_digest(5)}.ghost").is_file()
     assert twin in {row["id"] for row in world.store.holdings()}
     recorded_run = 2 * 4 * KB + 2 * 64
-    # Run 5's row goes but its clip stays for the twin: only run 2's row frees population bytes.
-    assert result["bytes"] == usage["except_pbs"]["bytes"] == 2 * recorded_run + 8 * KB + 16 * KB + 2 * 2 * KB
+    # Run 5's row goes but its clip stays for the twin: no population bytes are freed.
+    assert result["bytes"] == usage["except_pbs"]["bytes"] == recorded_run + 16 * KB + 2 * 2 * KB
 
 
 def _start(world, digest: str, size: int = 3 * KB, *, downloaded: bool = False) -> Path:
@@ -360,8 +371,8 @@ def test_a_ghost_start_goes_with_its_clip_and_counts_in_its_ghost(world):
     result = world.storage.purge(keep_pbs=True)
     assert not gone.exists() and kept.exists()
     recorded_run = 2 * 4 * KB + 2 * 64
-    assert result["bytes"] == usage["except_pbs"]["bytes"] == 2 * recorded_run + 2 * 8 * KB + 16 * KB + 2 * 2 * KB + 3 * KB
-    assert (result["deleted"], usage["except_pbs"]["ghosts"]) == (3, 3)      # the start is no ghost of its own
+    assert result["bytes"] == usage["except_pbs"]["bytes"] == recorded_run + 8 * KB + 16 * KB + 2 * 2 * KB + 3 * KB
+    assert (result["deleted"], usage["except_pbs"]["ghosts"]) == (2, 2)      # the start is no ghost of its own
     assert usage["total"]["bytes"] - world.storage.usage()["total"]["bytes"] == result["bytes"]
 
 
@@ -377,8 +388,8 @@ def test_a_start_stays_while_any_clip_of_its_bytes_stays(world):
 
 def test_a_start_of_his_recorded_run_follows_that_run(world):
     import hashlib
-    clip = world.replays / "native" / "attempt_2.ghost"           # run 2: the PB run 1 replaced
-    clip.write_bytes(b"run two's own bytes" * 200)                 # the fixture's runs share their bytes otherwise
+    clip = world.replays / "native" / "attempt_5.ghost"           # run 5: a plain run, no PB
+    clip.write_bytes(b"run five's own bytes" * 200)                # the fixture's runs share their bytes otherwise
     start = _start(world, hashlib.sha256(clip.read_bytes()).hexdigest())
     world.storage.purge(keep_pbs=True)
     assert not clip.exists() and not start.exists()
@@ -388,4 +399,4 @@ def test_a_start_whose_clip_is_gone_goes_with_either_button(world):
     orphan = _start(world, _digest(999))
     usage = world.storage.usage()
     world.storage.purge(keep_pbs=True)
-    assert not orphan.exists() and usage["except_pbs"]["ghosts"] == 3   # freed bytes, no extra ghost counted
+    assert not orphan.exists() and usage["except_pbs"]["ghosts"] == 2   # freed bytes, no extra ghost counted

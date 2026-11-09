@@ -1921,7 +1921,10 @@ is on: one click switches to the [[Ghost Lab]], opens that [[attempt]]'s
 scene and plays it from its first [[frame]] as soon as the viewer draws that
 picture. A row the lab knows nothing about has none; a scene the lab is still
 cutting shows it disabled ("Scene finishing…") until it is ready, and a scene
-that cannot exist shows the lab's reason. [[star]] and [[segment]] rows both
+that cannot exist shows the lab's reason. An [[attempt]] with no scene of its
+own but a [[ghost]] of it opens too: the [[Ghost Lab]] makes the scene from
+that [[ghost]], as it does for a [[ghost]] picked from its own list, and plays
+it from its first [[frame]]. [[star]] and [[segment]] rows both
 have it. The same button sits on each community [[ghost]] in the Library whose
 [[star]] or [[segment]] this Trainer knows: one click turns the
 [[Ghost Lab]] to that [[star]] or [[segment]] and watches that [[ghost]], which becomes
@@ -2944,8 +2947,9 @@ the in-game input display; saving it never changes the input comparison.
 
 The Settings section that shows how much space [[ghost]] files use on this
 computer and frees it. One button deletes every [[ghost]] except [[PB ghost]]s
-(each [[personal best]]'s latest save, per [[strategy]] and ROM), [[saved
-ghost]]s, [[template track]] [[run]]s and [[imported ghost]]s; the other deletes
+(every [[personal best]] he ever set, per [[strategy]] and ROM: the current one
+and each one it beat), [[saved ghost]]s, [[template track]] [[run]]s and
+[[imported ghost]]s; the other deletes
 those too. A [[ghost]] counts once however many files it has: an [[attempt scene]],
 the committed recording and its [[playback copy]], the local population's row,
 a downloaded [[community ghost]], an imported one. Neither button deletes a
@@ -3782,9 +3786,16 @@ new [[target]] records its first [[attempt]]. A Bowser course's Reds/Pipe pair i
 the worked example: the reds [[star]] is a [[subsection]] of its paired
 pipe-entry [[segment]], so grabbing it draws its own card nested inside the
 movement's rather than beside it — never a toggle hiding either half.
+It hides the [[attempt]]s that ended in a [[reset]] or a [[death]] until you choose
+to show them in its settings. Its **PBs only** switch turns the log to every
+[[session]], keeps every card in its place and lists in each one only the
+[[attempt]]s that set a
+[[personal best]] when they ran, newest first: that [[target]]'s whole
+[[personal best]] history, each with its [[Ghost button]].
 
 - **Lives** — the log
-  (`src/sm64_events/ui/components/practicelog.js`)
+  (`src/sm64_events/ui/components/practicelog.js`); its remembered choices
+  (`src/sm64_events/ui/components/practice.js`)
 
 ### Book mark
 

@@ -124,6 +124,17 @@ Choosing a strategy also classifies pending attempts and automatically saves
 the fastest eligible success as GOLD. Correcting the latest attempt's strategy
 saves it when it beats that strategy's PB, with the usual rank celebration.
 
+**See your PB history.** The practice log hides resets and deaths from the
+start, so each card shows the runs you finished. To see them again, open the
+log's settings (the gear) and turn off **Hide resets and deaths**. Press
+**PBs only** beside the gear to see every time you beat your own best: each
+card then lists only the runs that set a new personal best, newest first.
+PBs only shows every session, so the Session card switches to Lifetime. When
+you turn PBs only off, the log goes back to the session you were looking at.
+When the Ghost Lab is on, every run with a ghost has a Ghost button that opens
+it there. If the Ghost Lab has no recording of that run, it builds the scene
+from the ghost.
+
 **Segments.** Not just stars: define any repeatable piece of the run (LBLJ,
 a pipe entry, a Bowser fight, a castle movement) and it becomes a first-class
 practice target with the same history, PBs, ranks and replays a star gets.
@@ -155,7 +166,9 @@ uploads wait: ghosts you finish in the meantime are kept and upload afterwards.
 
 **Free up space from ghosts.** Settings shows how much space ghost files use on
 this computer under **Ghost files**. **Delete ghosts, keep PBs** deletes every
-ghost except your PB ghosts, the ghosts you saved and the ghosts you imported.
+ghost except your PB ghosts, the ghosts you saved and the ghosts you imported. It
+keeps every PB you ever set, not only your newest one, so your whole PB history
+stays.
 **Delete all ghosts** deletes those too. Each button says how many ghosts and how
 many MB it frees, and asks before it deletes. Neither one touches your times, your
 saved replays and their videos, your scene clips, your save states, or the ghosts

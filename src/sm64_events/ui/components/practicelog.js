@@ -64,6 +64,61 @@ function LogPreferenceSwitch({ label, description, checked, onChange }) {
   </label>`;
 }
 
+// PBS ONLY (his ask, 2026-11-09): "filter the Practice Log by which Ghosts were
+// PBs -- as in, I'd be able to see my PB progression directly in the practice
+// log, and be able to look at all of the ghosts in order of when I achieved
+// the PB, reverse chronological, most recent PB at the top". One click in the
+// heading every card follows, beside the settings gear rather than inside it:
+// it is a view he flips between while reading, not a setting he sets once.
+// Every card keeps its place and its fold; its table keeps only the rows that
+// set a PB (`attemptMatchesLogFilters`), newest first whatever the sort says
+// (`logSort`), so each card reads as that target's PB history.
+//
+// The history is every session's: "I want to be able to see all of my past PB
+// ghosts. That is, every time I broke my own record." So turning it on while
+// the log shows one session turns the log to Lifetime (the header's Session
+// card says so), as the PB tag's jump does for a PB from another session, and
+// turning it off goes back to that session unless he picked a view meanwhile.
+export const ONLY_PBS_LABEL = "PBs only";
+export const ONLY_PBS_TITLE = "Show only the runs that set a new personal best, from every session, newest first.";
+const NO_PBS_HERE = "No run here has set a new personal best yet. Turn off PBs only to see every run.";
+const ONLY_PBS_FROM = "sm64.onlyPbsFrom";
+
+// The order a card lists its rows in: the PB history always reads newest first.
+export function logSort(ui) {
+  return ui.onlyPbs ? "newest" : ui.sort;
+}
+
+function flipOnlyPbs(ui, t) {
+  const on = !ui.onlyPbs;
+  ui.setOnlyPbs(on);
+  if (!t.pickScope) return;
+  if (on && t.scope !== "lifetime") {
+    localStorage.setItem(ONLY_PBS_FROM, t.scope);
+    t.pickScope("lifetime");
+  } else if (!on) {
+    const from = localStorage.getItem(ONLY_PBS_FROM);
+    localStorage.removeItem(ONLY_PBS_FROM);
+    if (from && t.scope === "lifetime") t.pickScope(from);
+  }
+}
+
+// A card with runs, none of which set a PB, under PBs only: the "all filtered
+// out" case in a whole sentence, never "nothing recorded". Otherwise the
+// card's own empty state, its child.
+function NoPbsHere({ ui, sec, children }) {
+  if (!ui.onlyPbs || sec.attempts.length === 0) return children;
+  return html`<div class="stable-empty compact log-no-pbs">${NO_PBS_HERE}</div>`;
+}
+
+function OnlyPbsToggle({ ui, t }) {
+  return html`<button type="button" class="chip chip-button log-only-pbs"
+      aria-pressed=${ui.onlyPbs ? "true" : "false"} aria-label=${ONLY_PBS_LABEL}
+      title=${ONLY_PBS_TITLE} onclick=${() => flipOnlyPbs(ui, t)}>
+    <${Icon} name="rank" size=${14} />${" "}<span class="stat-menu-label">${ONLY_PBS_LABEL}</span>
+  </button>`;
+}
+
 export function PracticeLogSettings({ ui, t }) {
   const [anchor, setAnchor] = useState(null);
   const [ghostSettings, setGhostSettings] = useState(false);
@@ -133,7 +188,9 @@ export function PracticeLogSettings({ ui, t }) {
           description="Hide attempts started from or interrupted by a save state."
           checked=${ui.hideSavestates !== false} onChange=${ui.setHideSavestates} />
       </div>
-      <div class="log-settings-option"><span>Sort attempts</span><${SortControl} ui=${ui} /></div>
+      <div class="log-settings-option"><span>Sort attempts${ui.onlyPbs
+        ? html`<small class="log-settings-sort-note">PBs only always shows the newest first.</small>` : null}</span>
+        <${SortControl} ui=${ui} /></div>
       <div class="log-settings-option"><span>Visible stats</span><${StatMenuTrigger} t=${t} withinSettings=${true} /></div>
       <div class="log-settings-option"><span>Ghost Overlay</span>
         <button type="button" onclick=${() => { dismiss(true); setGhostSettings(true); }}>
@@ -680,7 +737,7 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
   const rows = base
     .filter((a) => attemptMatchesLogFilters(a, ui))
     .slice()
-    .sort(comparator(ui.sort, clock));
+    .sort(comparator(logSort(ui), clock));
   // A pick (this card's own PbTag jump, or a trend-graph dot in
   // EntityAnalysis) is resolved at PAGE level -- Practice's own
   // `useGraphPick`, over whichever entity is FOCUSED -- and that hook has no
@@ -930,8 +987,8 @@ export function LogCard({ sec, t, ui, freshIds, openCompare, focus,
         ? html`<${AttemptTable} attempts=${sec.attempts} rows=${shown} t=${t}
             focus=${selected ? focus : null} clearFocus=${clearFocus}
             freshIds=${freshIds} openCompare=${openCompare} sec=${sec} rankKind=${rowRankKind} />`
-        : html`<${AttemptLogEmpty} hasAttempts=${sec.attempts.length > 0}
-            manualTiming=${manualTiming} />`}
+        : html`<${NoPbsHere} ui=${ui} sec=${sec}><${AttemptLogEmpty} hasAttempts=${sec.attempts.length > 0}
+            manualTiming=${manualTiming} /><//>`}
       <div class="attempt-footer">
         ${/* Real pagination (amendment A8), replacing "Show 10 more": "we
              should replace the show more with the number of pages we have
@@ -1058,7 +1115,7 @@ function UnassignedLogCard({ v, t, ui, freshIds, openCompare }) {
   const rows = visibleAttempts
     .filter((a) => attemptMatchesLogFilters(a, ui))
     .slice()
-    .sort(comparator(ui.sort, t.clock));
+    .sort(comparator(logSort(ui), t.clock));
   const shown = rows.slice(0, visible);
   return html`<section data-feed-key="unassigned"
       class="log-card is-unassigned ${open ? "" : "is-closed"}">
@@ -1335,7 +1392,7 @@ export function PracticeLog({ v, t, ui, freshIds, openCompare, focus, pick,
       nextStepMode=${nextStepModeFor(tuning, { isNarrow, twoLadder })} />`;
   };
   const listRef = useRef(null);
-  useFeedMotion(listRef, [...page.map(entityKey), "unassigned"]);
+  useFeedMotion(listRef, [...page.map(entityKey), ...(ui.onlyPbs ? [] : ["unassigned"])]);
   const pbNews = usePbNews(t);
   return html`<section class="practice-card log-list-card ${logClasses}"
       style=${logVars} ref=${pageRef}>
@@ -1367,6 +1424,7 @@ export function PracticeLog({ v, t, ui, freshIds, openCompare, focus, pick,
             title="Pick a star or segment to practice manually">
           <${Icon} name="target" size=${14} />${" "}<span class="stat-menu-label">Target</span>
         </button>`}
+        <${OnlyPbsToggle} ui=${ui} t=${t} />
         <${PracticeLogSettings} ui=${ui} t=${t} />
       </div>
     </div>
@@ -1378,8 +1436,10 @@ export function PracticeLog({ v, t, ui, freshIds, openCompare, focus, pick,
          like any other physical object in the space. */""}
     <${PbNews.Provider} value=${pbNews}><div class="log-list" ref=${listRef}>
       ${page.map((sec) => cardFor(sec))}
-      <${UnassignedLogCard} v=${v} t=${t} ui=${ui} freshIds=${freshIds}
-        openCompare=${openCompare} />
+      ${/* A run with no target can never set a personal best, so under PBs
+           only this bucket would always be empty: it steps aside instead. */""}
+      ${!ui.onlyPbs && html`<${UnassignedLogCard} v=${v} t=${t} ui=${ui} freshIds=${freshIds}
+        openCompare=${openCompare} />`}
     </div></${PbNews.Provider}>
     ${sections.length > shown && html`<div class="log-list-footer">
       <button class="quiet-button"

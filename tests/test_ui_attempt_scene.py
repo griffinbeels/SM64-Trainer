@@ -161,6 +161,7 @@ def _served(tmp_path, monkeypatch, *, lab_on: bool, extra=None):
 # when Play turns into Pause, all on the page's own clock.
 TIMELINE = r"""
 (() => {
+  Element.prototype.requestPointerLock = function () { return Promise.resolve(); };   // never his real pointer
   const at = window.__scene = { click: null, sends: [], pictures: [], draws: [], pause: null, opens: [] };
   document.addEventListener("click", (event) => {
     if (event.target.closest?.(".attempt-scene")) at.click = performance.now();
@@ -199,9 +200,12 @@ TIMELINE = r"""
 """
 
 # The fixture's rows are short; the widest realistic ones are planted into the page's own session
-# view: a death with its detail and a 1' time, and a run on a long-named strategy.
+# view: a death with its detail and a 1' time, and a run on a long-named strategy. The log hides
+# deaths by default since 2026-11-09, so this page shows them (his "0" in the settings).
 PLANT = r"""
 (() => {
+  localStorage.setItem("sm64.hideResets", "0");
+  Element.prototype.requestPointerLock = function () { return Promise.resolve(); };
   const fetched = window.fetch.bind(window);
   window.fetch = async (url, options) => {
     const response = await fetched(url, options);
@@ -317,6 +321,74 @@ def test_one_click_opens_the_attempt_in_the_scene_viewer_and_plays_it(tmp_path, 
                         "play_first_drawn_ms": at["draws"][1] - at["click"], "frames_asked": frames}
             (tmp_path / "ghost-timeline.json").write_text(json.dumps(timeline, indent=1), encoding="utf-8")
             print("ghost click timeline", json.dumps(timeline))
+        finally:
+            browser.close()
+
+
+def _ghost_only_api(app, lab, seen) -> None:
+    """Every row's run has a ghost recording and no recorded take (2026-11-09: "I should be able to see
+    all of my PB ghosts"): attempt-scenes answers "ghost", POST /open {attempt} refuses, GET /ghost?attempt=
+    names the lab's ghost row for it, and POST /open {ghost} makes the scene (the synthetic package here)."""
+    router = APIRouter()
+    seen["calls"] = []
+
+    @router.get("/api/scene-lab/attempt-scenes")
+    def attempt_scenes(ids: str):
+        asked = [int(part) for part in ids.split(",")]
+        seen["asks"].append(asked)
+        return {"scenes": {str(attempt): {"state": "ghost"} for attempt in asked}}
+
+    @router.get("/api/scene-lab/ghost")
+    def ghost_row(attempt: int):
+        seen["calls"].append(("ghost", attempt))
+        return {"item": {"ref": f"mine-{attempt}", "player": "You", "attempt": attempt, "frames": 6,
+                         "time": "10\"10", "strat": "TJ Owlless", "version": "us", "rank": None, "more": 0,
+                         "yours": True}}
+
+    @router.post("/api/scene-lab/open")
+    async def open_scene(body: dict):
+        seen["calls"].append(("open", body))
+        if "attempt" in body:
+            raise HTTPException(404, "This attempt has no recorded scene.")
+        described = await lab.open(PACKAGE)
+        seen["host_pids"].append(described.get("renderer_pid"))
+        return {**described, "attempt": None}
+
+    app.include_router(router)
+    for _ in router.routes:
+        app.router.routes.insert(0, app.router.routes.pop())
+
+
+def test_a_run_with_only_a_ghost_opens_from_its_ghost_and_plays(tmp_path, monkeypatch):
+    with _served(tmp_path, monkeypatch, lab_on=True, extra=_ghost_only_api) as (base, seen), \
+            sync_playwright() as play:
+        browser = play.chromium.launch(headless=True, args=["--disable-gpu"])
+        try:
+            page = browser.new_page(viewport={"width": 1280, "height": 1000})
+            page.add_init_script(TIMELINE)
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            page.goto(base)
+            ghost = page.locator(f"{ROWS} .attempt-scene").first
+            ghost.wait_for(timeout=20000)
+            assert (ghost.is_disabled(), ghost.get_attribute("title")) == (False, "Open in Ghost Lab")
+            assert page.locator(f"{ROWS} .attempt-scene[disabled]").count() == 0
+            ghost.click()
+            page.locator(".scene-lab canvas").wait_for(timeout=20000)
+            page.wait_for_function("window.__scene.pause != null && window.__scene.draws.length >= 2", timeout=20000)
+            at = json.loads(page.evaluate("JSON.stringify(window.__scene)"))
+            calls = seen["calls"]
+            attempt = calls[0][1]["attempt"]
+            made = ("open", {"ghost": f"mine-{attempt}"})
+            assert calls[0] == ("open", {"attempt": attempt})           # its take first, quietly
+            assert [call for call in calls if call[0] == "ghost"] == [("ghost", attempt)]
+            assert calls[-1] == made and calls.index(("ghost", attempt)) < calls.index(made)
+            assert all(call in (("open", {"attempt": attempt}), ("ghost", attempt), made) for call in calls), calls
+            assert page.locator(".nav-item.on").inner_text().strip() == "Ghost Lab"
+            assert [frame for _, frame in at["sends"]][:2] == [0, 0]     # from its first frame, then Play's
+            assert page.locator(".ghost-lab-top-note.is-bad").count() == 0
+            assert errors == []
+            page.screenshot(path=str(tmp_path / "ghost-only-1280.png"))
         finally:
             browser.close()
 

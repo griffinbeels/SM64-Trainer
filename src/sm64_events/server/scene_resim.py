@@ -35,6 +35,7 @@ the child starts, and the rest follows at ~30 frames a second.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import logging
 import os
@@ -99,6 +100,16 @@ class Build:
                 "save_states": latest.get("save_states") or {"allowed": False, "reason": BUILDING}}
 
 
+def prebuild_key(sha256: str) -> tuple:
+    """The warmer's key for one ghost's scene made ahead: its clip's hash, as the scene cache names it."""
+    return ("ghost", sha256[:16])
+
+
+def _list_tier() -> int:
+    from sm64_events.server.scene_warm import LIST
+    return LIST
+
+
 def act_of_target(target) -> int | None:
     """The act a star ghost was played in: a course's stars 1-6 (entity_key "course-star", star from 0) are
     its acts. None for the 100-coin star, a castle star and a segment, which name no act (the build then
@@ -144,7 +155,8 @@ class SceneResim:
         self.child_lock = threading.Lock()
         self.stopped = threading.Event()
         self.building: Build | None = None            # the newest progressive build (one runs at a time)
-        self.warmer = StageWarmer(self._spawn_warm, pace=pace, route=self._route_stars)
+        self.warmer = StageWarmer(self._spawn_warm, pace=pace, route=self._route_stars,
+                                  spawn_ghost=self._spawn_prebuild, finished=self._prebuilt)
 
     # ---------------------------------------------------------------- where things live
     def starts_root(self) -> Path:
@@ -306,6 +318,7 @@ class SceneResim:
         else:
             self.cancel()
             self.warmer.join(stage)                   # a warm of its own stage: wait for it rather than race it
+            self.warmer.join(prebuild_key(hashlib.sha256(clip).hexdigest()))   # its scene made ahead, the same way
             build = Build(ref, clip)
 
             def work() -> None:
@@ -425,6 +438,41 @@ class SceneResim:
             return
         from sm64_events.server import scene_warm
         self.warmer.ask(scene_warm.stage_of(course, star), scene_warm.CURRENT if tier is None else tier)
+
+    def prebuild(self, path: Path, sha256: str, target) -> bool:
+        """One of his PB ghosts' scene made ahead, after its stage, at the warmer's idle pace (scene_warm.ask_ghost),
+        unless that scene was made before. `path` is the clip the race plays and `sha256` its hash (run_clip's
+        manifest); a click on that ghost then joins it or reads the made scene. True when queued. Never waits."""
+        if self.stopped.is_set() or not isinstance(sha256, str) or len(sha256) != 64 or self.scene_made(sha256):
+            return False
+        stage = stage_of_target(target)
+        if stage is not None:
+            self.warmer.ask(stage, _list_tier(), then_rest=False)
+        self.warmer.ask_ghost(prebuild_key(sha256), (Path(path), sha256, act_of_target(target)), _list_tier())
+        return True
+
+    def scene_made(self, sha256: str) -> bool:
+        """Whether a scene of the ghost with this clip hash is in the cache (ghost_resim names it by that hash)."""
+        return any(self.cache().glob(f"ghost-{sha256[:16]}-*.json"))
+
+    def _spawn_prebuild(self, payload) -> subprocess.Popen:
+        """ghost_resim's `build` of one PB ghost, in the warmer's idle background child; its clip copied beside the
+        cache first (the race's file may change under it), removed again once the child ends (_prebuilt)."""
+        path, sha256, act = payload
+        config = self._config()
+        clip = self.cache() / f"prebuild-{sha256[:16]}.clip"
+        clip.parent.mkdir(parents=True, exist_ok=True)
+        data = Path(path).read_bytes()
+        if hashlib.sha256(data).hexdigest() != sha256:
+            raise ResimRefused("This ghost's recording changed after it was listed.")
+        clip.write_bytes(data)
+        args = ["build", *self._common(config), "--clip", str(clip), *self._scene_args(),
+                "--starts", str(self.starts_root())]
+        return self._spawn(args + (["--act", str(act)] if act is not None else []), background=True)
+
+    def _prebuilt(self, key: tuple) -> None:
+        if key[0] == "ghost":
+            (self.cache() / f"prebuild-{key[1]}.clip").unlink(missing_ok=True)
 
     def _spawn_warm(self, level: int, area: int, act: int) -> subprocess.Popen:
         config = self._config()

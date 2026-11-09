@@ -44,3 +44,26 @@ test("defaults, remembered preferences, and close/reopen preserve independent sw
   fireEvent.pointerDown(document.body);
   await waitFor(() => expect(remounted.queryByRole("dialog")).toBeNull());
 });
+
+// His words (2026-11-09): "By default "Hide resets & deaths" should be enabled (if it's not already)".
+// A fresh profile hides them; his own stored "0" keeps them shown; the switch still flips and remembers.
+test("Hide resets and deaths starts on, and only his own choice turns it off", () => {
+  const resetsSwitch = (screen) => {
+    fireEvent.click(screen.getByRole("button", { name: "Practice log settings", exact: true }));
+    return screen.getByRole("switch", { name: "Hide resets and deaths" });
+  };
+  const fresh = render(h(Settings));
+  const resets = resetsSwitch(fresh);
+  expect(resets.checked).toBe(true);
+  expect(localStorage.getItem("sm64.hideResets")).toBeNull();          // a default, not a write
+  fireEvent.click(resets);
+  expect(resets.checked).toBe(false);
+  expect(localStorage.getItem("sm64.hideResets")).toBe("0");
+  fresh.unmount();
+  const chosen = render(h(Settings));
+  expect(resetsSwitch(chosen).checked).toBe(false);                      // his "0" stays honored
+  chosen.unmount();
+  localStorage.setItem("sm64.hideResets", "1");
+  const on = render(h(Settings));
+  expect(resetsSwitch(on).checked).toBe(true);
+});
