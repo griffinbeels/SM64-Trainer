@@ -14,6 +14,7 @@ import hashlib
 import json
 import re
 import sys
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -137,3 +138,24 @@ def test_every_source_the_shipped_binaries_are_built_from_is_attached():
     assert renderer["qt"]["sha256"] in pinned, "the Qt source is not attached"
     for name, item in renderer["libraries"].items():
         assert item["sha256"] in pinned, f"the plugin's {name} source is not attached"
+
+
+def _locked(name: str) -> dict:
+    lock = tomllib.loads((ROOT / "uv.lock").read_text(encoding="utf-8"))
+    (package,) = [p for p in lock["package"] if p["name"] == name]
+    return package
+
+
+def test_the_locked_unicorn_is_the_one_whose_source_is_attached():
+    """Unicorn is GPL v2 only (licenses/python/unicorn/README.md), and the Ghost
+    Lab ships its wheel: the source release uv.lock pins for it, by file and
+    SHA-256, is the one each release attaches. A version bump that forgets the
+    pin turns this red."""
+    package = _locked("unicorn")
+    sdist = package["sdist"]
+    attached = {item["url"]: item["sha256"] for archive in sources.load()["archives"].values()
+                for item in archive["sources"]}
+    assert sdist["url"] in attached, f"unicorn {package['version']}'s source release is not attached"
+    assert sdist["hash"] == f"sha256:{attached[sdist['url']]}"
+    readme = (ROOT / "licenses" / "python" / "unicorn" / "README.md").read_text(encoding="utf-8")
+    assert f"Version: {package['version']}\n" in readme, "licenses/python/unicorn describes another version"

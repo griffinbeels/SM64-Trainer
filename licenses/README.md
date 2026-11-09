@@ -5,11 +5,14 @@ the repository root, and `SM64-Trainer/LICENSE` in an installed copy). Its
 source is <https://github.com/griffinbeels/SM64-Trainer>; each release is a
 tag there.
 
-The trainer's own code that is built into the graphics plugin, or that loads
-the plugin into its own process, is under the GNU GPL v2 or later instead
-(`renderer/GPL-2.0.txt` is version 2). The plugin is linked with LINK's
-GLideN64, which is GPL v2 only, and GPL v3 code cannot be combined with GPL
-v2-only code; "v2 or later" combines with both. That code is:
+Two parts the app carries are GPL v2 only: LINK's GLideN64, in the graphics
+plugin, and Unicorn, the CPU emulator the Ghost Lab runs the game's own code
+in (`python/unicorn/README.md`). GPL v3 code cannot be combined with GPL
+v2-only code; "v2 or later" combines with both. So the trainer's own code
+that is built into the graphics plugin, that loads the plugin or the
+plugin's code into its own process, or that runs in Unicorn's process, is
+under the GNU GPL v2 or later instead (`renderer/GPL-2.0.txt` is version 2).
+That code is:
 
 - `plugin/gfxwrap/`, as its `LICENSE.md` says (not `vendor/` or `zilmar.h`);
 - `renderer/model/`, the pose model linked into the plugin;
@@ -19,9 +22,17 @@ v2-only code; "v2 or later" combines with both. That code is:
   `native_identity.py`, `native_build_cache.py`, `stage_link_witness.py`,
   `stage_ghost_renderer.py` and `stage_ghost_presentation.py`;
 - the scene-lab hosts that load the plugin: `tools/scene_lab/viewer_host.c`,
-  `replay_host.c` and `renderer_load.h`.
+  `replay_host.c` and `renderer_load.h`;
+- the Ghost Lab hosts built from the plugin's code:
+  `tools/scene_lab/tap_offline_host.cpp` (with the plugin's scene tap,
+  `scene_tap.cpp` and `scene_spool.cpp`) and `ghost_sound_host.cpp` (with
+  its ghost sound, `ghost_audio.cpp` and `ghost_assets.cpp`);
+- the Ghost Lab's native hooks inside Unicorn's process:
+  `tools/scene_lab/cpu_hooks.c`.
 
-The plugin as one file follows GLideN64's license, GPL v2.
+The plugin as one file follows GLideN64's license, GPL v2, and Unicorn
+follows its own, GPL v2 only. Unicorn must only run in a process that loads
+no GPL v3 or LGPL v3 library, such as PyAV's FFmpeg or pystray.
 
 This folder ships with the app as `_internal/licenses/`
 (`tools/third_party_notices.py` stages it at build time). It holds the
@@ -37,7 +48,9 @@ each release, on its page on GitHub, beside the installer:
   zlib);
 - `SM64Trainer-third-party-source-ffmpeg.tar`: the sources of `ffmpeg.exe`
   and of PyAV's FFmpeg libraries, with the libiconv and zlib that PyAV's
-  wheel carries as DLLs.
+  wheel carries as DLLs;
+- `SM64Trainer-third-party-source-unicorn.tar`: Unicorn's own source
+  release, which its wheel is built from.
 
 The compiler's own runtime is not in them: libgcc and libstdc++ (GCC),
 winpthreads and the MinGW-w64 C runtime, which the linker puts into
@@ -63,7 +76,8 @@ scripts are in this repository at the release's tag.
 | FreeType 2.5.3 | Inside the renderer: on-screen text (Qt is built without FreeType) | FreeType License or GPL-2.0-or-later; the plugin takes it under the GPL v2 | `renderer/FreeType/` (`LICENSE.TXT` offers the choice) | The source archives on this release's page: `SM64Trainer-third-party-source-plugin.tar`; `tools/build_renderer_libs.py` builds it |
 | libpng 1.6.32, zlib 1.2.8 and 1.2.11 | Inside the renderer (GlideHQ; Qt's own zlib copy is 1.2.11, and its PNG reader was compiled against libpng 1.6.37's header) | libpng, zlib | `renderer/libpng/`, `renderer/zlib/` | The source archives on this release's page: `SM64Trainer-third-party-source-plugin.tar`; `tools/build_renderer_libs.py` builds libpng 1.6.32 and zlib 1.2.8; zlib 1.2.11 and libpng's 1.6.37 header are in the Qt source |
 | xxHash | Inside the renderer | BSD-2-Clause | `renderer/xxHash/` | The renderer's upstream tree, `src/xxHash/` |
-| cxd4 (mupen64plus-rsp-cxd4) | Not in the installed app: the scene lab, from source, runs the game's own audio microcode in it to split music from sound effects | CC0-1.0 | `cxd4/` | `tools/scene_lab/cxd4/` in this repository (its README names the pinned upstream commit) |
+| Unicorn 2.1.4 | The Python package `unicorn`, with its engine `unicorn.dll`: the Ghost Lab runs the game's own code in it (the free camera, rebuilt ghosts, save states) | The engine: GPL-2.0 only (its own code and the QEMU code it is built from; parts LGPL-2.1-or-later, BSD, MIT). The Python binding: BSD | `python/unicorn/` (`COPYING`, QEMU's note, the LGPL texts, `THIRD-PARTY-NOTICES.txt` with each permissive file's notice) | The source archives on this release's page: `SM64Trainer-third-party-source-unicorn.tar` (PyPI's `unicorn-2.1.4.tar.gz`, the file `uv.lock` pins) |
+| cxd4 (mupen64plus-rsp-cxd4) | `scene_cxd4.dll` in `sm64_events/data/lab/`: the Ghost Lab runs the game's own audio microcode in it to play the music and the sound effects apart | CC0-1.0 | `cxd4/` | `tools/scene_lab/cxd4/` in this repository (its README names the pinned upstream commit) |
 | NVIDIA Video Codec SDK header | `SM64GpuEncoderV1.dll`: hardware encoding on NVIDIA cards | MIT | `nvidia-video-codec-headers/` | `plugin/gfxwrap/vendor/nvEncodeAPI.h` in this repository |
 | Preact 10.24.3 | The interface | MIT | `preact/` | <https://github.com/preactjs/preact/tree/10.24.3> |
 | htm 3.1.1 | The interface's markup | Apache-2.0 | `htm/` | <https://github.com/developit/htm/tree/3.1.1> |
@@ -71,15 +85,23 @@ scripts are in this repository at the release's tag.
 | Google Sans | The Google sign-in button | OFL-1.1 | Beside the font: `ui/assets/community/google-sans-OFL.txt` (Google's own OFL.txt; its first line names Google Sans Flex, and the font file states its own copyright) | <https://github.com/googlefonts/googlesans> |
 | Super Mario 256 | The rank caps' division digits | Listed "100% Free" by its author on dafont; the font carries no license text | `super-mario-256/` | <https://www.dafont.com/super-mario-256.font> |
 | Python 3.13 | The interpreter and the DLLs it brings (OpenSSL, libffi, bzip2, SQLite ...), with Microsoft's C runtime DLLs beside it (`VCRUNTIME140.dll`, `MSVCP140.dll`, the Universal CRT) | PSF License and the licenses in its LICENSE.txt; the C runtime under Microsoft's redistribution terms (to the GPL it is a system library, the compiler's and Windows' own) | `python/CPython-<version>/`, added at build time | <https://www.python.org/downloads/source/> |
-| Python packages | Everything PyInstaller bundles | Each package's own | `python/<package>-<version>/`, collected at build time from what the exe actually contains | Each package's source release on PyPI, at that version. Two folders are tracked here: `python/proxy-tools/`, because its wheel installs no license file, and `python/pyaudiowpatch/`, the PyAudio and PortAudio licenses for the code its wheel compiles in but does not name |
+| Python packages | Everything PyInstaller bundles | Each package's own | `python/<package>-<version>/`, collected at build time from what the exe actually contains | Each package's source release on PyPI, at that version. Three folders are tracked here: `python/proxy-tools/` and `python/unicorn/`, because their wheels install no license file, and `python/pyaudiowpatch/`, the PyAudio and PortAudio licenses for the code its wheel compiles in but does not name |
 
 The SM64 decompilation and libsm64 are CC0, so they are credited in About
-and need no text here. That covers the address maps too: `behaviours_*.tsv`
-and `symbols_*.tsv` are (address, symbol) pairs from STROOP's
-`MappingUS.map` and `MappingJP.map`, which are GNU ld linker maps of a
-decompilation build (their entries read `build/us/src/game/...`). STROOP
-publishes no license, but those pairs come from the decompilation build, not
-from STROOP's own code; STROOP is credited as where we got them.
+and need no text here. That covers the address maps too. The app carries
+STROOP's `MappingUS.map` and `MappingJP.map` whole, as STROOP's repository
+holds them at commit `6771197ad0f50718d3d4a13387e01d1e6d9c0d1a`
+(`STROOP/Mappings/`; SHA-256 `d942ba97…` and `5e518529…`, 879,744 and
+812,217 bytes): the Ghost Lab reads their symbols and section rows to run
+the game's own code. `behaviours_*.tsv` and `symbols_*.tsv` are (address,
+symbol) pairs from the same two files. Both are GNU ld linker maps of a
+decompilation build: they open with the linker's own "Archive member
+included to satisfy reference by file (symbol)" and list its "Memory
+Configuration", "Linker script" and the objects it linked
+(`build/us/src/game/...`). STROOP publishes no license (its repository at
+that commit has no license file), but the maps are output of the
+decompilation build, not STROOP's own code; STROOP is credited as where we
+got them.
 
 When a release changes one of these (a new ffmpeg.exe, a PyAV bump, a new
 vendored file), refresh its texts and its row. The build refuses an
