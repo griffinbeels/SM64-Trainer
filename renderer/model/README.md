@@ -43,8 +43,8 @@ The caller must separately establish its expected ROM/version identity.
 ## Model data comes from the player's ROM
 
 No Nintendo vertex, display-list, light, geo-layout or animation data is
-compiled in (since 2026-11-09; before, the decomp's literal arrays were, see
-`.tasks/features/ghost-lab-beta/ip-audit.md` C1). `tools/build_model.py`
+compiled in (since 2026-11-09; before, the decomp's literal arrays were, which
+`tools/native_data_scan.py` now refuses). `tools/build_model.py`
 `_romify` turns each decomp definition into empty storage of its size plus a
 row (`rom_data.h`): the owner (Mario or a held kind), the ROM block and the
 segmented address the decomp names it by (its name's address suffix, else

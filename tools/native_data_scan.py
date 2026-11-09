@@ -16,7 +16,7 @@ no Nintendo bytes live in this repository either:
 - each display list's first four triangles, as libsm64's GFXCMD words and as
   the ROM's F3D G_TRI1 commands.
 
-On 2026-11-09 the audit (.tasks/features/ghost-lab-beta/ip-audit.md, C1)
+On 2026-11-09 the Ghost Lab beta's IP audit (its finding C1)
 found Mario's vertices and the Bob-omb's walk in beta.37's renderer by two of
 these patterns; tools/build_natives.py now runs this scan on every native it
 compiles. Limits: a pattern is a sample (the first entries of each array),
