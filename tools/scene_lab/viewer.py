@@ -39,7 +39,6 @@ import socket
 import struct
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 from collections import deque
@@ -196,21 +195,20 @@ def load_sources(paths: list[Path]) -> tuple[list[Frame], str]:
 
 
 def build() -> Path:
-    spec = importlib.util.spec_from_file_location("scene_lab_build", ROOT / "tools/build_plugin.py")
-    compiler = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(compiler)
-    digest = hashlib.sha256(b"".join(path.read_bytes() for path in SOURCES)).hexdigest()[:16]
-    work = Path(os.environ.get("LOCALAPPDATA", tempfile.gettempdir())) / "SM64Trainer/build-cache/scene-lab" / digest
-    target = work / "viewer_host.exe"
-    if target.is_file():
-        return target
-    work.mkdir(parents=True, exist_ok=True)
-    vcvars = compiler.find_vcvars32()
-    if vcvars is None:
-        raise RuntimeError("x86 MSVC toolchain is required")
-    compiler._cl(vcvars, [*compiler.COMMON_FLAGS, f"/I{ROOT / 'plugin/gfxwrap'}", str(SOURCES[0]),
-                          f"/Fe:{target}", f"/Fo{work}\\", "/link", "user32.lib", "kernel32.lib"], work)
-    return target
+    """viewer_host.exe. The installed app runs its own copy (core/paths.py bundled_lab_file) and
+    never compiles; a checkout compiles the one recipe (tools/build_lab.py) into the
+    scene lab's build cache, keyed by the build id it carries."""
+    if getattr(sys, "frozen", False):
+        from sm64_events.core.paths import bundled_lab_file
+        path = bundled_lab_file("viewer_host.exe")
+        if path is None:
+            raise RuntimeError("This copy of SM64 Trainer is missing viewer_host.exe, the program that draws "
+                               "Ghost Lab pictures. Reinstall SM64 Trainer.")
+        return path
+    spec = importlib.util.spec_from_file_location("scene_lab_build", ROOT / "tools/build_lab.py")
+    recipes = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(recipes)
+    return recipes.cached("viewer_host.exe")
 
 
 class Host:
