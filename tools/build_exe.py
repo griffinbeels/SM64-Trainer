@@ -255,12 +255,42 @@ def sim_args(*, metadata_path: "Path | None" = None, version_hook: "Path | None"
     return argv
 
 
+#: Unicorn's import library: --collect-all carries it, and nothing links against it at run time (49 MB).
+SIM_DROP = (Path(SIM_CONTENTS) / "unicorn" / "lib" / "unicorn.lib",)
+GUARD_CF = 0x4000                  # IMAGE_DLLCHARACTERISTICS_GUARD_CF
+
+
+def without_control_flow_guard(exe: Path) -> None:
+    """Clear Control Flow Guard from a built program's PE header (and fix its checksum).
+
+    PyInstaller's bootloader is linked /guard:cf, and a process whose exe is marked so validates every longjmp
+    target. Unicorn's engine (QEMU's TCG) leaves its translated code with a longjmp to a target it never
+    registers, so in such a process the first emulation ends in a fail-fast in VCRUNTIME140
+    (0xC0000409, FAST_FAIL_INVALID_SET_OF_CONTEXT). Measured 2026-11-09 on the scratch beta.38 build: the
+    simulation program died on its first Uc.emu_start with the bit set and passed all 78 of its self-checks
+    with it cleared; python.exe, where the lab always ran, carries no such bit. Only the simulation program
+    is changed; the Trainer keeps its guard."""
+    import pefile
+    pe = pefile.PE(str(exe))
+    try:
+        pe.OPTIONAL_HEADER.DllCharacteristics &= ~GUARD_CF
+        pe.OPTIONAL_HEADER.CheckSum = pe.generate_checksum()
+        data = pe.write()
+    finally:
+        pe.close()
+    exe.write_bytes(data)
+
+
 def merge_sim(sim_dist: Path, app_dir: Path) -> None:
     """Put the built simulation program (its exe and SIM_CONTENTS) beside the
-    Trainer's, then refuse an app whose programs hold what they must not
-    (bundle_policy.check_programs)."""
+    Trainer's, without Control Flow Guard (without_control_flow_guard) and
+    without SIM_DROP, then refuse an app whose programs hold what they must
+    not (bundle_policy.check_programs)."""
     shutil.copy2(sim_dist / SIM_EXE, app_dir / SIM_EXE)
     shutil.copytree(sim_dist / SIM_CONTENTS, app_dir / SIM_CONTENTS)
+    without_control_flow_guard(app_dir / SIM_EXE)
+    for relative in SIM_DROP:
+        (app_dir / relative).unlink(missing_ok=True)
     check_programs(app_dir)
 
 

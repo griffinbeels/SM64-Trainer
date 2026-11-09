@@ -36,3 +36,31 @@ def test_a_receipt_path_must_be_absolute_json(tmp_path):
     for bad in ("relative.json", str(tmp_path / "receipt.txt"), str(tmp_path / "missing" / "receipt.json")):
         with pytest.raises(ValueError):
             probe._receipt_path(bad)
+
+
+def test_the_simulation_program_is_built_without_control_flow_guard(tmp_path, monkeypatch):
+    """A process whose exe is marked /guard:cf dies on Unicorn's first emulation (a longjmp to an unregistered
+    target, measured on the frozen beta.38 scratch build); the build clears the mark on SM64TrainerSim.exe alone,
+    and the program's own self-check reads it back from its header."""
+    import shutil
+    import sys
+
+    import pefile
+    sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[1] / "tools"))
+    import build_exe
+    exe = tmp_path / "SM64TrainerSim.exe"
+    shutil.copyfile(getattr(sys, "_base_executable", sys.executable), exe)
+    pe = pefile.PE(str(exe))
+    pe.OPTIONAL_HEADER.DllCharacteristics |= build_exe.GUARD_CF
+    marked = pe.write()
+    pe.close()
+    exe.write_bytes(marked)
+    monkeypatch.setattr(sys, "executable", str(exe))
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    assert probe._no_control_flow_guard() is False                 # the mark, read the way the program reads it
+    build_exe.without_control_flow_guard(exe)
+    assert probe._no_control_flow_guard() is True
+    monkeypatch.undo()
+    pe = pefile.PE(str(exe))
+    assert not pe.OPTIONAL_HEADER.DllCharacteristics & build_exe.GUARD_CF and pe.verify_checksum()
+    pe.close()

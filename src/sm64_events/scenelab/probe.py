@@ -43,12 +43,18 @@ TRUNCATE = 600
 
 
 class Receipt:
-    def __init__(self, kind: str):
+    """Checks in order; with `path`, written again after each one, so a check that ends the process (a native
+    crash) still leaves every earlier result and the name of the one that was running."""
+
+    def __init__(self, kind: str, path: Path | None = None):
         self.data = {"schema": 1, "kind": kind, "ok": False, "checks": []}
+        self.path = path
 
     def check(self, name: str, work, **extra) -> bool:
         began = time.perf_counter()
         item = {"name": name, **extra}
+        if self.path is not None:
+            _write(self.path, self.data | {"running": name})
         try:
             value = work()
             item["ok"] = bool(value) if not isinstance(value, dict) else bool(value.get("ok"))
@@ -90,6 +96,17 @@ def _unicorn_runs_mips() -> bool:
     return engine.reg_read(UC_MIPS_REG_V0) == 42
 
 
+def _no_control_flow_guard() -> bool:
+    """This program's exe carries no IMAGE_DLLCHARACTERISTICS_GUARD_CF (tools/build_exe.py says why)."""
+    if not getattr(sys, "frozen", False):
+        return True
+    with open(sys.executable, "rb") as exe:
+        head = exe.read(4096)
+    pe = int.from_bytes(head[0x3C:0x40], "little")
+    characteristics = int.from_bytes(head[pe + 24 + 70:pe + 24 + 72], "little")
+    return head[pe:pe + 4] == b"PE\0\0" and not characteristics & 0x4000
+
+
 def _refused(name: str) -> bool:
     try:
         importlib.import_module(name)
@@ -103,12 +120,13 @@ def sim_self_check(argv: list[str]) -> int:
     if len(argv) != 1:
         return 2
     target = _receipt_path(argv[0])
-    receipt = Receipt("simulation-program-self-check")
+    receipt = Receipt("simulation-program-self-check", target)
     from sm64_events.scenelab_code import lab_module
     receipt.check("sim_boundary_enter", lambda: lab_module("sim_boundary").enter() is None)
     sim_boundary = lab_module("sim_boundary")
     for name in sim_boundary.MODULES:
         receipt.check("import:" + name, lambda name=name: importlib.import_module(name) is not None)
+    receipt.check("no_control_flow_guard", _no_control_flow_guard)          # else the next check dies
     receipt.check("unicorn_runs_mips", _unicorn_runs_mips)
     receipt.check("hashing_without_openssl", lambda: hashlib.sha256(b"abc").hexdigest().startswith("ba7816bf")
                   and importlib.util.find_spec("_hashlib") is None and importlib.util.find_spec("_ssl") is None)
@@ -150,20 +168,40 @@ def run_sim_self_check(folder: Path | None = None) -> dict:
         return json.loads(target.read_text(encoding="utf-8")) | {"returncode": done.returncode}
 
 
-def trainer_lab_checks(check) -> dict | None:
-    """The Ghost Lab's rows of the beta self-check (`check(name, work)` is beta_probe's). Returns the simulation
-    program's receipt, which the report carries whole."""
+#: The one Ghost Lab module the Trainer carries that imports Unicorn at its top: lazy paths in the evaluator and
+#: the state resolvers name it, and only simulation processes run them. In the Trainer it must fail to import.
+SIM_ONLY = ("e2_georender",)
+
+
+def _imports_only_in_the_simulation(name: str) -> bool:
+    from sm64_events.scenelab_code import lab_module
+    try:
+        lab_module(name)
+    except ImportError as error:
+        return "unicorn" in str(error)
+    return False
+
+
+def trainer_lab_checks(check) -> dict:
+    """The Ghost Lab's rows of the beta self-check (`check(name, work)` is beta_probe's, which keeps no error
+    text): one row for the Trainer's side and one for the simulation program. Returns both receipts, each check
+    with its error, which the report carries whole."""
     from sm64_events.scenelab_code import LAB_MODULES, lab_module
+    trainer = Receipt("trainer-ghost-lab")
     for name in LAB_MODULES:
-        check("lab_import:" + name, lambda name=name: lab_module(name) is not None)
-    check("trainer_holds_no_unicorn", lambda: importlib.util.find_spec("unicorn") is None)
+        if name in SIM_ONLY:
+            trainer.check("sim_only:" + name, lambda name=name: _imports_only_in_the_simulation(name))
+        else:
+            trainer.check("import:" + name, lambda name=name: lab_module(name) is not None)
+    trainer.check("holds_no_unicorn", lambda: importlib.util.find_spec("unicorn") is None)
+    check("ghost_lab_trainer", lambda: trainer.finish()["ok"])
     held: dict = {}
 
     def simulation():
         held.update(run_sim_self_check())
         return held.get("ok") is True
-    check("simulation_program", simulation)
-    return held or None
+    check("ghost_lab_simulation_program", simulation)
+    return {"trainer": trainer.data, "simulation_program": held}
 
 
 # ---------------------------------------------------------------- the lab's work, through its children

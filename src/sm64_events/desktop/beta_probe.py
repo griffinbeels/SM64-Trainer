@@ -181,7 +181,7 @@ def _ghost_lab(report, check, fixture):
     have no simulation program beside them."""
     if fixture is None:
         from sm64_events.scenelab.probe import trainer_lab_checks
-        report["simulation_program"] = trainer_lab_checks(check)
+        report["ghost_lab"] = trainer_lab_checks(check)
 
 
 def collect_report(*, fixture: ProbeRuntime | None = None, importer=None):
