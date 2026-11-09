@@ -52,6 +52,12 @@ only the first manual download does.)
 - **Windowed**, not exclusive fullscreen, or replay capture can't see the game.
 - Your data lives in `%LOCALAPPDATA%\SM64Trainer\` and survives every update.
 
+**Course pictures come from your own ROM.** The Trainer does not ship any of
+the game's pictures. Once it has found your Usamune ROM, it copies each
+course's painting out of that ROM on your computer and keeps the copies in
+your data folder. Until then, each course shows a plain tile with its short
+name, such as "BoB". Nothing from your ROM is uploaded.
+
 **Setup and Practice Replay.** Each page shows the current action, with
 optional help for getting Project64, setting up your own Usamune ROM, and
 configuring the game/controller. Pages advance after a visible acknowledgment;

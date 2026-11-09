@@ -988,7 +988,11 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
                library_path=None, refresh_library_on_start=False,
                library_bundled_path=None, ghost=None, protect_local_api=False,
                local_port=None, community_account=None, community_sync=None,
-               bootstrap_cleanup_path=None, multiplayer=None) -> FastAPI:
+               bootstrap_cleanup_path=None, multiplayer=None, course_art=None) -> FastAPI:
+    # `course_art` is the cache of course portraits cut from the player's ROM
+    # (sm64_events/course_art.py). None -- every test and fixture unless it
+    # passes one -- serves the plain stand-ins and never looks for a ROM;
+    # main.py passes the real one.
     # `library_bundled_path` overrides the BUNDLED snapshot the library falls
     # back to (None = the shipped one). Since round 33 every fitted star row
     # in the library becomes a sheet-fitted rank standard at load, so a test
@@ -1029,6 +1033,8 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
     _mount_service_routes(app, service, mode_path)
     _mount_optional_routes(app, replay, inputs, capture_layer, compare,
                            compilation, updater, mode_path, setup_observer, poller, setup_profile)
+    from sm64_events.server.course_art_api import create_course_art_router
+    app.include_router(create_course_art_router(course_art, broadcaster))
     from sm64_events.server.ghost_api import mount_ghost_routes
     mount_ghost_routes(app, session=ghost)
     from sm64_events.server.community_api import create_community_router

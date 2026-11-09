@@ -184,17 +184,17 @@ export function useTracker() {
   // being tuned (2026-07-24). Client display preference like starIcons.
   const [showDust, setShowDust] = useState(
     localStorage.getItem("sm64.showDust") === "1");
-  // Course portrait manifest (stem -> filename) from GET /api/icons/courses.
-  // Fetched ONCE: the set only changes with the install. Empty object until it
-  // lands, which the icon chain treats as "no portrait" and falls back to star
-  // art — so a slow fetch degrades to the same art the four painting-less
-  // courses use, never to a broken image.
+  // Course portrait listing (stem -> URL tail) from GET /api/icons/courses.
+  // The portraits are cut from the player's own ROM, so the listing names a
+  // plain stand-in until the server has them; it broadcasts
+  // course_art_changed when they arrive, and this asks again (the socket
+  // handler below). Empty object until it lands, which the icon chain treats
+  // as "no portrait" and falls back to star art -- never a broken image.
   const [courseIcons, setCourseIcons] = useState({});
-  useEffect(() => {
-    getJSON("/api/icons/courses")
-      .then((payload) => setCourseIcons(payload.courses || {}))
-      .catch(() => {});      // no portraits is a survivable state
-  }, []);
+  const loadCourseIcons = () => getJSON("/api/icons/courses")
+    .then((payload) => setCourseIcons(payload.courses || {}))
+    .catch(() => {});      // no portraits is a survivable state
+  useEffect(() => { loadCourseIcons(); }, []);
   // Segment definitions + the builder vocabulary, for the pickers. Segments
   // are refetched when the server says they changed (a new definition should
   // appear in the target picker without a reload); vocab is static per
@@ -579,6 +579,9 @@ export function useTracker() {
           // A new or edited definition must show up in the target picker
           // without a reload — the picker reads t.segments.
           loadSegments();
+        } else if (ev.type === "course_art_changed") {
+          // The portraits were cut from the player's ROM (or it changed).
+          loadCourseIcons();
         } else if (ev.type === "stage_changed") {
           // MERGED, not replaced. The service stamps derived keys (`node`)
           // onto both the session view's stage and this broadcast payload, so

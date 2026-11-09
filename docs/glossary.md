@@ -2135,6 +2135,27 @@ the rule holds with no trainer open.
 - **Not** -- the [[game version]] setting (US or JP), which picks addresses and
   grading, not whether the tooling is on
 
+### Course portrait
+
+The picture the Trainer shows for a course: the castle painting you jump
+into, or a texture of the course itself where there is no painting (the BBH
+Boo portrait, the RR flying carpet, Peach's and Bowser's portraits for the
+slide and BitFS). The Trainer ships none of them (Griffin, 2026-11-09: "yes,
+let's do that if we can"): `course_art.py` cuts each one from the player's own
+[[practice ROM]] while the app is open, checks its bytes against a pinned
+fingerprint, and keeps it in a cache folder named by the ROM's hash. Until the
+Trainer finds a ROM, the page shows a stand-in instead: our plain tile with
+the course's short name, the same size, so nothing moves when the picture
+arrives.
+
+- **Lives** -- `src/sm64_events/course_art.py` (cutting, cache, stand-in),
+  `src/sm64_events/server/course_art_api.py` (the listing and the pictures),
+  and `src/sm64_events/ui/entities.js` (the one place that builds a portrait's
+  URL)
+- **Not** -- a [[star]]'s split icon (`ui/assets/star_icons/`), which names one
+  [[star]] rather than the course; HMC, SSL, DDD and SL keep a split icon
+  because their "painting" is a pool, a water ripple or a plain wall
+
 ### Encoder helper
 
 The 64-bit NVENC DLL (`SM64GpuEncoderV1.dll`) the server's isolated encoder

@@ -466,8 +466,8 @@
     "354a9ddb240b289fbf700592184fa97f56f56ae448e16066c93db5e7f07d7b72",
     "ab209614cf4302f1ffebcc19ac13801445cde61ed16d039b993aa4867d7ed870",
     "4373102980df94ccdb09593416bd493ef8f27a7b77122bd21cac579509a94ce5",
-    "71eaefbf6c568bf37953abef05eb78c31898b49cec23c2ed51edd9ef063072f5",
-    "448089a97fa1f09f61c5c2ba8c411a5077b9206d1f70f1b60ee9916f91df662d",
+    "3d443b94f8ebe34a53c1ea9b1e53a5a83399e1460c5451e757af6fdea577ddb9",
+    "3d492be9838c704725bed9820b04c748e0d32c0e98c38eabca9cf6f0041811fa",
     "0e8adeb7b4211470ec8e0e009fe76acbb0935afb25ba7b2ec763296347c21b36",
     "42d72afad0e873df9b821ca8a6b8941bff69a1dad2b63eddde5914c9cd890620"
   ],
@@ -1044,15 +1044,15 @@
     },
     {
       "path": "src/sm64_events/server/api.py",
-      "line": 391,
+      "line": 387,
       "rule": "C901",
-      "message": "`create_api_router` is too complex (153 > 15)"
+      "message": "`create_api_router` is too complex (152 > 15)"
     },
     {
       "path": "src/sm64_events/server/api.py",
-      "line": 391,
+      "line": 387,
       "rule": "PLR0915",
-      "message": "Too many statements (396 > 50)"
+      "message": "Too many statements (394 > 50)"
     },
     {
       "path": "src/sm64_events/server/api.py",
@@ -3709,6 +3709,30 @@
         }
       ],
       "reason": "Shared RankCard and cohesive Rank row renderers remove all three prior rankpage.js complexity/length findings. No replacement or increased allowances."
+    },
+    {
+      "findings": [
+        {
+          "path": "src/sm64_events/server/api.py",
+          "line": 387,
+          "rule": "C901",
+          "message": "`create_api_router` is too complex (152 > 15)",
+          "allowance": "3d443b94f8ebe34a53c1ea9b1e53a5a83399e1460c5451e757af6fdea577ddb9",
+          "replaces_allowance": "71eaefbf6c568bf37953abef05eb78c31898b49cec23c2ed51edd9ef063072f5"
+        },
+        {
+          "path": "src/sm64_events/server/api.py",
+          "line": 387,
+          "rule": "PLR0915",
+          "message": "Too many statements (394 > 50)",
+          "allowance": "3d492be9838c704725bed9820b04c748e0d32c0e98c38eabca9cf6f0041811fa",
+          "replaces_allowance": "448089a97fa1f09f61c5c2ba8c411a5077b9206d1f70f1b60ee9916f91df662d"
+        }
+      ],
+      "reason": "Course portraits moved out of the general API into server/course_art_api.py (P16 rom-art). Reviewed decreases only: create_api_router C901 153 -> 152 and statements 396 -> 394. No new debt adopted.",
+      "source_commit": "66217d8ba9361daf02227ad2f6c35394baf5a8bb",
+      "source_state": "Reviewed working-tree delta from source_commit",
+      "reviewer": "rom-art node (P16) self-review of the deleted endpoint"
     }
   ]
 }
