@@ -1,8 +1,21 @@
-"""Make this checkout's two bundled natives match its sources.
+"""Make this checkout's bundled natives match its sources.
 
     uv run python tools/build_natives.py            # build what is out of date
     uv run python tools/build_natives.py --strict   # and fail if any cannot be (wrap, release)
     uv run python tools/build_natives.py --check    # only say what is out of date
+    uv run python tools/build_natives.py --no-lab   # the plugin and the helper alone
+
+The Ghost Lab's natives (core/update_plan.py LAB_NATIVES: viewer_host.exe,
+tap_offline_host.exe, ghost_sound_host.exe, scene_cpu_hooks.dll,
+scene_cxd4.dll) go to src/sm64_events/data/lab/, which the frozen app carries
+as sm64_events/data/lab/ and never compiles (core/paths.py
+bundled_lab_file). Each is tools/build_lab.py's one recipe for it, with an
+embedded build id, version resource and source date,
+the same cache, the same Defender gate and the same strictness as the
+plugin. Every command-line run builds them; a call from code asks for them
+with `lab=True` (packaging), so the server's launch check (main.py) never
+waits for them: a checkout's lab compiles its own into the scene lab's build
+cache on first use.
 
 The graphics plugin (sm64_trainer_gfx.dll: LINK's GLideN64 v4.2, the overlay
 and the capture layer in one file since 2026-11-07) and the 64-bit encoder
@@ -49,6 +62,7 @@ from typing import Callable, NamedTuple
 
 REPO = Path(__file__).resolve().parents[1]
 BUNDLE = REPO / "src" / "sm64_events" / "data" / "plugin"
+LAB_BUNDLE = REPO / "src" / "sm64_events" / "data" / "lab"   # core/update_plan.py LAB_NATIVE_FOLDER, in the app
 KEEP_PER_NATIVE = 6  # cached builds kept per file: a few branches' worth
 
 
@@ -82,6 +96,7 @@ class Native(NamedTuple):
     identity: Callable[[], str]
     build: Callable[[Path], Path]
     needs: str  # what building it takes, said when it cannot be built
+    lab: bool = False  # a Ghost Lab native: it lives in LAB_BUNDLE
 
 
 def natives() -> tuple[Native, ...]:
@@ -92,6 +107,30 @@ def natives() -> tuple[Native, ...]:
         Native("SM64GpuEncoderV1.dll", plugin.helper_build_id, plugin.build_encoder_helper,
                "the x64 MSVC toolchain (VS Build Tools)"),
     )
+
+
+def lab_natives() -> tuple[Native, ...]:
+    """The Ghost Lab's natives, in core/update_plan.py LAB_NATIVES order."""
+    from functools import partial
+    from sm64_events.core.update_plan import LAB_NATIVES
+    lab = _load("build_lab")
+    found = []
+    for name in LAB_NATIVES:
+        recipe = lab.RECIPES[name]
+        needs = f"the {'x64' if recipe.x64 else 'x86'} MSVC toolchain (VS Build Tools)"
+        needs += f" and {recipe.needs}" if recipe.needs else ""
+        found.append(Native(name, partial(lab.build_id, name), partial(lab.build, name), needs, lab=True))
+    return tuple(found)
+
+
+def target(native: Native) -> Path:
+    """Where a native sits in this checkout's bundle."""
+    return (LAB_BUNDLE if native.lab else BUNDLE) / native.name
+
+
+def bundle_files(*, lab: bool = True) -> list[Path]:
+    """Every native's bundle path (packaging scans them all again: tools/build_exe.py)."""
+    return [target(native) for native in (*natives(), *(lab_natives() if lab else ()))]
 
 
 # Files earlier builds put in the bundle and this one never makes: until
@@ -162,22 +201,22 @@ def _scan_installed(installed: list, states: dict, log) -> None:
         scan([target for _, _, target in installed], log)
     except _load("defender_scan").ThreatFound as found:
         flagged = {Path(verdict.path) for verdict in found.verdicts}
-        for native, expected, target in installed:
-            if target in flagged:
-                target.unlink(missing_ok=True)
+        for native, expected, path in installed:
+            if path in flagged:
+                path.unlink(missing_ok=True)
                 shutil.rmtree(_entry(native, expected), ignore_errors=True)
                 states[native.name] = "flagged"
         raise
 
 
-def ensure(*, build: bool = True, strict: bool = False, log=print) -> dict[str, str]:
+def ensure(*, build: bool = True, strict: bool = False, lab: bool = False, log=print) -> dict[str, str]:
     """Each native's state after the run: fresh, built, stale or missing.
 
     With `build`, an out-of-date native is taken from the cache or compiled;
     one that cannot be is removed from the bundle. Each native put in the
     bundle is scanned (`scan`); a threat raises defender_scan.ThreatFound
     whatever `strict` says. `strict` raises instead of returning when any
-    native is not fresh afterwards."""
+    native is not fresh afterwards. `lab` adds the Ghost Lab's natives."""
     states, problems, installed = {}, [], []
     if build:
         for name in RETIRED:
@@ -187,25 +226,25 @@ def ensure(*, build: bool = True, strict: bool = False, log=print) -> dict[str, 
                     log(f"  removed {name}: this repository no longer builds it")
                 except PermissionError as failure:
                     problems.append(f"{name} is retired but in use, so it stayed ({failure})")
-    for native in natives():
-        target = BUNDLE / native.name
+    for native in (*natives(), *(lab_natives() if lab else ())):
+        path = target(native)
         expected = native.identity()
-        if target.is_file() and embedded_id(target) == expected:
+        if path.is_file() and embedded_id(path) == expected:
             states[native.name] = "fresh"
             continue
         if not build:
-            states[native.name] = "stale" if target.is_file() else "missing"
+            states[native.name] = "stale" if path.is_file() else "missing"
             problems.append(f"{native.name} is {states[native.name]}")
             continue
         try:
-            _install(_cached_build(native, expected, log), target)
+            _install(_cached_build(native, expected, log), path)
             states[native.name] = "built"
-            installed.append((native, expected, target))
+            installed.append((native, expected, path))
         except PermissionError as failure:
             states[native.name] = "stale"
             problems.append(f"{native.name} is in use and was not replaced ({failure})")
         except Exception as failure:  # noqa: BLE001 - any build failure reads the same to him
-            target.unlink(missing_ok=True)
+            path.unlink(missing_ok=True)
             states[native.name] = "missing"
             problems.append(f"{native.name} could not be built: it needs {native.needs}. "
                             f"({str(failure).splitlines()[0] if str(failure) else type(failure).__name__})")
@@ -222,10 +261,11 @@ def main() -> int:
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--check", action="store_true", help="report only; exit 1 if any is out of date")
     mode.add_argument("--strict", action="store_true", help="exit 1 if any cannot be built")
+    parser.add_argument("--no-lab", action="store_true", help="leave the Ghost Lab's natives out")
     args = parser.parse_args()
     sys.path.insert(0, str(REPO / "src"))
     try:
-        states = ensure(build=not args.check, strict=args.strict)
+        states = ensure(build=not args.check, strict=args.strict, lab=not args.no_lab)
     except _load("defender_scan").ThreatFound as found:
         print(f"natives: STOPPED: {found}")
         return 3

@@ -14,10 +14,7 @@ imports Unicorn: attach() takes the Sandbox's Uc and its binding's library.
 from __future__ import annotations
 
 import ctypes
-import hashlib
 import importlib.util
-import os
-import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -88,24 +85,21 @@ def address(buffer) -> int:
 
 
 def build(work: Path | None = None) -> Path | None:
-    """The hooks DLL, compiled once per source hash (into `work` when given); None without an
-    x64 MSVC toolchain."""
-    spec = importlib.util.spec_from_file_location("scene_lab_build", ROOT / "tools/build_plugin.py")
-    compiler = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(compiler)
-    digest = hashlib.sha256(SOURCE.read_bytes()).hexdigest()[:16]
-    cache = Path(os.environ.get("LOCALAPPDATA", tempfile.gettempdir())) / "SM64Trainer/build-cache/scene-lab"
-    work = work or cache / digest
-    target = work / "scene_cpu_hooks.dll"
-    if target.is_file():
-        return target
-    vcvars = compiler.find_vcvars64()
-    if vcvars is None:
+    """The hooks DLL; None without it, so the Python hooks run. The installed app runs its own copy
+    (core/paths.py bundled_lab_file) and never compiles; a checkout compiles the one recipe
+    (tools/build_lab.py) once per build id into the scene lab's build cache, or into
+    `work` when given, and has none without an x64 MSVC toolchain."""
+    import sys
+    if getattr(sys, "frozen", False):
+        from sm64_events.core.paths import bundled_lab_file
+        return bundled_lab_file("scene_cpu_hooks.dll")
+    spec = importlib.util.spec_from_file_location("scene_lab_build", ROOT / "tools/build_lab.py")
+    recipes = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(recipes)
+    try:
+        return recipes.cached("scene_cpu_hooks.dll", work)
+    except recipes.ToolchainMissing:
         return None
-    work.mkdir(parents=True, exist_ok=True)
-    compiler._cl(vcvars, ["/nologo", "/O2", "/W4", "/LD", "/MT", str(SOURCE), f"/Fe:{target}",
-                          f"/Fo{work}\\"], work)
-    return target
 
 
 _LIBRARY: list = []
