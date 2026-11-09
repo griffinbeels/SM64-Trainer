@@ -3,8 +3,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {Miniflare,convertV4MiniflareOptions,Response as MFResponse} from 'miniflare';
 import {generateKeyPair,exportJWK,SignJWT} from 'jose';
-import {randomBytes} from 'node:crypto';
-import {alice,nativeClip,upload,digest} from './fixtures.js';
+import {alice,nativeClip,upload,digest,startFor} from './fixtures.js';
 import {Store} from '../src/store.js';
 import {config} from '../src/config.js';
 const model=JSON.parse(readFileSync(new URL('../catalog.json',import.meta.url),'utf8'));
@@ -80,7 +79,7 @@ try{
   // A ghost's start in real workerd/D1/R2: one object holds the ghost and then
   // its start, both read back by range through the private asset cache export.
   await call('/v1/account/sharing',{method:'PUT',body:{enabled:true}});
-  const g=upload(nativeClip({marker:2})),start=randomBytes(26132);
+  const g=upload(nativeClip({marker:2})),start=startFor(g.body.raw_sha256);
   g.body={...g.body,target:entry.target,strategy:entry.strategies[0].name,generation:model.generation,start_sha256:digest(start),start_bytes:start.length};
   const startGrant=await call('/v1/uploads',{method:'POST',body:g.body});
   const startPublished=await call('/v1/uploads/'+startGrant.json.upload_id,{method:'PUT',bytes:Buffer.concat([g.bytes,start])});

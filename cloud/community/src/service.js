@@ -4,6 +4,7 @@ import {ServiceError,requireThat,json,readJSON,exactQuery,boundedBody,hex64,uuid
 import {catalogFor,lookup,grade,targetKey,aboveCeiling} from './catalog.js';
 import {Store,storedBytes} from './store.js';
 import {validateGHC1} from './codec.js';
+import {checkStart} from './start-header.js';
 import {checkedName,prefixRange} from './names.js';
 import {encodeCursor,decodeCursor} from './cursors.js';
 import {nativeAuthorize} from './portal-contract.js';
@@ -177,8 +178,9 @@ async function recording({url,env,ctx,s,a},rm){
     ...(r.start_bytes>0?{'Ghost-Start-SHA256':r.start_sha256,'Ghost-Start-Bytes':String(r.start_bytes)}:{})}});
 }
 const UPLOAD_FIELDS=['target','clock','rom','strategy','frames','raw_sha256','raw_bytes','encoded_sha256','encoded_bytes','codec','generation'];
-// A ghost's start is optional and opaque: both fields or neither. Trainers
-// that predate it send neither, and their uploads are unchanged.
+// A ghost's start is optional: both fields or neither. Trainers that predate
+// it send neither, and their uploads are unchanged. Its header is checked when
+// its bytes arrive (start-header.js); its game state is never unpacked here.
 function startClaim(b){
   const sha=Object.hasOwn(b,'start_sha256'),bytes=Object.hasOwn(b,'start_bytes');
   requireThat(sha===bytes&&(!sha||hex64(b.start_sha256)&&integer(b.start_bytes,1,Number.MAX_SAFE_INTEGER)));
@@ -194,7 +196,7 @@ async function receiveUpload({request,url,env,s,a},um){
   exactQuery(url,[]);requireThat(request.headers.get('content-type')==='application/octet-stream','content_type','Expected binary GHC1.');const g=await s.beginUpload(a,um[1]);if(g.state==='complete')return json(s.grantResponse(g));if(g.state==='stored')return json(await s.publish(g));let bytes;
   try{
     bytes=await boundedBody(request,LIMITS.encoded_bytes+LIMITS.start_bytes,storedBytes(g));validateGHC1(bytes.subarray(0,g.encoded_bytes),g);
-    if(g.start_bytes>0)requireThat(await sha256(bytes.subarray(g.encoded_bytes))===g.start_sha256,'start_mismatch','The ghost start disagrees with its grant.',422);
+    if(g.start_bytes>0){requireThat(await sha256(bytes.subarray(g.encoded_bytes))===g.start_sha256,'start_mismatch','The ghost start disagrees with its grant.',422);checkStart(bytes.subarray(g.encoded_bytes),g);}
   }catch(error){await s.release(g);throw error;}
   const multipart=await env.GHOSTS.createMultipartUpload(g.asset_key,{httpMetadata:{contentType:'application/octet-stream'},customMetadata:{encoded_sha256:g.encoded_sha256,...(g.start_bytes>0?{start_sha256:g.start_sha256}:{})}});
   try{
