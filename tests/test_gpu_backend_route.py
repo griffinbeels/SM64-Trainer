@@ -102,7 +102,8 @@ def test_the_installed_app_starts_the_helper_as_itself(monkeypatch):
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     command, identity, env = helper_launch()
     assert command == [sys.executable, process_worker.GPU_HELPER_FLAG]
-    assert env is None and identity["entry"] == str(Path(sys.executable).resolve())
+    assert env == {k: v for k, v in os.environ.items() if k != "__PYVENV_LAUNCHER__"}   # inherited, as a copy
+    assert identity["entry"] == str(Path(sys.executable).resolve())
     spawned = []
 
     class Job:
