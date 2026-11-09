@@ -54,8 +54,7 @@ export function attemptHiddenByDefault(a) {
 // Shared by star/segment cards, the unassigned bucket and graph-pick membership.
 // Missing preferences retain the default: saved-state entries are hidden.
 export function attemptMatchesLogFilters(a, ui) {
-  const savestated = a.outcome === "loaded" || a.state_loads > 0
-    || a.anchor_type === "state_loaded" || a.invalid_reason === "save_state";
+  const savestated = a.save_state; // the server's verdict (caveats.save_state_run)
   return !(ui.hideSavestates !== false && savestated)
     && !(ui.hideResets && ["reset", "hard_reset", "death"].includes(a.outcome));
 }

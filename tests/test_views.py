@@ -1,6 +1,8 @@
 import asyncio
 from datetime import datetime, timezone
 
+import pytest
+
 from sm64_events.core.events import Event
 from sm64_events.server.broadcaster import Broadcaster
 from sm64_events.storage.db import Database
@@ -437,6 +439,31 @@ def test_a_save_state_success_is_absent_from_progress_even_with_a_saved_pb(tmp_p
     points = sec["progress"]["sessions"][0]["points"]
     assert [p["attempt_id"] for p in points] == [clean.id]
     assert all(not p["is_pb_igt"] for p in points)
+
+
+@pytest.mark.parametrize("proof", [
+    {"anchor_type": "state_loaded"}, {"state_loads": 1},
+    {"invalid_reason": "save_state", "valid": False}, {"outcome": "loaded"},
+])
+def test_every_attempt_row_carries_the_save_state_verdict(tmp_path, proof):
+    """The browser reads `save_state` (goal plate, log filter) and never
+    restates the predicate, so every row the session view ships carries
+    caveats.save_state_run's own answer: True on save-state practice, False
+    on the clean control beside it."""
+    from dataclasses import replace
+
+    from sm64_events.tracking.caveats import save_state_run
+
+    db, svc = make(tmp_path)
+    seed(svc)
+    attempts = db.attempts()
+    clean, partial = [a for a in attempts if a.outcome == "success"]
+    partial = replace(partial, **proof)
+    db.replace_attempts([partial if a.id == partial.id else a for a in attempts])
+    [sec] = build_session_view(db, svc, clock="igt")["stars"]
+    rows = {row["id"]: row for row in sec["attempts"]}
+    assert rows[clean.id]["save_state"] is False
+    assert rows[partial.id]["save_state"] is True is save_state_run(partial)
 
 
 def test_progress_superseded_pbs_stay_gold(tmp_path):

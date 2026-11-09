@@ -420,6 +420,12 @@ def _attempt_json(a, clock, ranks=None, rank_clock=None, rank_ek=None,
             "valid": a.valid,
             "invalid_reason": a.invalid_reason,
             "state_loads": a.state_loads,
+            # Save-state practice (caveats.save_state_run), the ONE answer:
+            # never a goal, PB or celebration, and hidden by the log's
+            # save-state filter. Shipped so the browser reads the verdict
+            # instead of restating the predicate (2026-11-09: a loaded
+            # state's 10"00 played the goal plate's "GOAL!").
+            "save_state": save_state_run(a),
             # A time he brought rather than played: a real row with every
             # row affordance, and provably no replay -- the one control the
             # log hides for it, rather than drawing a player for a run the

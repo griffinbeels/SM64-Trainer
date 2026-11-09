@@ -1558,7 +1558,8 @@ class Database:
                    " WHERE attempts.id = pbs.attempt_id AND (attempts.cleared=1"
                    " OR attempts.anchor_type='state_loaded'"
                    " OR attempts.state_loads>0"
-                   " OR attempts.invalid_reason='save_state'))")
+                   " OR attempts.invalid_reason='save_state'"
+                   " OR attempts.outcome='loaded'))")
 
     def insert_pb(self, course_id: int | None, star_id: int | None,
                   strat_tag: str | None, timer_mode: str, frames: int,
