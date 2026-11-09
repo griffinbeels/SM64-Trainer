@@ -7,9 +7,12 @@ the shipping implementation. A clean entry is the control for each list.
 import copy
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import urlsplit
 
 from playwright.sync_api import expect, sync_playwright
+
+from sm64_events.tracking.caveats import save_state_run
 
 from tools.ui_fixture import (FIXTURE_COURSE, FIXTURE_SEGMENT, FIXTURE_STAR,
                               serve_ui)
@@ -32,6 +35,8 @@ def _rows(sample, start):
                "invalid_reason": None, "cleared": False, "pb_action": None,
                "pb_blocked": None, "pb_delta_frames": None,
                "ended_utc": f"2026-10-05T12:00:{i:02d}+00:00", **variant}
+        # The verdict _attempt_json ships, from the real predicate.
+        row["save_state"] = save_state_run(SimpleNamespace(**row))
         rows.append(row)
     return rows
 

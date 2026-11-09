@@ -11,7 +11,8 @@ midnight, which is his ("if they had it open when we shifted from 11:59pm to
 machine and so in the same timezone.
 
 Today's best is the fastest successful, uncleared attempt on the entry that
-ENDED inside today, on the entry's Scorecard clock, whatever the strategy. It
+ENDED inside today, on the entry's Scorecard clock, whatever the strategy,
+never save-state practice (`caveats.save_state_run`, 2026-11-09). It
 reads attempts rather than the saved-PB table because a PB is a deliberate
 save and "what was your best time achieved TODAY" must exist without one. An
 imported time is excluded: it was typed in today, not played today.
@@ -38,6 +39,7 @@ from sm64_events.ranks.dailystar import daily_entry
 from sm64_events.ranks.scorecard import template_rows
 from sm64_events.server.scorecard_standards import tile_strategies
 from sm64_events.tracking.activestrat import ActiveStrats
+from sm64_events.tracking.caveats import save_state_run
 from sm64_events.tracking.views import entity_rank, fastest_current_pbs
 
 SEEN_KEY = "daily_star_seen"
@@ -127,7 +129,9 @@ def todays_best(attempts, entity_key: str, clock: str, day: date) -> dict | None
                 or attempt.timed_by == "imported":
             continue
         count += 1
-        if attempt.outcome != "success" or attempt.cleared:
+        # Save-state practice is played, so it is counted, but its time is
+        # never a best (caveats.save_state_run, the rule PBs and goals obey).
+        if attempt.outcome != "success" or attempt.cleared or save_state_run(attempt):
             continue
         frames = _frames(attempt, clock)
         if frames is not None and (best is None or frames < best["frames"]):

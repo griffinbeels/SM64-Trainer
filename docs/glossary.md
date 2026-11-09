@@ -803,7 +803,9 @@ until cleared. A pin may repeat: `10x` asks for ten finishes under it, `10x
 streak` for ten in a row, counted from the current [[session]]'s [[attempt]]s
 since you set the pin, so each sitting starts again. A [[reset]] in the first
 3 s neither counts nor breaks a streak, and you can forgive an [[attempt]]
-that broke one.
+that broke one. An [[attempt]] touched by a [[save-state load]] never counts
+toward any goal, never breaks a streak and never plays a goal
+[[Celebration]] (2026-11-09).
 
 Capless 4 through 1 have finite goal times; Capless 5 is the unbounded floor
 and is not a selectable goal.
