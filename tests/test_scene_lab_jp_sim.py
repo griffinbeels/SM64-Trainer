@@ -180,6 +180,29 @@ def test_a_starts_protected_places_are_the_builds_own():
     assert start_check.never_ranges(Map()) == start_check.NEVER                # a map without those names: US's
 
 
+def test_the_moment_child_names_the_build_that_made_the_slot(tmp_path, monkeypatch, capsys):
+    """The server's write (scene_moments) translates a slot only when its build differs from the running game's; a
+    child that named no build made every JP slot read as US, to be translated into a JP game as if it were US."""
+    import json
+
+    import package as packages
+    rom = tmp_path / "rom.z64"
+    header = bytearray(0x1000)
+    header[:4] = bytes.fromhex("80371240")
+    header[0x20:0x33] = b"SM64 USAMUNE v1.93j"
+    header[0x3E] = ord("J")
+    rom.write_bytes(bytes(header))
+    built = moment_slot.BuiltMoment(b"slot", 5, 24, 1, 0x8033D8D8, 0x0C400201, None, bytes(64), 0x8033A000, "f" * 64,
+                                    False, 0, 0, {}, 0, 0.1)
+    monkeypatch.setattr(packages, "open_package", lambda path, rom_path: None)
+    monkeypatch.setattr(moment_slot, "PackageMoments", lambda package: None)
+    monkeypatch.setattr(moment_slot, "build", lambda *args, **kwargs: built)
+    args = type("Args", (), {"package": tmp_path / "scene", "rom": rom, "map": tmp_path / "map", "frame": 5, "slot": 3,
+                             "out": tmp_path / "slot.bin"})()
+    moment_slot.build_command(args)
+    assert json.loads(capsys.readouterr().out)["build"] == "jp"
+
+
 def _pj64_extra(address: int, value: int, size: int) -> tuple[int, bytes]:
     """A tap identity extra as Project64 stores it: little-endian words."""
     base, data = address & ~3, bytearray(4)

@@ -355,7 +355,10 @@ def build_command(args) -> int:
         print(json.dumps({"refused": refused.code, "reason": str(refused), "detail": refused.detail}))
         return 0
     args.out.write_bytes(built.data)
-    print(json.dumps({"frame": built.frame, "level": built.level, "area": built.area, "mario_object": built.mario_object,
+    # "build": which Usamune made the slot (the ROM's own). The server's write translates a slot only when this
+    # differs from the running game's, so a JP slot named "us" would be translated into a JP game as if it were US.
+    print(json.dumps({"build": sim.version_of(rom), "frame": built.frame, "level": built.level, "area": built.area,
+                      "mario_object": built.mario_object,
                       "action": built.action, "seed": built.seed, "segments": built.segments.hex(),
                       "current_area": built.current_area, "fingerprint": built.fingerprint, "worked_out": built.worked_out,
                       "random_before_site": built.random_before_site, "random_in_frame": built.random_in_frame,
