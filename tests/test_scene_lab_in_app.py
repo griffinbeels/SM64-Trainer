@@ -337,7 +337,7 @@ def test_attempt_scenes_wait_for_the_rom_then_start_with_every_note_kept(app_lab
                                  cutter_factory=lambda folder, on_event: made.append(Cutter()) or made[-1])
     told = []
     cutter = lab._start_cutter(app_lab["root"] / "attempts", told.append)
-    assert isinstance(cutter, scene_lab_api.RomWait) and made == []
+    assert isinstance(cutter.inner, scene_lab_api.RomWait) and made == []    # RegionCutter: no game read yet
     assert told == [{"live": {"recording": False, "reason": NOT_FOUND}}]
     cutter.send({"op": "start", "frame": 1})
     cutter.send({"op": "complete", "attempt": 7})
@@ -354,11 +354,56 @@ def test_attempt_scenes_wait_for_the_rom_then_start_with_every_note_kept(app_lab
     assert made[0].closed
 
 
+def test_the_apps_cutter_cuts_with_the_rom_of_the_game_being_played(app_lab, monkeypatch):
+    """A player who keeps both ROMs and plays JP: the cutter runs on the JP ROM, never on US code (the lead,
+    2026-11-09). An attempt that starts on the other cartridge ends the old cutter and starts that region's; every
+    note arrives, in order, at the cutter of the region it was played on."""
+    jp = app_lab["dir"] / "store" / "jp.z64"
+    jp.write_bytes(app_lab["rom"])
+    both = Store({"us": app_lab["store"].roms["us"], "jp": jp})
+    playing = {"region": "jp"}
+    made = []
+
+    class Started(Cutter):
+        def __init__(self, rom):
+            super().__init__()
+            self.rom = rom
+
+    lab = scene_lab_api.SceneLab(None, app_inputs=lambda: app_lab["inputs"](store=both),
+                                 game_region=lambda: playing["region"])
+    original = scene_lab_api._lab_module
+
+    class FakeCutterModule:
+        @staticmethod
+        def CutterProcess(rom, folder, on_event, **options):
+            made.append(Started(rom))
+            return made[-1]
+
+    monkeypatch.setattr(scene_lab_api, "_lab_module",
+                        lambda name: FakeCutterModule if name == "attempt_cutter" else original(name))
+    cutter = lab._start_cutter(app_lab["root"] / "attempts", lambda event: None)
+    assert [c.rom for c in made] == [jp]                                  # the JP game: the JP ROM
+    cutter.send({"op": "start", "frame": 1})
+    cutter.send({"op": "complete", "attempt": 1})
+    playing["region"] = "us"                                              # he loads the US cartridge
+    cutter.send({"op": "start", "frame": 2})
+    deadline = time.monotonic() + 5
+    while len(made) < 2 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    cutter.send({"op": "complete", "attempt": 2})
+    deadline = time.monotonic() + 5
+    while (len(made) < 2 or len(made[1].notes) < 2) and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert [c.rom for c in made] == [jp, app_lab["store"].roms["us"]]
+    assert made[0].notes == [{"op": "start", "frame": 1}, {"op": "complete", "attempt": 1}] and made[0].closed
+    assert made[1].notes == [{"op": "start", "frame": 2}, {"op": "complete", "attempt": 2}]
+
+
 def test_with_a_rom_the_apps_cutter_starts_at_once(app_lab):
     made = []
     lab = scene_lab_api.SceneLab(None, app_inputs=app_lab["inputs"],
                                  cutter_factory=lambda folder, on_event: made.append(Cutter()) or made[-1])
-    assert lab._start_cutter(app_lab["root"] / "attempts", lambda event: None) is made[0]
+    assert lab._start_cutter(app_lab["root"] / "attempts", lambda event: None).inner is made[0]
 
 
 # ---------------------------------------------------------------- the stage warmer's cache check

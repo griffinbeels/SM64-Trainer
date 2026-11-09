@@ -1938,10 +1938,12 @@ function MoreMenu({ link, status, opening, open, tuning, setTuning }) {
   </span>`;
 }
 
-// What the bar says on its one line: an error, why the stage is missing, or how the last scene ended.
+// What the bar says on its one line: an error, why the stage is missing, or how the last scene ended. While the
+// lab cannot open anything yet, the empty stage says why in full (LabSetup), so the bar says nothing: one place
+// says it.
 function barNote(link, status, stageNote) {
   if (link.error) return { text: link.error, bad: true };
-  if (stageNote) return { text: stageNote, bad: false };
+  if (stageNote && !(status?.ready === false && !link.scene)) return { text: stageNote, bad: false };
   if (!link.scene && status?.ended) return { text: status.ended.message, bad: false };
   return null;
 }

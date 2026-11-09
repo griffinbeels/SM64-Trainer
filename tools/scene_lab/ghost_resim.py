@@ -279,7 +279,7 @@ class GhostScenes:
 
         if self.starts_dir is not None:
             try:
-                saved = start_frame.read_start(self.starts_dir, clip_sha)
+                saved = start_frame.read_start(self.starts_dir, clip_sha, rom=self.stages.rom)
             except start_frame.StartError:
                 saved = None
             if saved is not None and saved.rom_sha256 != hashlib.sha256(self.stages.rom).hexdigest():
@@ -343,7 +343,7 @@ class GhostScenes:
         the state it would make. Its main-pool changes are never applied (start_check.py says why). A start
         that fails is skipped; its sentence goes to the scene's refused starts."""
         try:
-            saved = start_frame.read_start(self.starts_dir, clip_sha, downloaded=True)
+            saved = start_frame.read_start(self.starts_dir, clip_sha, downloaded=True, rom=self.stages.rom)
             if saved is None:
                 return None
             start_frame.bind(saved, clip.frames[0])
@@ -538,7 +538,7 @@ def capture_start(scene_path: Path, clip_bytes: bytes, starts_dir: Path, stages:
             saved.pool_runs = runs
         except stage_sim.StageError:
             pass                                  # regions alone: Mario and objects exact
-    return start_frame.write_start(starts_dir, saved)
+    return start_frame.write_start(starts_dir, saved, rom)
 
 
 # ---------------------------------------------------------------- the load check

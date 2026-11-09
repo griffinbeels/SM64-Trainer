@@ -183,7 +183,7 @@ def test_a_start_is_the_roms_own_so_the_other_cartridges_start_gives_way_to_the_
     for maker, first_kind in ((b"another cartridge", gr.SIMULATED_RESET), (rom, gr.GHOST_START)):
         saved = SimpleNamespace(rom_sha256=hashlib.sha256(maker).hexdigest(), pool_base=None, level=24, area=1, act=1)
         monkeypatch.setattr(gr.start_frame, "read_start",
-                            lambda folder, sha, downloaded=False, saved=saved: None if downloaded else saved)
+                            lambda folder, sha, downloaded=False, rom=None, saved=saved: None if downloaded else saved)
         assert next(scenes.starts(clip(), "ab" * 32)).kind == first_kind
     assert scenes.refusals == [{"start": gr.GHOST_START, "reason": "This ghost's start was made on another ROM."}]
 

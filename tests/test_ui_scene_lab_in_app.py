@@ -75,9 +75,12 @@ def test_the_apps_ghost_lab_opens_and_says_it_needs_the_rom(width, tmp_path, mon
             entry.wait_for(timeout=20000)
             entry.click()
             page.locator(".scene-lab").wait_for(timeout=20000)
-            page.get_by_text(REASON).first.wait_for(timeout=20000)
             card = page.locator(".ghost-lab-empty .rom-pick[data-state=missing]")
             card.wait_for(timeout=20000)
+            # One place says why: the card, in full; the bar's one line says nothing (the lead, 2026-11-09).
+            page.wait_for_timeout(300)
+            assert page.get_by_text(REASON).count() == 0
+            assert page.get_by_text(roms.missing_sentence("us")).count() == 1
             sentence = card.locator(".rom-pick-reason")
             assert sentence.text_content() == roms.missing_sentence("us")
             assert sentence.evaluate("e => e.scrollWidth <= e.clientWidth && e.scrollHeight <= e.clientHeight + 1")

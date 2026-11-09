@@ -362,6 +362,55 @@ class RomWait:
             return
 
 
+class RegionCutter:
+    """The installed app's cutter, on the ROM of the cartridge Project64 runs. `start(region)` makes a cutter for that
+    region's ROM (None while the store has none: RomWait waits for it); `game_region()` is the running cartridge's
+    region, or None while no game is read (then the lab's own ROM, US first). An attempt that starts on the other
+    cartridge ends this cutter (on a thread of its own: send runs on the poll loop) and starts that region's; the
+    notes wait in order meanwhile, and the spool keeps the recording, so nothing played is lost."""
+
+    def __init__(self, start, game_region, reason, on_event, *, poll_seconds: float | None = None):
+        self.start, self.game_region, self.reason, self.on_event = start, game_region, reason, on_event
+        self.poll_seconds = poll_seconds
+        self.lock = threading.Lock()
+        self.region = self._region()
+        self.inner = self._make(self.region, announce=True)
+
+    def _region(self) -> str | None:
+        try:
+            region = self.game_region()
+        except Exception:  # noqa: BLE001 - an unread game reads as "no game"
+            region = None
+        return region if region in ("us", "jp") else None
+
+    def _make(self, region, *, announce: bool):
+        cutter = self.start(region)
+        if cutter is not None:
+            return cutter
+        return RomWait(lambda: self.start(region), self.reason, self.on_event if announce else (lambda event: None),
+                       poll_seconds=self.poll_seconds)
+
+    def send(self, note: dict) -> None:
+        old = None
+        if note.get("op") == "start":
+            region = self._region()
+            with self.lock:
+                if region is not None and region != self.region:
+                    old, self.region = self.inner, region
+                    self.inner = RomWait(lambda: self.start(region), self.reason, lambda event: None,
+                                         poll_seconds=0.05 if self.poll_seconds is None else self.poll_seconds)
+        if old is not None:
+            threading.Thread(target=old.close, name="scene-cutter-region", daemon=True).start()
+        with self.lock:
+            inner = self.inner
+        inner.send(note)
+
+    def close(self, timeout: float = 10.0):
+        with self.lock:
+            inner = self.inner
+        return inner.close(timeout)
+
+
 class LoopProbe:
     """How late the event loop answers a short timer while a scene is open (measurement runs only:
     e3_measure.py mounts with measure_loop=True; the app never runs it)."""
@@ -402,7 +451,8 @@ class SceneLab:
                  page_gone_seconds: float = PAGE_GONE_SECONDS, watch_seconds: float = WATCH_SECONDS,
                  idle_seconds: float | None = None, measure_loop: bool = False, live: bool = False,
                  lease_factory=None, cutter_factory=None, cutter_options: dict | None = None,
-                 grow_seconds: float = GROW_SECONDS, live_audio=None, ghost_loader=None, app_inputs=None):
+                 grow_seconds: float = GROW_SECONDS, live_audio=None, ghost_loader=None, app_inputs=None,
+                 game_region=None):
         """config_path: a developer's lab.json; None: the installed app's own inputs, app_inputs() ->
         core/lab_inputs.py::app_inputs' dict, read on every config() (LabConfig.from_app).
         live: hold the recording's lease and cut attempt scenes (main.py's server only; a test,
@@ -413,6 +463,9 @@ class SceneLab:
         shape; without either, the player's own runs in the replay store, stage_ghosts.LocalGhosts)."""
         self.config_path = Path(config_path) if config_path is not None else None
         self.app_inputs = app_inputs or lab_inputs.app_inputs
+        # The region ("us"/"jp") of the cartridge Project64 runs now, or None (main.py: the poller's header read): the
+        # installed app's cutter cuts with that region's ROM (RegionCutter).
+        self.game_region = game_region or (lambda: None)
         self.session_options = session_options or {}
         self.live_on, self.lease_factory, self.cutter_options = live, lease_factory, cutter_options or {}
         self.cutter_factory = cutter_factory
@@ -525,17 +578,19 @@ class SceneLab:
     def _app_cutter(self, folder: Path, on_event):
         """The installed app's cutter: the child at once when the ROM store holds a ROM, else RomWait, which starts it
         the moment one turns up (D1: the store copies it from Project64 the first time he plays), so a new player's
-        first session still gets its attempt scenes without a restart."""
-        def start():
+        first session still gets its attempt scenes without a restart. It cuts with the ROM of the game being played
+        (RegionCutter): a player who keeps both ROMs and plays JP gets JP scenes, not JP play read against US code."""
+        def start(region: str | None):
             config = self.config()
-            if config.rom is None:
+            rom = config.roms.get(region) if region in config.roms else config.rom
+            if rom is None:
                 return None
+            symbol_map = config.maps.get(region) if region in config.maps else config.map
             if self.cutter_factory is not None:
                 return self.cutter_factory(folder, on_event)
-            return _lab_module("attempt_cutter").CutterProcess(config.rom, folder, on_event, lab_root=config.lab_root,
-                                                               symbol_map=config.map, **self.cutter_options)
-        cutter = start()
-        return cutter if cutter is not None else RomWait(start, lambda: self.config().rom_problem, on_event)
+            return _lab_module("attempt_cutter").CutterProcess(rom, folder, on_event, lab_root=config.lab_root,
+                                                               symbol_map=symbol_map, **self.cutter_options)
+        return RegionCutter(start, self.game_region, lambda: self.config().rom_problem, on_event)
 
     def _start_live_blocking(self) -> None:
         if self.scenes is None or not self.live_on:

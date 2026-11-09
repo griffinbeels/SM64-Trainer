@@ -685,6 +685,7 @@ def build(*, recorder_lock=None):
         protect_local_api=True, local_port=server_port()), tracker=service, live_audio=_scene_lab_live_audio(),
         ghost_sources={"tracker": service, "replay": replay, "ghost": ghost, "community": community_sync},
         game_timer=lambda: poller.latest.global_timer if poller.latest is not None else None,
+        game_region=lambda: poller.observed_game_version,
         plugin_dir=_plugin_dir_of(capture_layer), app_background=True)
 
 
@@ -736,7 +737,7 @@ def _scene_lab_live_audio():
 
 
 def _mount_scene_lab(app, tracker=None, live_audio=None, ghost_sources=None, game_timer=None, plugin_dir=None,
-                     app_background=False):
+                     app_background=False, game_region=None):
     """M4's scene viewer, the Ghost Lab (server/scene_lab_api.py). This is the one reader of its
     switch (_scene_lab_on): SM64_SCENE_LAB names a developer's lab config, read exactly as before;
     the installed app (frozen) mounts it with no lab config at all, from its own inputs
@@ -753,7 +754,9 @@ def _mount_scene_lab(app, tracker=None, live_audio=None, ghost_sources=None, gam
     never arms anything. The same tracker's spawns refit the Usamune slots (slotlibrary/refit.py).
     `game_timer` is the poller's newest game clock: the lab's background work pauses while his game runs
     slow (server/scene_warm.py GamePace). `app_background` (the live server only): the installed app copies the
-    ROM from the running game and starts the stage warmer once a ROM is known (scene_lab_api._AppBackground)."""
+    ROM from the running game and starts the stage warmer once a ROM is known (scene_lab_api._AppBackground).
+    `game_region` is the running cartridge's region (the poller's): the installed app cuts attempt scenes with that
+    region's ROM (scene_lab_api.RegionCutter)."""
     if any(getattr(route, "path", None) == "/api/scene-lab" for route in app.routes):
         return app
     config = os.environ.get("SM64_SCENE_LAB")
@@ -765,7 +768,8 @@ def _mount_scene_lab(app, tracker=None, live_audio=None, ghost_sources=None, gam
             from functools import partial
 
             from sm64_events.core.lab_inputs import app_inputs
-            from_app = {"app_inputs": partial(app_inputs, plugin=plugin_dir), "app_background": app_background}
+            from_app = {"app_inputs": partial(app_inputs, plugin=plugin_dir), "app_background": app_background,
+                        "game_region": game_region}
         lab = mount_scene_lab(app, config or None, live=tracker is not None, live_audio=live_audio,
                               ghost_sources=ghost_sources,
                               resim_options={"pace": GamePace(game_timer)} if game_timer is not None else {},
