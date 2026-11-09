@@ -350,7 +350,9 @@ def test_an_export_draws_every_entry_again_and_lands_beside_the_saved_replays(co
     # Each held frame is one picture drawn; the HUD switched while paused draws again (the synthetic
     # recording has no HUD to leave out, so those two pictures are alike).
     assert status["stats"]["drawn"] == 11 and len(set(expected)) == 10
-    assert loader.asked == ["a", "b"]                        # the catalog's clips, loaded once for the child
+    # The catalog's clips, each loaded once for the child. Loads may finish in either order (a loaded
+    # merge check once asked "b" first), so the count is the contract, not the order.
+    assert sorted(loader.asked) == ["a", "b"]
 
 
 def test_an_export_draws_a_tilted_and_zoomed_camera_as_the_page_showed_it(config, recording, tmp_path):
