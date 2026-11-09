@@ -424,9 +424,10 @@ h1 span {
 .hero-star {
   position:absolute;
   right:-22px;
-  top:-25px;
-  width:61px;
-  transform:rotate(12deg);
+  top:-22px;
+  width:101px;
+  border-radius:8px;
+  transform:rotate(8deg);
   filter:drop-shadow(0 6px 12px #0008);
   pointer-events:none;
 }
@@ -582,19 +583,19 @@ h1 span {
 .ghost-art {
   position:relative;
   width:100%;
-  max-width:380px;
+  max-width:460px;
   justify-self:center;
   padding:15px 25px 38px;
 }
 
-.course-art {
+.lineup-art {
+  display:block;
   width:100%;
-  border:9px solid #665327;
-  outline:1px solid #a78c43;
+  height:auto;
+  border:1px solid var(--soft-border);
+  border-radius:12px;
   box-shadow:0 20px 40px #0004;
-  transform:rotate(-5deg);
-  border-radius:3px;
-  image-rendering:auto;
+  transform:rotate(-3deg);
 }
 
 .ghost-art-label {
@@ -604,23 +605,6 @@ h1 span {
   text-align:center;
   margin-top:28px;
   letter-spacing:.12em;
-}
-
-.ghost-star {
-  position:absolute;
-  filter:drop-shadow(0 6px 8px #0005);
-}
-
-.star-a {
-  right:3px;
-  bottom:65px;
-  transform:rotate(10deg);
-}
-
-.star-b {
-  left:0;
-  top:-5px;
-  transform:rotate(-18deg);
 }
 
 .rank-section {
@@ -894,7 +878,8 @@ details[open]>summary>span {
 
 .final-cta>img {
   margin:0 auto 22px;
-  width:54px;
+  width:101px;
+  border-radius:8px;
 }
 
 .final-cta h2 {
@@ -991,8 +976,9 @@ details[open]>summary>span {
     margin-top:30px;
   }
   .hero-star {
-    width:46px;
+    width:84px;
     right:-12px;
+    top:-34px;
   }
   .compatibility {
     display:block;
@@ -1121,9 +1107,9 @@ details[open]>summary>span {
     font-size:8px;
   }
   .hero-star {
-    width:45px;
-    right:-12px;
-    top:-13px;
+    width:70px;
+    right:-6px;
+    top:-34px;
   }
   .hero-product figcaption {
     font-size:11px;
@@ -1183,7 +1169,7 @@ details[open]>summary>span {
     padding-block:58px;
   }
   .ghost-art {
-    max-width:300px;
+    max-width:380px;
     order:2;
   }
   .ghost-layout h2 {
