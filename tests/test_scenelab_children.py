@@ -28,8 +28,8 @@ ROOT = Path(__file__).resolve().parents[1]
 TRAINER_FLAGS = sorted(flag for flag, (_module, program) in LAB_CHILDREN.items() if program == TRAINER_PROGRAM)
 SIM_FLAGS = sorted(flag for flag, (_module, program) in LAB_CHILDREN.items() if program == SIM_PROGRAM)
 #: the children that run Unicorn today (the license ruling's list)
-UNICORN_CHILDREN = {"--scene-lab-resolver", "--scene-lab-resim", "--scene-lab-moment", "--scene-lab-atlas",
-                    "--scene-lab-stems"}
+UNICORN_CHILDREN = {"--scene-lab-evaluator", "--scene-lab-resolver", "--scene-lab-resim", "--scene-lab-moment",
+                    "--scene-lab-atlas"}
 
 
 def _spawn_sites() -> set[tuple[str, str]]:

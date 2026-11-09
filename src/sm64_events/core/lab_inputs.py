@@ -60,9 +60,9 @@ def _store():
 
 
 def _lab_file():
-    """core/paths.py::bundled_lab_file (interface I2), or None when this build lacks it."""
-    from sm64_events.core import paths
-    return getattr(paths, "bundled_lab_file", None)
+    """core/paths.py::bundled_lab_file (interface I2)."""
+    from sm64_events.core.paths import bundled_lab_file
+    return bundled_lab_file
 
 
 def _existing(path) -> Path | None:

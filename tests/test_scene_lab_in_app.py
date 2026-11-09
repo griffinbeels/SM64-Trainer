@@ -189,7 +189,7 @@ def test_the_apps_config_opens_a_scene_through_the_real_session(app_lab):
         client.post("/api/scene-lab/close")
 
 
-def test_app_inputs_prefer_the_us_rom_and_name_every_missing_piece(tmp_path):
+def test_app_inputs_prefer_the_us_rom_and_name_every_missing_piece(tmp_path, monkeypatch):
     rom = tmp_path / "jp.z64"
     rom.write_bytes(b"x")
     bundle = tmp_path / "MappingJP.map"
@@ -203,6 +203,8 @@ def test_app_inputs_prefer_the_us_rom_and_name_every_missing_piece(tmp_path):
     assert jp_only["rom_problems"]["us"] == NOT_FOUND
     no_map = lab_inputs.app_inputs(store=Store({"jp": rom}), lab_file=lambda name: None, plugin=lambda: plugin)
     assert no_map["problems"] == [lab_inputs.NO_MAP]
+    # A build without the ROM store (never the real store: it would read this computer's Project64 settings).
+    monkeypatch.setattr(lab_inputs, "_store", lambda: None)
     broken = lab_inputs.app_inputs(store=None, lab_file=lambda name: None, plugin=lambda: None)
     assert broken["rom"] is None and broken["problems"][0] in (lab_inputs.NO_STORE, NOT_FOUND)
 

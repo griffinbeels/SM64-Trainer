@@ -23,13 +23,11 @@ from __future__ import annotations
 import importlib.abc
 import sys
 
-ENTRIES = {
-    "--scene-lab-evaluator": "evaluator_child",   # the free camera (scene_session.GameCodeEvaluator's client)
-    "--scene-lab-resolver": "state_resolver",     # the free camera's state resolvers (children of the evaluator's)
-    "--scene-lab-moment": "moment_slot",          # a save state built from a scene frame
-    "--scene-lab-resim": "ghost_resim",           # re-simulated ghosts, stages and their warm-up
-    "--scene-lab-atlas": "slot_atlas",            # the US/JP slot translation atlas
-}
+from sm64_events.scenelab_code import LAB_CHILDREN, SIM_PROGRAM  # noqa: E402
+
+# The one table of which program runs each lab child lives in sm64_events/scenelab_code.py; a simulation process
+# is exactly a child it gives to the simulation program.
+ENTRIES = {flag: module for flag, (module, program) in LAB_CHILDREN.items() if program == SIM_PROGRAM}
 
 FORBIDDEN = ("av", "pystray")
 
@@ -55,7 +53,7 @@ MODULES = (
     "sm64_events.inputs", "sm64_events.inputs.frame",
     "sm64_events.memory", "sm64_events.memory.addresses", "sm64_events.memory.base", "sm64_events.memory.behaviours",
     "sm64_events.memory.ghost_layout", "sm64_events.memory.layout", "sm64_events.memory.objects",
-    "sm64_events.memory.version_probe",
+    "sm64_events.memory.version_probe", "sm64_events.scenelab_code",
     "sm64_events.slotlibrary", "sm64_events.slotlibrary.atlas", "sm64_events.slotlibrary.relocate",
     "sm64_events.slotlibrary.store", "sm64_events.slotlibrary.usamune",
 )

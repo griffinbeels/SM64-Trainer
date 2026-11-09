@@ -37,18 +37,22 @@ SIM_PROGRAM = "SM64TrainerSim.exe"
 #: THE table of the lab's child processes: the flag a child is started with
 #: (core/childproc.py::python_child), the lab module it runs as its main
 #: program, and the installed program that runs it. A child that runs Unicorn
-#: runs in SIM_PROGRAM; the rest re-enter the Trainer.
+#: runs in SIM_PROGRAM; the rest re-enter the Trainer. The SIM_PROGRAM rows are
+#: the simulation processes tools/scene_lab/sim_boundary.py guards (its ENTRIES
+#: are read from here). The stems child splits music from sound effects on the
+#: cxd4 RSP DLL and encodes FLAC with PyAV, and runs no Unicorn: the Trainer's.
 LAB_CHILDREN = {
     "--scene-lab-cutter": ("attempt_cutter", TRAINER_PROGRAM),
     "--scene-lab-rig-path": ("rig_path", TRAINER_PROGRAM),
     "--scene-lab-encoder": ("picture_encoder", TRAINER_PROGRAM),
     "--scene-lab-ghost-sound": ("ghost_sound", TRAINER_PROGRAM),
     "--scene-lab-export": ("scene_export", TRAINER_PROGRAM),
-    "--scene-lab-resolver": ("state_resolver", SIM_PROGRAM),
-    "--scene-lab-resim": ("ghost_resim", SIM_PROGRAM),
-    "--scene-lab-moment": ("moment_slot", SIM_PROGRAM),
-    "--scene-lab-atlas": ("slot_atlas", SIM_PROGRAM),
-    "--scene-lab-stems": ("stems_live", SIM_PROGRAM),
+    "--scene-lab-stems": ("stems_live", TRAINER_PROGRAM),
+    "--scene-lab-evaluator": ("evaluator_child", SIM_PROGRAM),   # the free camera (scene_session's evaluator)
+    "--scene-lab-resolver": ("state_resolver", SIM_PROGRAM),      # the free camera's state resolvers
+    "--scene-lab-resim": ("ghost_resim", SIM_PROGRAM),            # re-simulated ghosts, stages and their warm-up
+    "--scene-lab-moment": ("moment_slot", SIM_PROGRAM),           # a save state built from a scene frame
+    "--scene-lab-atlas": ("slot_atlas", SIM_PROGRAM),             # the US/JP slot translation atlas
 }
 
 
