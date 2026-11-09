@@ -486,9 +486,78 @@ def find_geo_start(ram: bytes, main: int, size: int, top: int) -> tuple[int, int
 
 
 # --- symbolization ---
-def load_map(path: Path, version: str = "us") -> list[tuple[int, str]]:
+JR_RA, LUI_OP, ADDIU_OP, JAL_OP, ADDIU_SP_HIGH = 0x03E00008, 0x0F, 0x09, 0x03, 0x27BD
+
+
+def _code_word(rom: bytes, segments: list[tuple[int, int, int]]):
+    """word(address): the ROM's big-endian code word the game copies to `address`, None outside its images."""
+    def word(address: int) -> int | None:
+        for start, size, rom_at in segments:
+            at = rom_at + address - start
+            if start <= address < start + size and at + 4 <= len(rom):
+                return struct.unpack_from(">I", rom, at)[0]
+        return None
+    return word
+
+
+def _function(word, start: int, limit: int = 0x2000) -> tuple[int, int] | None:
+    """[start, end) of the function at `start`, through its `jr ra` and delay slot (IDO gives each one epilogue)."""
+    for at in range(start, start + limit, 4):
+        value = word(at)
+        if value is None:
+            return None
+        if value == JR_RA:
+            return start, at + 8
+    return None
+
+
+def _calls(word, start: int, end: int) -> list[int]:
+    return [0x80000000 | (value & 0x3FFFFFF) << 2 for at in range(start, end, 4)
+            if (value := word(at)) is not None and value >> 26 == JAL_OP]
+
+
+def read_view_symbols(by_name: dict[str, int], segments: list[tuple[int, int, int]], rom: bytes) -> dict[str, int]:
+    """The view names STROOP's JP map lacks, read off the build's own code through names it has (US: each equals
+    its map row; JP: 0x8027D14C, 0x8027CF68, 0x80339F50, the same addresses a masked match of US's code found):
+
+    - sFloorAlignMatrix: align_with_floor's first lui/addiu pointer (it aims Mario's throwMatrix there).
+    - geo_process_object and obj_is_in_view: of the functions geo_process_node_and_siblings calls, the one whose
+      own call reaches the function ending exactly where it begins. Exactly one must match, else none is named."""
+    word, found = _code_word(rom, segments), {}
+    floor = by_name.get("align_with_floor")
+    high: dict[int, int] = {}
+    for at in range(floor, floor + 0x100, 4) if floor is not None else ():
+        value = word(at) or 0
+        op, rs, rt, imm = value >> 26, (value >> 21) & 31, (value >> 16) & 31, value & 0xFFFF
+        if op == LUI_OP:
+            high[rt] = imm << 16
+        elif op == ADDIU_OP and rs in high:
+            found["sFloorAlignMatrix"] = (high[rs] + imm - (0x10000 if imm & 0x8000 else 0)) & 0xFFFFFFFF
+            break
+    dispatch = by_name.get("geo_process_node_and_siblings")
+    span = _function(word, dispatch) if dispatch is not None else None
+    matches = []
+    for target in sorted(set(_calls(word, *span))) if span else ():
+        own = _function(word, target)
+        if own is None or word(target - 8) != JR_RA:
+            continue
+        for callee in _calls(word, *own):
+            opens = word(callee) or 0
+            if callee < target and _function(word, callee) == (callee, target) and opens >> 16 == ADDIU_SP_HIGH:
+                matches.append((target, callee))
+    if len(matches) == 1:
+        found["geo_process_object"], found["obj_is_in_view"] = matches[0]
+    return found
+
+
+def load_map(path: Path, version: str | None = None, rom: bytes | None = None) -> list[tuple[int, str]]:
     """Fill US, CODE_SEGMENTS and REGIONS from the decomp's linker map (read as
-    data); returns every (address, symbol) for labels."""
+    data); returns every (address, symbol) for labels. `rom` (the build the map
+    is for) names the version when none is given, and fills the view names the
+    JP map lacks from that build's own code (read_view_symbols)."""
+    if version is None:
+        from sm64_events.memory.version_probe import version_from_header  # noqa: PLC0415
+        version = (version_from_header(rom[:0x40]) if rom is not None else None) or "us"
     pattern = re.compile(r"^\s+0x00000000([0-9a-f]{8})\s+([A-Za-z_]\w*)\s*$")
     section = re.compile(r"^\.(main|engine)(\.noload)?\s+0x([0-9a-f]+)\s+0x([0-9a-f]+)\s+load address 0x([0-9a-f]+)")
     by_address, by_name, sections = {}, {}, {}
@@ -499,10 +568,17 @@ def load_map(path: Path, version: str = "us") -> list[tuple[int, str]]:
         elif match := section.match(line):
             sections[match[1] + (match[2] or "")] = (int(match[3], 16) & 0xFFFFFFFF, int(match[4], 16),
                                                      int(match[5], 16))
+    if rom is not None and any(name not in by_name for name in SYMBOLS):
+        images = [sections[name] for name in ("main", "engine") if name in sections]
+        for name, address in read_view_symbols(by_name, images, rom).items():
+            if name not in by_name:
+                by_name[name] = address
+                by_address.setdefault(address, name)
     missing = [name for name in SYMBOLS if name not in by_name] + \
               [name for name in ("main", "main.noload", "engine", "engine.noload") if name not in sections]
     if missing:
-        raise SystemExit(f"{path}: the map names none of {missing}")
+        raise SystemExit(f"{path}: the map names none of {missing}" + ("" if rom is not None else
+                         " (with the ROM, the view names a map lacks are read off its code)"))
     US.update({name: by_name[name] for name in SYMBOLS})
     layout = layout_for(version)
     for symbol, field in LAYOUT_ROWS_FOR.items():
@@ -747,7 +823,7 @@ class Capture:
         self.rom = args.rom.read_bytes()
         if be_from_pj64(bytes.fromhex(frame.meta["rom_header"])) != self.rom[:0x40]:
             raise SystemExit("the frame's ROM header does not match --rom")
-        self.symbols = load_map(args.map)
+        self.symbols = load_map(args.map, rom=self.rom)
         self.fcr31 = args.fcr31
         self.cpu = Cpu(self.rom, self.fcr31, fresh=True)
         self.pool = frame.word(US["gGfxPool"])
@@ -1393,8 +1469,8 @@ def from_tap(args) -> int:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import tap
     from evaluator import SceneImages
-    symbols = load_map(args.map)
     rom = args.rom.read_bytes()
+    symbols = load_map(args.map, rom=rom)
     header = tap.session_header(args.session)
     if be_from_pj64(bytes.fromhex(header["rom_header"])) != rom[:0x40]:
         raise SystemExit("the session's ROM header does not match --rom")
@@ -1453,8 +1529,8 @@ def from_package(args) -> int:
     scene-state layer), in order or shuffled, then compared like from-tap."""
     import package as scene_package
     from evaluator import Evaluator
-    symbols = load_map(args.map)
     rom = args.rom.read_bytes()
+    symbols = load_map(args.map, rom=rom)
     results = []
     try:
         package = scene_package.Package(args.package.read_bytes(), rom)

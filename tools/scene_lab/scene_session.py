@@ -92,6 +92,7 @@ the GPU hold check; tests and e3_measure.py --fake inject fake_viewer_host.py's 
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import math
 import re
@@ -292,6 +293,35 @@ class HostImage:
         runs = np.empty(2 * starts.size, np.uint32)
         runs[0::2], runs[1::2] = starts * 4, ends * 4
         return runs.tobytes(), np.concatenate(pieces).byteswap().tobytes()
+
+
+def scene_inputs(config, path: Path) -> tuple[Path, Path | None]:
+    """The ROM and map a scene package opens with: of the lab's ROMs (config.rom, then each region's in
+    `config.roms`), the one whose bytes the package was written from (its header's rom_sha), with that
+    region's map (`config.maps`). So a JP scene opens with the JP ROM and MappingJP.map whichever region the
+    lab runs first. Otherwise the configured pair, and the package reader names the mismatch."""
+    rom, map_path = Path(config.rom), config.map
+    try:
+        with Path(path).open("rb") as handle:
+            head = handle.read(scene_package.HEADER.size)
+        header = scene_package.Header(*scene_package.HEADER.unpack_from(head))
+    except (OSError, struct.error):
+        return rom, map_path
+    if header.magic != scene_package.MAGIC:
+        return rom, map_path
+    maps = getattr(config, "maps", None) or {}
+    seen = set()
+    for region, candidate in [(None, rom), *(getattr(config, "roms", None) or {}).items()]:
+        if candidate is None or Path(candidate) in seen:
+            continue
+        seen.add(Path(candidate))
+        try:
+            digest = hashlib.sha256(Path(candidate).read_bytes()).digest()
+        except OSError:
+            continue
+        if digest == header.rom_sha:
+            return Path(candidate), map_path if region is None else (maps.get(region) or None)
+    return rom, map_path
 
 
 def renderer_host(config):
@@ -508,13 +538,14 @@ class SceneSession:
         held = gpu_gate.hold_reason()
         if held:
             raise Refused(f"The renderer is on hold until Griffin lifts it: {held}")
-        if not config.rom.is_file():
+        rom_path, map_path = scene_inputs(config, path)
+        if not rom_path.is_file():
             raise Refused("The ROM named in the lab config is missing.")
         growth = None if sidecar is None else Growth(path, sidecar)
         try:
             if path.stat().st_size > scene_package.MAX_PACKAGE_BYTES:
                 raise Refused("This scene package is larger than the viewer accepts.")
-            rom = config.rom.read_bytes()
+            rom = rom_path.read_bytes()
             stat = path.stat()
             package = scene_package.Package(path.read_bytes(), rom) if growth is None else growth.read(rom)
             if package is None:                         # finished between the lookup and now
@@ -528,7 +559,7 @@ class SceneSession:
         frames = [index for index, outline in enumerate(outlines) if outline["vi"] is not None]
         if not frames:
             raise Refused("This scene package holds no picture the game showed.")
-        factory = evaluator_factory or GameCodeEvaluator(config.map, path, config.rom)
+        factory = evaluator_factory or GameCodeEvaluator(map_path, path, rom_path)
         unavailable = getattr(factory, "unavailable", None)
         live_sound = _live_sound(package, outlines, frames, live, fitter)
         encoder = (encoder_factory or start_encoder)()      # starts beside the host's warm-up
