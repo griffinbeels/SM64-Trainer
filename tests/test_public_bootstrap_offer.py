@@ -31,6 +31,8 @@ def built_offer(tmp_path, monkeypatch, version, *, legacy=False):
     monkeypatch.setattr(build_exe, "scan_built", lambda *args: scanned.append(args))
     placeholders = []             # the retired names' placeholder too (test_build_beta.py writes a real one)
     monkeypatch.setattr(build_exe, "write_retired_natives", lambda app_dir: placeholders.append(app_dir))
+    merged = []                   # the simulation program joins the Trainer's folder (test_bundle_policy.py checks it)
+    monkeypatch.setattr(build_exe, "merge_sim", lambda sim_dist, app_dir: merged.append((sim_dist, app_dir)))
     captured = []
     monkeypatch.setattr(pyi, "run", lambda args: captured.append(args))
     work = tmp_path / "build"
@@ -59,6 +61,13 @@ def built_offer(tmp_path, monkeypatch, version, *, legacy=False):
         app_args = captured[0]
         assert str(work / "release-version.json") + build_exe.SEP + "." in app_args
         assert json.loads((work / "release-version.json").read_text())["version"] == version
+        # SM64TrainerSim.exe carries the same version and build identity, and
+        # is merged into the Trainer's folder before the notices are staged.
+        sim_args = captured[1]
+        assert sim_args[0].endswith("sim_entry.py")
+        assert {str(work / name) + build_exe.SEP + "." for name in ("release-version.json", "build-channel.json")} \
+            <= set(sim_args)
+        assert [app_dir.name for _sim, app_dir in merged] == ["SM64Trainer"]
         # The license notices land in the folder PyInstaller just built.
         assert [(args[0].parts[-2:], args[2]) for args in staged] == [
             (("SM64Trainer", "_internal"), tmp_path / "ffmpeg.exe")]

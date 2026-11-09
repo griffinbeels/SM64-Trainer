@@ -119,7 +119,7 @@ export const CREDIT_GROUPS = [
       { name: "Unicorn", by: "Nguyen Anh Quynh, Dang Hoang Vu and the Unicorn contributors, built on QEMU",
         url: "https://github.com/unicorn-engine/unicorn",
         what: "Runs the game's own code for the Ghost Lab: its free camera, rebuilt ghosts and save states. GPL-2.0.",
-        notices: "licenses/python/unicorn" },
+        notices: "licenses/python/unicorn", covers: ["python:unicorn"] },
       { name: "ProcTap", by: "m96-chan", url: "https://github.com/m96-chan/ProcTap",
         what: "Records Project64's own audio. MIT.", covers: ["python:proc-tap"] },
       { name: "PyAudioWPatch", by: "s0d3s, from PyAudio by Hubert Pham", url: "https://github.com/s0d3s/PyAudioWPatch",
