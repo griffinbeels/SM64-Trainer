@@ -350,6 +350,36 @@ def test_cleared_abandoned_forgiven_and_earlier_attempts_are_ignored():
     assert _run(before + _attempts(start=2))["broken_by"] == 5
 
 
+@pytest.mark.parametrize("proof", [
+    {"anchor_type": "state_loaded"}, {"state_loads": 2},
+    {"invalid_reason": "save_state", "valid": False},
+])
+def test_a_save_stated_finish_under_the_goal_neither_counts_nor_breaks(proof):
+    """Griffin, 2026-11-09: "If the attempt was save stated, then this should
+    NEVER count towards your goals." His run: WF Wild Blue, a loaded state's
+    10"00 against a 10"00 goal. Save-state practice is not a real try, so it
+    is judged like a cleared row: no count, no break."""
+    from dataclasses import replace
+
+    clean = [_attempt(1, "success", 4000), _attempt(2, "success", 4100)]
+    loaded = replace(_attempt(3, "success", 3000), **proof)
+    after = [_attempt(4, "success", 4200)]
+    streak = _run(clean + [loaded] + after)
+    assert (streak["done"], streak["best"], streak["broken_by"]) == (3, 3, None)
+    assert _run(clean + [loaded] + after, streak=False)["done"] == 3
+    # Alone, the loaded finish counts nothing.
+    assert _run([loaded], count=1, streak=False)["done"] == 0
+
+
+def test_a_run_a_save_state_ended_does_not_break_the_streak():
+    """A segment a load ENDS records outcome `loaded`; the same play on a star
+    stays one attempt that counts the load. Neither is a real miss."""
+    run = [_attempt(1, "success", 4000), _attempt(2, "loaded", 2500),
+           _attempt(3, "success", 4100)]
+    progress = _run(run)
+    assert (progress["done"], progress["best"], progress["broken_by"]) == (2, 2, None)
+
+
 def _pin_with_attempts(client, db, service, *, count=3, streak=True):
     """Pin a repeat goal, then record RUN in the live session after it."""
     answer = _pin(client, {"kind": "time", "cs": GOAL_CS, "count": count, "streak": streak})

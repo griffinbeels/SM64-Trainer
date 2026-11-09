@@ -9,14 +9,21 @@ Every attempt is judged one of three ways:
 
 - it COUNTS: a successful, uncleared finish at or under the goal, on the
   entry's own clock in displayed centiseconds (the unit `goal_cs` uses);
-- it is IGNORED: cleared, abandoned, imported, forgiven by the player, or a
-  reset right at the start (`EARLY_RESET_CS`);
+- it is IGNORED: cleared, abandoned, imported, forgiven by the player,
+  save-state practice (`caveats.save_state_run`), or a reset right at the
+  start (`EARLY_RESET_CS`);
 - anything else was a real try that missed -- a slower finish, a death, a
   later reset -- and BREAKS a streak.
+
+Save-state practice is never a real try, so it neither counts nor breaks.
+Griffin, 2026-11-09, after a loaded state's 10"00 played "GOAL!": "If the
+attempt was save stated, then this should NEVER count towards your goals.
+That's very very important."
 """
 from datetime import datetime
 
 from sm64_events.ranks.classify import display_cs
+from sm64_events.tracking.caveats import save_state_run
 
 # A reset this early on the entry's clock is setup or a distraction, not a
 # try, so it neither counts nor breaks a streak. His words: "we shouldn't count
@@ -42,7 +49,8 @@ def parse_utc(text: str) -> datetime:
 
 def _judge(attempt, clock: str, goal_cs: int | None, forgiven) -> str:
     if (attempt.cleared or attempt.outcome == "abandoned"
-            or attempt.timed_by == "imported" or attempt.id in forgiven):
+            or attempt.timed_by == "imported" or attempt.id in forgiven
+            or save_state_run(attempt)):
         return _IGNORED
     frames = attempt.igt_frames if clock == "igt" else attempt.rta_frames
     cs = display_cs(frames) if frames is not None else None
