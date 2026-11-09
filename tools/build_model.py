@@ -32,12 +32,15 @@ SOURCE_FILES = (
 # Order is the sg_held_kind order in model.h (checked at compile time).
 # shift: where the model's data sits in its US segment minus the decomp
 # comment's address (Mips' group sits 0xF0 later in the US ROM).
+# geo_block: the raw geo segment (0x0C and up) the level scripts load beside
+# the model's group (assets.c's block table names both cartridges' offsets).
 class HeldModel(NamedTuple):
     geo: str
     table: str | None  # None: the object has no animation
     segment: int       # ROM offset of the MIO0 block
     lists: str         # list input
     inputs: tuple[str, ...]  # geo and animation inputs
+    geo_block: int = 0
     shift: int = 0
     extra_lists: tuple[str, ...] = ()  # another actor reached by this geo
     texture_segments: tuple[tuple[int, int], ...] = ()  # segment number -> ROM block
@@ -49,29 +52,33 @@ def _anims(actor: str, *addresses: str) -> tuple[str, ...]:
 
 HELD_MODELS = {
     "bobomb": HeldModel("black_bobomb_geo", "bobomb_seg8_anims_0802396C", 0x1F2200, "bobomb_model",
-                        ("bobomb_anim_walk", "bobomb_anim_held", "bobomb_anims", "bobomb_geo")),
+                        ("bobomb_anim_walk", "bobomb_anim_held", "bobomb_anims", "bobomb_geo"), 0x2008D0),
     "penguin": HeldModel("penguin_geo", "penguin_seg5_anims_05008B74", 0x160670, "penguin_model",
-                         _anims("penguin", "050079E4", "05007DCC", "050087C0", "05008B5C")),
+                         _anims("penguin", "050079E4", "05007DCC", "050087C0", "05008B5C"), 0x1656E0),
     "king_bobomb": HeldModel("king_bobomb_geo", "king_bobomb_seg5_anims_0500FE30", 0x134D20, "king_bobomb_model",
                              _anims("king_bobomb", "0500BDFC", "0500C2AC", "0500C520", "0500C774", "0500CFCC",
                                     "0500D5B0", "0500D978", "0500DDD8", "0500E10C", "0500F078", "0500F6C8",
-                                    "0500FE18")),
+                                    "0500FE18"), 0x13B5D0),
     "chuckya": HeldModel("chuckya_geo", "chuckya_seg8_anims_0800C070", 0x1F2200, "chuckya_model",
                          _anims("chuckya", "0800AF68", "0800B1A8", "0800B4A8", "0800B9F8", "0800BBEC",
-                                "0800C058")),
+                                "0800C058"), 0x2008D0),
     "breakable_box": HeldModel("breakable_box_small_geo", None, 0x1F2200, "breakable_box_model",
-                               ("breakable_box_geo",)),
+                               ("breakable_box_geo",), 0x2008D0),
     "mips": HeldModel("mips_geo", "mips_seg6_anims_06015634", 0x1D8310, "mips_model",
-                      _anims("mips", "06013248", "0601369C", "060139F8", "06014B94", "0601561C"), shift=0xF0),
+                      _anims("mips", "06013248", "0601369C", "060139F8", "06014B94", "0601561C"), 0x1E4BF0,
+                      shift=0xF0),
     "hoot": HeldModel("hoot_geo", "hoot_seg5_anims_05005768", 0x12A7E0, "hoot_model",
-                      _anims("hoot", "050053EC", "05005750")),
-    "koopa_shell": HeldModel("koopa_shell_geo", None, 0x1F2200, "koopa_shell_model", ("koopa_shell_geo",)),
+                      _anims("hoot", "050053EC", "05005750"), 0x132850),
+    "koopa_shell": HeldModel("koopa_shell_geo", None, 0x1F2200, "koopa_shell_model", ("koopa_shell_geo",),
+                             0x2008D0),
     "ukiki": HeldModel("ukiki_geo", "ukiki_seg5_anims_05015784", 0x1521D0, "ukiki_model",
                        _anims("ukiki", "0500D658", "0500DC80", "0500DDEC", "0500EACC", "0500EEA8",
                               "0500F530", "0500FC84", "0501006C", "050103F4", "05012ABC", "05014BE4",
-                              "050153C4", "0501576C"),
+                              "050153C4", "0501576C"), 0x1602E0,
                        extra_lists=("mario_cap_model",), texture_segments=((3, 0x201410),)),
 }
+# Mario's own blocks: group0's MIO0 (segment 4) and its raw geo (segment 0x17).
+MARIO_SEGMENTS = {0x04: 0x114750, 0x17: 0x1279B0}
 MARIO_ATLAS_CELLS = 13
 HELD_HEADER = """#include "../include/sm64.h"
 #include "../include/types.h"
@@ -152,8 +159,10 @@ def _fetch(cache: Path, spec: dict, seed: Path | None) -> Path:
     return target
 
 
-def stage_model(staging: Path, cache: Path, seed: Path | None = None) -> Path:
-    """Write only below caller-owned staging/cache; verify bytes before use."""
+def stage_model(staging: Path, cache: Path, seed: Path | None = None, reference: bool = False) -> Path:
+    """Write only below caller-owned staging/cache; verify bytes before use.
+    reference compiles the decomp's literal data as before (rows over it), only
+    to compare a ROM fill against; it must never reach a delivered build."""
     staging, cache = staging.resolve(), cache.resolve()
     staging.mkdir(parents=True, exist_ok=True)
     cache.mkdir(parents=True, exist_ok=True)
@@ -183,18 +192,25 @@ def stage_model(staging: Path, cache: Path, seed: Path | None = None) -> Path:
             skip = 2
             lines[i] = "//" + line
         elif line.startswith("const "):
-            header += "\nextern " + line.replace(" = {", ";")
+            header += "\nextern " + line.replace(" = {", ";").replace("const ", "", 0 if reference else 1)
     destination = source / "src/decomp/mario"
     destination.mkdir(exist_ok=True)
+    template = "" if reference else '#include "rom_gfx_template.h"\n'
+    geo_begin, geo_end = ('#include "rom_data.h"\n', "") if reference else (
+        '#include "rom_geo_template.h"\n', '\n#include "rom_geo_template_end.h"\n')
     generated = {
-        "geo.inc.c": importer.geo_inc_c_header + raw_geo + importer.geo_inc_c_footer,
+        "geo.inc.c": importer.geo_inc_c_header + geo_begin
+        + _romify(raw_geo, "mario_geo", 0, MARIO_SEGMENTS, reference=reference) + geo_end
+        + importer.geo_inc_c_footer,
         "geo.inc.h": importer.geo_inc_h,
         "model.inc.h": header,
-        "model.inc.c": '#include "../../load_tex_data.h"\n#include "../../gfx_macros.h"\n' + "\n".join(lines),
+        "model.inc.c": '#include "../../load_tex_data.h"\n#include "../../gfx_macros.h"\n#include "rom_data.h"\n'
+        + template + _romify("\n".join(lines), "mario_model", 0, MARIO_SEGMENTS, reference=reference),
     }
     for name, text in generated.items():
         (destination / name).write_text(text, encoding="utf-8", newline="\n")
-    _stage_held(files, source)
+    units = ["mario_model", "mario_geo", *_stage_held(files, source, reference)]
+    (source / "src/decomp/rom_index.c").write_text(_rom_index(units), encoding="utf-8", newline="\n")
     _module("model_patches", MODEL / "patches.py").patch(source)
     # convUtils needs two helpers from utils.c, whose remainder is filesystem code.
     utilities = (source / "src/decomp/tools/utils.c").read_text(encoding="utf-8")
@@ -224,18 +240,24 @@ def _held_sources(files: dict, name: str, model: HeldModel) -> tuple[str, str]:
         unmatched = "GEO_CLOSE_NODE(), //! more close than open nodes\n"
         if text.count(unmatched) != 1:
             raise ValueError("Pinned Hoot graph's unmatched close changed")
-        text = text.replace(unmatched, "", 1)
+        text = text.replace(unmatched, HOOT_SKIPPED_CLOSE, 1)
     return text, list_text
 
 
-def _stage_held(files: dict, source: Path) -> None:
+# Where the Owl's unmatched close was: the ROM still holds it, so a template
+# reads past it (SG_GEO_SKIP); compiled literally, it is simply gone.
+HOOT_SKIPPED_CLOSE = "/* the Owl's unmatched close */\n"
+
+
+def _stage_held(files: dict, source: Path, reference: bool = False) -> list[str]:
     """Two translation units per held model, its lists (texture arrays
     commented out, their names now atlas cells) and its geo and animations,
-    plus held_cells.h: the kinds, and the cells assets.c fills."""
+    plus held_cells.h: the kinds, and the cells assets.c fills. Returns the
+    units' names for the row index."""
     destination = source / "src/decomp/held"
     destination.mkdir(exist_ok=True)
-    cell, widths, heights, textures, models, lights = MARIO_ATLAS_CELLS, [], [], [], [], []
-    for name, model in HELD_MODELS.items():
+    cell, widths, heights, textures, models, units = MARIO_ATLAS_CELLS, [], [], [], [], []
+    for owner, (name, model) in enumerate(HELD_MODELS.items(), 1):
         geo, table, segment, shift = model.geo, model.table, model.segment, model.shift
         kind = f"SG_HELD_{name.upper()}"
         text, list_text = _held_sources(files, name, model)
@@ -267,25 +289,32 @@ def _stage_held(files: dict, source: Path) -> None:
                 # A texture its geo never reaches still names a cell; never drawn.
                 defines += f"#define {symbol} {cells.get(symbol, first)}\n"
             elif line.startswith("const "):
-                externs += "extern " + line.replace(" = {", ";") + "\n"
+                externs += "extern " + line.replace(" = {", ";").replace("const ", "", 0 if reference else 1) + "\n"
+        segments = {address: model.geo_block for address in range(0x0C, 0x20)}
+        segments.update({address: model.segment for address in range(0x01, 0x0C)})
+        segments.update(dict(model.texture_segments))
+        own = {segment: model.shift for segment, block in segments.items() if block == model.segment}
+        template = '#include "rom_data.h"\n' if reference else '#include "rom_gfx_template.h"\n'
+        # The skipped entry is ours, so its one word is written out.
         (destination / f"{name}_lists.c").write_text(
-            '#include "../../load_tex_data.h"\n#include "../../gfx_macros.h"\n' + defines
-            + "\n".join(lines) + f"\nconst Gfx sg_{name}_skipped[] = {{ gsSPEndDisplayList() }};\n",
+            '#include "../../load_tex_data.h"\n#include "../../gfx_macros.h"\n' + defines + template
+            + _romify("\n".join(lines), f"{name}_lists", owner, segments, own, reference)
+            + f"\nconst Gfx sg_{name}_skipped[] = {{ GFXCMD_EndDisplayList }};\n",
             encoding="utf-8", newline="\n")
         # libsm64's shadow node draws nothing and skips its children, so a
         # held graph's shadow becomes a plain start node.
-        text = re.sub(r"GEO_SHADOW\([^)]*\)", "GEO_NODE_START()", text)
+        text = re.sub(r"GEO_SHADOW\([^)]*\)", "GEO_NODE_START()" if reference else "SG_GEO_SHADOW_AS_START()", text)
         count = len(re.findall(r"^\s*&", _array(text, table), re.M)) if table else 0
-        text = HELD_HEADER + externs + f"extern const Gfx sg_{name}_skipped[];\n" + text
+        if not reference:
+            text = text.replace(HOOT_SKIPPED_CLOSE, "SG_GEO_SKIP(0x05),\n")
+        begin, end = ('#include "rom_data.h"\n', "") if reference else (
+            '#include "rom_geo_template.h"\n', '\n#include "rom_geo_template_end.h"\n')
+        text = (HELD_HEADER + externs + f"extern const Gfx sg_{name}_skipped[];\n" + begin
+                + _romify(text, name, owner, segments, own, reference) + end)
         text += HELD_ROOT.format(name=name, geo=geo, table=table or "NULL", count=count)
         (destination / f"{name}.c").write_text(text, encoding="utf-8", newline="\n")
         models.append((name, kind))
-        for light in re.findall(r"static const Lights1 \w+ = gdSPDefLights1\(([^)]*)\)", list_text):
-            values = [int(value, 0) for value in light.replace("\n", " ").split(",")]
-            if len(values) != 9:
-                raise ValueError(f"held model {name} has a malformed light")
-            values[6:] = [value - 256 if value > 127 else value for value in values[6:]]  # s8 direction
-            lights.append(f"X({kind}, {', '.join(map(str, values))})")
+        units += [f"{name}_lists", name]
     header = ("/* Generated by tools/build_model.py (HELD_MODELS): the held models, their\n"
               " * sg_held_kind, and the atlas cells their textures fill. */\n#pragma once\n"
               "#define SG_HELD_MODELS(X) " + " ".join(f"X({name}, {kind})" for name, kind in models) + "\n"
@@ -297,10 +326,125 @@ def _stage_held(files: dict, source: Path) -> None:
               f"#define SG_HELD_CELL_WIDTHS {', '.join(map(str, widths))}\n"
               f"#define SG_HELD_CELL_HEIGHTS {', '.join(map(str, heights))}\n"
               "/* {kind, cell, segment ROM offset, texture offset in the segment} */\n"
-              f"#define SG_HELD_TEXTURES {', '.join(textures)}\n"
-              "/* Each held model's gdSPDefLights1: kind, ambient, diffuse, direction. */\n"
-              f"#define SG_HELD_LIGHTS(X) {' '.join(lights)}\n")
+              f"#define SG_HELD_TEXTURES {', '.join(textures)}\n")
     (destination / "held_cells.h").write_text(header, encoding="utf-8", newline="\n")
+    return units
+
+
+# No Nintendo model data compiles in: each decomp definition becomes empty
+# storage of its size plus a row (renderer/model/rom_data.h) naming the ROM
+# block and address that fill it at open; a display list or geo layout keeps
+# only its template (rom_gfx_template.h, rom_geo_template.h). Every list macro
+# must have a template, or its numbers would compile in.
+TEMPLATE_MACROS = frozenset({
+    "gsSPVertex", "gsSP2Triangles", "gsSP1Triangle", "gsSPEndDisplayList", "gsSPBranchList",
+    "gsSPDisplayList", "gsSPLight", "gsSPTexture", "gsDPSetTextureImage", "gsDPSetTileSize",
+    "gsDPPipeSync", "gsDPLoadSync", "gsDPTileSync", "gsDPLoadBlock", "gsDPSetEnvColor",
+    "gsDPSetAlphaCompare", "gsDPSetCombineMode", "gsDPSetTile", "gsSPSetGeometryMode",
+    "gsSPClearGeometryMode", "gsDPLoadTextureBlock"})
+_DEFINITION = re.compile(
+    r"^(?P<static>static )?const (?:"
+    r"(?P<array>Vtx|s16|u16|Gfx|GeoLayout) (?P<name>\w+)\[\] = \{(?P<body>.*?)^\};"
+    r"|Lights1 (?P<light>\w+) = gdSPDefLights1\(.*?\);"
+    r"|struct Animation (?P<anim>\w+) = \{.*?^\};"
+    r"|struct Animation \*const (?P<table>\w+)\[\] = \{(?P<entries>.*?)^\};)", re.M | re.S)
+
+
+def _decomp_address(text: str, match, name: str, unit: str, after_light: int | None) -> int:
+    """The segmented address the decomp gives a definition."""
+    before = text[:match.start()].rstrip("\n").rsplit("\n", 1)[-1]
+    found = re.match(r"// (0x[0-9A-Fa-f]{8})\b", before)
+    suffix = re.search(r"_([0-9A-F]{8})$", name)
+    if suffix and not match["light"]:
+        # The decomp names data by its address, and a few comments are
+        # wrong (the box's second list). A light is named by its .l, 8 on.
+        return int(suffix[1], 16)
+    if found:
+        return int(found[1], 16)
+    if match["light"] and after_light is not None:
+        # An uncommented light (Bob-omb's "Unreferenced light group")
+        # follows the light before it, 24 bytes on.
+        return after_light
+    raise ValueError(f"{unit}: {name} has no address comment")
+
+
+def _reference_row(match, name: str, place: str) -> str:
+    kind = match["array"]
+    if kind:
+        count, out = f"sizeof({name}) / sizeof({name}[0])", f"(void *){name}"
+    else:
+        count, out = "1u", f"(void *)&{name}"
+    code = {"Vtx": "VTX", "s16": "S16", "u16": "U16", "Gfx": "GFX", "GeoLayout": "GEO"}.get(
+        kind, "LIGHTS" if match["light"] else "ANIM")
+    return f"{{SG_ROM_{code}, {place}, (uint32_t)({count}), {out}, NULL}}"
+
+
+def _storage(match, name: str, place: str, unit: str) -> tuple[str, str]:
+    """(the definition's empty storage or template, its row)."""
+    static, kind, body = match["static"] or "", match["array"], match["body"]
+    if match["light"]:
+        return f"{static}Lights1 {name};", f"{{SG_ROM_LIGHTS, {place}, 1u, (void *)&{name}, NULL}}"
+    if match["anim"]:
+        return f"{static}struct Animation {name};", f"{{SG_ROM_ANIM, {place}, 1u, (void *)&{name}, NULL}}"
+    if kind == "Vtx":
+        count = body.count("{{{")
+        return f"{static}Vtx {name}[{count}];", f"{{SG_ROM_VTX, {place}, {count}u, (void *){name}, NULL}}"
+    if kind in ("s16", "u16"):
+        count = len(re.findall(r"-?0x[0-9A-Fa-f]+|-?\b\d+\b", re.sub(r"//[^\n]*|/\*.*?\*/", "", body, flags=re.S)))
+        return (f"{static}{kind} {name}[{count}];",
+                f"{{SG_ROM_{kind.upper()}, {place}, {count}u, (void *){name}, NULL}}")
+    word = "intptr_t" if kind == "Gfx" else "uintptr_t"
+    if kind == "Gfx":
+        unknown = set(re.findall(r"\b(gs\w+)\(", body)) - TEMPLATE_MACROS
+        if unknown:
+            raise ValueError(f"{unit}: {name} uses list macros with no template: {sorted(unknown)}")
+    code = "GFX" if kind == "Gfx" else "GEO"
+    return (f"static const {word} sg_tpl_{name}[] = {{{body}}};\n"
+            f"{static}{kind} {name}[sizeof(sg_tpl_{name}) / sizeof({word})];",
+            f"{{SG_ROM_{code}, {place}, (uint32_t)(sizeof(sg_tpl_{name}) / sizeof({word})), "
+            f"(void *){name}, sg_tpl_{name}}}")
+
+
+def _romify(text: str, unit: str, owner: int, segments: dict[int, int],
+            shift: dict[int, int] | None = None, reference: bool = False) -> str:
+    """Replace each data definition in text with storage and a row, appending
+    the unit's row table. reference keeps the literal definitions (rows over
+    them), for comparing a fill against the arrays that compiled in before."""
+    rows, shift, last = [], shift or {}, [None]
+
+    def row(match):
+        name = match["name"] or match["light"] or match["anim"] or match["table"]
+        address = _decomp_address(text, match, name, unit, last[0])
+        last[0] = address + 0x18 if match["light"] else None
+        segment = address >> 24
+        if segment not in segments:
+            raise ValueError(f"{unit}: {name} is in segment {segment:#x}, which names no block")
+        place = f"{owner}, {segments[segment]:#x}u, {address + shift.get(segment, 0):#010x}u"
+        if match["table"]:
+            entries = [entry for entry in re.sub(r"//[^\n]*", "", match["entries"]).split(",") if entry.strip()]
+            rows.append(f"{{SG_ROM_ANIM_TABLE, {place}, {len(entries)}u, NULL, (const void *){name}}}")
+            return match[0]
+        if reference:
+            rows.append(_reference_row(match, name, place))
+            return match[0]
+        storage, entry = _storage(match, name, place, unit)
+        rows.append(entry)
+        return storage
+
+    text = _DEFINITION.sub(row, text)
+    if not rows:
+        raise ValueError(f"{unit}: no model data found")
+    return (text + f"\nconst sg_rom_object sg_rom_rows_{unit}[] = {{\n    " + ",\n    ".join(rows)
+            + f"\n}};\nconst unsigned sg_rom_count_{unit} = sizeof(sg_rom_rows_{unit}) / sizeof(sg_rom_rows_{unit}[0]);\n")
+
+
+def _rom_index(units: list[str]) -> str:
+    return ('/* Generated by tools/build_model.py: every unit\'s model data rows. */\n#include "rom_data.h"\n'
+            + "".join(f"extern const sg_rom_object sg_rom_rows_{u}[];\nextern const unsigned sg_rom_count_{u};\n"
+                      for u in units)
+            + "const sg_rom_table sg_rom_tables[] = {\n    "
+            + ",\n    ".join(f"{{sg_rom_rows_{u}, &sg_rom_count_{u}}}" for u in units)
+            + f"\n}};\nconst unsigned sg_rom_table_count = {len(units)};\n")
 
 
 def _array(text: str, name: str) -> str:
@@ -398,7 +542,7 @@ def _function(source: str, name: str) -> str:
 
 
 def build_model(staging: Path, cache: Path | None = None, vcvars32: Path | None = None,
-                *, seed: Path | None = None, testing: bool = False) -> Path:
+                *, seed: Path | None = None, testing: bool = False, reference: bool = False) -> Path:
     """Return sm64_model.lib. Root's renderer links it and includes model.h.
 
     staging is exclusively caller-owned; no shared DLL or emulator is touched.
@@ -410,12 +554,20 @@ def build_model(staging: Path, cache: Path | None = None, vcvars32: Path | None 
     vcvars32 = vcvars32 or _module("model_build_plugin", ROOT / "tools/build_plugin.py").find_vcvars32()
     if vcvars32 is None:
         raise RuntimeError("Model build requires the x86 MSVC toolchain")
-    source = stage_model(staging, cache, seed)
+    source = stage_model(staging, cache, seed, reference)
     output = staging / "objects"
     output.mkdir(exist_ok=True)
-    sources = [source / name for name in (*SOURCE_FILES, *AUDIO_FILES)]
+    sources = [source / name for name in (*SOURCE_FILES, *AUDIO_FILES, "src/decomp/rom_index.c")]
     sources += [source / f"src/decomp/held/{name}{suffix}.c" for name in HELD_MODELS for suffix in ("", "_lists")]
-    sources += [MODEL / name for name in ("model.c", "assets.c", "particles.c", "memory.c", "audio.c", "held.c")]
+    sources += [MODEL / name for name in ("model.c", "assets.c", "particles.c", "memory.c", "audio.c", "held.c",
+                                          *(() if reference else ("rom_data.c",)), "rom_combiners.c")]
+    if reference:
+        # The literal arrays need no fill; the rows only describe them.
+        stub = staging / "rom_reference.c"
+        stub.write_text('#include "rom_data.h"\nint sg_rom_data_load(const uint8_t *rom, size_t bytes, int write,'
+                        ' unsigned *held_failed)\n{ (void)rom; (void)bytes; (void)write; *held_failed = 0;'
+                        ' return 0; }\n', encoding="utf-8", newline="\n")
+        sources.append(stub)
     # The renderer links this library, so its objects are built repeatably
     # too: the same switches and path names (tools/native_identity.py),
     # whatever scratch folder holds the staging.
@@ -446,7 +598,7 @@ def build_model(staging: Path, cache: Path | None = None, vcvars32: Path | None 
     if result.returncode:
         raise RuntimeError(f"Model compiler failed ({result.returncode}):\n{(result.stdout + result.stderr)[-7000:]}")
     manifest = {"component_hash": component_hash(), "architecture": "Win32", "runtime": "MT",
-                "testing": testing, "library_sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
+                "testing": testing, "reference": reference, "library_sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
                 "source_sha256": {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in sources}}
     (staging / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     return target

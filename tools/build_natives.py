@@ -121,6 +121,9 @@ def _cached_build(native: Native, expected: str, log) -> Path:
                                "protection may have quarantined it")
         if embedded_id(built) != expected:
             raise RuntimeError(f"{native.name} built without the expected id {expected}")
+        # No native ships Nintendo's model data: the model fills it from the
+        # player's ROM (renderer/model/rom_data.h). A hit never reaches the cache.
+        model_data_scan([built])
         log(f"  built {native.name} in {time.monotonic() - started:.0f} s")
         shutil.rmtree(entry, ignore_errors=True)
         try:
@@ -145,6 +148,12 @@ def _install(source: Path, target: Path) -> None:
     partial = target.with_name(target.name + ".partial")
     shutil.copyfile(source, partial)
     os.replace(partial, target)
+
+
+def model_data_scan(paths) -> None:
+    """Raise naming a native that holds Nintendo's model data
+    (tools/native_data_scan.py); tests replace it."""
+    _load("native_data_scan").require_clean(paths)
 
 
 def scan(paths, log):

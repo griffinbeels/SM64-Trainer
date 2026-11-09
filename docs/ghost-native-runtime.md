@@ -128,14 +128,17 @@ death, extrapolated dance and post-recording holds have no invented inputs.
 The font is the thin white SM64 US dialogue font. The trainer never ships
 it: each player's own US cartridge lends it. Whenever the atlas is built from a
 verified US cartridge, [ghost_font_cache.cpp](../plugin/gfxwrap/ghost_font_cache.cpp)
-keeps its font tiles in a per-user file,
+keeps its font tiles and the cartridge's own advances (`gDialogCharWidths`,
+256 bytes at ROM 0xEC370; never compiled in since 2026-11-09) in a per-user file,
 `%LOCALAPPDATA%\SM64Trainer\plugin-cache\us-dialogue-font.bin`: per user, as
 the cartridge was his; writable wherever Project64 is installed; kept across
 Project64 restarts and plugin reinstalls. It is written whole (a temporary
 file, then one replace) and read only when its magic, version, size and
-SHA-256 hold and the digest is the known US font (`us_font_sha256`, the same
-on stock SM64 US and Usamune US), so a short, altered or foreign file is
-refused. On a JP cartridge the atlas fills its glyph cells from that file:
+SHA-256 hold and the digests are the known US font and widths
+(`us_font_sha256`, `us_widths_sha256`, the same on stock SM64 US and Usamune
+US), so a short, altered or foreign file is refused. A version 1 file (tiles
+only) is refused too: a JP cartridge writes in its own capitals until the
+player's US cartridge next loads and writes version 2. On a JP cartridge the atlas fills its glyph cells from that file:
 US glyphs, US widths, lowercase and US punctuation. Without it, a JP name is
 drawn in JP's own font, an 8x16 one-bit font with digits, capitals and kana
 but no lowercase Latin: in JP's capitals (lowercase takes the capital),

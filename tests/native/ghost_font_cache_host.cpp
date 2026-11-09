@@ -37,13 +37,19 @@ static std::vector<uint8_t> segment2(char country,unsigned base,unsigned size,un
     std::memset(rom.data()+base+16,255,flags_end-16);std::memcpy(rom.data()+base+flags_end,decoded.data(),size);
     return rom;
 }
-static std::string hex(const UsFont& font) {
-    std::vector<uint8_t> body(font.present.begin(),font.present.end());
-    body.insert(body.end(),font.tiles.begin(),font.tiles.end());
+static std::string hex_of(const std::vector<uint8_t>& body) {
     uint8_t digest[32]{};check(ghost_assets::sha256(body,digest),"digest");
     std::string out;char two[3];
     for(uint8_t b:digest) {std::snprintf(two,sizeof(two),"%02x",b);out+=two;}
     return out;
+}
+static std::string hex(const UsFont& font) {
+    std::vector<uint8_t> body(font.present.begin(),font.present.end());
+    body.insert(body.end(),font.tiles.begin(),font.tiles.end());
+    return hex_of(body);
+}
+static std::string widths_hex(const UsFont& font) {
+    return hex_of(std::vector<uint8_t>(font.widths.begin(),font.widths.end()));
 }
 static std::vector<uint8_t> file_bytes(const std::wstring& path) {
     std::ifstream in(path,std::ios::binary);return std::vector<uint8_t>((std::istreambuf_iterator<char>(in)),{});
@@ -69,21 +75,26 @@ int main(int argc,char** argv) {
         std::vector<std::pair<unsigned,uint32_t>> lut{{0x77e8,0x02005900u}};
         for(unsigned c=1;c<256;++c)lut.push_back({0x77e8+4*c,0x0200a000u+c*64});
         auto us=segment2('E',0x108a40,100878,0x7700,lut,{{0xa000+0x24*64+(1*16+2)/2,0xf0}});
+        // Its own advances (gDialogCharWidths at 0xEC370), never compiled in.
+        for(unsigned c=0;c<256;++c)us[0xec370+c]=uint8_t(4+c%5);
         // JP: its own one-bit font, every code's tile by its code; A lights (0, 0).
         std::vector<std::pair<unsigned,uint32_t>> jp_lut;
         for(unsigned c=0;c<256;++c)jp_lut.push_back({0x8338+4*c,0x02007100u+c*16});
         auto jp=segment2('J',0x1076d0,0x15bae,0x8250,jp_lut,{{0x7100+10*16,0x80},{0x7100+0xf4*16+3,0x10}});
         auto plain_owned=std::make_unique<Assets>();Assets& plain=*plain_owned;check(plain.load(us.data(),unsigned(us.size())) && plain.lends,"a US atlas lends its font");
-        const std::string digest=hex(plain.lent);
-        const ghost_font_cache::Cache cache{folder+L"\\synthetic\\nested\\us-font.bin",digest.c_str()};
+        const std::string digest=hex(plain.lent),widths=widths_hex(plain.lent);
+        check(plain.lent.widths[0x24]==4+0x24%5 && ghost_annotation::advance(0x24)==4+0x24%5,
+              "a US atlas takes its cartridge's own advances");
+        const ghost_font_cache::Cache cache{folder+L"\\synthetic\\nested\\us-font.bin",digest.c_str(),widths.c_str()};
         // No file yet: JP writes in its own capitals.
         capitals(cache,jp,"no cache: JP's own capitals");
         // A US load writes the cache, whole, through its own folders.
         auto us_atlas_owned=std::make_unique<Assets>();Assets& us_atlas=*us_atlas_owned;check(ghost_font_cache::load(cache,us_atlas,us.data(),unsigned(us.size())),"US atlas loads");
         const auto written=file_bytes(cache.file);
-        check(written.size()==48+32+256*64 && !std::memcmp(written.data(),"SM64UFNT",8),"the US load wrote the cache");
+        check(written.size()==48+32+256*64+256 && !std::memcmp(written.data(),"SM64UFNT",8),"the US load wrote the cache");
         UsFont read{};check(ghost_font_cache::read(cache,read) && read.tiles==plain.lent.tiles
-                            && read.present==plain.lent.present,"the cache reads back the lent font");
+                            && read.present==plain.lent.present && read.widths==plain.lent.widths,
+                            "the cache reads back the lent font and its widths");
         // JP now writes names in the US font, with US widths.
         auto japanese_owned=std::make_unique<Assets>();Assets& japanese=*japanese_owned;check(ghost_font_cache::load(cache,japanese,jp.data(),unsigned(jp.size())),"JP atlas loads");
         check(japanese.borrowed && japanese.font==font::us,"JP borrows the cached US font and its widths");
@@ -102,12 +113,21 @@ int main(int argc,char** argv) {
         capitals(cache,jp,"a longer cache is refused");
         auto altered=written;altered[48+32+0x24*64]^=1;set_file(cache.file,altered);
         capitals(cache,jp,"a payload altered under its stored digest is refused");
-        auto versioned=written;versioned[8]=2;set_file(cache.file,versioned);
+        auto versioned=written;versioned[8]=3;set_file(cache.file,versioned);
         capitals(cache,jp,"another version is refused");
+        versioned[8]=1;set_file(cache.file,versioned);
+        capitals(cache,jp,"a version 1 file (no widths) is refused");
+        auto other_widths=written;other_widths[48+32+256*64+0x24]^=1;
+        {
+            std::vector<uint8_t> body(other_widths.begin()+48,other_widths.end());uint8_t d[32]{};
+            check(ghost_assets::sha256(body,d),"digest");std::memcpy(other_widths.data()+16,d,32);
+        }
+        set_file(cache.file,other_widths);
+        capitals(cache,jp,"a font whose widths are not the cache's is refused");
         auto magic=written;magic[0]='X';set_file(cache.file,magic);
         capitals(cache,jp,"another magic is refused");
         set_file(cache.file,written);
-        const ghost_font_cache::Cache foreign{cache.file,ghost_annotation::us_font_sha256};
+        const ghost_font_cache::Cache foreign{cache.file,ghost_annotation::us_font_sha256,widths.c_str()};
         capitals(foreign,jp,"a well-formed file holding another font is refused");
         check(!ghost_font_cache::write(foreign,plain.lent),"a font that is not the cache's own is never written");
         check(file_bytes(cache.file)==written,"a refused write leaves the file");
@@ -115,7 +135,8 @@ int main(int argc,char** argv) {
         // The user's cache: under LOCALAPPDATA, for the real US font only.
         const auto user=ghost_font_cache::user_cache();
         check(user.file==folder+L"\\SM64Trainer\\plugin-cache\\us-dialogue-font.bin"
-              && !std::strcmp(user.digest,us_font_sha256),"the per-user cache under LOCALAPPDATA");
+              && !std::strcmp(user.digest,us_font_sha256) && !std::strcmp(user.widths,ghost_annotation::us_widths_sha256),
+              "the per-user cache under LOCALAPPDATA");
         bool real=false;
         if(argc==4) {
             const auto load_rom=[](const char* path) {
@@ -127,6 +148,8 @@ int main(int argc,char** argv) {
             capitals(user,jp_rom,"before US was ever loaded, JP writes in its capitals");
             auto us_real_owned=std::make_unique<Assets>();Assets& us_real=*us_real_owned;check(ghost_font_cache::load(user,us_real,us_rom.data(),unsigned(us_rom.size())),"US loads");
             check(hex(us_real.lent)==us_font_sha256,"his US cartridge's font is the known US font");
+            check(widths_hex(us_real.lent)==ghost_annotation::us_widths_sha256,
+                  "his US cartridge's advances are the known US widths");
             UsFont kept{};check(ghost_font_cache::read(user,kept),"the US load kept the font in his cache");
             auto jp_real_owned=std::make_unique<Assets>();Assets& jp_real=*jp_real_owned;check(ghost_font_cache::load(user,jp_real,jp_rom.data(),unsigned(jp_rom.size())),"JP loads");
             check(jp_real.borrowed && jp_real.font==font::us && same_font_cells(jp_real,us_real),
