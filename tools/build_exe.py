@@ -214,7 +214,7 @@ def sim_args(*, metadata_path: "Path | None" = None, version_hook: "Path | None"
         *(arg for module in SIM_MODULES for arg in ("--hidden-import", module)),
         # OpenSSL is Apache-2.0, which cannot share a process with GPL-2.0-only
         # Unicorn; hashlib falls back to CPython's built-in hash modules and
-        # the program needs no network (l0-sim-license.md, section 4).
+        # the program needs no network (licenses/README.md, the simulation program).
         *(arg for module in SIM_EXCLUDE for arg in ("--exclude-module", module)),
         "--icon", str(REPO / "assets" / "ukiki.ico"),
     ]

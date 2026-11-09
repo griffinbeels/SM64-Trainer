@@ -35,7 +35,7 @@ SIM_ROOT_FILES = frozenset({"build-channel.json", "release-version.json"})
 #: carries whatever they import, which SIM_FORBIDDEN bounds.
 SIM_MODULES = child_modules(SIM_PROGRAM)
 #: Top-level modules each program must never hold (the license ruling,
-#: 2026-11-09, and .tasks/features/ghost-lab-beta/l0-sim-license.md): Unicorn
+#: 2026-11-09; licenses/README.md and licenses/python/unicorn/README.md): Unicorn
 #: is GPL-2.0-only, so it stays out of the Trainer, which loads PyAV's GPL-3.0
 #: FFmpeg and LGPL-3.0 pystray. The simulation program holds nothing that
 #: cannot share a process with GPL-2.0-only code: no PyAV, pystray or
@@ -48,7 +48,7 @@ TRAINER_FORBIDDEN = frozenset({"unicorn"})
 SIM_FORBIDDEN = frozenset({"av", "pystray", "pyaudiowpatch", "capstone", "webview",
                            "_ssl", "_hashlib", "libssl", "libcrypto"})
 #: The line every module of ours the simulation program carries begins with
-#: (l0-sim-license.md, section 1; Griffin's D9, 2026-11-09).
+#: (licenses/README.md; Griffin's D9, 2026-11-09).
 SIM_SPDX = "# SPDX-License-Identifier: GPL-2.0-or-later"
 
 DATA_FILES = frozenset({

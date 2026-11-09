@@ -938,7 +938,8 @@ def serve(argv: list[str] | None = None) -> int:
     rom = args.rom.read_bytes()
     rom_loads = package.provenance.segment_loads(rom)
     args.folder.mkdir(parents=True, exist_ok=True)
-    stems, stems_problem = None, "The scene lab has no symbol map (lab.json \"map\"), so music and sound effects cannot be split."
+    stems, stems_problem = None, ("The Ghost Lab is missing the game's address map, so it cannot split music from sound "
+                                    "effects.")
     if args.map is not None:
         import stems_live
         stems = stems_live.StemsProcess(args.rom, args.map, lab_root=args.lab_root,

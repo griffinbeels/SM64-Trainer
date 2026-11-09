@@ -1734,19 +1734,26 @@ def mount_scene_lab(app, config_path, **options) -> SceneLab:
             raise HTTPException(422, f"This part of the recording's sound is damaged: {damaged}") from None
         return Response(data, media_type=media_type, headers={"Cache-Control": "no-store"})
 
-    in_app = config_path is None
-    if in_app:
+    if config_path is None:
         # The installed app finds its own ROM (scenelab/roms.py): the no-ROM card's routes (ui/components/rompick.js).
         from sm64_events.server.lab_roms_api import create_rom_router
         app.include_router(create_rom_router())
     app.include_router(router)
+    _wrap_lifespan(app, lab, app_background=config_path is None and app_background)
+    app.state.scene_lab = lab
+    return lab
+
+
+def _wrap_lifespan(app, lab: SceneLab, *, app_background: bool) -> None:
+    """The lab's live work runs while the app serves: the recording's lease and the attempt scenes, and (the
+    installed server) _AppBackground; all of it ends, with the open scene, when the app stops."""
     serving = app.router.lifespan_context
 
     @asynccontextmanager
     async def lifespan(application):
         async with serving(application) as state:
             await lab.start_live()
-            background = _AppBackground.start(lab) if in_app and app_background else None
+            background = _AppBackground.start(lab) if app_background else None
             try:
                 yield state
             finally:
@@ -1757,5 +1764,3 @@ def mount_scene_lab(app, config_path, **options) -> SceneLab:
                 await lab.shutdown()
 
     app.router.lifespan_context = lifespan
-    app.state.scene_lab = lab
-    return lab
