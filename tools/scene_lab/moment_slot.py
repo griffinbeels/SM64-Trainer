@@ -321,6 +321,7 @@ def main() -> int:
     compare = commands.add_parser("compare", help="this build against handoff_slot's replay from a tap session's boot record")
     compare.add_argument("session")
     compare.add_argument("--every", type=int, default=61)
+    compare.add_argument("--lab-config", type=Path, help="the lab.json naming the ROM and map (default: the lab root's)")
     compare.set_defaults(handler=compare_command)
     args = parser.parse_args()
     return args.handler(args)
@@ -371,10 +372,11 @@ class TapMoments:
 
 def compare_command(args) -> int:
     """Both ways of making frame K's slot, byte for byte; Usamune's profiler bytes are a clock the replay stops."""
+    from sm64_events.core.lab_inputs import tool_config  # noqa: PLC0415
     lab = sim.lab_root()
-    config = json.loads((lab / "lab.json").read_text(encoding="utf-8"))
+    config = tool_config(getattr(args, "lab_config", None))
     rom, map_path = Path(config["rom"]).read_bytes(), Path(config["map"])
-    replay = slots.start_replay(lab / args.session)
+    replay = slots.start_replay(lab / args.session, config)
     truth = replay.cpu
     anchor = bytes(truth.ram[0x400000:0x400040])
     start = rom.find(anchor)

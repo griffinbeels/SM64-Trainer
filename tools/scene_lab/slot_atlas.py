@@ -4,7 +4,8 @@
 
 Each build boots from its own cartridge (cold_boot.py), warps to the place the way a painting does, and runs
 ENTRY_FRAMES more frames standing still; then the two RAMs give the atlas (slotlibrary/atlas.py). The US ROM is
-lab.json's "rom", and the JP ROM is found beside it by its header. Prints one JSON line: where it wrote the atlas,
+lab.json's "rom", and the JP ROM is found beside it by its header; in the installed app both come from its ROM
+store and bundled maps (core/lab_inputs.py::tool_config). Prints one JSON line: where it wrote the atlas,
 or {"refused": reason}. The Trainer runs this as a hidden child when a save state crosses builds
 (slotlibrary/atlas.py::child_builder).
 """
@@ -120,9 +121,11 @@ def main() -> int:
     make.add_argument("--level", type=int, required=True)
     make.add_argument("--area", type=int, required=True)
     make.add_argument("--out", type=Path, required=True)
+    make.add_argument("--lab-config", type=Path, help="the lab.json naming the ROMs (default: core/lab_inputs.py's)")
     args = parser.parse_args()
     try:
-        atlas = build(args.level, args.area)
+        from sm64_events.core.lab_inputs import tool_config  # noqa: PLC0415
+        atlas = build(args.level, args.area, tool_config(args.lab_config))
     except SystemExit as stopped:
         print(json.dumps({"refused": str(stopped)}))
         return 2

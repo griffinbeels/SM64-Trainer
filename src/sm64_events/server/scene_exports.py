@@ -330,9 +330,8 @@ class SceneExports:
         return output, self._config()
 
     def _config(self) -> dict:
-        from sm64_events.server.scene_lab_api import LabConfig
-        config = LabConfig.load(self.lab.config_path)
-        return {"rom": str(config.rom), "pj64_plugin": str(config.pj64_plugin) if config.pj64_plugin else "",
+        config = self.lab.config()                 # a developer's lab.json, or the installed app's own inputs
+        return {"rom": str(config.require_rom()), "pj64_plugin": str(config.pj64_plugin) if config.pj64_plugin else "",
                 "renderer": config.renderer, "resolution": list(config.resolution) if config.resolution else None,
                 "map": str(config.map) if config.map else None}
 
