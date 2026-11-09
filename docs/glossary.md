@@ -1839,6 +1839,22 @@ levels, - and = change the lens while held, and so does Ctrl with the wheel. A
   only the recorded camera shows; the wheel without Ctrl, which moves the free
   camera closer instead of zooming
 
+### Lab ROM
+
+The [[Ghost Lab]]'s private copy of the [[practice ROM]], one for each version of the game: Super
+Mario 64 Usamune v1.93u for US and v1.93j for JP. The Trainer copies it from the game open in
+Project64, else finds it in Project64's ROM folders, else asks the player to choose the file once. It
+knows the ROM by the header's name and country letter and its size, never by the file name. It keeps
+the copy in the lab folder so scenes still open after Project64 closes, and it never uploads it or
+writes to Project64.
+
+- **Lives** -- the store (`src/sm64_events/scenelab/roms.py`), its route
+  (`src/sm64_events/server/lab_roms_api.py`) and the one-time step
+  (`src/sm64_events/ui/components/rompick.js`); the copy from the game reads
+  the cartridge image through `src/sm64_events/memory/pj64.py`
+- **Not** -- the [[game version]] setting, which grades and reads addresses;
+  the Lab ROM only supplies the cartridge whose code the lab plays
+
 ### Camera preset
 
 A camera you saved in the [[Ghost Lab]]'s **Cameras** strip: a name and
