@@ -112,6 +112,27 @@ test('both start formats the trainer writes are taken: version 3 (game data as i
 
 // The trainer's US spans (tests/test_ghost_start_frame.py keeps this file equal to its own).
 const SPANS_US=SPANS.us.regions;
+// A JP start as the trainer writes one: the same header over the JP spans.
+const asJP=s=>rewritten(s,m=>{m.game_version='jp';m.regions=structuredClone(SPANS.jp.regions);m.boot[0].begin=SPANS.jp.boot[0];});
+
+test('a JP start is taken over the JP spans, and neither cartridge takes the other one\'s',async()=>{
+  const {env}=await environment(),h=harness(env);
+  try{
+    const us=withStart(upload()),jp=asJP(us.start);
+    // JP's spans differ from US's: its .data begins elsewhere.
+    assert.notDeepEqual(SPANS.jp.regions,SPANS.us.regions);assert.notEqual(SPANS.jp.boot[0],SPANS.us.boot[0]);
+    for(const [name,start,status] of [['US regions named JP',rewritten(us.start,m=>{m.game_version='jp';m.boot[0].begin=SPANS.jp.boot[0];}),422],
+      ['JP regions named US',rewritten(jp,m=>{m.game_version='us';m.boot[0].begin=SPANS.us.boot[0];}),422],
+      ['JP with the US boot span',rewritten(jp,m=>{m.boot[0].begin=SPANS.us.boot[0];}),422]]){
+      const body={...us.body,start_sha256:digest(start),start_bytes:start.length};
+      const admission=await h.call('/v1/uploads',{method:'POST',body});
+      const refused=await h.call('/v1/uploads/'+admission.json.upload_id,{method:'PUT',bytes:Buffer.concat([us.bytes,start])});
+      assert.equal(refused.response.status,status,name);assert.equal(refused.json.error.code,'start_invalid',name);
+    }
+    const id=await publish(h,withStart(upload(),{start:jp}));
+    assert.deepEqual(await bytesOf((await h.call('/v1/recordings/'+id+'/start',{user:'bob'})).response),jp);
+  }finally{env.DB.close();}
+});
 const refusals={
   'random bytes':()=>Buffer.from('not a ghost start, only bytes that a client claims are one'),
   'another magic':s=>Buffer.concat([Buffer.from('SM64STRX'),s.subarray(8)]),

@@ -334,17 +334,30 @@ def test_the_worker_test_starts_are_what_this_trainer_reads():
 
 
 def test_the_workers_span_table_is_this_trainers():
-    """The Worker refuses a start whose regions are not these (cloud/community/src/start-spans.json); a game
-    version this Trainer cannot make starts for is absent there too. Update that file from allowed_spans()."""
+    """The Worker refuses a start whose regions are not these (cloud/community/src/start-spans.json). Every game
+    version this Trainer can make starts for is there and equal; one it cannot make yet may be carried ahead
+    (JP, from claude/lab-p15, so one Worker deploy takes both) and is checked here once its layout rows land.
+    Update that file from allowed_spans() and boot_spans()."""
     table = json.loads((FIXTURES.parents[1] / "src" / "start-spans.json").read_text(encoding="utf-8"))
-    expected = {}
+    versions = {k: v for k, v in table.items() if not k.startswith("_")}
+    assert set(versions) <= set(sf.GAME_VERSIONS)
+    made = 0
     for version in sf.GAME_VERSIONS:
         try:
-            expected[version] = {"regions": [list(span) for span in sf.allowed_spans(version)],
-                                 "boot": [begin for begin, _size in sf.boot_spans(version)]}
+            expected = {"regions": [list(span) for span in sf.allowed_spans(version)],
+                        "boot": [begin for begin, _size in sf.boot_spans(version)]}
         except sf.StartError:
-            continue
-    assert {k: v for k, v in table.items() if not k.startswith("_")} == expected
+            continue                                                  # not made here yet: may be carried ahead
+        made += 1
+        assert versions.get(version) == expected, version
+    assert made >= 1
+    for version, spans in versions.items():                           # every row, carried ahead or not, is sane
+        ends = [begin + size for begin, size in spans["regions"]]
+        assert all(size > 0 for _begin, size in spans["regions"]) and len(spans["regions"]) == len(sf.SPAN_ROWS)
+        assert all(ends[i] <= spans["regions"][i + 1][0] for i in range(len(ends) - 1)), version
+        boot = dict(map(tuple, spans["regions"]))
+        assert len(spans["boot"]) == len(sf.BOOT_ROWS) and all(
+            b in boot and sf.BOOT_RAM <= b and b + boot[b] <= sf.BOOT_RAM + sf.BOOT_BYTES for b in spans["boot"]), version
     assert table["_versions"] == list(sf.READS) and table["_max_boot_runs"] == sf.MAX_BOOT_RUNS
     assert table["_max_meta_bytes"] == sf.MAX_META_BYTES
 

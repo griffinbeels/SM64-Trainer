@@ -211,9 +211,11 @@ trainer's spans for that game version (`src/start-spans.json`, which
 `tests/test_ghost_start_frame.py` keeps equal to `ghost/start_frame.py`), no
 main-pool changes, game-data differences only over the boot spans, and the start
 named for the ghost it rides with (`clip_sha256` equals the grant's `raw_sha256`).
-Anything else is `422 start_invalid`, with the reservation refunded. A new game
-version's spans need this file updated and the Worker deployed before its starts
-are taken. Format version 3 sends the game's .data as its change from the ROM's
+Anything else is `422 start_invalid`, with the reservation refunded. The table
+holds US and JP; JP was carried ahead from the JP re-simulation branch (its
+layout rows await Griffin's live JP check), so one deploy takes both, and the
+test holds JP equal once this trainer can make JP starts. A further span change
+needs this file updated and the Worker deployed before such starts are taken. Format version 3 sends the game's .data as its change from the ROM's
 boot image: on his five Whomp's Fortress starts 99.5% of it equals the boot
 image, and a start as it travels fell from 23.7 KB to 16.9 KB on average. The
 receiver rebuilds it from its own ROM. It then stores the start in the ghost's own R2 object, right after

@@ -1,5 +1,5 @@
 {
-  "_comment": "The trainer's ghost-start spans (src/sm64_events/ghost/start_frame.py allowed_spans and boot_spans, physical begin and bytes). tests/test_ghost_start_frame.py keeps this file equal to them.",
+  "_comment": "The trainer's ghost-start spans (src/sm64_events/ghost/start_frame.py allowed_spans and boot_spans, physical begin and bytes). tests/test_ghost_start_frame.py keeps every game version the trainer can make starts for equal to this file. jp is carried ahead from claude/lab-p15 e22b8089 (its layout rows are VERIFY until Griffin's live JP gate), so one Worker deploy takes JP starts once that trainer sends them.",
   "_versions": [
     2,
     3
@@ -43,6 +43,45 @@
     ],
     "boot": [
       3331424
+    ]
+  },
+  "jp": {
+    "regions": [
+      [
+        2128640,
+        512
+      ],
+      [
+        3327520,
+        15728
+      ],
+      [
+        3347680,
+        16
+      ],
+      [
+        3382304,
+        156384
+      ],
+      [
+        3538688,
+        544
+      ],
+      [
+        3718304,
+        12864
+      ],
+      [
+        3731168,
+        4
+      ],
+      [
+        4291604,
+        308
+      ]
+    ],
+    "boot": [
+      3327520
     ]
   }
 }
