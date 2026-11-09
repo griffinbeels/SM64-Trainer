@@ -15,7 +15,7 @@ from sm64_events.core.build_channel import (
     BETA_APP_DIR, CONFIG_FILENAME, STABLE_APP_DIR, BuildChannel, read_metadata,
 )
 from sm64_events.core.reporting_setup import CONFIG_FILE as REPORTING_CONFIG, read_config_dsn
-from sm64_events.core.update_plan import BUNDLED_NATIVES
+from sm64_events.core.update_plan import BUNDLED_NATIVES, LAB_NATIVES
 
 FLAG = "--beta-self-check"
 _UI = "sm64_events/ui/"
@@ -41,6 +41,12 @@ _ASSETS = (
 #: its PE machine and the core/paths.py resolver that must find it.
 _NATIVES = tuple(zip(BUNDLED_NATIVES, ((0x14C, "bundled_plugin_dll"), (0x8664, "bundled_encoder_dll")),
                      strict=True))
+#: Each Ghost Lab native (core/update_plan.py::LAB_NATIVES, in that order): its
+#: PE machine and whether it is a DLL. The hosts are x86 programs beside the
+#: x86 plugin they load; the CPU hooks and the cxd4 runner are x64 DLLs the
+#: server's own children load. core/paths.py::bundled_lab_file must find each.
+_LAB_NATIVES = tuple(zip(LAB_NATIVES, ((0x14C, False), (0x14C, False), (0x14C, False), (0x8664, True),
+                                       (0x8664, True)), strict=True))
 _IMPORTS = (
     ("sm64_events.ghost.bundled_beta", ("BundledPopulation", "with_bundled_beta")),
     ("sm64_events.desktop.beta_runtime", ("run_if_needed",)),
@@ -223,6 +229,13 @@ def collect_report(*, fixture: ProbeRuntime | None = None, importer=None):
             return (resolved is not None and Path(resolved).resolve() == path.resolve()
                     and _file(bundle, path.relative_to(bundle)) and _pe(path, machine, dll=True))
         check("native:" + name, native)
+    for name, (machine, dll) in _LAB_NATIVES:
+        path = bundle / "sm64_events/data/lab" / name
+        def lab_native(name=name, path=path, machine=machine, dll=dll):
+            resolved = paths.bundled_lab_file(name)
+            return (resolved is not None and Path(resolved).resolve() == path.resolve()
+                    and _file(bundle, path.relative_to(bundle)) and _pe(path, machine, dll=dll))
+        check("lab_native:" + name, lab_native)
     ffmpeg = bundle / "ffmpeg.exe"
     check("bundled_ffmpeg", lambda: paths.bundled_ffmpeg() is not None
           and Path(paths.bundled_ffmpeg()).resolve() == ffmpeg.resolve()

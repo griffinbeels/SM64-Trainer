@@ -1430,6 +1430,7 @@ dependencies = [
     { name = "pystray" },
     { name = "pywebview" },
     { name = "sentry-sdk" },
+    { name = "unicorn" },
     { name = "uvicorn", extra = ["standard"] },
     { name = "yt-dlp" },
 ]
@@ -1442,7 +1443,6 @@ dev = [
     { name = "pytest-rerunfailures" },
     { name = "pytest-testmon" },
     { name = "pytest-xdist" },
-    { name = "unicorn" },
 ]
 profiling = [
     { name = "psutil" },
@@ -1463,6 +1463,7 @@ requires-dist = [
     { name = "pystray", specifier = ">=0.19" },
     { name = "pywebview", specifier = ">=5.0" },
     { name = "sentry-sdk", specifier = ">=2.60,<3" },
+    { name = "unicorn", specifier = "==2.1.4" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.36" },
     { name = "yt-dlp", specifier = ">=2025.1.1" },
 ]
@@ -1475,7 +1476,6 @@ dev = [
     { name = "pytest-rerunfailures", specifier = ">=15.0" },
     { name = "pytest-testmon", specifier = ">=2.1" },
     { name = "pytest-xdist", specifier = ">=3.8" },
-    { name = "unicorn", specifier = "==2.1.4" },
 ]
 profiling = [
     { name = "psutil", specifier = ">=6" },

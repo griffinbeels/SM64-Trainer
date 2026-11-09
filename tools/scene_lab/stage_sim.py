@@ -34,7 +34,6 @@ recorded it (the same seven levels' ghosts part, or never part, at the same reco
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import struct
 import sys
@@ -86,7 +85,34 @@ class StageError(RuntimeError):
 
 
 def lab_config() -> dict:
-    return json.loads((sim.lab_root() / "lab.json").read_text(encoding="utf-8"))
+    """The lab's ROM and map when a caller named none: the lab root's lab.json from a source checkout, the installed
+    app's own inputs otherwise (core/lab_inputs.py::tool_config)."""
+    from sm64_events.core.lab_inputs import tool_config  # noqa: PLC0415
+    return tool_config()
+
+
+def recipe(rom: bytes) -> str | None:
+    """What every cached boot and reset of this cartridge is named by (STAGE_VERSION, its build, its bytes); None for a
+    ROM that is neither Usamune build. Stages.key and `made` both read it, so a cache check outside the simulation
+    (server/scene_resim.py, before it starts a warm) names exactly the files a warm writes."""
+    from sm64_events.memory.version_probe import version_from_header  # noqa: PLC0415
+    version = version_from_header(rom[:0x40])
+    return None if version is None else f"v{STAGE_VERSION}-{version}-{hashlib.sha256(rom).hexdigest()[:12]}"
+
+
+def boot_file(cache: Path, recipe_name: str) -> Path:
+    return Path(cache) / f"boot-{recipe_name}.npz"
+
+
+def reset_file(cache: Path, recipe_name: str, level: int, area: int, act: int) -> Path:
+    return Path(cache) / f"reset-{recipe_name}-{level}-{area}-{act}.npz"
+
+
+def made(cache: Path, recipe_name: str, level: int, area: int, act: int) -> bool:
+    """Whether `cache` already holds what a warm of that stage makes first: the cold boot's RAM and that place's
+    practice reset. A warm's packer seed for the level comes with the reset (the build or warm that made the reset
+    packed that level's frames, sim_scene.Seed.keep)."""
+    return boot_file(cache, recipe_name).is_file() and reset_file(cache, recipe_name, level, area, act).is_file()
 
 
 class Machine:
@@ -171,6 +197,8 @@ class Stages:
     def __init__(self, lab_root: Path, cache: Path, *, rom_path: Path | None = None, symbols: sim.Symbols | None = None,
                  map_path: Path | None = None):
         config = lab_config() if rom_path is None or symbols is None or map_path is None else {}
+        if (map_path or config.get("map")) is None or (rom_path or config.get("rom")) is None:
+            raise StageError(next(iter(config.get("problems") or ()), "The lab has no ROM or map to simulate."))
         self.map_path = Path(map_path or config["map"])
         self.lab_root, self.cache = Path(lab_root), Path(cache)
         self.rom_path = Path(rom_path or config["rom"])
@@ -198,8 +226,9 @@ class Stages:
         """The cold boot in the castle grounds: (game, its snapshot). Booted once (~3 s), then restored."""
         if self._game is None:
             import cold_boot  # noqa: PLC0415
-            try:
-                game, _frames = cold_boot.boot_into_castle(self.version(), {"rom": str(self.rom_path)})
+            try:                                             # this lab's own ROM and map, never a lab.json's
+                game, _frames = cold_boot.boot_into_castle(self.version(), {
+                    "rom": str(self.rom_path), "maps": {self.version(): str(self.map_path)}})
             except SystemExit as stopped:                    # cold_boot's own sentences
                 raise StageError(f"The simulated cartridge did not boot: {stopped}") from None
             self._game, self._castle_snap = game, game.snapshot()
@@ -209,7 +238,7 @@ class Stages:
         """The RAM a start lies over (code, threads, everything a scene's regions do not hold): the cold boot's
         castle grounds, cached on disk by build and ROM; and thread 5's FCSR."""
         if self._boot is None:
-            path = self.cache / f"boot-{self._recipe()}.npz"
+            path = boot_file(self.cache, self._recipe())
             if path.is_file():
                 self._boot = np.load(path)["ram"]
             else:
@@ -248,7 +277,8 @@ class Stages:
         return int(ram[sim.phys(self.symbols[LEVEL_TO_COURSE]) + level - 1])
 
     def _recipe(self) -> str:
-        return f"v{STAGE_VERSION}-{self.version()}-{hashlib.sha256(self.rom).hexdigest()[:12]}"
+        self.version()                                       # StageError for a ROM that is neither build
+        return recipe(self.rom)
 
     def key(self, level: int, area: int, act: int) -> str:
         return f"{self._recipe()}-{level}-{area}-{act}"
@@ -288,7 +318,7 @@ class Stages:
     def reset(self, level: int, area: int, act: int) -> np.ndarray:
         """The practice-reset state of that level, area and act (cached)."""
         with self.lock:
-            path = self.cache / f"reset-{self.key(level, area, act)}.npz"
+            path = reset_file(self.cache, self._recipe(), level, area, act)
             if path.is_file():
                 return np.load(path)["ram"]
             ram = self._make_reset(level, area, act)

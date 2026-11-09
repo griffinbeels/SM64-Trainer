@@ -1,0 +1,68 @@
+"""The installed app's Ghost Lab on the real page, before it found a ROM (D2 on by default, D6 the plain reason).
+
+The UI fixture boots the real app offline; the lab is mounted the way main.py mounts it in the installed app: no
+lab.json, its config from core/lab_inputs.py with a ROM store that holds nothing yet. The sidebar shows the Ghost
+Lab, the page opens without an error, and it shows the store's sentence. CPU only: a headless browser without the
+GPU, and the renderer is never started (nothing can open without a ROM)."""
+import sys
+from pathlib import Path
+
+import pytest
+from playwright.sync_api import sync_playwright
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "tools"))
+sys.path.insert(0, str(ROOT / "tools" / "scene_lab"))
+import gpu_gate  # noqa: E402
+import ui_fixture  # noqa: E402
+from sm64_events.core import lab_inputs  # noqa: E402
+from sm64_events.server import scene_lab_api  # noqa: E402
+
+REASON = "The Ghost Lab needs the Super Mario 64 Usamune v1.93u ROM. Open it in Project64 once (a test's words)."
+# A page that grabs the pointer confines his real cursor to the test's viewport (2026-11 note): stub it.
+NO_POINTER_LOCK = "Element.prototype.requestPointerLock = function () {}; document.exitPointerLock = function () {};"
+
+
+class EmptyStore:
+    def rom_for(self, region):
+        return None
+
+    def missing_reason(self, region):
+        return REASON
+
+
+@pytest.mark.parametrize("width", [850, 1280])
+def test_the_apps_ghost_lab_opens_and_says_it_needs_the_rom(width, tmp_path, monkeypatch):
+    monkeypatch.setattr(gpu_gate, "HOLD", tmp_path / "no-hold.txt")
+    (tmp_path / "Plugin").mkdir()
+    statuses = []
+    original = ui_fixture.create_app
+
+    def create_app(*args, **kwargs):
+        app = original(*args, **kwargs)
+        scene_lab_api.mount_scene_lab(app, None, app_inputs=lambda: lab_inputs.app_inputs(
+            store=EmptyStore(), lab_file=lambda name: None, plugin=lambda: tmp_path / "Plugin",
+            lab_root=tmp_path / "lab-root"))
+        return app
+    monkeypatch.setattr(ui_fixture, "create_app", create_app)
+    with ui_fixture.serve_ui() as base, sync_playwright() as play:
+        browser = play.chromium.launch(headless=True, args=["--disable-gpu"])
+        try:
+            page = browser.new_page(viewport={"width": width, "height": 1000})
+            page.add_init_script(NO_POINTER_LOCK)
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            page.on("response", lambda response: statuses.append(response.json())
+                    if response.url.endswith("/api/scene-lab/status") else None)
+            page.goto(base)
+            entry = page.locator(".nav-item", has_text="Ghost Lab")
+            entry.wait_for(timeout=20000)
+            entry.click()
+            page.locator(".scene-lab").wait_for(timeout=20000)
+            page.get_by_text(REASON).first.wait_for(timeout=20000)
+            assert page.locator(".nav-item.on").text_content().strip() == "Ghost Lab"   # 850: an icon, text hidden
+            assert statuses and statuses[-1]["ready"] is False and statuses[-1]["problems"][0] == REASON
+            assert errors == []
+            page.screenshot(path=str(tmp_path / f"ghost-lab-no-rom-{width}.png"))
+        finally:
+            browser.close()

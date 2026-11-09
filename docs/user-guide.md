@@ -52,6 +52,12 @@ only the first manual download does.)
 - **Windowed**, not exclusive fullscreen, or replay capture can't see the game.
 - Your data lives in `%LOCALAPPDATA%\SM64Trainer\` and survives every update.
 
+**Course pictures come from your own ROM.** The Trainer does not ship any of
+the game's pictures. Once it has found your Usamune ROM, it copies each
+course's painting out of that ROM on your computer and keeps the copies in
+your data folder. Until then, each course shows a plain tile with its short
+name, such as "BoB". Nothing from your ROM is uploaded.
+
 **Setup and Practice Replay.** Each page shows the current action, with
 optional help for getting Project64, setting up your own Usamune ROM, and
 configuring the game/controller. Pages advance after a visible acknowledgment;
@@ -66,6 +72,15 @@ Each difference says how to fix it and links the guide. A different controller
 plugin is fine; it is only noted. If ghosts stop showing and your setup differs,
 the practice card says so and opens this check for you. The setup wizard's
 last page lists any differences too, but never stops you from practicing.
+
+**Your ROM for the Ghost Lab.** The Ghost Lab plays ghosts with your own Usamune
+ROM. You don't have to do anything: while setup watches your game, the trainer
+copies the Usamune ROM you have open in Project64, and it finds the other version
+(US or JP) in Project64's ROM folder if you have it there. The copy stays on your
+computer, in `%LOCALAPPDATA%\SM64Trainer\scene-lab\roms`, and is never uploaded.
+The trainer only reads Project64's files and never changes them. If the trainer
+can't find the US ROM, **Check my setup** and the Ghost Lab show a
+**Choose ROM file** button so you can pick it once.
 
 Already set up? The trainer compares the installed graphics plugin's build with
 this build and checks Project64's selected graphics plugin. A matching installation

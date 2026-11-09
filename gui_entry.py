@@ -16,6 +16,15 @@ def main():
     # resolve paths or ports. No environment variable can select the channel.
     from sm64_events.core.build_channel import current_build
     current_build()
+    # The Ghost Lab's child processes re-enter this exe the same way, each
+    # running one lab module as its main program (sm64_events/scenelab_code.py).
+    # A child that runs Unicorn belongs to SM64TrainerSim.exe and never runs here.
+    from sm64_events.scenelab_code import TRAINER_PROGRAM, child_program, run_child
+    if len(sys.argv) > 1 and child_program(sys.argv[1]) is not None:
+        if child_program(sys.argv[1]) != TRAINER_PROGRAM:
+            print(f"{sys.argv[1]} runs in {child_program(sys.argv[1])}, not in this program.", file=sys.stderr)
+            return 2
+        return run_child(sys.argv[1], sys.argv[2:])
     # Workers must bypass desktop imports, migrations and instance takeover.
     from sm64_events.library.background import WORKER_FLAG
     if len(sys.argv) > 1 and sys.argv[1] == WORKER_FLAG:

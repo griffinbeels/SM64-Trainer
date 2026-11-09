@@ -788,8 +788,15 @@ def inject_vi(cpu: GameCpu, frame: Frame, last_vi: int) -> int:
     return value
 
 
+def lab_config(args) -> dict:
+    """The lab's {"rom", "map"}: --lab-config's file, else where core/lab_inputs.py::tool_config says (the lab
+    root's lab.json from a source checkout)."""
+    from sm64_events.core.lab_inputs import tool_config  # noqa: PLC0415
+    return tool_config(getattr(args, "lab_config", None))
+
+
 def run(args) -> int:
-    config = json.loads((lab_root() / "lab.json").read_text(encoding="utf-8"))
+    config = lab_config(args)
     rom = Path(config["rom"]).read_bytes()
     symbols = Symbols(Path(config["map"]))
     ram, stream = boot_state(lab_root() / args.session)
@@ -868,7 +875,7 @@ def scan(_args) -> int:
     """What thread 5's code could read that this probe does not model: CP0 count, hardware registers."""
     from capstone import CS_ARCH_MIPS, CS_MODE_BIG_ENDIAN, CS_MODE_MIPS64, Cs
     lab = lab_root()
-    config = json.loads((lab / "lab.json").read_text(encoding="utf-8"))
+    config = lab_config(_args)
     symbols = Symbols(Path(config["map"]))
     session = lab / "tap-20261025-182310"
     ram, _ = boot_state(session)
@@ -891,6 +898,7 @@ def scan(_args) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--lab-config", help="the lab.json naming the ROM and map (default: the lab root's)")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("scan").set_defaults(handler=scan)
     runner = commands.add_parser("run")

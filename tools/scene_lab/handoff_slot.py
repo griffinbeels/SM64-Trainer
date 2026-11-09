@@ -188,8 +188,11 @@ class Replay:
         self.cpu.scheduler_model()
 
 
-def start_replay(session: Path) -> Replay:
-    config = json.loads((sim.lab_root() / "lab.json").read_text(encoding="utf-8"))
+def start_replay(session: Path, config: dict | None = None) -> Replay:
+    """config: the lab's {"rom", "map"}; None reads them where core/lab_inputs.py::tool_config says (the lab root's
+    lab.json from a source checkout)."""
+    from sm64_events.core.lab_inputs import tool_config  # noqa: PLC0415
+    config = config or tool_config()
     rom = Path(config["rom"]).read_bytes()
     symbols = sim.Symbols(Path(config["map"]))
     ram, stream = sim.boot_state(session)

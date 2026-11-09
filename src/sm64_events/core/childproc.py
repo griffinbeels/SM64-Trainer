@@ -64,19 +64,27 @@ def isolated_python_child(script: Path, frozen_flag: str, args=()) -> list[str]:
 
 
 def python_child(module: str, frozen_flag: str, args=(), *,
-                 site_packages: bool = False) -> tuple[list[str], dict | None]:
+                 site_packages: bool = False) -> tuple[list[str], dict]:
     """(argv, env) that run `module` as a direct child interpreter.
 
     Frozen: the exe re-enters itself through `frozen_flag` (gui_entry.py
-    dispatches it), and env is None: inherit. Source: the base interpreter,
+    dispatches it), except a Ghost Lab child that sm64_events/scenelab_code.py
+    assigns to the simulation program, which starts that program beside this
+    exe instead (sim_entry.py dispatches it). env is a copy of this process's
+    environment, so a spawner may extend it. Source: the base interpreter,
     never the venv launcher, with this checkout's src/ first on the path.
     `site_packages` is for a child that imports third-party packages (the
     ghost overlay needs pywebview): `__PYVENV_LAUNCHER__` is how CPython's
     own launcher tells the base interpreter which venv it is running, so the
     child gets that venv's site-packages without the launcher in between."""
-    if getattr(sys, "frozen", False):
-        return [sys.executable, frozen_flag, *args], None
     env = os.environ.copy()
+    if getattr(sys, "frozen", False):
+        from sm64_events.scenelab_code import SIM_PROGRAM, child_program
+        program = sys.executable
+        if child_program(frozen_flag) == SIM_PROGRAM:
+            program = str(Path(sys.executable).with_name(SIM_PROGRAM))
+        env.pop("__PYVENV_LAUNCHER__", None)
+        return [program, frozen_flag, *args], env
     env["PYTHONPATH"] = os.pathsep.join(filter(None, (
         str(_SOURCE_ROOT), env.get("PYTHONPATH"))))
     if site_packages and sys.prefix != sys.base_prefix:

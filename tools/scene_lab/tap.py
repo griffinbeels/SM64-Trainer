@@ -38,15 +38,12 @@ WRITER_KEY on the keys the writer starts each segment with.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import importlib.util
 import json
 import mmap
-import os
 import struct
 import subprocess
 import sys
-import tempfile
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -720,27 +717,21 @@ def frames(args) -> int:
 
 
 def build_offline_host() -> Path:
-    """tap_offline_host.exe (x86, the wrapper's compiler flags), cached by source hash."""
-    spec = importlib.util.spec_from_file_location("scene_lab_build", ROOT / "tools/build_plugin.py")
-    compiler = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(compiler)
-    # SCENE_TAP_ONE_SHOT: the armed.txt mode, which only this host has (scene_tap.cpp's header).
-    flags = [*(flag for flag in compiler.COMMON_FLAGS if not flag.startswith("/std:")), "/std:c++17", "/EHsc",
-             "/DSCENE_TAP_ONE_SHOT"]
-    digest = hashlib.sha256(b"".join(path.read_bytes() for path in HOST_SOURCES)
-                            + " ".join(flags).encode()).hexdigest()[:16]
-    work = Path(os.environ.get("LOCALAPPDATA", tempfile.gettempdir())) / "SM64Trainer/build-cache/scene-lab" / digest
-    target = work / "tap_offline_host.exe"
-    if target.is_file():
-        return target
-    work.mkdir(parents=True, exist_ok=True)
-    vcvars = compiler.find_vcvars32()
-    if vcvars is None:
-        raise RuntimeError("x86 MSVC toolchain is required")
-    compiler._cl(vcvars, [*flags, f"/I{ROOT / 'plugin/gfxwrap'}",
-                          *map(str, HOST_SOURCES[:3]), f"/Fe:{target}", f"/Fo{work}\\",
-                          "/link", "kernel32.lib", "user32.lib"], work)
-    return target
+    """tap_offline_host.exe (x86, the wrapper's compiler flags, SCENE_TAP_ONE_SHOT). The installed
+    app runs its own copy (core/paths.py bundled_lab_file) and never compiles; a checkout compiles
+    the one recipe (tools/build_lab.py) into the scene lab's build cache, keyed by
+    the build id it carries."""
+    if getattr(sys, "frozen", False):
+        from sm64_events.core.paths import bundled_lab_file
+        path = bundled_lab_file("tap_offline_host.exe")
+        if path is None:
+            raise RuntimeError("This copy of SM64 Trainer is missing tap_offline_host.exe, the program that "
+                               "loads saved scenes. Reinstall SM64 Trainer.")
+        return path
+    spec = importlib.util.spec_from_file_location("scene_lab_build", ROOT / "tools/build_lab.py")
+    recipes = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(recipes)
+    return recipes.cached("tap_offline_host.exe")
 
 
 def _frame_argument(frame: str) -> str:

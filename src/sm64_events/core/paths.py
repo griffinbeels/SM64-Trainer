@@ -20,7 +20,7 @@ import sys
 from pathlib import Path
 
 from sm64_events.core import build_channel
-from sm64_events.core.update_plan import BUNDLED_NATIVES
+from sm64_events.core.update_plan import BUNDLED_NATIVES, LAB_NATIVES
 
 log = logging.getLogger("sm64.paths")
 
@@ -233,6 +233,13 @@ def user_icons_dir() -> Path:
     return data_root() / "data" / "icons"
 
 
+def course_art_dir() -> Path:
+    # Course portraits cut from the player's own ROM (sm64_events/course_art.py),
+    # one folder per ROM. In the DATA dir for user_icons_dir's reason: the
+    # install's ui/assets is read-only when frozen, and ships no Nintendo art.
+    return data_root() / "data" / "course_art"
+
+
 def compilations_dir() -> Path:
     # Generated failure compilations. Lives UNDER replays_root() (== the
     # ReplayService save_root) on purpose: the existing /api/replay/reveal
@@ -323,6 +330,30 @@ def bundled_plugin_dll() -> Path | None:
 def bundled_encoder_dll() -> Path | None:
     """The 64-bit NVENC helper the server's isolated encoder process loads."""
     return bundled_plugin_file(ENCODER_DLL_NAME)
+
+
+#: STROOP's symbol maps for the two Usamune builds (the Ghost Lab's evaluator,
+#: cold boot and stage simulation read them): committed package data under
+#: ``sm64_events/data/maps``, pinned by sha256 in tools/bundle_policy.py.
+LAB_MAPS = ("MappingUS.map", "MappingJP.map")
+
+
+def bundled_lab_file(name: str) -> Path | None:
+    """A Ghost Lab file the installed app carries: one of update_plan's
+    LAB_NATIVES under ``sm64_events/data/lab``, or one of LAB_MAPS under
+    ``sm64_events/data/maps``. None from a source checkout, where the lab
+    builds its natives into its build cache and reads the maps its own config
+    names, and None when this build lacks the file."""
+    if name in LAB_NATIVES:
+        relative = Path("sm64_events") / "data" / "lab" / name
+    elif name in LAB_MAPS:
+        relative = Path("sm64_events") / "data" / "maps" / name
+    else:
+        raise ValueError(f"{name} is not a Ghost Lab file this build carries")
+    if not is_frozen():
+        return None
+    cand = Path(getattr(sys, "_MEIPASS", "")) / relative
+    return cand if cand.is_file() else None
 
 
 def update_state_path() -> Path:

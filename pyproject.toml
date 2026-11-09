@@ -20,13 +20,16 @@ dependencies = [
     "httpx>=0.27",
     "Authlib>=1.6.5",
     "sentry-sdk>=2.60,<3",
+    # The Ghost Lab's MIPS emulator. Pinned exactly: the free camera's CPU
+    # hooks (tools/scene_lab/cpu_hooks.c) are built against 2.1.4's internals.
+    "unicorn==2.1.4",
 ]
 
 [dependency-groups]
 profiling = ["psutil>=6", "py-spy>=0.4"]
 dev = ["pytest>=8.0", "pytest-xdist>=3.8", "pytest-testmon>=2.1",
        "pytest-rerunfailures>=15.0",
-       "pyinstaller>=6.0", "playwright>=1.49", "unicorn==2.1.4"]
+       "pyinstaller>=6.0", "playwright>=1.49"]
 
 # playwright is declared HERE, not inherited from uilab, and that is on purpose.
 # uilab is resolved by PATH (see tests/test_responsive.py) because `uv sync`

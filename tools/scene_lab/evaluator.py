@@ -31,6 +31,10 @@ child processes with their own Evaluator over the same package, which resolve th
 hands them (ahead) and deliver each state into this cache; state() then waits for a frame a
 child has rather than resolving it again, and resolves here what no child can.
 
+The Trainer runs this evaluator in a simulation process of its own (evaluator_child.py: Unicorn is
+GPL-2.0-only and never loads in the server, sim_boundary.py); the proof commands (e2_georender.py,
+this file's resolve) run it in the process they are started in.
+
 Imported packages stay untrusted: the package reader checks every record, and code runs only
 from this ROM (the package's code loads are rebuilt from it and refused on mismatch). A recorded
 resolution names addresses only and is taken only when the game's own code, run from the state

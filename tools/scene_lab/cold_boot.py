@@ -19,7 +19,9 @@ main pool is block for block the one in his recording. Under identical pads the 
 castle grounds (600 frames), BoB and JRB (300); WF's course entry takes one frame longer on US.
 
 Inputs, read only: the ROMs (lab.json "rom" for US; the JP ROM is found beside it by its header) and STROOP's maps
-(lab refs/Mapping<V>.map; `fetch-maps` downloads the pinned commit). Nothing here touches a running game.
+(lab refs/Mapping<V>.map; `fetch-maps` downloads the pinned commit), or, in the installed app, its ROM store and
+bundled maps (core/lab_inputs.py; a caller may name both by region, find_rom and map_for). Nothing here touches a
+running game.
 """
 from __future__ import annotations
 
@@ -75,19 +77,39 @@ def read_entry_dma(data: bytes) -> tuple[int, int]:
 
 
 def find_rom(version: str, config: dict | None = None) -> Rom:
-    config = config or json.loads((sim.lab_root() / "lab.json").read_text(encoding="utf-8"))
-    us = Path(config["rom"])
-    candidates = [us] if version == "us" else sorted(p for p in us.parent.iterdir() if p.suffix.lower() == ".z64")
+    """That build's cartridge. `config` (else core/lab_inputs.py::tool_config: the lab root's lab.json from a source
+    checkout, the installed app's inputs otherwise) names it by region in "roms" (the app's ROM store), or names the
+    US ROM in "rom", the JP one being found beside it by its header (a developer's lab.json)."""
+    from sm64_events.core.lab_inputs import tool_config  # noqa: PLC0415
+    config = config or tool_config()
+    if "roms" in config:
+        named = config["roms"].get(version)
+        if named is None:
+            raise SystemExit((config.get("rom_problems") or {}).get(version)
+                             or f"no Usamune {version.upper()} ROM in the Trainer's ROM store")
+        candidates = [Path(named)]
+        where = f"the ROM store's {version.upper()} ROM {named} is not Usamune's"
+    else:
+        us = Path(config["rom"])
+        candidates = [us] if version == "us" else sorted(p for p in us.parent.iterdir() if p.suffix.lower() == ".z64")
+        where = f"no Usamune {version.upper()} ROM found beside {us}"
     for path in candidates:
         data = path.read_bytes()
         if data[0x20:0x20 + len(USAMUNE_HEADER[version])] == USAMUNE_HEADER[version]:
             image_rom, image_bytes = read_entry_dma(data)
             return Rom(version, path, data, image_rom, image_bytes)
-    raise SystemExit(f"no Usamune {version.upper()} ROM found beside {us}")
+    raise SystemExit(where)
 
 
 def map_path(version: str) -> Path:
     return sim.lab_root() / "refs" / f"Mapping{version.upper()}.map"
+
+
+def map_for(version: str, config: dict | None = None) -> Path:
+    """That build's symbol map: the one `config` names by region in "maps" (the installed app's bundled maps, or the
+    caller's own map), else the lab root's refs/ copy that `fetch-maps` downloads (a developer's lab)."""
+    named = ((config or {}).get("maps") or {}).get(version)
+    return Path(named) if named else map_path(version)
 
 
 def fetch_maps() -> None:
@@ -181,13 +203,16 @@ class ColdGame:
     """A booted build: thread 5 one frame per step(); Usamune's save and load at its own call site."""
 
     def __init__(self, version: str, config: dict | None = None):
+        from sm64_events.core.lab_inputs import tool_config  # noqa: PLC0415
+        config = config or tool_config()
         rom = find_rom(version, config)
-        if not map_path(version).exists():
-            raise SystemExit(f"no {map_path(version)}: run `cold_boot.py fetch-maps`")
+        symbols = map_for(version, config)
+        if not symbols.exists():
+            raise SystemExit(f"no {symbols}: run `cold_boot.py fetch-maps`")
         self.version = version
         self.rom = rom
         self.u = USAMUNE[version]
-        cpu = self.cpu = BootCpu(rom, sim.Symbols(map_path(version)))
+        cpu = self.cpu = BootCpu(rom, sim.Symbols(symbols))
         self.resume = cpu.resume
         within = lambda name, address: cpu.symbols[name] <= address < cpu.symbols[name] + 0x400  # noqa: E731
         thread = lambda ident: next(t for t in cpu.threads.values() if t["id"] == ident)  # noqa: E731

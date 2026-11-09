@@ -10,7 +10,7 @@ import logging
 import threading
 import time
 
-from sm64_events.core.onboarding import CounterWindow, SteadyChecks, identify_rom
+from sm64_events.core.onboarding import CounterWindow, SteadyChecks, identify_rom, is_practice_rom
 
 log = logging.getLogger("sm64.setup")
 
@@ -20,12 +20,17 @@ class SetupRuntime:
     #: left before this observer walks its memory again.
     ATTACH_RETRY_S = 2.0
 
-    def __init__(self, processes, memory_factory, poller, replay, clock=time.monotonic):
+    def __init__(self, processes, memory_factory, poller, replay, clock=time.monotonic, rom_store=None):
         self.processes = processes
         self.memory_factory = memory_factory
         self.poller = poller
         self.replay = replay
         self.clock = clock
+        # The Ghost Lab's ROM store (scenelab/roms.py), or None. While setup
+        # watches the game, the practice ROM it reads is copied through this
+        # observer's own reader, so a new player's Ghost Lab works with no step
+        # of its own (his rule, 2026-09-16: no onboarding past the original).
+        self.rom_store = rom_store
         self._lock = threading.Lock()
         self._next_read = 0.0
         self._cached = {}
@@ -107,6 +112,23 @@ class SetupRuntime:
         self._reader, self._reader_pid, self._refused = reader, pid, None
         return reader
 
+    def _lab_roms(self, rom, layer) -> dict | None:
+        """Which practice ROMs the Ghost Lab holds, after copying the one open
+        in Project64 (once per process and cartridge) and looking in Project64's
+        folders for the other version. Never a blocker: readiness does not read
+        it; the setup check shows it as one row. None without a store."""
+        store = self.rom_store
+        if store is None:
+            return None
+        try:
+            if self._reader is not None and is_practice_rom(rom):
+                store.copy_from(self._reader)
+            store.scan_folders(layer.pj64_dir)
+            return store.held()
+        except (OSError, RuntimeError):
+            log.warning("could not keep a copy of the practice ROM this time", exc_info=True)
+            return None
+
     def _release_reader(self) -> None:
         reader, self._reader, self._reader_pid = self._reader, None, None
         if reader is not None:
@@ -187,4 +209,5 @@ class SetupRuntime:
         return {"target": target, "rom": rom, "checks": checks,
                 "capture_note": recorder.get("frame_source_note"),
                 "paused": self.poller.paused,
-                "tracking_note": getattr(self.poller, "hold_reason", None)}
+                "tracking_note": getattr(self.poller, "hold_reason", None),
+                "lab_roms": self._lab_roms(rom, layer)}

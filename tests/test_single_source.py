@@ -259,7 +259,7 @@ INVARIANTS = (
     SingleSource(
         concept="star/segment icon art",
         owners=frozenset({"entities.js", "entityicons.js"}),
-        tokens=("/ui/assets/star_", "/ui/assets/course_icons/", "/api/icons/file/",
+        tokens=("/ui/assets/star_", "/api/icons/course/", "/api/icons/file/",
                 "COURSE_ICON_PREFIXES", "LEVEL_ICONS", "SPECIAL_COURSE_ICONS",
                 "COURSE_SUBSTITUTE_ICONS"),
         files=ui_js(),

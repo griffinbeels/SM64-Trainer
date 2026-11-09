@@ -38,17 +38,18 @@ def _canonical(name: str) -> str:
     return re.sub(r"[-_.]+", "-", name).lower()
 
 
-def bundled_import_names(app_dir: Path, exe_name: str = "SM64Trainer") -> set[str]:
-    """Top-level import names inside a built onedir app: the modules in the
-    exe's embedded PYZ plus the packages, extensions and delvewheel `.libs`
-    folders PyInstaller copied into `_internal/`."""
+def bundled_import_names(app_dir: Path, exe_name: str = "SM64Trainer", contents: str = "_internal") -> set[str]:
+    """Top-level import names inside one program of a built onedir app: the
+    modules in the exe's embedded PYZ plus the packages, extensions and
+    delvewheel `.libs` folders PyInstaller copied into its contents folder
+    (`_internal/` for the Trainer, `_sim/` for SM64TrainerSim.exe)."""
     from PyInstaller.archive.readers import CArchiveReader
     archive = CArchiveReader(str(app_dir / f"{exe_name}.exe"))
     names: set[str] = set()
     for entry in archive.toc:
         if entry.endswith(".pyz"):
             names |= {module.split(".")[0] for module in archive.open_embedded_archive(entry).toc}
-    for child in (app_dir / "_internal").iterdir():
+    for child in (app_dir / contents).iterdir():
         if child.name.endswith(".dist-info") or child.name == "licenses":
             continue
         if child.is_dir():

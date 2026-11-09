@@ -1350,11 +1350,14 @@ Defender's scanner it says so and the build continues.
 
 ### Third-party source archive
 
-One of the two tar files every release attaches beside its installer:
+One of the three tar files every release attaches beside its installer:
 `SM64Trainer-third-party-source-plugin.tar` (the sources our build tools make
 the [[renderer]] plugin from: the pinned GLideN64 tree, Qt, FreeType, libpng
-and zlib) and `SM64Trainer-third-party-source-ffmpeg.tar` (the sources of the
-bundled ffmpeg.exe and of PyAV's FFmpeg). Each carries a `.sha256`. The
+and zlib), `SM64Trainer-third-party-source-ffmpeg.tar` (the sources of the
+bundled ffmpeg.exe and of PyAV's FFmpeg) and
+`SM64Trainer-third-party-source-unicorn.tar` (Unicorn's source release, the
+CPU emulator in which the [[Ghost Lab]] executes the game's own code). Each carries a
+`.sha256`. The
 compiler's own runtime (GCC's, winpthreads, the MinGW-w64 C runtime) stays
 out: the GPL v3 counts it as a System Library, and its notices ship in the
 app instead. The GPL asks that the complete source come
@@ -1582,8 +1585,12 @@ about 4 ms, the next task about 22 ms with the recorded answers (52 ms
 searching, while walkers need their matrices put back), and a jump to any task
 about 60 ms (2026-10-25). A viewer has its two [[state resolver]]s work out
 the next tasks while it draws this one (a second thread until they are ready).
+In the Trainer it works in a [[simulation process]] of its own, which starts as
+a scene opens, never in the server: a view costs the server under 1 ms more
+than when it ran there (2026-11-09).
 
-- **Lives** -- `tools/scene_lab/evaluator.py` (what a viewer calls); the
+- **Lives** -- `tools/scene_lab/evaluator.py` (what a viewer calls); its
+  process (`tools/scene_lab/evaluator_child.py`); the
   game-code sandbox and its proofs (`tools/scene_lab/e2_georender.py`, with
   native hooks in `tools/scene_lab/cpu_hooks.c`)
 - **Not** -- the [[renderer]], which draws a list; the evaluator makes the
@@ -1841,6 +1848,22 @@ levels, - and = change the lens while held, and so does Ctrl with the wheel. A
   only the recorded camera shows; the wheel without Ctrl, which moves the free
   camera closer instead of zooming
 
+### Lab ROM
+
+The [[Ghost Lab]]'s private copy of the [[practice ROM]], one for each version of the game: Super
+Mario 64 Usamune v1.93u for US and v1.93j for JP. The Trainer copies it from the game open in
+Project64, else finds it in Project64's ROM folders, else asks the player to choose the file once. It
+knows the ROM by the header's name and country letter and its size, never by the file name. It keeps
+the copy in the lab folder so scenes still open after Project64 closes, and it never uploads it or
+writes to Project64.
+
+- **Lives** -- the store (`src/sm64_events/scenelab/roms.py`), its route
+  (`src/sm64_events/server/lab_roms_api.py`) and the one-time step
+  (`src/sm64_events/ui/components/rompick.js`); the copy from the game reads
+  the cartridge image through `src/sm64_events/memory/pj64.py`
+- **Not** -- the [[game version]] setting, which grades and reads addresses;
+  the Lab ROM only supplies the cartridge whose code the lab plays
+
 ### Camera preset
 
 A camera you saved in the [[Ghost Lab]]'s **Cameras** strip: a name and
@@ -1992,13 +2015,34 @@ out itself, so every picture is the same bytes. One child goes on [[frame]] afte
 [[frame]] while Play stays ahead; the other takes [[frame]]s further on when the
 first falls behind. Windows gives them below-normal priority; they start the
 first time the free camera moves in a whole scene and stop with it. A [[frame]]
-they cannot do, the server works out as before.
+they cannot do, the evaluator works out itself. They are [[simulation process]]es,
+started by the evaluator's own process, and hand their states to it.
 
 - **Lives** -- `tools/scene_lab/state_resolver.py`; used by the evaluator
-  (`tools/scene_lab/evaluator.py`); started and closed with the scene
+  (`tools/scene_lab/evaluator.py`) in its process
+  (`tools/scene_lab/evaluator_child.py`); started and closed with the scene
   (`tools/scene_lab/scene_session.py`)
 - **Not** -- the [[picture encoder]], which compresses pictures; a resolver
   draws nothing
+
+### Simulation process
+
+A child process that executes SM64's own code under Unicorn: the [[scene
+evaluator]]'s process, its [[state resolver]]s, the save-state builder, the
+[[ghost]] re-simulation and the US/JP slot [[atlas]] builder. Unicorn is GPL-2.0-only,
+and GPL-2.0-only code cannot share a program with the GPL-3.0 libraries the
+Trainer's own process loads (PyAV's FFmpeg, pystray). So only these processes
+load Unicorn, and they never load those libraries: each refuses them from its
+first line. The Trainer code they execute is the code licensed
+GPL-2.0-or-later. In the installed app they are the separate program
+SM64TrainerSim.exe.
+
+- **Lives** -- `tools/scene_lab/sim_boundary.py` (which processes they are,
+  what they never load, the Trainer modules they run);
+  `tests/test_sim_boundary.py` holds the running processes to those lists
+- **Not** -- the server or the export child, which load PyAV and ask the
+  evaluator's process for every free-camera view; nor the cutter or the stems
+  child, which execute no game code under Unicorn
 
 ### Attempt scene
 
@@ -2092,6 +2136,27 @@ the rule holds with no trainer open.
   compares over the same headers
 - **Not** -- the [[game version]] setting (US or JP), which picks addresses and
   grading, not whether the tooling is on
+
+### Course portrait
+
+The picture the Trainer shows for a course: the castle painting you jump
+into, or a texture of the course itself where there is no painting (the BBH
+Boo portrait, the RR flying carpet, Peach's and Bowser's portraits for the
+slide and BitFS). The Trainer ships none of them (Griffin, 2026-11-09: "yes,
+let's do that if we can"): `course_art.py` cuts each one from the player's own
+[[practice ROM]] while the app is open, checks its bytes against a pinned
+fingerprint, and keeps it in a cache folder named by the ROM's hash. Until the
+Trainer finds a ROM, the page shows a stand-in instead: our plain tile with
+the course's short name, the same size, so nothing moves when the picture
+arrives.
+
+- **Lives** -- `src/sm64_events/course_art.py` (cutting, cache, stand-in),
+  `src/sm64_events/server/course_art_api.py` (the listing and the pictures),
+  and `src/sm64_events/ui/entities.js` (the one place that builds a portrait's
+  URL)
+- **Not** -- a [[star]]'s split icon (`ui/assets/star_icons/`), which names one
+  [[star]] rather than the course; HMC, SSL, DDD and SL keep a split icon
+  because their "painting" is a pool, a water ripple or a plain wall
 
 ### Encoder helper
 
