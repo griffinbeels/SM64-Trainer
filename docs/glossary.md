@@ -1551,10 +1551,12 @@ scene makes a save state only before the parting record, and only after the
 slot passes a load check in the simulation (one switch: `SAVE_STATES` in
 `tools/scene_lab/ghost_resim.py`). Another player's [[ghost]] works the same
 way: the act is its [[star]]'s, and the scene names the cartridge its player
-recorded it on beside the one it ran on. The lab plays these scenes on the US
-cartridge only for now. It makes a JP [[reset]] and checks JP starts against it,
-but it cannot play a JP scene or make a JP save state yet, and it says so in
-one sentence when asked. Three of his Whomp's Fortress [[ghost]]s and two
+recorded it on beside the one it ran on. Either cartridge plays these scenes
+(2026-11-09): the lab runs every [[ghost]] on its own ROM, whichever cartridge
+recorded it, and makes JP scenes and JP save states the same way. A start is
+the ROM's own, so a start made on the other cartridge is refused and the
+simulated [[reset]] is used: Mario follows the [[ghost]] exactly, but moving
+platforms and enemies may be at another point in their cycle. Three of his Whomp's Fortress [[ghost]]s and two
 other players' (2026-11-08): no parting record from any start. The lab writes
 the scene while it simulates, so the viewer opens it as a growing scene: the
 first picture shows in about a second once the lab has made its stage ahead

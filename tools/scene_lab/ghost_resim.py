@@ -18,6 +18,12 @@ For the last two the ghost's own clocks are set; its seed is not known (a ghost 
 stayed exact from both (0 units over 351-403 frames); objects whose phase comes from before a reset
 (the sliding platforms, the Bomps) stood elsewhere, 100-340 units.
 
+Either cartridge re-simulates (2026-11-09): the lab's own ROM runs every ghost, whichever cartridge recorded it.
+A start is the ROM's own: a start file or a downloaded start made on the other cartridge (its rom_sha256 names
+another ROM) is refused, so a JP lab rebuilds a US uploader's ghost from its own simulated reset, and the other
+way round. For a player that means: Mario follows the ghost exactly, but moving platforms and enemies may be at a
+different point in their cycle than in the recording.
+
 Every re-simulated frame's Mario (his object's drawn position and his action) is compared with the
 ghost's recorded pose; the first record where they part is reported (None: they never part). The
 package holds the ghost's records 1.. (record 0 is the start itself, whose display list no start holds).
@@ -274,7 +280,9 @@ class GhostScenes:
                 saved = start_frame.read_start(self.starts_dir, clip_sha)
             except start_frame.StartError:
                 saved = None
-            if saved is not None:
+            if saved is not None and saved.rom_sha256 != hashlib.sha256(self.stages.rom).hexdigest():
+                self.refusals.append({"start": GHOST_START, "reason": "This ghost's start was made on another ROM."})
+            elif saved is not None:
                 yield self._from_start_file(saved, clip_sha)
             downloaded = self._downloaded(clip, clip_sha)
             if downloaded is not None:
@@ -539,10 +547,8 @@ def check_slot_load(package_path: Path, frame: int, slot: bytes, clip, stages: s
     the next frame, then the ghost's pads for LOAD_CHECK_FRAMES frames. It passes when nothing stops the
     game and Mario stands where the ghost's recorded pose has him on every frame the ghost covers.
     {"ok": bool, "reason": sentence or None, "frames": played, "compared": poses compared}."""
-    import handoff_slot  # noqa: PLC0415 - Usamune's own load at its own site
+    import handoff_slot  # noqa: PLC0415 - Usamune's own load at its own site, the build's own (frame_sim.SimBuild)
     from sm64_events.slotlibrary.usamune import BODY_BYTES, slot_address  # noqa: PLC0415
-    if stages.region() != "us":                    # handoff_slot's call site and frame_sim's frames are the US build's
-        return {"ok": False, "frames": 0, "compared": 0, "reason": stage_sim.JP_SLOTS_NOT_YET}
     reasons = start_check.check_slot(slot, stages.reference_for_slot(slot), BODY_BYTES)
     if reasons:
         return {"ok": False, "reason": reasons[0], "frames": 0, "compared": 0}

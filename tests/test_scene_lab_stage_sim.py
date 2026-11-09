@@ -64,14 +64,12 @@ def test_a_reset_is_named_by_its_build_and_rom_so_two_cartridges_never_share_one
     assert us.key(24, 1, 1) != us.key(24, 1, 2)
 
 
-def test_the_jp_cartridge_makes_resets_but_refuses_to_simulate_and_another_rom_makes_nothing(tmp_path):
-    jp = _stages(tmp_path, _rom(tmp_path, "J", b"SM64 USAMUNE v1.93j "))
-    for refusal in (jp.simulates, lambda: jp.machine(np.zeros(16, np.uint8))):
-        with pytest.raises(stage_sim.StageError) as refused:
-            refusal()
-        assert str(refused.value) == stage_sim.JP_NOT_YET
-    us = _stages(tmp_path, _rom(tmp_path, "E"))
-    us.simulates()                                                            # the US cartridge plays
+def test_both_usamune_cartridges_simulate_and_another_rom_makes_nothing(tmp_path):
+    """JP re-simulation (2026-11-09): each build's frame facts come from its own code (frame_sim.SimBuild), so
+    neither Usamune cartridge is refused; any other ROM is, with a sentence, before anything boots."""
+    _stages(tmp_path, _rom(tmp_path, "J", b"SM64 USAMUNE v1.93j ")).simulates()
+    _stages(tmp_path, _rom(tmp_path, "E")).simulates()
     other = _stages(tmp_path, _rom(tmp_path, "E", b"SOME OTHER GAME     "))
-    with pytest.raises(stage_sim.StageError, match="not a Usamune"):
-        other.reset(24, 1, 1)
+    for refusal in (other.simulates, lambda: other.reset(24, 1, 1)):
+        with pytest.raises(stage_sim.StageError, match="not a Usamune"):
+            refusal()

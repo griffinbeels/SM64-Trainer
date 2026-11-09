@@ -171,6 +171,23 @@ def test_a_scene_naming_no_act_takes_the_ghosts_star_act_or_is_refused(tmp_path,
     assert own.ram.tolist() == BOOT_RAM.tolist() and own.detail["base"] == "boot" and "level 6" in own.detail["base_reason"]
 
 
+def test_a_start_is_the_roms_own_so_the_other_cartridges_start_gives_way_to_the_simulated_reset(tmp_path, monkeypatch):
+    """Either cartridge re-simulates (2026-11-09), but a start's bytes belong to the ROM that made it: a start file
+    made on the other cartridge is refused with a sentence, and the lab's own simulated reset is the start."""
+    import hashlib
+    rom = b"the lab's own ROM"
+    stages = ResetStages(symbols=SYMBOLS, rom=rom, rom_path=tmp_path / "rom", asked=[],
+                         key=lambda level, area, act: f"{level}-{area}-{act}")
+    scenes = gr.GhostScenes(tmp_path, tmp_path / "cache", scenes_dir=None, starts_dir=tmp_path, stages=stages)
+    scenes.refusals = []
+    for maker, first_kind in ((b"another cartridge", gr.SIMULATED_RESET), (rom, gr.GHOST_START)):
+        saved = SimpleNamespace(rom_sha256=hashlib.sha256(maker).hexdigest(), pool_base=None, level=24, area=1, act=1)
+        monkeypatch.setattr(gr.start_frame, "read_start",
+                            lambda folder, sha, downloaded=False, saved=saved: None if downloaded else saved)
+        assert next(scenes.starts(clip(), "ab" * 32)).kind == first_kind
+    assert scenes.refusals == [{"start": gr.GHOST_START, "reason": "This ghost's start was made on another ROM."}]
+
+
 def test_every_start_has_a_switch_row_and_an_exactness():
     assert set(gr.SAVE_STATES) == set(gr.STARTS) == set(gr.EXACT)
 

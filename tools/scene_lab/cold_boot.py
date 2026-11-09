@@ -40,10 +40,9 @@ import frame_sim as sim  # noqa: E402
 STROOP_COMMIT = "6771197ad0f50718d3d4a13387e01d1e6d9c0d1a"
 STROOP_URL = "https://raw.githubusercontent.com/SM64-TAS-ABC/STROOP/{commit}/STROOP/Mappings/Mapping{v}.map"
 USAMUNE_HEADER = {"us": b"SM64 USAMUNE v1.93u", "jp": b"SM64 USAMUNE v1.93j"}
-USAMUNE_IMAGE = 0x80400000
-# Usamune's own call into its save/load dispatcher sits in try_print_debug_mario_level_info: a jal into its image.
-USAMUNE_IMAGE_END = 0x80424000
-# Its routines and settings, read from each build's code (US 0x8040392C/0x80411CF0, JP 0x80403930/0x80411D84).
+USAMUNE_IMAGE = sim.USAMUNE_IMAGE
+# Usamune's own call into its save/load dispatcher sits in try_print_debug_mario_level_info: a jal into its image
+# (frame_sim.SimBuild.site). Its routines and settings, read from each build's code (US 0x8040392C/0x80411CF0, JP 0x80403930/0x80411D84).
 USAMUNE = {"us": {"save": 0x8040392C, "load": 0x80411CF0, "settings": 0x80417B4C},
            "jp": {"save": 0x80403930, "load": 0x80411D84, "settings": 0x80417C14}}
 SLOT_BASE, SLOT_BYTES, BODY_BYTES = 0x80500000, 0x26460, 0x26320
@@ -125,18 +124,13 @@ def fetch_maps() -> None:
         print(f"{target}: {len(data)} bytes from STROOP @ {STROOP_COMMIT[:12]}")
 
 
-def jal_site_after(ram: np.ndarray, function: int, callee: int, limit: int = 0x400) -> int:
-    """The address after the delay slot of the first `jal callee` inside `function`."""
-    jal = 0x0C000000 | (sim.phys(callee) >> 2)
-    words = np.frombuffer(ram[sim.phys(function):sim.phys(function) + limit].tobytes(), ">u4")
-    hits = np.flatnonzero(words == jal)
-    if not hits.size:
-        raise SystemExit(f"no jal {callee:08x} in {function:08x}")
-    return function + int(hits[0]) * 4 + 8
+jal_site_after = sim.jal_site_after
 
 
 class BootCpu(sim.GameCpu):
-    """GameCpu over a cold RDRAM, with the device and thread calls a boot needs."""
+    """GameCpu over a cold RDRAM, with the device and thread calls a boot needs. Its SimBuild is read off the
+    cartridge's own code (IPL3's copy of the main segment), for this CPU alone: frame_sim's module is never
+    changed, so a process can hold both builds at once (the atlas does)."""
 
     def __init__(self, rom: Rom, symbols: sim.Symbols):
         self.version = rom.version
@@ -148,15 +142,7 @@ class BootCpu(sim.GameCpu):
         self.threads: dict[int, dict] = {}
         self.started: list[int] = []
         self.stop_rule = None
-        # frame_sim stops a frame at its module-global RESUME: this build's own, read off its code, before the hooks go in.
-        self.resume = jal_site_after(ram, symbols["display_and_vsync"], symbols["send_display_list"])
-        sim.RESUME = self.resume
-        names_before = sim.STUB_NAMES
-        sim.STUB_NAMES = tuple(dict.fromkeys(names_before + EXTRA_STUBS))
-        try:
-            super().__init__(ram, rom.data, symbols, 0x01000800)
-        finally:
-            sim.STUB_NAMES = names_before
+        super().__init__(ram, rom.data, symbols, 0x01000800, extra_stubs=EXTRA_STUBS)
         uc = self.uc
         uc.mem_map(0x04000000, 0x00900000)     # SP, DP, MI, VI, AI, PI, RI, SI registers: zeros, writes kept
         uc.mem_map(0x1FC00000, 0x1000)         # PIF RAM
@@ -237,6 +223,8 @@ class ColdGame:
         sound = thread(4)
         cpu.run_thread(sound["entry"], sound["sp"], sound["arg"], lambda kind, x: kind == "recv" and within("thread4_sound", x))
         game = thread(5)
+        if cpu.symbols.next_after(cpu.symbols["gThread5Stack"]) != game["sp"]:    # where SimBuild puts its frames
+            raise SystemExit(f"{version}: thread 5's stack does not end where the map's next symbol begins")
         first = jal_site_after(cpu.ram, cpu.symbols["rendering_init"], cpu.symbols["send_display_list"])
         self._first = False
         cpu.uc.hook_add(cpu.unicorn.UC_HOOK_CODE, self._first_frame, begin=sim.sext(first), end=sim.sext(first))
@@ -245,6 +233,7 @@ class ColdGame:
             raise SystemExit(f"{version}: thread 5 never sent its first frame")
         self.begin = first
         cpu.scheduler_model()
+        sim.complete_symbols(cpu.symbols, cpu.ram)        # the engine segment is in RAM now
         self.frames = 0
         self.site = self._find_site()
         self.pending = None
@@ -257,12 +246,9 @@ class ColdGame:
             uc.emu_stop()
 
     def _find_site(self) -> int:
-        start = self.cpu.symbols["try_print_debug_mario_level_info"]
-        words = np.frombuffer(self.cpu.ram[sim.phys(start):sim.phys(start) + 0x200].tobytes(), ">u4")
-        for i, w in enumerate(words.tolist()):
-            if w >> 26 == 3 and USAMUNE_IMAGE <= (0x80000000 | (w & 0x3FFFFFF) << 2) < USAMUNE_IMAGE_END:
-                return start + i * 4
-        raise SystemExit("no call into Usamune in try_print_debug_mario_level_info")
+        if self.cpu.build.site is None:
+            raise SystemExit("no call into Usamune in try_print_debug_mario_level_info")
+        return self.cpu.build.site
 
     def _on_site(self, uc, *_):
         if self.pending is not None:
