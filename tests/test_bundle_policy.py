@@ -39,6 +39,26 @@ def test_data_inputs_refuse_local_extras_without_echoing_contents(data_directory
     assert "synthetic private" not in str(failure.value)
 
 
+def test_the_lab_natives_have_their_own_folder_and_nothing_else_rides_in_it(data_directory):
+    """tools/build_natives.py writes the Ghost Lab's natives into data/lab/
+    beside plugin/; the build ships exactly update_plan's LAB_NATIVES from it."""
+    from sm64_events.core.update_plan import LAB_NATIVE_FOLDER, LAB_NATIVES
+    lab = data_directory / "lab"
+    lab.mkdir()
+    for name in LAB_NATIVES:
+        (lab / name).write_bytes(b"MZ native fixture")
+    policy.data_inputs(data_directory)
+    for name in LAB_NATIVES:
+        policy.check_bundle_path(f"{LAB_NATIVE_FOLDER}/{name}", ui_paths={"index.html"})
+    for path in (f"{LAB_NATIVE_FOLDER}/unknown_host.exe", "_internal/sm64_events/data/plugin/viewer_host.exe",
+                 f"{LAB_NATIVE_FOLDER}/lab/viewer_host.exe", "_internal/sm64_events/data/viewer_host.exe"):
+        with pytest.raises(ValueError, match="unexpected first-party data"):
+            policy.check_bundle_path(path, ui_paths={"index.html"})
+    (lab / "leftover.pdb").write_bytes(b"debug symbols")
+    with pytest.raises(ValueError, match="unexpected first-party data input in lab/"):
+        policy.data_inputs(data_directory)
+
+
 def test_data_inputs_require_the_runtime_files(data_directory):
     (data_directory / "ranking_policy.json").unlink()
     with pytest.raises(ValueError, match="missing"):
