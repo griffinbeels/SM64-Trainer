@@ -185,9 +185,23 @@ A ghost's start is the game state the ghost begins from. With it, the ghost's
 recorded pads re-simulate the whole run exactly, so a community ghost becomes a
 full scene with exact save states. Griffin approved the upload format change and
 the service update on 2026-11-08: "Yes, 5% more per ghost is fine, and go ahead
-and update..". The 5% compares a start with the raw clip (20.5-26.1 KB against
-452-519 KB). Against the stored GHC1 bytes it is larger: the live average was
-73 KB per ghost on 2026-11-04, so a 26 KB start adds about 36% to what R2 stores.
+and update..". The 5% compares a start with the raw clip (452-519 KB). Against the
+stored GHC1 bytes it is larger: the live average was 73.5 KB per ghost on
+2026-11-08, and the trainer's start (`ghost/start_frame.py`, the start frame's task
+regions) is about 21 KB, so R2 stores about 29% more per ghost. He approved that
+too, the same day: "29% storage is fine."
+
+A start holds the game's memory at the start of the run, including the save
+file's star flags and the practice ROM's settings, so the privacy notice says so.
+Griffin, 2026-11-08: "Sure, update privacy policy". Privacy version `beta-3` adds
+that paragraph (`/policies#ghost-start`); terms stay `beta-2`, so the earlier-ghost
+claim, keyed on terms, is unchanged. The Worker that accepts starts is the one
+that serves `beta-3`. Every account on `beta-2` meets `403 consent_required` on its
+next admitted call and accepts once through the existing consent step. Released
+trainers (beta.37) show that step, keep their saved upload intents and send them
+after acceptance; they do not save a run finished while the step is open. This
+trainer saves that run too (status `consent_required` counts as waiting in
+`community/sync.py`), and sends nothing until the account is active again.
 
 The service never reads inside a start. It checks the declared size and SHA-256
 before any write, then stores the start in the ghost's own R2 object, right after
@@ -202,8 +216,10 @@ size to grants and assets.
 
 The trainer (`community/sync.py`) asks the start's owner for a start, via the
 seam in `community/ghost_start.py`, and sends it only when `/v1/config`
-advertises `limits.start_bytes` and the start fits. That config read costs no
-account ticket and is held for an hour. A grant key binds one exact admission
+advertises `limits.start_bytes`, the start fits, and the account has accepted the
+privacy version that config names. That config read costs no account ticket and is
+held for an hour; an account whose accepted version differs reads it again, at most
+once a minute, so accepting `beta-3` is seen at the next upload. A grant key binds one exact admission
 body, so a start that begins to ride along gets a new key. A released trainer
 sends no start fields and its uploads are unchanged; a start upload later finds
 the earlier ghost `already_present` and is not attached. A downloaded ghost with
@@ -358,9 +374,9 @@ Beta worker owns channel/path/updater/desktop identity and beta builder/tests;
 it leaves main.py and community config to root/client respectively. Writers
 use separate worktrees, commit only owned files and report tested commits.
 
-## The Scene viewer's reads
+## The Ghost Lab's reads
 
-The lab's [Scene viewer](api.md#scene-viewer-m4-lab-source-checkouts-only-off-by-default)
+The lab's [Ghost Lab](api.md#ghost-lab-m4-lab-source-checkouts-only-off-by-default)
 lists other players' ghosts through this same client, cache and account
 (`server/scene_community.py`); it adds no route, key or store. Each Worker call
 below spends one account ticket, cache hits on the service included, and listings

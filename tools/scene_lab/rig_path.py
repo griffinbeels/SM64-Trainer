@@ -35,22 +35,26 @@ import numpy as np
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 _BELOW_NORMAL = getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0)
-ROW = 4                                   # float64s a frame: x, y, z, the game's s16 facing (NaN: no place)
+ROW = 5                                   # float64s a frame: x, y, z, the game's s16 facing, his action
+                                          # (NaN: no place; the action NaN only where the read had none)
 
 
 def read_poses(package, indices, mario: int) -> np.ndarray:
     """(len(indices), ROW) of the stage's Mario in each package frame of `indices` (read in that order:
     ascending is one forward pass of the state cursor), NaN where his position is not a place (a
-    load's reset memory). `mario`: gMarioStates' RDRAM offset."""
-    from sm64_events.memory.addresses import MARIO_POS_LIMIT, MARIO_POS_OFF, MARIO_YAW_OFF
+    load's reset memory). `mario`: gMarioStates' RDRAM offset. The last column is his action (the
+    u32 gMarioStates.action, the Scene viewer's step to the next action change), wherever he is a place."""
+    from sm64_events.memory.addresses import MARIO_ACTION_OFF, MARIO_POS_LIMIT, MARIO_POS_OFF, MARIO_YAW_OFF
     yaw_word = (mario + MARIO_YAW_OFF) & ~3          # the yaw is the low half of its big-endian word
     out = np.full((len(indices), ROW), np.nan)
     for row, index in enumerate(indices):
-        where, facing = package.scene_bytes(int(index), [(mario + MARIO_POS_OFF, 12), (yaw_word, 4)])
+        where, facing, action = package.scene_bytes(int(index), [(mario + MARIO_POS_OFF, 12), (yaw_word, 4),
+                                                                  (mario + MARIO_ACTION_OFF, 4)])
         position = struct.unpack("<3f", where)
         if all(math.isfinite(value) and abs(value) < MARIO_POS_LIMIT for value in position):
             out[row, :3] = position
             out[row, 3] = struct.unpack("<h", struct.pack("<H", int.from_bytes(facing, "little") & 0xFFFF))[0]
+            out[row, 4] = int.from_bytes(action, "little")
     return out
 
 

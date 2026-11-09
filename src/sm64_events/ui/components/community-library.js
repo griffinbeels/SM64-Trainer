@@ -147,7 +147,7 @@ export function libraryGhost(row) {
 }
 
 // Its words, so it never reads as Add ghost beside it (same glyph): it opens, it does not save.
-export const WATCH_IN_VIEWER = "Watch in Scene viewer";
+export const WATCH_IN_VIEWER = "Watch in Ghost Lab";
 function WatchGhost({ row, onOpenGhost }) {
   const ghost = onOpenGhost ? libraryGhost(row) : null;
   return ghost ? html`<${GhostButton} open=${() => onOpenGhost(ghost)} title=${WATCH_IN_VIEWER}

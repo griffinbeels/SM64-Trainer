@@ -9,7 +9,7 @@
 // frame, read off SceneLink at that frame -- the scene frame the play's clock is at (or the frame
 // on screen while paused), the camera the page asks for (cameraNow: recorded, free, a ghost's
 // view, a rig), the camera the server drew when the picture on screen is that request
-// (camera_used), the HUD switch, the ghosts drawn, the sound's switches and mutes, and the
+// (camera_used), the HUD and Mario switches, the ghosts drawn, the sound's switches and mutes, and the
 // recorded time the sound plays (play_ms; null while nothing sounds). Stop sends it to the lab
 // (POST /api/scene-lab/export), which draws every entry again at full size in a child of its own
 // and mixes the sound as the page played it (tools/scene_lab/scene_export.py), so a hitch while
@@ -29,20 +29,24 @@ const html = htm.bind(h);
 const ROOT = "/api/scene-lab";
 // fps: the video's frame rate. The free camera, rigs and fly-tos move every display frame, so at 30 a
 // camera move would keep half its steps; the game's own pictures (30 a second) each fill two frames.
-// version: the recording's format (tools/scene_lab/scene_export.py TIMELINE_VERSION, which refuses another).
-export const RECORDING = { version: 1, fps: 60, maxMs: 30 * 60 * 1000, pollMs: 300 };
+// version: the recording's format (tools/scene_lab/scene_export.py TIMELINE_VERSION, which refuses another);
+// 2 adds each entry's Mario switch (mario: false, the stage's Mario left out).
+export const RECORDING = { version: 2, fps: 60, maxMs: 30 * 60 * 1000, pollMs: 300 };
 
 const samePose = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
 // The recorded time a play's sound is at on the display frame that began at `frameTime`, and the
 // picture it shows then (a play's picture shows on the display frame it is due: SceneLink.holdUntil);
 // null before the play's sound starts (its lead, or a resumed play's point: what was heard before
-// Pause is never heard again) or after its last picture.
+// Pause is never heard again) or after its last picture. A play on a camera path keeps the path's
+// clock (scenepathbar.js playTiming): its recorded time heard then is the clock's, null where that is
+// silent (a hold, a slower stretch).
 export function playPosition(play, frameTime) {
   if (!play) return null;
   const elapsed = frameTime - play.start + (play.frameMs || 0);
   if (elapsed < (play.resumeMs || 0) || elapsed >= play.length) return null;
-  return { frame: pictureAt(play.times, play.from, elapsed), playMs: play.times[play.from] + elapsed };
+  const shown = play.times[play.from] + elapsed;
+  return { frame: pictureAt(play.times, play.from, elapsed), playMs: play.path ? play.path.clock.at(shown).heardMs : shown };
 }
 
 // The camera the server drew for the picture on screen, when that picture answers `camera` at
@@ -92,7 +96,7 @@ export class SceneRecorder {
     const ghosts = link.ghosts.map((ghost) => ghost.ref), mutes = [...sound.ghostMutes];
     const last = this.last;
     const entry = { t_ms: frameTime - this.started, scene_frame: frame, camera,
-      camera_used: cameraUsed(link.shown, frame, camera), hud: link.hud,
+      camera_used: cameraUsed(link.shown, frame, camera), hud: link.hud, mario: link.mario !== false,
       ghosts: last && samePose(last.ghosts, ghosts) ? last.ghosts : ghosts,
       sound: { music: sound.music, effects: sound.effects, volume: sound.volume, muted: sound.muted,
         ghost_mutes: last && samePose(last.sound.ghost_mutes, mutes) ? last.sound.ghost_mutes : mutes },

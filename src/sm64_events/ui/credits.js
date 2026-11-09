@@ -66,6 +66,9 @@ export const CREDIT_GROUPS = [
       { name: "SM64 emulator guide", by: "wermipls",
         url: "https://wermi.neocities.org/emuguide/",
         what: "The Project64 setup steps the trainer's own setup links to." },
+      { name: "SM64Scripts", by: "Xander (MikeXander)",
+        url: "https://github.com/MikeXander/SM64Scripts",
+        what: "His camera paths, freeze frames and slow motion gave the Ghost Lab its camera path ideas." },
     ],
   },
   {
@@ -93,7 +96,7 @@ export const CREDIT_GROUPS = [
         what: "Compresses and decodes replay video through PyAV, and converts comparison videos. GPL-3.0.",
         notices: "licenses/ffmpeg" },
       { name: "cxd4", by: "Iconoclast, kept by the mupen64plus team", url: "https://github.com/mupen64plus/mupen64plus-rsp-cxd4",
-        what: "Runs the game's own sound program again, so the Scene viewer can play the music and the sound effects apart. Public domain (CC0).",
+        what: "Runs the game's own sound program again, so the Ghost Lab can play the music and the sound effects apart. Public domain (CC0).",
         notices: "licenses/cxd4" },
     ],
   },

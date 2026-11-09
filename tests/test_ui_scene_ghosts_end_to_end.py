@@ -1,4 +1,4 @@
-"""The Scene viewer's stage picker and ghost panel end to end against the lab's REAL routes (M4 round 4,
+"""The Ghost Lab's stage picker and Ghosts tab end to end against the lab's REAL routes (M4 round 4,
 items 2 and 3): no stub of GET /stage, GET /ghosts, POST /open or the socket's "ghosts" answer.
 
 The UI fixture boots the real app with the scene lab mounted on a scratch lab: the attempt scenes are
@@ -6,7 +6,8 @@ attempt_scenes.AttemptScenes fed by test_scene_lab_ghosts.py's cutter double (on
 the stage attempt), the renderer host is fake_viewer_host.py (headless, no GPU), and the ghost catalog
 reads test_scene_lab_ghosts.py's journal and replay doubles over real native clips, the real rank
 standards, a real local population and the real rival race. The page alone is driven, as he would:
-pick a star, the stage opens, Your ghosts lists, Add, the lab draws it, Remove.
+pick a star, the stage opens, Top ghosts lists, Yours lists his runs with the stage watched, a row's eye
+shows one beside it, the lab draws it, the eye hides it again (round 9: the layers pattern).
 """
 import json
 import sys
@@ -151,6 +152,27 @@ def _picture_after(page, sent_before: int) -> dict:
     }""", sent_before)
 
 
+def _stage_and_yours(page) -> None:
+    """The stage opened for the star: its title in the bar, Top first, then Yours with his three runs and the
+    stage watched (pressed with its star, no eye)."""
+    title = page.locator(".ghost-lab-watching").get_attribute("title")
+    assert title == "Whomp's Fortress · Shoot into the Wild Blue · Standard · 11\"03", title
+    assert page.locator(".scene-lab-stage-picker select").input_value() == "Standard"
+    page.locator(TOP_ROWS, has_text=SULLY).wait_for(timeout=20000)      # Top first
+    _segment(page, "Yours")
+    page.locator(YOURS_ROWS).nth(2).wait_for(timeout=20000)
+    rows = page.locator(YOURS_ROWS)
+    assert [row.locator(".scene-lab-ghost-time").inner_text() for row in rows.all()] == ['11"03', '11"33', '12"00']
+    stage = rows.nth(0).locator(":scope > .ghost-lab-watch")            # the stage is the run you watch
+    assert stage.get_attribute("aria-pressed") == "true" and stage.locator(".ghost-lab-star").inner_text() == "★"
+    assert rows.nth(0).locator(":scope > button.ghost-lab-eye").count() == 0
+
+
+def _segment(page, name: str) -> None:
+    """The Ghosts tab's list beside "In the scene": Top or Yours."""
+    page.locator(".ghost-lab-segments").get_by_role("button", name=name, exact=True).click()
+
+
 def test_pick_a_star_the_stage_opens_your_ghosts_list_and_add_draws_one_then_remove(tmp_path, monkeypatch):
     with _served(tmp_path, monkeypatch) as (base, lab), sync_playwright() as play:
         browser = play.chromium.launch(headless=True, args=["--disable-gpu"])
@@ -160,45 +182,41 @@ def test_pick_a_star_the_stage_opens_your_ghosts_list_and_add_draws_one_then_rem
             errors = []
             page.on("pageerror", lambda error: errors.append(str(error)))
             page.goto(base)
-            page.locator('.nav-item[title="Scene viewer"]:visible').click()
+            page.locator('.nav-item[title="Ghost Lab"]:visible').click()
             page.locator(".scene-lab-target").click()                        # pick Shoot into the Wild Blue
             page.locator("[role=dialog] button", has_text="Whomp's Fortress").first.click()
             page.locator("[role=dialog] .starcell", has_text="Shoot into the Wild Blue").first.click()
             page.wait_for_function("!!document.querySelector('.scene-lab-readout')", timeout=30000)
-            title = page.locator(".scene-lab-title").inner_text()
-            assert title == "Whomp's Fortress · Shoot into the Wild Blue · Standard · 11\"03", title
-            assert page.locator(".scene-lab-stage-picker select").input_value() == "Standard"
-
-            page.locator(YOURS_ROWS).nth(2).wait_for(timeout=20000)
-            rows = page.locator(YOURS_ROWS)
-            assert [row.locator(".scene-lab-ghost-time").inner_text() for row in rows.all()] == ['11"03', '11"33', '12"00']
-            assert rows.nth(0).locator(".scene-lab-ghost-stage").inner_text() == "The stage"
-            page.locator(TOP_ROWS, has_text=SULLY).wait_for(timeout=20000)
+            _stage_and_yours(page)
 
             mine = page.locator(YOURS_ROWS, has_text=YOURS)
             sent = page.evaluate("window.__socket.sent.length")
-            mine.get_by_role("button", name="Add").click()
+            mine.locator(":scope > button.ghost-lab-eye").click()
             answer = _answered(page, 1)
             ref = page.evaluate("window.__socket.sent.filter((m) => m.kind === 'ghosts')[0].set[0].ref")
             assert answer["shown"] == [ref] and answer["refused"] == [], answer
-            page.wait_for_function("(ref) => document.querySelector(`li[data-ref='${ref}']`)?.classList.contains('is-shown')",
-                                   arg=ref)
+            page.wait_for_function("(ref) => document.querySelector(`li.scene-lab-ghost[data-ref='${ref}']`)"
+                                   "?.classList.contains('is-shown')", arg=ref)
             redrawn = _picture_after(page, sent + 1)
             assert redrawn["ghosts"] and redrawn["ghosts"]["asked"] == 1, redrawn       # drawn with the ghost, no reload
 
+            _segment(page, "Top")
             sully = page.locator(TOP_ROWS, has_text=SULLY)
-            sully.get_by_role("button", name="Add").click()
+            sully.locator(":scope > button.ghost-lab-eye").click()
             both = _answered(page, 2)
             assert len(both["shown"]) == 2 and both["refused"] == [], both
             page.locator(f"{TOP_ROWS}.is-shown", has_text=SULLY).wait_for(timeout=20000)
+            in_scene = page.evaluate("[...document.querySelectorAll('.ghost-lab-scene-list li')].map((li) => li.dataset.ref)")
+            assert in_scene == ["stage", ref, *both["shown"][1:]] and len(in_scene) == 3, in_scene
             page.locator(".scene-lab").screenshot(path=str(tmp_path / "scene-ghosts-real-1280.png"))
 
             sent = page.evaluate("window.__socket.sent.length")
-            mine.get_by_role("button", name="Remove").click()
+            _segment(page, "Yours")
+            mine.locator(":scope > button.ghost-lab-eye").click()
             left = _answered(page, 3)
             assert len(left["shown"]) == 1 and ref not in left["shown"], left            # Sully's stays
-            page.wait_for_function("(ref) => !document.querySelector(`li[data-ref='${ref}']`)?.classList.contains('is-shown')",
-                                   arg=ref)
+            page.wait_for_function("(ref) => !document.querySelector(`li.scene-lab-ghost[data-ref='${ref}']`)"
+                                   "?.classList.contains('is-shown')", arg=ref)
             redrawn = _picture_after(page, sent + 1)
             assert redrawn["ghosts"] and redrawn["ghosts"]["asked"] == 1, redrawn
             assert lab.session is not None and errors == []

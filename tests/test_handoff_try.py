@@ -45,7 +45,7 @@ class FakeGame:
         self.poke(slots.CURR_AREA, struct.pack(">h", AREA))
         self.poke(slots.MARIO_OBJECT, struct.pack(">I", MARIO))
         self.poke(slots.CURRENT_AREA_POINTER, struct.pack(">I", CURRENT_AREA))
-        self.poke(usamune.SEGMENT_TABLE, SEGMENTS)
+        self.poke(usamune.US.segment_table, SEGMENTS)
         self.poke(slots.SAVE, b"\x11" * 0x400)
         self.poke(slots.LOAD, b"\x22" * 0x400)
 
@@ -73,19 +73,24 @@ def make_image(game: FakeGame, **overrides) -> tool.SlotImage:
     data = bytearray(b"\xAB" * slots.SLOT_BYTES)
     struct.pack_into(">I", data, slots.TRAILER_MARIO, MARIO)
     struct.pack_into(">hh", data, slots.TRAILER_LEVEL, LEVEL, AREA)
+    for at in (0x26420, 0x26424, 0x26440):     # the session clocks (trailer +0x100, +0x104, +0x120): the game's
+        data[at:at + 4] = bytes(4)
     fields = {"data": bytes(data), "index": INDEX, "seed": 0x1234, "segments": SEGMENTS, "current_area": CURRENT_AREA,
-              "fingerprint": tool.routine_fingerprint(game.read), "source": "test"}
+              "fingerprint": tool.routine_fingerprint(game.read, usamune.US), "source": "test"}
     return tool.SlotImage(**(fields | overrides))
 
 
 def old_slot(game: FakeGame) -> bytes:
-    data = bytes(i & 0xFF for i in range(slots.SLOT_BYTES))
-    game.poke(slots.slot_address(INDEX), data)
-    return data
+    data = bytearray(i & 0xFF for i in range(slots.SLOT_BYTES))
+    for at in (0x26420, 0x26424, 0x26440):     # the session clocks (trailer +0x100, +0x104, +0x120): the game's
+        data[at:at + 4] = bytes(4)
+    game.poke(slots.slot_address(INDEX), bytes(data))
+    return bytes(data)
 
 
 def run(game, image, folder, **flags):
-    return tool.install(game, image, folder, dry_run=flags.get("dry_run", False), write_seed=flags.get("write_seed", False))
+    return tool.install(game, image, folder, dry_run=flags.get("dry_run", False),
+                        write_seed=flags.get("write_seed", False)).backup
 
 
 def set_level(game):
@@ -109,7 +114,7 @@ def set_area_pointer(game):
 
 
 def set_segment(game):
-    game.poke(usamune.SEGMENT_TABLE + 8, b"\xFF\xFF\xFF\xFF")
+    game.poke(usamune.US.segment_table + 8, b"\xFF\xFF\xFF\xFF")
 
 
 def vanilla_rom(game):
@@ -167,7 +172,7 @@ def test_the_gfx_pool_segment_may_differ(tmp_path):
     """Segment 1 alternates every frame, so a slot and the live game can hold either pool."""
     game = FakeGame()
     image = make_image(game)
-    game.poke(usamune.SEGMENT_TABLE + 4, b"\xEE\xEE\xEE\xEE")
+    game.poke(usamune.US.segment_table + 4, b"\xEE\xEE\xEE\xEE")
     run(game, image, tmp_path)
     assert game.writes
 
@@ -227,10 +232,10 @@ def test_a_failed_read_back_leaves_the_slot_empty(tmp_path):
     game = FakeGame()
     old_slot(game)
     image = make_image(game)
-    backup = tool.save_backup(game, INDEX, tmp_path, "first")
+    backup = tool.save_backup(game, usamune.US, INDEX, tmp_path, "first")
     game.corrupt_next_read = True
     with pytest.raises(tool.WriteFailed):
-        tool.write_slot_bytes(game, INDEX, image.data, mario_place=None)
+        tool.write_slot_bytes(game, usamune.US, INDEX, image.data, mario_place=None)
     assert game.read(slots.slot_address(INDEX) + slots.TRAILER_MARIO, 4) == bytes(4)
     assert backup.exists()
 

@@ -19,7 +19,7 @@ setlocal
 set "SM64_SCENE_LAB=%LOCALAPPDATA%\SM64Trainer\scene-lab\lab.json"
 if not exist "%SM64_SCENE_LAB%" (
   echo ERROR: no lab config at %SM64_SCENE_LAB%
-  echo The Scene viewer is a lab feature and has not been set up on this machine.
+  echo The Ghost Lab is a lab feature and has not been set up on this machine.
   echo.
   pause
   exit /b 1

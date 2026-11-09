@@ -8,7 +8,7 @@ Every call goes through the community client the race already uses (`community/s
 CommunitySync, over the signed-in account): no new route, key, HTTP client or store. Each Worker
 call spends one ticket of the account's 500 a day, cache hits on the service included, and its
 listings answer `Cache-Control: no-store` with no conditional request; recordings are immutable
-by id. So the saving is in not asking (docs/community-protocol.md, "The Scene viewer's reads"):
+by id. So the saving is in not asking (docs/community-protocol.md, "The Ghost Lab's reads"):
 
 - The race's own list first: a complete rival pool the race holds for this identity (inside its
   lease) answers the top list and every search, with no call of the viewer's.

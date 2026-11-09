@@ -38,13 +38,15 @@ def slot_bytes() -> bytes:
     data = bytearray(b"\xCD" * slots.SLOT_BYTES)
     struct.pack_into(">I", data, slots.TRAILER_MARIO, fakes.MARIO)
     struct.pack_into(">hh", data, slots.TRAILER_LEVEL, fakes.LEVEL, fakes.AREA)
+    for at in (0x26420, 0x26424, 0x26440):     # the session clocks (trailer +0x100, +0x104, +0x120): the game's
+        data[at:at + 4] = bytes(4)
     return bytes(data)
 
 
 class Harness:
     def __init__(self, tmp_path):
         self.game = fakes.FakeGame()
-        self.answer = {**ANSWER, "fingerprint": tool.routine_fingerprint(self.game.read)}
+        self.answer = {**ANSWER, "fingerprint": tool.routine_fingerprint(self.game.read, slots.US)}
         self.calls = []
         self.library = SlotLibrary(tmp_path / "library")
         self.backups = tmp_path / "backups"

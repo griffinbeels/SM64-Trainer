@@ -3,7 +3,8 @@
 A state's id is the sha256 of its raw bytes, so saving the same bytes twice keeps one state, and two different
 saves can never replace each other. Nothing here deletes a state, and a record it cannot read is reported and
 left alone rather than overwritten. Layout: <root>/states/<id>.xz and <id>.json, written to a temporary name
-and renamed, so a crash leaves either the old file or the new one.
+and renamed, so a crash leaves either the old file or the new one. A state made from a frame the Scene viewer was
+showing also keeps that frame's picture, <root>/pictures/<id>.jpg (the star sets strip shows it).
 """
 from __future__ import annotations
 
@@ -19,7 +20,7 @@ from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
-from sm64_events.slotlibrary.usamune import SEGMENT_BYTES, SLOT_BYTES, Refusal, slot_facts
+from sm64_events.slotlibrary.usamune import SEGMENT_BYTES, SLOT_BYTES, Refusal, build_of_rom, slot_facts
 
 log = logging.getLogger("sm64.slotlibrary")
 
@@ -28,6 +29,8 @@ CAPTURED, IMPORTED, BUILT = "captured", "imported", "built"
 SOURCES = frozenset({CAPTURED, IMPORTED, BUILT})
 MAX_NAME = 80
 XZ_MEMORY_LIMIT = 32 << 20           # a state packs with preset 6's 8 MB window; refuse files asking for more
+PICTURE_MAX_BYTES = 4 << 20          # a Scene viewer JPEG is about 0.2 MB
+JPEG_START = b"\xff\xd8\xff"
 _HEX_64 = re.compile(r"[0-9a-f]{64}")
 _FIELDS = {"id": str, "name": str, "level": int, "area": int, "mario_object": int, "fingerprint": str, "rom": str,
            "first_seen_utc": str, "source": str}
@@ -64,6 +67,12 @@ class KeptState:
         if self.current_area is None or self.segments_hex is None:
             return None
         return LoadContext(self.current_area, bytes.fromhex(self.segments_hex))
+
+    @property
+    def build(self) -> str | None:
+        """"us" or "jp": the Usamune build that made these bytes, from the cartridge name the record has always
+        carried, so no record changes. None for a Usamune whose slot addresses this Trainer does not know."""
+        return build_of_rom(self.rom)
 
 
 @dataclass(frozen=True)
@@ -118,6 +127,7 @@ class SlotLibrary:
     def __init__(self, root: Path):
         self.root = Path(root)
         self._states = self.root / "states"
+        self._pictures = self.root / "pictures"
         self._lock = threading.Lock()
 
     def _blob(self, identity: str) -> Path:
@@ -222,6 +232,21 @@ class SlotLibrary:
             renamed = replace(self.get(identity), name=clean_name(name))
             self._write_record(renamed)
             return renamed
+
+    def put_picture(self, identity: str, jpeg: bytes) -> None:
+        """The picture of the frame a kept state was made from; a later one for the same state replaces it."""
+        if not self.has(identity):
+            raise Refusal(f"no kept state {identity}")
+        if not jpeg.startswith(JPEG_START) or len(jpeg) > PICTURE_MAX_BYTES:
+            raise ValueError("a picture is one JPEG of at most 4 MB")
+        with self._lock:
+            self._pictures.mkdir(parents=True, exist_ok=True)
+            write_atomic(self._pictures / f"{identity}.jpg", jpeg)
+
+    def picture_path(self, identity: str) -> Path | None:
+        """The state's picture file, or None when it has none."""
+        path = self._pictures / f"{self._checked_id(identity)}.jpg"
+        return path if path.is_file() else None
 
     def resolve(self, prefix: str) -> str:
         """A full id from the start of one, for a person typing at a command line."""

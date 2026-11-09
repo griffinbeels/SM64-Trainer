@@ -37,7 +37,7 @@ from sm64_events.server import scene_exports, scene_lab_api  # noqa: E402
 from test_scene_lab_stage_ghosts import CLIP, Loader, config, recording  # noqa: E402,F401
 
 RATE = 48000
-VERSION = 1                     # the scene recording's format the page writes today
+VERSION = 2                     # the scene recording's format the page writes today (scenerecord.js)
 FRAME_MS = 1000 / 30
 
 
@@ -350,15 +350,18 @@ def test_an_export_draws_every_entry_again_and_lands_beside_the_saved_replays(co
     # Each held frame is one picture drawn; the HUD switched while paused draws again (the synthetic
     # recording has no HUD to leave out, so those two pictures are alike).
     assert status["stats"]["drawn"] == 11 and len(set(expected)) == 10
-    assert loader.asked == ["a", "b"]                        # the catalog's clips, loaded once for the child
+    # The catalog's clips, each loaded once for the child. Loads may finish in either order (a loaded
+    # merge check once asked "b" first), so the count is the contract, not the order.
+    assert sorted(loader.asked) == ["a", "b"]
 
 
 def test_an_export_draws_a_tilted_and_zoomed_camera_as_the_page_showed_it(config, recording, tmp_path):
     """Round 7 (interface I): Record keeps each camera's tilt and lens. A free camera's roll and fov, and
     the camera_used a cinematic camera's picture carried them in, are drawn again exactly. The roll stays
     the game's s16 angle, as round 6's version-1 recordings carry it (the lead's ruling, 2026-10-28), so
-    the format's version is unchanged and an older recording draws as it did."""
-    assert scene_export.TIMELINE_VERSION == 1
+    tilt and lens needed no new version and a version-1 recording still reads and draws as it did (its
+    entries carry no Mario switch: version 2's, 2026-11-08)."""
+    assert 1 in scene_export.READABLE
     place = {"focus": [0, 0, 0], "position": [100, 300, 900]}
     tilted = {**place, "roll": -2731, "fov": 14.8}
     used = {"focus": [0.0, 50.0, 0.0], "position": [300.0, 400.0, 900.0], "roll": 5461, "fov": 85.7}
@@ -481,12 +484,13 @@ def test_a_recording_names_its_format_and_a_reader_refuses_another(config, recor
                          Loader({}))) as client:
         opened = client.post("/api/scene-lab/open", json={"package": "scene.sm64scene"}).json()
         body = _body(opened, [{**entry, "ghosts": []} for entry in _timeline()])
-        for other in ({key: value for key, value in body.items() if key != "version"}, {**body, "version": 2}):
+        unknown = max(scene_export.READABLE) + 1
+        for other in ({key: value for key, value in body.items() if key != "version"}, {**body, "version": unknown}):
             refused = client.post("/api/scene-lab/export", json=other)
             assert refused.status_code == 422 and refused.json()["detail"] == scene_export.OTHER_VERSION
     assert not (tmp_path / "clips").exists() or not list((tmp_path / "clips").iterdir())
     with pytest.raises(scene_export.ExportError, match="another version"):
-        scene_export.run({"version": 2, "timeline": body["timeline"], "fps": 60}, tmp_path, lambda event: None,
+        scene_export.run({"version": unknown, "timeline": body["timeline"], "fps": 60}, tmp_path, lambda event: None,
                          scene_export.threading.Event())
 
 

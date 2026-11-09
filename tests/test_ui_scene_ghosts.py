@@ -1,10 +1,12 @@
-"""The Scene viewer's Course/Star/Strategy selector and its ghost panel (M4 round 4, items 2 and 3) on
-the real page.
+"""The Ghost Lab's Course/Star/Strategy selector and its Ghosts tab (M4 round 4, items 2 and 3; round 9,
+item 5) on the real page.
 
 His words (round 4): "We should include our Course/Star/Strategy selector on this screen. By default, it
 opens to whatever the user currently has selected in the practice log (or how they got here)" (item 2);
 "we should also display on the bottom A PAGINATED LIST OF GHOSTS THAT WE COULD LOAD INTO THIS SCENE!!!
 ... If I add a ghost, it should immediately appear in the scene without needing to reload" (item 3).
+Round 9 (his words on Add and Open: "I didn't understand the difference on first glance"): a row's eye shows
+its ghost beside the run you watch, and the row itself watches its run (it becomes the scene).
 
 The UI fixture boots the real app with test_ui_attempt_scene.py's scratch lab and fake renderer host
 (headless, no GPU). The lab's round 4 routes are stubbed here with their agreed shapes, ahead of the
@@ -99,6 +101,10 @@ def _stubs(app, lab, seen) -> None:
     @router.post("/api/scene-lab/open")
     async def open_scene(body: dict):
         seen["opened"].append(body)
+        if "ghost" in body:                  # a run watched from a row: the lab makes it a scene of its own
+            described = await lab.open(attempt_scene.PACKAGE)
+            seen["host_pids"].append(described.get("renderer_pid"))
+            return described
         if "attempt" not in body:
             return await lab.open(body["package"])
         described = {**await lab.open(attempt_scene.PACKAGE), "attempt": body["attempt"]}
@@ -188,35 +194,41 @@ def _shoot(page, folder, name):
 
 
 def _selector(page) -> dict:
+    """The stage picker as drawn, and the bar's note (round 9: one line in the bar, "" when it says nothing)."""
     return page.evaluate("""(() => {
       const root = document.querySelector('.scene-lab-stage-picker');
+      const note = document.querySelector('.ghost-lab-top-note')?.textContent || null;
       return { name: root.querySelector('.scene-lab-target-words strong')?.textContent,
         course: root.querySelector('.scene-lab-target-words small')?.textContent,
-        strat: root.querySelector('select')?.value ?? null,
-        note: root.querySelector('.scene-lab-stage-note')?.textContent ?? null };
+        strat: root.querySelector('select')?.value ?? null, note };
     })()""")
 
 
-# Each ghost list's box and its controls', left to right; the first row's top.
-LISTS = """[...document.querySelectorAll('.scene-lab-ghost-section')].map((section) => {
-  const box = section.getBoundingClientRect(), row = section.querySelector('.scene-lab-ghost-list > li');
-  return { name: section.getAttribute('aria-label'), left: box.left, right: box.right,
-    controls: [...section.querySelectorAll('header > select, header > input')].map((c) => c.getBoundingClientRect().right),
-    row: row ? Math.round(row.getBoundingClientRect().top) : null };
-})"""
+def _title(page) -> str | None:
+    """The scene's whole title: the hover of the run you watch in the bar."""
+    watching = page.locator(".ghost-lab-watching")
+    return watching.get_attribute("title") if watching.count() else None
+
+
+# The Ghosts tab's two columns ("In the scene", the list beside it), the list's controls, and the panel, left
+# to right: nothing may grow past its column or the panel.
+COLUMNS = """(() => {
+  const box = (el) => { const r = el.getBoundingClientRect(); return [r.left, r.right]; };
+  const panel = document.querySelector('#ghost-lab-panel-ghosts'), scene = document.querySelector('.ghost-lab-scene-list');
+  const lists = document.querySelector('.ghost-lab-lists');
+  return { panel: box(panel), scene: box(scene), lists: box(lists),
+    controls: [...lists.querySelectorAll('select, input, .ghost-lab-segments button')].map((c) => box(c)[1]) };
+})()"""
 
 
 def _lists_hold_their_columns(page) -> None:
-    """A long strategy name ellipsizes in its list's dropdown: no list grows over its neighbour, no control
-    pokes out of its list, and side-by-side lists start their rows level (measured 2026-10-27: Top ghosts'
-    dropdown widened its column over Find a player)."""
-    lists = page.evaluate(LISTS)
-    for one, after in zip(lists, lists[1:], strict=False):
-        assert one["right"] <= after["left"] + 1 or after["left"] < one["left"], lists     # side by side, or wrapped
-    for one in lists:
-        assert all(right <= one["right"] + 1 for right in one["controls"]), one
-    level = {one["row"] for one in lists[:2] if one["row"] is not None}
-    assert len(level) == 1, lists
+    """A long strategy name ellipsizes in the list's dropdown: no column grows over its neighbour or out of the
+    panel, and no control pokes out of the list (measured 2026-10-27: Top ghosts' dropdown widened its column)."""
+    columns = page.evaluate(COLUMNS)
+    panel, scene, lists = columns["panel"], columns["scene"], columns["lists"]
+    assert scene[1] <= lists[0] + 1 or lists[0] < scene[1] - 1 and lists[0] <= scene[0] + 1, columns   # beside, or under
+    assert lists[1] <= panel[1] + 1 and scene[1] <= panel[1] + 1, columns
+    assert all(right <= lists[1] + 1 for right in columns["controls"]), columns
 
 
 def _pick(page, course: str, star: str) -> None:
@@ -233,18 +245,17 @@ def test_arriving_opens_the_practice_targets_stage_and_a_pick_opens_another_or_s
         _answer_ghosts(monkeypatch, seen)
         browser, page, errors = _browse(play, base)
         try:
-            page.locator('.nav-item[title="Scene viewer"]:visible').click()          # no Ghost button
+            page.locator('.nav-item[title="Ghost Lab"]:visible').click()             # no Ghost button
             page.wait_for_function(DRAWN, timeout=20000)
             assert seen["stage"] == [{"course": ui_fixture.FIXTURE_COURSE, "star": ui_fixture.FIXTURE_STAR,
                                       "segment": None, "strat": ui_fixture.FIXTURE_STRAT}]
             assert seen["opened"] == [{"attempt": STAGE_ATTEMPT}]
             assert _selector(page) == {"name": "Shoot into the Wild Blue", "course": "Whomp's Fortress",
                                        "strat": ui_fixture.FIXTURE_STRAT, "note": None}
-            title = page.locator(".scene-lab-title").inner_text()
-            assert title == f"Whomp's Fortress · Shoot into the Wild Blue · {ui_fixture.FIXTURE_STRAT} · 11\"03"
+            assert _title(page) == f"Whomp's Fortress · Shoot into the Wild Blue · {ui_fixture.FIXTURE_STRAT} · 11\"03"
 
             _pick(page, "Whomp's Fortress", "Blast Away the Wall")                    # a star with no scene
-            page.wait_for_function(f"document.querySelector('.scene-lab-stage-note')?.textContent === {json.dumps(NO_SCENE)}")
+            page.wait_for_function(f"document.querySelector('.ghost-lab-top-note')?.textContent === {json.dumps(NO_SCENE)}")
             assert seen["stage"][-1] == {"course": ui_fixture.FIXTURE_COURSE, "star": NO_SCENE_STAR, "segment": None,
                                          "strat": None}
             page.wait_for_function("!document.querySelector('.scene-lab-player')")     # the other star's scene closed
@@ -267,7 +278,7 @@ def test_arriving_opens_the_practice_targets_stage_and_a_pick_opens_another_or_s
             other = [value for value in strategy.evaluate("(s) => [...s.options].map((o) => o.value)")
                      if value and value != LONG_STRAT][0]
             strategy.select_option(other)
-            page.wait_for_function(f"document.querySelector('.scene-lab-title').textContent.includes({json.dumps(other)})")
+            page.wait_for_function(f"document.querySelector('.ghost-lab-watching')?.title.includes({json.dumps(other)})")
             assert seen["stage"][-1]["strat"] == other
             _shoot(page, tmp_path, "scene-stage-picked")
             assert errors == []
@@ -276,10 +287,12 @@ def test_arriving_opens_the_practice_targets_stage_and_a_pick_opens_another_or_s
 
 
 def _rows(page, section: str) -> list[dict]:
+    """A list's rows: ref, shown beside the run (its eye pressed), watched (its row pressed, with a star), the
+    eye's name (None on the watched row: it has no eye) and the lab's reason."""
     return page.evaluate(f"""[...document.querySelectorAll("{SECTION.format(section)} .scene-lab-ghost-list > li")]
       .map((li) => ({{ ref: li.dataset.ref, shown: li.classList.contains('is-shown'),
-        action: li.querySelector(':scope > button:not(.scene-lab-ghost-more)')?.textContent.trim() ?? null,
-        stage: !!li.querySelector('.scene-lab-ghost-stage'),
+        watched: li.querySelector(':scope > .ghost-lab-watch')?.getAttribute('aria-pressed') === 'true',
+        eye: li.querySelector(':scope > button.ghost-lab-eye')?.getAttribute('aria-label') ?? null,
         reason: li.querySelector('.scene-lab-ghost-reason')?.textContent ?? null }}))""")
 
 
@@ -287,29 +300,32 @@ def _row(page, section: str, ref: str):
     return page.locator(f"{SECTION.format(section)} li[data-ref='{ref}']")
 
 
+def _eye(page, section: str, ref: str):
+    return _row(page, section, ref).locator(":scope > button.ghost-lab-eye")
+
+
 def _names_show_whole(page) -> None:
     """Every player name up to WHOLE characters shows whole; every name, cut or not, is its own tooltip."""
-    names = page.evaluate("""[...document.querySelectorAll('.scene-lab-ghost-player')].map((name) => ({
+    names = page.evaluate("""[...document.querySelectorAll('#ghost-lab-panel-ghosts .scene-lab-ghost-player')].map((name) => ({
       text: name.firstChild.textContent, title: name.title, cut: name.scrollWidth > name.clientWidth }))""")
     assert names and all(name["title"] == name["text"] for name in names), names
     cut = [name["text"] for name in names if name["cut"] and len(name["text"]) <= WHOLE]
     assert not cut, cut
 
 
-def _ghost_rows_align(page) -> None:
-    """Every row's time and action button share one column down a list (his weight rule)."""
-    for section in ("Your ghosts", "Top ghosts"):
-        edges = page.evaluate(f"""[...document.querySelectorAll("{SECTION.format(section)} .scene-lab-ghost-list > li")]
-          .map((li) => [Math.round(li.querySelector('.scene-lab-ghost-time').getBoundingClientRect().right),
-                        Math.round(li.querySelector(':scope > button, :scope > .scene-lab-ghost-stage')
-                          .getBoundingClientRect().right)])""")
-        assert len({edge[0] for edge in edges}) == 1 and len({edge[1] for edge in edges}) == 1, (section, edges)
+def _ghost_rows_align(page, section: str) -> None:
+    """Every row's time and eye share one column down a list (his weight rule); the watched row keeps the
+    eye's place empty."""
+    edges = page.evaluate(f"""[...document.querySelectorAll("{SECTION.format(section)} .scene-lab-ghost-list > li")]
+      .map((li) => [Math.round(li.querySelector('.scene-lab-ghost-time').getBoundingClientRect().right),
+                    Math.round(li.querySelector(':scope > .ghost-lab-eye').getBoundingClientRect().right)])""")
+    assert len({edge[0] for edge in edges}) == 1 and len({edge[1] for edge in edges}) == 1, (section, edges)
 
 
 def _shown(page, ref: str, shown: bool = True) -> None:
-    """Waits until the row for `ref` looks selected (or not)."""
-    page.wait_for_function("([ref, shown]) => document.querySelector(`li[data-ref='${ref}']`)?.classList"
-                           ".contains('is-shown') === shown", arg=[ref, shown])
+    """Waits until the list row for `ref` shows it beside the run (or not)."""
+    page.wait_for_function("([ref, shown]) => document.querySelector(`.scene-lab-ghost-list li.scene-lab-ghost[data-ref='${ref}']`)"
+                           "?.classList.contains('is-shown') === shown", arg=[ref, shown])
 
 
 def _first_row(page, section: str, ref: str) -> None:
@@ -317,19 +333,33 @@ def _first_row(page, section: str, ref: str) -> None:
                            arg=[SECTION.format(section), ref])
 
 
-def _ghosts_added_removed_and_refused(page, seen, first: str) -> None:
+def _list(page, name: str) -> None:
+    """The Ghosts tab's list beside "In the scene": Top or Yours."""
+    page.locator(".ghost-lab-segments").get_by_role("button", name=name, exact=True).click()
+
+
+def _in_scene(page) -> list[str]:
+    """"In the scene" as drawn: the watched run first ("stage" for his own), then every ghost shown beside it."""
+    return page.evaluate("[...document.querySelectorAll('.ghost-lab-scene-list li')].map((li) => li.dataset.ref)")
+
+
+def _ghosts_shown_hidden_and_refused(page, seen, first: str) -> None:
     before = page.evaluate("window.__pictures.length")
-    _row(page, "Top ghosts", first).get_by_role("button", name="Add").click()
+    _eye(page, "Top ghosts", first).click()
     _shown(page, first)
     assert seen["sets"] == [[first]]
     page.wait_for_function(f"window.__pictures.length > {before}")               # drawn again, no reload
-    _row(page, "Top ghosts", REFUSED).get_by_role("button", name="Add").click()
+    assert _in_scene(page) == ["stage", first]
+    _eye(page, "Top ghosts", REFUSED).click()
     page.wait_for_function("(ref) => document.querySelector(`li[data-ref='${ref}'] .scene-lab-ghost-reason`)",
                            arg=REFUSED)
     assert seen["sets"][-1] == [first, REFUSED]
     refused = {row["ref"]: row for row in _rows(page, "Top ghosts")}[REFUSED]
-    assert refused == {**refused, "shown": False, "action": "Add", "reason": REFUSAL}
-    _row(page, "Your ghosts", "yours-3").get_by_role("button", name="Add").click()
+    assert refused == {**refused, "shown": False, "reason": REFUSAL}
+    assert refused["eye"].startswith("Show ") and refused["eye"].endswith(" beside the run you watch"), refused
+    _list(page, "Yours")
+    _first_row(page, "Your ghosts", "yours-0")
+    _eye(page, "Your ghosts", "yours-3").click()
     _shown(page, "yours-3")
     assert seen["sets"][-1] == [first, "yours-3"]
 
@@ -343,7 +373,7 @@ def _a_player_and_their_slower_ghosts(page, seen) -> str:
     page.locator(SECTION.format("Find a player")).get_by_role("button", name="2 more").click()
     page.locator(f"{SECTION.format('Find a player')} .scene-lab-ghost-more-list li").nth(2).wait_for()
     assert seen["ghosts"][-1] == {**seen["ghosts"][-1], "section": "player", "player": name}
-    _row(page, "Find a player", f"player-{name}-2").get_by_role("button", name="Add").click()
+    page.locator(f"{SECTION.format('Find a player')} li[data-ref='player-{name}-2'] > button.ghost-lab-eye").click()
     _shown(page, f"player-{name}-2")
     return name
 
@@ -369,56 +399,103 @@ def _top_lists_every_strategy_with_flags(page, seen) -> None:
                                             ["US", LONG_STRAT]]
 
 
-def test_the_ghost_panel_pages_sorts_searches_and_adds_ghosts_into_the_scene(tmp_path, monkeypatch):
+def _watching_a_row_makes_it_the_scene(page, seen) -> None:
+    """Round 9, item 5: a row WATCHES its run. One with no attempt of his is made into a scene from its ghost
+    (POST /open {ghost}); the row then shows pressed with its star, the bar names whose run it is, and "In the
+    scene" starts with it. His own stage row, watched before, is a plain row again."""
+    _list(page, "Top")
+    _first_row(page, "Top ghosts", "top-all-0")
+    row = _row(page, "Top ghosts", "top-all-1")
+    row.locator(":scope > .ghost-lab-watch").click()
+    page.wait_for_function("document.querySelector(`li[data-ref='top-all-1'] > .ghost-lab-watch`)"
+                           "?.getAttribute('aria-pressed') === 'true'", timeout=20000)
+    assert seen["opened"][-1] == {"ghost": "top-all-1"}
+    assert row.locator(".ghost-lab-star").inner_text() == "★"
+    assert row.locator(":scope > button.ghost-lab-eye").count() == 0               # the scene is not shown beside itself
+    assert page.locator(".ghost-lab-watching strong").inner_text() == PLAYERS[1]
+    assert _in_scene(page) == ["top-all-1"]                                          # a new scene starts with none beside it
+    _list(page, "Yours")
+    _first_row(page, "Your ghosts", "yours-0")
+    yours = {one["ref"]: one for one in _rows(page, "Your ghosts")}
+    assert not yours["yours-0"]["watched"] and yours["yours-0"]["eye"], yours["yours-0"]
+
+
+def _lists_as_they_open(page, seen, first: str) -> None:
+    """The Ghosts tab first: Top lists All strategies with every row's eye, "In the scene" holds his run, and
+    Yours shows that run watched (pressed, no eye); every row's time and eye line up at every width."""
+    assert page.get_by_role("tab", name=re.compile(r"^Ghosts")).get_attribute("aria-selected") == "true"
+    page.locator(f"{SECTION.format('Top ghosts')} li").first.wait_for()
+    top = _rows(page, "Top ghosts")
+    assert len(top) == 10 and top[0]["ref"] == first and top[2]["ref"] == REFUSED
+    assert all(row["eye"] and not row["watched"] for row in top)
+    _top_lists_every_strategy_with_flags(page, seen)
+    assert _in_scene(page) == ["stage"]                                       # his own run is the scene
+    _list(page, "Yours")
+    _first_row(page, "Your ghosts", "yours-0")
+    yours = _rows(page, "Your ghosts")
+    assert [row["ref"] for row in yours] == [f"yours-{i}" for i in range(10)]
+    assert yours[0]["watched"] and yours[0]["eye"] is None                    # the stage: no eye, pressed
+    assert all(row["eye"] and not row["watched"] for row in yours[1:])
+    assert page.locator(SECTION.format("Your ghosts")).get_by_text("Page 1", exact=True).is_visible()
+    _list(page, "Top")
+    _first_row(page, "Top ghosts", first)
+    for width in (850, 1200, 1280, 1440, 1500, 1600):
+        page.set_viewport_size({"width": width, "height": 1000})
+        page.wait_for_timeout(100)
+        _ghost_rows_align(page, "Top ghosts")
+        assert page.evaluate(MARKS_INSIDE), width
+        if width >= 1280:
+            _names_show_whole(page)
+    page.set_viewport_size({"width": 1280, "height": 1000})
+
+
+def _pages_sorts_and_strategies(page, seen, first: str) -> None:
+    """Yours pages and sorts (a new sort starts on page 1); Top asks one strategy, then All strategies again,
+    while the stage keeps its own."""
     import ui_fixture
+    _list(page, "Yours")
+    section = page.locator(SECTION.format("Your ghosts"))
+    section.get_by_role("button", name="Next").click()
+    _first_row(page, "Your ghosts", "yours-10")
+    section.get_by_role("combobox", name="Sort your ghosts").select_option("newest")
+    newest = sorted(range(23), key=lambda i: ((i * 11) % 23, -i))[-1]
+    _first_row(page, "Your ghosts", f"yours-{newest}")                            # page 1 again, newest first
+    assert seen["ghosts"][-1] == {**seen["ghosts"][-1], "section": "yours", "sort": "newest", "page": 1}
+    _list(page, "Top")
+    top_strategy = page.locator(SECTION.format("Top ghosts")).get_by_role("combobox", name="Strategy for top ghosts")
+    other = [value for value in top_strategy.evaluate("(s) => [...s.options].map((o) => o.value)")
+             if value and value != ui_fixture.FIXTURE_STRAT][0]
+    top_strategy.select_option(other)
+    _first_row(page, "Top ghosts", f"top-{_slug(other)}-0")
+    assert seen["ghosts"][-1] == {**seen["ghosts"][-1], "section": "top", "strat": other}
+    assert _selector(page)["strat"] == ui_fixture.FIXTURE_STRAT                  # the stage keeps its own
+    top_strategy.select_option("")                                               # All strategies again
+    _first_row(page, "Top ghosts", first)
+
+
+def test_the_ghost_panel_pages_sorts_searches_shows_and_watches_ghosts(tmp_path, monkeypatch):
     first = "top-all-0"
     with attempt_scene._served(tmp_path, monkeypatch, lab_on=True, extra=_stubs) as (base, seen), \
             sync_playwright() as play:
         _answer_ghosts(monkeypatch, seen)
         browser, page, errors = _browse(play, base)
         try:
-            page.locator('.nav-item[title="Scene viewer"]:visible').click()
+            page.locator('.nav-item[title="Ghost Lab"]:visible').click()
             page.wait_for_function(DRAWN, timeout=20000)
-            page.locator(f"{SECTION.format('Top ghosts')} li").first.wait_for()
-            yours = _rows(page, "Your ghosts")
-            assert [row["ref"] for row in yours] == [f"yours-{i}" for i in range(10)]
-            assert yours[0]["stage"] and yours[0]["action"] is None                      # the stage is not addable
-            assert all(row["action"] == "Add" for row in yours[1:])
-            assert page.locator(SECTION.format("Your ghosts")).get_by_text("Page 1", exact=True).is_visible()
-            top = _rows(page, "Top ghosts")
-            assert len(top) == 10 and top[0]["ref"] == first and top[2]["ref"] == REFUSED
-            _top_lists_every_strategy_with_flags(page, seen)
-            for width in (850, 1200, 1280, 1440, 1500, 1600):
-                page.set_viewport_size({"width": width, "height": 1000})
-                page.wait_for_timeout(100)
-                _ghost_rows_align(page)
-                assert page.evaluate(MARKS_INSIDE), width
-                if width >= 1280:
-                    _names_show_whole(page)
-            page.set_viewport_size({"width": 1280, "height": 1000})
-
-            _ghosts_added_removed_and_refused(page, seen, first)
+            _lists_as_they_open(page, seen, first)
+            _ghosts_shown_hidden_and_refused(page, seen, first)
             name = _a_player_and_their_slower_ghosts(page, seen)
             _shoot(page, tmp_path, "scene-ghosts")
-            _row(page, "Top ghosts", first).get_by_role("button", name="Remove").click()
-            _shown(page, first, False)
+            page.locator(f".ghost-lab-scene-list li[data-ref='{first}'] button.ghost-lab-eye").click()   # hide it again
+            _shown(page, f"player-{name}-2")
+            page.wait_for_function("(ref) => !document.querySelector(`.ghost-lab-scene-list li[data-ref='${ref}']`)",
+                                   arg=first)
             assert seen["sets"][-1] == ["yours-3", f"player-{name}-2"]
 
-            section = page.locator(SECTION.format("Your ghosts"))
-            section.get_by_role("button", name="Next").click()
-            _first_row(page, "Your ghosts", "yours-10")
-            section.get_by_role("combobox", name="Sort your ghosts").select_option("newest")
-            newest = sorted(range(23), key=lambda i: ((i * 11) % 23, -i))[-1]
-            _first_row(page, "Your ghosts", f"yours-{newest}")                            # page 1 again, newest first
-            assert seen["ghosts"][-1] == {**seen["ghosts"][-1], "section": "yours", "sort": "newest", "page": 1}
-            top_strategy = page.locator(SECTION.format("Top ghosts")).get_by_role("combobox", name="Strategy for top ghosts")
-            other = [value for value in top_strategy.evaluate("(s) => [...s.options].map((o) => o.value)")
-                     if value and value != ui_fixture.FIXTURE_STRAT][0]
-            top_strategy.select_option(other)
-            _first_row(page, "Top ghosts", f"top-{_slug(other)}-0")
-            assert seen["ghosts"][-1] == {**seen["ghosts"][-1], "section": "top", "strat": other}
-            assert _selector(page)["strat"] == ui_fixture.FIXTURE_STRAT                  # the stage keeps its own
+            page.get_by_role("searchbox", name="Find a player by name").fill("")
+            page.get_by_role("searchbox", name="Find a player by name").press("Enter")
+            _pages_sorts_and_strategies(page, seen, first)
+            _watching_a_row_makes_it_the_scene(page, seen)
             assert errors == []
         finally:
             browser.close()
-

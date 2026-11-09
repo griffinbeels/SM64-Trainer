@@ -23,19 +23,23 @@ UPLOAD_FIELDS = {"target", "clock", "rom", "strategy", "frames", "raw_sha256", "
                  "encoded_bytes", "codec", "generation"}
 
 
+NOTICE = "beta-3"  # The first privacy notice that describes a ghost's start.
+
+
 class Service(Account):
     """The fake Worker: a public config with or without a start cap, and ghost
-    downloads that may name a start."""
-    def __init__(self, *, start_cap=64 * 1024, served_start=None):
+    downloads that may name a start. The account has accepted its notice."""
+    def __init__(self, *, start_cap=64 * 1024, served_start=None, notice=NOTICE):
         super().__init__()
-        self.start_cap, self.served_start = start_cap, served_start
+        self.start_cap, self.served_start, self.notice = start_cap, served_start, notice
+        self.state["privacy_version"] = NOTICE
         self.start_failure = None
 
     async def request_json(self, method, path, **kwargs):
         if path == "/v1/config":
             self.calls.append((method, path, kwargs))
             limits = {"encoded_bytes": 2 << 20} | ({} if self.start_cap is None else {"start_bytes": self.start_cap})
-            return {"v": 1, "protocol": 1, "limits": limits}
+            return {"v": 1, "protocol": 1, "limits": limits, "terms_version": "beta-2", "privacy_version": self.notice}
         return await super().request_json(method, path, **kwargs)
 
     async def request_bytes(self, method, path, **kwargs):
@@ -161,7 +165,8 @@ def test_a_downloaded_start_is_kept_with_the_ghost_and_handed_to_its_owner(tmp_p
         assert population.is_ready(identifier)
         assert population.start_of(identifier) == START
         assert (tmp_path / "cache" / (identifier + ".start")).read_bytes() == START
-        assert handed == [(identifier, recording()["raw_sha256"], START)]
+        assert [args[:3] for args in handed] == [(identifier, recording()["raw_sha256"], START)]
+        assert handed[0][3] == native()                    # the ghost's own bytes: what the start is bound to
         start_call = next(call for call in account.calls if call[1] == f"/v1/recordings/{identifier}/start")
         assert start_call[2]["limit"] == len(START)
     finally:
@@ -249,6 +254,19 @@ def test_the_cache_counts_a_start_in_its_byte_cap_and_evicts_it_with_its_ghost(t
         population.close()
 
 
+def test_settings_ghost_files_count_and_delete_a_kept_start_with_its_ghost(tmp_path):
+    population = CachedPopulation(Local(), root=tmp_path, account=Account())
+    try:
+        encoded = codec.encode(native())
+        population.store_asset(recording(), encoded, native(), start=START)
+        held = population.cached_holdings()
+        assert held[0]["bytes"] == len(encoded) + len(native()) + len(START)
+        assert population.drop_cached(["1" * 64])["bytes"] == held[0]["bytes"]
+        assert not list(tmp_path.glob("1" * 64 + ".*"))
+    finally:
+        population.close()
+
+
 def test_a_kept_start_that_changed_on_disk_is_not_handed_out(tmp_path):
     population = CachedPopulation(Local(), root=tmp_path, account=Account())
     try:
@@ -279,3 +297,42 @@ def test_a_byte_request_can_hand_back_its_response_headers():
             assert await account.request_bytes("GET", "/v1/config", authenticated=False, response_headers=headers) == b"ghost"
             assert headers["ghost-start-sha256"] == START_SHA
     asyncio.run(scenario())
+
+
+# -- the seam's owner calls (ghost/start_frame.py), not stubs ------------------------------------------
+
+def test_upload_asks_the_owner_for_his_own_start(tmp_path, monkeypatch):
+    from sm64_events.ghost import start_frame
+    monkeypatch.setattr("sm64_events.core.paths.ghost_population_root", lambda: tmp_path)
+    raw = native()
+    digest = hashlib.sha256(raw).hexdigest()
+    assert ghost_start.start_for_upload(tmp_path / "x.ghost", digest) is None          # no start: the ghost goes alone
+    asked = []
+    monkeypatch.setattr(start_frame, "start_blob", lambda root, sha: asked.append((root, sha)) or b"start")
+    assert ghost_start.start_for_upload(tmp_path / "x.ghost", digest) == b"start" and asked == [(tmp_path, digest)]
+
+
+def test_download_hands_the_owner_the_ghosts_own_bytes(tmp_path, monkeypatch):
+    from sm64_events.ghost import start_frame
+    monkeypatch.setattr("sm64_events.core.paths.ghost_population_root", lambda: tmp_path)
+    handed = []
+    monkeypatch.setattr(start_frame, "accept_start_blob", lambda root, raw, blob: handed.append((root, raw, blob)))
+    raw = native()
+    digest = hashlib.sha256(raw).hexdigest()
+    ghost_start.accept_download("1" * 64, digest, START, raw)
+    assert handed == [(tmp_path, raw, START)]
+    assert ghost_start.accept_download("1" * 64, digest, START) is None and len(handed) == 1   # nothing to bind it to
+    with pytest.raises(start_frame.StartError, match="other ghost bytes"):
+        ghost_start.accept_download("1" * 64, "0" * 64, START, raw)
+
+
+def test_a_start_its_owner_refuses_never_costs_the_ghost_end_to_end(tmp_path, monkeypatch):
+    """The real owner refuses a blob that is no start at all; the ghost is still kept and playable."""
+    monkeypatch.setattr("sm64_events.core.paths.ghost_population_root", lambda: tmp_path / "population")
+    account = Service(served_start=START)                     # 26 KB of counting bytes: not a start
+    population = _download(tmp_path, account)
+    try:
+        assert population.is_ready("1" * 64)
+        assert not (tmp_path / "population" / "starts").exists()
+    finally:
+        population.close()

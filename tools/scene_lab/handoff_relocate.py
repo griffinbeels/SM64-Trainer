@@ -37,11 +37,9 @@ import handoff_slot as slots  # noqa: E402
 
 from sm64_events.memory.addresses import OBJECT_COUNT  # noqa: E402
 from sm64_events.memory.addresses import OBJECT_SIZE as OBJECT_BYTES  # noqa: E402
-from sm64_events.slotlibrary.usamune import BODY_BYTES, SLOT_BASE  # noqa: E402
+from sm64_events.slotlibrary.usamune import BODY_BYTES, SLOT_BASE, US  # noqa: E402
 from sm64_events.slotlibrary.relocate import (  # noqa: E402  (the one relocation; the writers run it too)
-    BODY_START,
-    POOL_END,
-    POOL_START,
+    POOL_BYTES,
     Ambiguous,
     in_pool,
     map_pointers,
@@ -52,6 +50,10 @@ from sm64_events.slotlibrary.relocate import (  # noqa: E402  (the one relocatio
 )
 
 __all__ = ["Ambiguous", "object_index"]
+
+# The recordings this probe replays are Usamune US.
+BODY_START, POOL_START = US.body_start, US.object_pool
+POOL_END = POOL_START + POOL_BYTES
 
 
 def _be_words(data: bytes | np.ndarray) -> np.ndarray:
@@ -216,8 +218,8 @@ def loaded(seen: dict) -> bool:
 def outside_pointers(ram: np.ndarray, natural: np.ndarray, place: np.ndarray, symbols: sim.Symbols) -> dict:
     """After a load: words outside the slot naming an object, that are not what frame K's world would say."""
     words = _be_words(ram)
-    truth = map_pointers(_be_words(natural), place)
-    stale = in_pool(words) & (words != truth)
+    truth = map_pointers(_be_words(natural), place, POOL_START)
+    stale = in_pool(words, POOL_START) & (words != truth)
     for low, high in ((sim.phys(BODY_START), sim.phys(BODY_START) + BODY_BYTES),
                       (sim.phys(SLOT_BASE), sim.RDRAM_BYTES), *[(lo, hi) for _n, lo, hi in slots.PRESENTATION]):
         stale[low // 4:high // 4] = False
@@ -230,7 +232,7 @@ def outside_pointers(ram: np.ndarray, natural: np.ndarray, place: np.ndarray, sy
 def _map_back(ram: np.ndarray, place: np.ndarray) -> np.ndarray:
     """A RAM image with the swaps undone, to compare with what really happened."""
     inverse = np.argsort(place)
-    words = map_pointers(_be_words(ram), inverse)
+    words = map_pointers(_be_words(ram), inverse, POOL_START)
     low, high = sim.phys(POOL_START) // 4, sim.phys(POOL_END) // 4
     objects = words[low:high].reshape(OBJECT_COUNT, OBJECT_BYTES // 4).copy()
     moved = objects.copy()
@@ -322,7 +324,7 @@ class SimulatedGame:
 def twin_moves(trip: Trip, cpu: slots.SlotCpu, data: bytes) -> tuple[list, dict]:
     """The writers' plan (relocate.planned_moves) against the live world, checked against frame K's own pointers."""
     ours, live = slot_mario(data), cpu.u32(slots.MARIO_OBJECT)
-    moves = planned_moves(SimulatedGame(cpu), data, ours, live)
+    moves = planned_moves(SimulatedGame(cpu), data, ours, live, US)
     natural_word = lambda address: struct.unpack_from(">I", trip.natural, sim.phys(address))[0]  # noqa: E731
     area = cpu.u32(slots.CURRENT_AREA_POINTER)
     node, k_names = cpu.u32(area + WARP_LIST_IN_AREA), {}
@@ -353,8 +355,8 @@ def prove_pair(args, session: Path, k: int, j: int) -> tuple[str, dict]:
     ours = slot_mario(trip.saved)
     title = f"K={k} J={j}" + (f" L at {args.reset_at}" if args.reset_at else "")
     print(f"\n{title}: slot Mario {ours:08x}, live {live:08x}, level/area {trip.identity}")
-    moved = relocate(trip.saved, [(ours, live)])
-    place = permutation([(ours, live)])
+    moved = relocate(trip.saved, [(ours, live)], US)
+    place = permutation([(ours, live)], POOL_START)
     wm, check = twin_moves(trip, cpu, trip.saved)     # reads the live world: before any load below
     rows: dict = {"slot_mario": f"{ours:08x}", "live_mario": f"{live:08x}", "pointers_by_structure": dict(moved.pointers),
                   "raw_data_by_value": [(i, hex(o), hex(b)) for i, o, b in moved.raw_data]}
@@ -381,8 +383,8 @@ def prove_pair(args, session: Path, k: int, j: int) -> tuple[str, dict]:
     print(f"  warp objects by behavior+params: {check}")
     all_moves = [(ours, live), *[(a, b) for a, b in wm if b != live and a != ours]]
     rows["all_moves"] = [(f"{a:08x}", f"{b:08x}") for a, b in all_moves]
-    wider = relocate(trip.saved, all_moves)
-    wider_place = permutation(all_moves)
+    wider = relocate(trip.saved, all_moves, US)
+    wider_place = permutation(all_moves, POOL_START)
     run_row(trip, "relocated with warp objects, Usamune's load alone", wider.data, wider_place, rows)
     run_row(trip, "relocated with warp objects + seed+clocks+pads (needs code)", wider.data, wider_place, rows,
             lambda c: put_back(c, (*spans, pads)))
@@ -425,14 +427,14 @@ def controls(args) -> int:
         seen = press_load(trip, None)
         report["no relocation"] = {"loaded": loaded(seen), "ran": seen["ran"]}
         print(f"no relocation, K={k} J={j} (slot {ours:08x}, live {live:08x}): Usamune's gate {'REFUSED' if not loaded(seen) else 'LOADED'}; frame ran {seen['ran']}")
-        moved = relocate(trip.saved, [(ours, live)]).data
+        moved = relocate(trip.saved, [(ours, live)], US).data
         for name, offset, change in (("wrong area", slots.TRAILER_AREA, 1), ("wrong level", slots.TRAILER_LEVEL, 1)):
             bad = bytearray(moved)
             struct.pack_into(">h", bad, offset, struct.unpack_from(">h", bad, offset)[0] + change)
             seen = press_load(trip, bytes(bad))
             report[name] = {"loaded": loaded(seen), "ran": seen["ran"]}
             print(f"relocated, {name}: Usamune's gate {'REFUSED' if not loaded(seen) else 'LOADED'}; frame ran {seen['ran']}")
-        back = relocate(moved, [(live, ours)]).data
+        back = relocate(moved, [(live, ours)], US).data
         report["relocating there and back is the same bytes"] = back == trip.saved
         print(f"relocating there and back gives the same bytes: {back == trip.saved}")
     if args.same:
@@ -440,7 +442,7 @@ def controls(args) -> int:
         trip = ride(session, k, j, args.follow, args.slot)
         cpu = trip.replay.cpu
         ours, live = slot_mario(trip.saved), cpu.u32(slots.MARIO_OBJECT)
-        same = relocate(trip.saved, [(ours, live)]).data
+        same = relocate(trip.saved, [(ours, live)], US).data
         report["Mario already matches"] = {"slot": hex(ours), "live": hex(live), "bytes_unchanged": same == trip.saved}
         print(f"Mario matches (K={k} J={j}, slot {ours:08x}, live {live:08x}): relocating leaves the bytes unchanged: {same == trip.saved}")
     if args.wrong_level:
@@ -448,7 +450,7 @@ def controls(args) -> int:
         trip = ride(session, k, j, args.follow, args.slot)
         cpu = trip.replay.cpu
         ours, live = slot_mario(trip.saved), cpu.u32(slots.MARIO_OBJECT)
-        moved = relocate(trip.saved, [(ours, live)]).data
+        moved = relocate(trip.saved, [(ours, live)], US).data
         seen = press_load(trip, moved)
         report["truly another level"] = {"loaded": loaded(seen), "ran": seen["ran"]}
         print(f"truly another level (K={k} J={j}, slot {trip.identity}, live level {cpu.u16(slots.CURR_LEVEL)}): "
@@ -474,8 +476,8 @@ def address(args) -> int:
             if frame.index == args.at + 1:
                 mario = cpu.u32(slots.MARIO_OBJECT)
                 if chooser is None:
-                    other = POOL_START + (object_index(mario) + 7) % OBJECT_COUNT * OBJECT_BYTES
-                    place = permutation([(mario, other)])
+                    other = POOL_START + (object_index(mario, POOL_START) + 7) % OBJECT_COUNT * OBJECT_BYTES
+                    place = permutation([(mario, other)], POOL_START)
                 else:
                     order = list(range(OBJECT_COUNT))
                     random.Random(chooser).shuffle(order)
@@ -519,7 +521,7 @@ def address(args) -> int:
 def _move_everything(cpu: slots.SlotCpu, place: np.ndarray) -> None:
     """Move objects at a frame boundary: every RAM word naming one follows, by value, except the display buffers."""
     words = _be_words(cpu.ram)
-    mapped = map_pointers(words, place)
+    mapped = map_pointers(words, place, POOL_START)
     low, high = sim.phys(POOL_START) // 4, sim.phys(POOL_END) // 4
     objects = mapped[low:high].reshape(OBJECT_COUNT, OBJECT_BYTES // 4).copy()
     moved = objects.copy()

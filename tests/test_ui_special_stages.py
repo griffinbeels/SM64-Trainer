@@ -192,6 +192,8 @@ def _open(page, base):
     })()""")
     # The initial MARELO request can precede instrumentation. Its completed
     # resource entry proves it returned before any later reload is allowed.
+    # The entry survives a crowded startup because tools/browser_guard.py
+    # raises Chromium's 250-entry buffer in every page.
     _wait(page, "performance.getEntriesByType('resource').some(entry => "
           "new URL(entry.name).pathname === '/api/marelo')")
 

@@ -288,9 +288,9 @@ def test_narrowing_to_one_region_says_so_and_refiles_the_overall_block(
     read_note = ("(document.querySelector('.workshop-hero .version-switch-note')"
                  " || {}).textContent")
     assert library_page.evaluate(read_note) == "Both regions shown"
-    # The full app fills Chromium's default 250-entry timing buffer before
-    # this gesture. Observe a fresh bounded interaction, not a saturated log.
-    library_page.evaluate("performance.setResourceTimingBufferSize(4096); performance.clearResourceTimings();")
+    # Observe this gesture's own requests, not the whole startup log. Every
+    # page already keeps every entry (tools/browser_guard.py).
+    library_page.evaluate("performance.clearResourceTimings()")
     library_page.evaluate(TOGGLE_US)          # JP only
     library_page.wait_ms(400)
     note = library_page.evaluate(read_note)

@@ -347,7 +347,9 @@ both. Asset and start downloads read their range of that object, through the
 AssetCache export with a `range` prop. Objects without a start keep the exact
 whole-object read and cache identity they always had. Every byte budget charges
 `encoded_bytes + start_bytes`, and deleting the object refunds both. Apply
-additive migration `0008_ghost_start.sql` before this Worker. Rolling the Worker
+additive migration `0008_ghost_start.sql` before this Worker, and deploy it with
+`PRIVACY_VERSION` `beta-3`, the first notice that describes starts
+(`/policies#ghost-start`); never serve that paragraph under an older version. Rolling the Worker
 back past it is safe only while no start is stored: an older Worker reads whole
 objects without expecting a start after the ghost's bytes, and its collection
 refunds only the ghost's bytes.

@@ -8,3 +8,8 @@
 0x80417c1f	usamune_input_display	the HUD-settings block aligns +0xC8 (250 references); the display byte is +0xB on both
 0x8033c26c	usamune_timer	object slot 0's oTimer (pool + 0x154) on both builds
 0x80417c15	usamune_stop	settings base + 1 on both (STOP is menu index 1 in Usamune's own menu table, JP 0x80416114; its grab hook 0x80412e94 tests bit 0), US value + 0xC8
+0x80417c14	usamune_state_start	settings base: the verified STOP byte (0x80417c15) is base + 1 on both builds; US value + 0xC8
+0x80417d48	usamune_state_end	the counters after the settings align +0xC8 like the overall counter; US value + 0xC8
+0x80403930	usamune_slot_save	the JP dispatcher's save call, aligned instruction by instruction with US's save; a cold-booted JP game saves and loads through it (tools/scene_lab/cold_boot.py, 2026-11-08)
+0x80411d84	usamune_slot_load	the JP dispatcher's load call, aligned with US's load; the same cold-boot round trip
+0x80500000	usamune_slots_start	the JP save routine builds the same slot base and stride as US (0x80500000, 0x26460)

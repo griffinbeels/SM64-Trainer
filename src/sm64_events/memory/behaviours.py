@@ -59,6 +59,7 @@ NAME_OVERRIDES = {
     "bhvMessagePanel": "sign",
     "bhvMrBlizzard": "Mr. Blizzard",
     "bhvMrI": "Mr. I",
+    "bhvPlaysMusicTrackWhenTouched": "music trigger",
     "bhvPoleGrabbing": "pole",
     "bhvSignOnWall": "wall sign",
     "bhvToadMessage": "Toad",

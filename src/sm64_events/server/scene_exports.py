@@ -6,7 +6,7 @@
 
 A scene recording (the glossary's) is the timeline the page kept while Record was on: one entry
 per display frame, {t_ms, scene_frame, camera, camera_used, hud, ghosts, sound, play_ms}
-(docs/api.md "Scene viewer"). POST checks it against the open scene, writes a job folder (the lab
+(docs/api.md "Ghost Lab"). POST checks it against the open scene, writes a job folder (the lab
 config's paths, the package, the timeline, every ghost's clip as the catalog loads it, the
 ghosts' look) and starts tools/scene_lab/scene_export.py as a below-normal, hidden child: the
 pictures are drawn by a renderer host of its own and encoded by FFmpeg, so the server's event loop
@@ -69,14 +69,30 @@ def _pose(value) -> dict:
 
 
 def _camera(value):
-    """A camera as the page sent it (interface D): null, a pose, {"ghost": ref} or {"rig": {...}}."""
+    """A camera as the page sent it (interface D): null, a pose (a camera path's may carry "recorded",
+    its blend toward the recorded camera, and "aim", its focus's share on runners: scene_session's
+    recorded_blend and aim_blend check them as they draw), {"ghost": ref} or {"rig": {...}}."""
     if value is None:
         return None
     if isinstance(value, dict) and set(value) == {"ghost"} and isinstance(value["ghost"], str) and value["ghost"]:
         return {"ghost": value["ghost"][:512]}
     if isinstance(value, dict) and set(value) == {"rig"} and isinstance(value["rig"], dict) and len(json.dumps(value)) < 4096:
         return {"rig": value["rig"]}
-    return _pose(value)
+    if not isinstance(value, dict):
+        return _pose(value)
+    extra = {}
+    if "recorded" in value:
+        weight = value["recorded"]
+        if not (_number(weight) and 0 <= weight <= 1):
+            raise ValueError("a camera's recorded weight is a number from 0 to 1")
+        extra["recorded"] = float(weight)
+    if "aim" in value:
+        aim = value["aim"]
+        if not (isinstance(aim, dict) and len(aim) <= 64 and all(isinstance(target, str) and 0 < len(target) <= 512
+                                                                 and _number(weight) for target, weight in aim.items())):
+            raise ValueError("a camera's aim is {runner: weight}")
+        extra["aim"] = {target: float(weight) for target, weight in aim.items()}
+    return {**_pose({key: part for key, part in value.items() if key not in ("recorded", "aim")}), **extra}
 
 
 def _refs(value, what: str) -> list[str]:
@@ -114,6 +130,7 @@ def checked_timeline(timeline, frames: int) -> list[dict]:
         entries.append({
             "t_ms": float(t_ms), "scene_frame": frame, "camera": _camera(entry.get("camera")),
             "camera_used": None if used is None else _pose(used), "hud": entry.get("hud", True) is not False,
+            "mario": entry.get("mario", True) is not False,          # version 2; version 1 always drew him
             "ghosts": _refs(entry.get("ghosts") or [], "a timeline entry's ghosts"),
             "play_ms": None if play is None else float(play),
             "sound": {"music": sound.get("music", True) is not False, "effects": sound.get("effects", True) is not False,
@@ -255,7 +272,7 @@ class SceneExports:
             raise ValueError("The export is {version, session, timeline, fps}.")
         from sm64_events.server.scene_lab_api import _lab_module
         reader = _lab_module("scene_export")                   # the recording's format and its one reader
-        if body.get("version") != reader.TIMELINE_VERSION:
+        if body.get("version") not in reader.READABLE:
             raise ValueError(reader.OTHER_VERSION)
         fps = body.get("fps", 60)
         if fps not in FPS_CHOICES:

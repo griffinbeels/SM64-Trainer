@@ -1,25 +1,77 @@
-/* The Scene viewer (M4 E3, lab only): components/sceneviewer.js links this
-   sheet when it loads, so with the lab switched off the browser never fetches
-   it. Layout gates on the pane (.view-pane is the container), never the
-   viewport. */
-.scene-lab { display: grid; gap: 12px; outline: none; }
+/* The Ghost Lab (the Scene viewer until round 9; M4 E3, lab only): components/sceneviewer.js links this
+   sheet when it loads, so with the lab switched off the browser never fetches it. Each block lays out on
+   its own width (@container), never the viewport, and nothing in it moves when a control changes state:
+   a control or readout whose words change is a SteadyText (components/steadytext.js), and a note is one
+   line cut short with the whole sentence on hover (round 9, item 3: "The UI should not be bouncing around
+   like that when we go between playing / paused"). tests/test_ui_scene_steady.py measures every box
+   through every state.
+
+   The page, top to bottom (round 9, item 5): the bar, the picture, the play bar, the save-state strip,
+   and the tray with its two tabs. Gold marks what is chosen or on (the run you watch, a pressed switch,
+   the slot loaded last), always with a second sign beside it (a star, a ▶, a pressed border). */
+.scene-lab { display: grid; gap: 10px; outline: none; }
+.scene-lab-reason { margin: 0; flex-basis: 100%; color: var(--muted); line-height: 1.5; }
+.scene-lab-hint, .scene-lab-readout { margin: 0; color: var(--muted); font-size: .8rem; line-height: 1.5; }
+.scene-lab-hint.is-bad { color: var(--coral); }
+.scene-lab-readout { font-variant-numeric: tabular-nums; }
+.scene-lab-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
+.scene-lab-bar input[type=range] { flex: 1 1 220px; min-width: 0; }
+.scene-lab-bar button[aria-pressed="true"], .ghost-lab button[aria-pressed="true"] { border-color: var(--gold); color: var(--gold-soft); }
+
+/* ---- The bar: the stage picker and the run you watch, a one-line note, then the recording's sign, More
+   and Close. On a narrow pane the note and the right side take the second line. */
+.ghost-lab-top { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "left note right";
+  align-items: center; gap: 8px 14px; padding: 10px 12px; container-type: inline-size; }
+.ghost-lab-top-left { grid-area: left; display: flex; align-items: center; gap: 10px; min-width: 0; }
+.ghost-lab-top-note { grid-area: note; margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--muted); font-size: .85rem; line-height: 1.4; }
+.ghost-lab-top-note.is-bad { color: var(--coral); }
+.ghost-lab-top-right { grid-area: right; display: flex; align-items: center; gap: 8px; }
+.ghost-lab-watching { display: inline-flex; align-items: center; gap: 6px; min-width: 0; white-space: nowrap; }
+.ghost-lab-watching strong { overflow: hidden; text-overflow: ellipsis; max-width: 18ch; }
+.ghost-lab-watching-time { color: var(--muted); font-variant-numeric: tabular-nums; }
+.ghost-lab-star { color: var(--gold); font-size: .95rem; line-height: 1; }
+/* The stage picker, Course/Star/Strategy (components/scenestage.js), in the bar. */
+.scene-lab-stage-picker { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.scene-lab-target { gap: 10px; min-width: 0; max-width: 260px; padding: 4px 12px 4px 6px; text-align: left; }
+.scene-lab-target img { width: 30px; height: 30px; flex: none; object-fit: contain; }
+.scene-lab-target-words { display: grid; min-width: 0; line-height: 1.25; }
+.scene-lab-target-words strong, .scene-lab-target-words small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scene-lab-target-words small { color: var(--muted); font-size: .76rem; }
+.scene-lab-stage-picker select { min-width: 0; max-width: 200px; background: var(--surface-2); }
+.scene-lab-stage-note { min-width: 0; color: var(--muted); font-size: .85rem; line-height: 1.4; }
+/* The live recording's sign and switch (components/scenerecording.js): always in the bar, so whether the
+   lab records his play is never hidden behind a menu. A steady light, no animation. */
+.scene-recording { display: inline-flex; align-items: center; gap: 8px; min-width: 0; color: var(--text); font-size: .85rem; }
+.scene-recording-light { width: 10px; height: 10px; flex: 0 0 auto; border-radius: 50%; background: var(--muted); }
+.scene-recording.is-running .scene-recording-light { background: var(--coral); box-shadow: 0 0 0 3px rgba(255,123,115,.22); }
+.scene-recording.is-off .scene-recording-words { color: var(--muted); }
+.scene-recording.is-bad .scene-recording-words { color: var(--coral); }
+.scene-recording button { min-height: 30px; padding: 0 10px; }
+/* The More menu and the sound: small menus over the page (components/scenepop.js), taking no room. */
+.ghost-lab-more, .ghost-lab-sound { position: relative; display: inline-flex; }
+.ghost-lab-pop { position: absolute; z-index: 30; top: calc(100% + 6px); right: 0; display: grid; gap: 10px;
+  width: max-content; max-width: min(520px, 92vw); padding: 12px; border: 1px solid var(--border-soft);
+  border-radius: var(--radius); background: var(--surface); box-shadow: 0 12px 32px rgba(0,0,0,.45); }
+.ghost-lab-pop[hidden] { display: none; }
+.ghost-lab-sound-pop { top: auto; bottom: calc(100% + 6px); }
+.ghost-lab-sound-pop .scene-lab-bar { flex-wrap: nowrap; }
+.ghost-lab-numbers { max-width: 480px; }
+.scene-lab-quality { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); }
+.scene-lab-quality select { background: var(--surface-2); }
 .scene-lab-open { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; min-width: 0; }
 .scene-lab-open label { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); min-width: 0; }
-.scene-lab-open select { min-width: 0; max-width: 360px; background: var(--surface-2); }
-.scene-lab-title { min-width: 0; max-width: 560px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
-.scene-lab-reason { margin: 0; flex-basis: 100%; color: var(--muted); line-height: 1.5; }
-/* The live recording's sign and switch (components/scenerecording.js): its own row of the hero, so
-   whether the lab records his play is never hidden behind a menu. A steady light, no animation. */
-.scene-recording { flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; min-width: 0;
-  padding: 8px 12px; border: 1px solid var(--border-soft); border-radius: var(--radius); background: var(--surface-2); }
-.scene-recording-light { width: 10px; height: 10px; flex: 0 0 auto; border-radius: 50%; background: var(--muted); }
-.scene-recording.is-running { border-color: rgba(255,123,115,.55); }
-.scene-recording.is-running .scene-recording-light { background: var(--coral); box-shadow: 0 0 0 3px rgba(255,123,115,.22); }
-.scene-recording-words { flex: 1 1 260px; min-width: 0; line-height: 1.4; }
-.scene-recording.is-off .scene-recording-words { color: var(--muted); }
-.scene-recording .scene-lab-reason { color: var(--coral); }
-.scene-lab-error { margin: 0; padding: 10px 14px; border-left: 3px solid var(--coral); background: rgba(255,123,115,.06); }
-.scene-lab-player { display: grid; gap: 10px; min-width: 0; }
+.scene-lab-open select { min-width: 0; max-width: 300px; background: var(--surface-2); }
+.ghost-lab-keys { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 16px; margin: 0; font-size: .8rem; }
+.ghost-lab-keys div { display: grid; grid-template-columns: 8.5rem minmax(0, 1fr); gap: 8px; align-items: baseline; }
+.ghost-lab-keys dt, .ghost-lab-keys dd { margin: 0; }
+.ghost-lab-keys dd { color: var(--muted); }
+.ghost-lab kbd { min-width: 1.5em; padding: 0 .3em; border: 1px solid var(--border-soft); border-radius: 4px;
+  color: var(--muted); font: inherit; font-size: .72rem; font-weight: 700; line-height: 1.4; text-align: center; white-space: nowrap; }
+
+/* ---- The picture and what it wears: whose camera, Drawing..., and at its foot the notice, the cue and a
+   cinematic camera's settings. */
+.scene-lab-player { display: grid; gap: 8px; min-width: 0; padding: 10px; container-type: inline-size; }
 .scene-lab-stage { position: relative; background: #000; border: 1px solid var(--border-soft); border-radius: var(--radius); overflow: hidden; }
 .scene-lab-stage canvas { display: block; width: 100%; height: auto; max-height: 70vh; object-fit: contain; touch-action: none; }
 .scene-lab-stage canvas.is-movable { cursor: grab; }
@@ -30,47 +82,182 @@
 .scene-lab-tag { left: 10px; }
 .scene-lab-tag.is-free, .scene-lab-tag.is-view { color: var(--gold-soft); }
 .scene-lab-busy { right: 10px; color: var(--muted); }
-/* What the picture says on itself: why a click on it did nothing (the notice), then the keys of what
-   you are doing (the cue). On the picture, not between rows, so neither moves the controls. */
 .scene-lab-overlay { position: absolute; left: 50%; bottom: 12px; display: grid; justify-items: center; gap: 6px;
   width: max-content; max-width: calc(100% - 24px); transform: translateX(-50%); pointer-events: none; }
 .scene-lab-cue, .scene-lab-notice { margin: 0; padding: 4px 10px; border-radius: 6px; background: rgba(0,0,0,.66);
   color: var(--text); font-size: .78rem; line-height: 1.5; text-align: center; }
 .scene-lab-notice { color: var(--gold-soft); }
-/* Every bar wraps by its controls' fixed sizes only: a control or readout whose words change is a
-   SteadyText (components/steadytext.js), so where a row wraps never depends on what it says
-   (round 9, item 3: "The UI should not be bouncing around like that when we go between playing /
-   paused"). tests/test_ui_scene_steady.py measures every box through every state. */
-.scene-lab-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
-.scene-lab-bar input[type=range] { flex: 1 1 220px; min-width: 0; }
-.scene-lab-bar button[aria-pressed="true"] { border-color: var(--gold); color: var(--gold-soft); }
-/* The frame slider and its readout wrap as one: on the buttons' row while the slider keeps 220px
-   beside the readout's 230px, else together on the next row, never the readout alone under a slider
-   that grew into its place. */
-.scene-lab-scrub { flex: 1 1 460px; display: flex; align-items: center; gap: 8px; min-width: 0; }
-.scene-lab-frame { flex: none; font-variant-numeric: tabular-nums; }
-.scene-lab-frame small { display: block; color: var(--muted); }
-.scene-lab-quality { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; color: var(--muted); }
-.scene-lab-quality select { background: var(--surface-2); }
-.scene-lab-hint, .scene-lab-readout { margin: 0; color: var(--muted); font-size: .8rem; line-height: 1.5; }
-.scene-lab-hint.is-bad { color: var(--coral); }
-/* The Cinematic row (components/scenerigs.js): the cameras and Follow. The camera on screen's settings
-   sit on the picture's foot, under its notice, while one is on: a row of them that came and went moved
-   every row under it, and a row kept for them stood empty with no camera on (round 9). */
-.scene-lab-rigs-name { color: var(--muted); }
+.scene-lab-overlay .scene-lab-rig-options { justify-content: center; padding: 6px 8px; border-radius: 8px;
+  background: rgba(0,0,0,.72); pointer-events: auto; }
+.scene-lab-overlay .scene-lab-rig-options label { color: var(--text); }
+
+/* ---- The play bar (components/sceneplaybar.js): steps, the slider and its readout, then speed, Loop and
+   sound, every part a fixed size; under 900 px the slider takes its own line. */
+.ghost-lab-play { position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-areas: "steps scrub end"; align-items: center; gap: 8px 12px; }
+.ghost-lab-play-steps { grid-area: steps; display: flex; align-items: center; gap: 4px; }
+.ghost-lab-play-main { width: 46px; min-width: 46px; padding-inline: 0; }
+.ghost-lab-play .scene-lab-scrub { grid-area: scrub; }
+.ghost-lab-play-end { grid-area: end; display: flex; align-items: center; gap: 6px; }
+.ghost-lab-speeds { display: inline-flex; }
+.ghost-lab-speeds button { width: 40px; min-width: 40px; padding-inline: 0; border-radius: 0; }
+.ghost-lab-speeds button:first-child { border-radius: 6px 0 0 6px; }
+.ghost-lab-speeds button:last-child { border-radius: 0 6px 6px 0; }
+.ghost-lab-speeds button + button { margin-left: -1px; }
+.ghost-lab-speeds button[aria-pressed="true"] { position: relative; z-index: 1; background: rgba(240,189,50,.12); }
+.scene-lab-scrub { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.scene-lab-scrub input[type=range] { flex: 1 1 0; min-width: 0; }
+.ghost-lab-track { position: relative; display: flex; flex: 1 1 0; align-items: center; min-width: 0; }
+/* The part of a run not built yet: striped and empty, past the last frame a drag can reach. */
+.ghost-lab-unbuilt { position: absolute; top: 50%; right: 0; height: 8px; transform: translateY(-50%); border-radius: 4px;
+  background: repeating-linear-gradient(135deg, rgba(255,255,255,.2) 0 4px, rgba(255,255,255,.06) 4px 8px);
+  pointer-events: none; transition: left .2s ease-out; }
+.scene-lab-frame { flex: none; display: grid; line-height: 1.25; font-variant-numeric: tabular-nums; }
+.scene-lab-frame small { display: block; color: var(--muted); font-size: .76rem; }
+/* While a run becomes the scene, its progress on the picture's foot just above the bar. */
+.ghost-lab-play > .ghost-lab-build { position: absolute; left: 0; right: 0; bottom: calc(100% + 8px); }
+.ghost-lab-build { position: relative; display: flex; align-items: center; gap: 10px; min-height: 30px; padding: 4px 10px;
+  overflow: hidden; border: 1px solid rgba(240,189,50,.45); border-radius: 6px; background: rgba(8,14,22,.88);
+  font-size: .82rem; }
+.ghost-lab-build-fill { position: absolute; inset: auto 0 0 0; height: 3px; background: var(--gold);
+  transform-origin: left center; transition: transform .2s ease-out; }
+.ghost-lab-build-words { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ghost-lab-build-share { flex: none; color: var(--gold-soft); font-variant-numeric: tabular-nums; }
+.ghost-lab-build-stop { flex: none; width: 24px; height: 24px; min-height: 24px; padding: 0; justify-content: center; }
+/* A row's: its share under the rank, and the bar along the row's foot. */
+.ghost-lab-build.is-compact { position: absolute; inset: auto 0 0 0; min-height: 0; padding: 0 0 3px 6px; border: 0;
+  border-radius: 0; background: transparent; font-size: .7rem; line-height: 1.2; pointer-events: none; }
+.ghost-lab-build.is-compact .ghost-lab-build-share { max-width: 3.4ch; overflow: hidden; }
+@media (prefers-reduced-motion: reduce) { .ghost-lab-build-fill, .ghost-lab-unbuilt { transition: none; } }
+
+/* ---- The save-state strip (components/scenestrip.js): nine tiles in the order of Usamune's slots and the
+   number keys, then the one line that says what a press did or why it cannot, with the course and star the
+   slots follow at its right end. A tile is three rows over its picture: its number (and ▶ when loaded last);
+   the place's name when it has no picture (one line, all of it on hover); its flag (and ★ for the star's own
+   set) with ⇄ at the right. Its menu button sits on the top right corner (seen on hover, focus or while open). */
+.ghost-lab-strip { display: grid; gap: 4px; min-width: 0; }
+.ghost-lab-slots { display: grid; grid-template-columns: repeat(9, minmax(0, 1fr)); gap: 6px; margin: 0; padding: 0; list-style: none; }
+.ghost-lab-slot { position: relative; display: grid; min-width: 0; }
+.ghost-lab-slot > button { position: relative; display: grid; grid-template: auto minmax(0, 1fr) auto / minmax(0, 1fr);
+  align-items: center; justify-content: stretch; min-width: 0; height: 58px; min-height: 0; padding: 3px; overflow: hidden;
+  border-radius: 6px; background: #0a1522; }
+.ghost-lab-slot.is-empty > button, .ghost-lab-slot.is-unknown > button { border-style: dashed; background: transparent; }
+.ghost-lab-slot.is-unknown > button { opacity: .7; }
+.ghost-lab-slot-picture { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.ghost-lab-slot-top, .ghost-lab-slot-marks { position: relative; display: flex; align-items: center; gap: 3px; min-width: 0; }
+.ghost-lab-slot-top { grid-row: 1; justify-self: start; }
+.ghost-lab-slot-place { grid-row: 2; min-width: 0; padding: 0 3px; overflow: hidden; color: var(--text); font-size: .72rem;
+  line-height: 1.2; text-align: center; white-space: nowrap; text-overflow: ellipsis; }
+.ghost-lab-slot kbd { background: rgba(0,0,0,.7); color: var(--text); }
+.ghost-lab-slot.is-empty .ghost-lab-slot-top, .ghost-lab-slot.is-unknown .ghost-lab-slot-top { grid-row: 1 / -1; justify-self: center; }
+.ghost-lab-slot.is-empty kbd, .ghost-lab-slot.is-unknown kbd { background: transparent; color: var(--muted); }
+.ghost-lab-slot-marks { grid-row: 3; justify-content: space-between; pointer-events: none; }
+.ghost-lab-slot-from { display: inline-flex; align-items: center; gap: 3px; margin-right: auto; }
+.ghost-lab-slot-marks .region-flag { box-shadow: 0 0 0 1px rgba(0,0,0,.6); }
+.ghost-lab-slot-star { padding: 0 3px; border-radius: 4px; background: rgba(0,0,0,.72); color: var(--gold); font-size: .72rem;
+  line-height: 1.35; }
+.ghost-lab-slot-crossed { padding: 0 4px; border-radius: 4px; background: rgba(0,0,0,.72); color: var(--blue); font-size: .78rem; line-height: 1.3; }
+.ghost-lab-slot.is-loaded > button { border: 2px solid var(--gold); }
+.ghost-lab-slot-loaded { padding: 0 4px; border-radius: 4px; background: var(--gold); color: #1b1300; font-size: .62rem; line-height: 1.5; }
+.ghost-lab-slot.is-busy > button { border-color: var(--gold); border-style: solid; }
+.ghost-lab-slot.is-busy > button::after { content: ""; position: absolute; inset: 0; background: rgba(240,189,50,.18); }
+/* A saved tile's menu: which stars use the slot. Its button sits on the tile's corner; the menu lines up with
+   the tile's own edge (the near one for the far slots) and opens upward, over the player, so it covers no tab. */
+.ghost-lab-slot-menu { display: contents; }
+.ghost-lab-slot-more { position: absolute; top: 3px; right: 3px; z-index: 2; width: 22px; height: 20px; min-width: 0;
+  min-height: 0; padding: 0; justify-content: center; border-radius: 4px; background: rgba(0,0,0,.72); opacity: 0; }
+.ghost-lab-slot:hover .ghost-lab-slot-more, .ghost-lab-slot-more:focus-visible,
+.ghost-lab-slot-menu.is-open .ghost-lab-slot-more { opacity: 1; }
+.ghost-lab-slot-pop { top: auto; right: auto; bottom: calc(100% + 6px); left: 0; gap: 2px; padding: 6px; }
+.ghost-lab-slot-pop.is-end { right: 0; left: auto; }
+.ghost-lab-slot-pop button { justify-content: flex-start; gap: 6px; min-height: 30px; padding: 0 10px; border-color: transparent;
+  background: transparent; white-space: nowrap; }
+.ghost-lab-slot-pop button:hover:not(:disabled) { background: var(--surface-2); }
+.ghost-lab-slot-check { width: 1em; color: var(--gold); text-align: center; }
+.ghost-lab-strip-foot { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.ghost-lab-strip-line { display: flex; flex: 1 1 0; align-items: center; gap: 6px; min-width: 0; min-height: 1.5em; margin: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: .8rem; line-height: 1.5; }
+.ghost-lab-strip-line.is-bad { color: var(--coral); }
+.ghost-lab-strip-line .region-flag { flex: none; }
+.ghost-lab-strip-context { flex: 0 1 auto; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--muted); font-size: .8rem; line-height: 1.5; }
+
+/* ---- The tray: two tabs that each name their job and what they hold now, and a panel of fixed height
+   (it scrolls inside), so changing tab never moves the page. */
+.ghost-lab-tray { display: grid; gap: 0; min-width: 0; padding: 0; overflow: hidden; container-type: inline-size; }
+.ghost-lab-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border-bottom: 1px solid var(--border-soft); }
+.ghost-lab-tabs [role=tab] { justify-content: flex-start; gap: 10px; min-height: 52px; padding: 8px 14px; border: 0;
+  border-radius: 0; border-top: 3px solid transparent; background: transparent; text-align: left; }
+.ghost-lab-tabs [role=tab][aria-selected="true"] { border-top-color: var(--gold); background: var(--surface-2); }
+.ghost-lab-tabs [role=tab] + [role=tab] { border-left: 1px solid var(--border-soft); }
+.ghost-lab-tab-words { display: grid; min-width: 0; line-height: 1.25; }
+.ghost-lab-tab-words small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: .76rem; }
+.ghost-lab-panel { height: clamp(300px, 44vh, 470px); overflow: auto; padding: 12px 14px; background: var(--surface-2); }
+.ghost-lab-panel[hidden] { display: none; }
+.ghost-lab-empty { display: grid; place-items: center; min-height: 240px; color: var(--muted); }
+.ghost-lab-empty .ghost-lab-build { width: min(460px, 90%); }
+
+/* ---- The Camera tab: one labeled row per kind of camera choice; a row's controls wrap within it. */
+.ghost-lab-camera { display: grid; gap: 10px; min-width: 0; }
+.ghost-lab-camera-note { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ghost-lab-row { display: grid; grid-template-columns: 5.2rem minmax(0, 1fr); align-items: start; gap: 4px 12px; min-width: 0; }
+.ghost-lab-row-name { padding-top: 7px; color: var(--muted); font-size: .78rem; font-weight: 650; letter-spacing: .04em; }
+.ghost-lab-row-body { display: grid; gap: 6px; min-width: 0; }
+.ghost-lab-look .ghost-lab-row-body { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
+.ghost-lab-pair { display: inline-flex; gap: 6px; flex: none; }
 .scene-lab-rigs label, .scene-lab-rig-options label, .scene-lab-lens label { display: inline-flex; align-items: center;
   gap: 8px; min-width: 0; color: var(--muted); }
 .scene-lab-rig-note { color: var(--muted); font-size: .8rem; }
 .scene-lab-rigs select, .scene-lab-rig-options select { min-width: 0; max-width: 220px; background: var(--surface-2); }
-.scene-lab-overlay .scene-lab-rig-options { justify-content: center; padding: 6px 8px; border-radius: 8px;
-  background: rgba(0,0,0,.72); pointer-events: auto; }
-.scene-lab-overlay .scene-lab-rig-options label { color: var(--text); }
 .scene-lab-rig-shots { display: inline-flex; gap: 6px; }
 .scene-lab-bar .scene-lab-rig-range input[type=range] { flex: 0 1 120px; width: 120px; }
 .scene-lab-rig-range output { color: var(--text); font-variant-numeric: tabular-nums; }
 .scene-lab-speed { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
 .scene-lab-speed output { text-align: center; color: var(--text); font-variant-numeric: tabular-nums; }
 .scene-lab-speed button { min-width: 34px; justify-content: center; }
+/* Film: Record or Stop, then a place of its own for how long, the video's progress and what became of
+   it, each one line, so pressing Record moves nothing. */
+.scene-lab-record-dot { color: var(--coral); fill: currentColor; }
+.scene-lab-record button.is-recording { border-color: var(--coral); color: var(--coral); }
+.scene-lab-record-status { flex: 1 1 18rem; align-self: stretch; display: flex; align-items: center; gap: 8px; min-width: 0; }
+.scene-lab-record-time { color: var(--coral); font-variant-numeric: tabular-nums; }
+.scene-lab-record progress { flex: 0 1 160px; min-width: 80px; accent-color: var(--gold); }
+.scene-lab-record-note { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--muted); font-size: .85rem; line-height: 1.5; }
+.scene-lab-record-note.is-bad { color: var(--coral); }
+.scene-lab-record-link { flex: none; color: var(--gold-soft); white-space: nowrap; }
+/* The sound, in its menu (components/sceneaudio.js): Mute, a short volume slider, Music, Sound effects,
+   then what this picture's sound is, one line. */
+.scene-lab-sound input[type=range] { flex: 0 1 140px; }
+.scene-lab-sound-note { flex: 1 1 14rem; min-width: 0; max-width: 22rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--muted); font-size: .8rem; line-height: 1.5; }
+.scene-lab-sound-note.is-lost { color: var(--gold-soft); }
+/* Views (components/scenepresets.js): nine saved cameras in the order of Shift and the number keys. A
+   slot is its key over its name; rename and delete sit in its corner. Its line above is one line as tall
+   as the Undo button: what a press says never moves the slots. */
+.scene-lab-cameras { display: grid; gap: 6px; min-width: 0; }
+.scene-lab-cameras-head { display: flex; align-items: center; gap: 2px 12px; min-width: 0; min-height: 26px; }
+.scene-lab-cameras-head .scene-lab-hint { flex: 1 1 260px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scene-lab-cameras-undo { flex: none; color: var(--muted); font-size: .8rem; }
+.scene-lab-cameras-undo button { min-height: 26px; padding: 0 8px; font-size: .78rem; }
+.scene-lab-slots { display: grid; grid-template-columns: repeat(9, minmax(0, 1fr)); gap: 6px; margin: 0; padding: 0; list-style: none; }
+.scene-lab-slot { position: relative; display: grid; min-width: 0; }
+.scene-lab-slot.is-target > button, .scene-lab-slot.is-target > .scene-lab-slot-edit { outline: 2px dashed var(--gold); outline-offset: 1px; }
+.scene-lab-slot.is-dragged { opacity: .45; }
+.scene-lab-slot-cut, .scene-lab-slot-save, .scene-lab-slot-edit { display: grid; justify-content: stretch; justify-items: start;
+  align-content: start; gap: 3px; min-width: 0; min-height: 50px; padding: 5px 7px; text-align: left; }
+.scene-lab-slot-edit { border: 1px solid var(--gold); border-radius: 6px; background: #142338; }
+.scene-lab-slot-save { border-style: dashed; background: transparent; color: var(--muted); }
+.scene-lab-slot-cut[aria-pressed="true"] { border-color: var(--gold); background: rgba(240,189,50,.1); color: var(--gold-soft); }
+.scene-lab-slot-cut[aria-pressed="true"] kbd { border-color: var(--gold); color: var(--gold-soft); }
+.scene-lab-slot-name { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .8rem; }
+.scene-lab-slot-save .scene-lab-slot-name { display: inline-flex; align-items: center; gap: 3px; }
+.scene-lab-slot-name-field { width: 100%; min-width: 0; padding: 1px 4px; font-size: .8rem; }
+.scene-lab-slot-tools { position: absolute; top: 3px; right: 3px; display: flex; gap: 1px; }
+.scene-lab-slot-tools button { width: 19px; height: 20px; min-height: 0; padding: 0; border-color: transparent; background: transparent;
+  color: var(--muted); }
+.scene-lab-slot-tools button:hover:not(:disabled) { border-color: var(--border-soft); color: var(--text); }
+/* The camera's tuning inspector (More, then Tune controls), under the tray. */
 .scene-lab-tune { display: grid; gap: 8px; min-width: 0; }
 .scene-lab-tune-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .scene-lab-tune-head h3 { margin: 0 auto 0 0; font-size: 1rem; }
@@ -83,131 +270,84 @@
 .scene-lab-tune .tune-row > input[type=number] { width: 100%; background: var(--surface); }
 .scene-lab-tune .tune-row > input[type=range] { grid-column: 1 / -1; width: 100%; margin: 0; }
 .scene-lab-tune .tune-row.is-changed > label { color: var(--gold-soft); font-weight: 600; }
-.scene-lab-readout { font-variant-numeric: tabular-nums; }
-/* The Sound row (components/sceneaudio.js): a short volume slider, then what this picture's sound is.
-   The note changes as the scene plays, so it is one line in a place sized by the row, never by its
-   words (the whole sentence is its title). */
-.scene-lab-sound input[type=range] { flex: 0 1 140px; }
-.scene-lab-sound-note { flex: 1 1 18rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  color: var(--muted); font-size: .8rem; line-height: 1.5; }
-.scene-lab-sound-note.is-lost { color: var(--gold-soft); }
-/* The Record row (components/scenerecord.js): Record or Stop, then a place of its own for how long,
-   the video's progress and what became of it, each one line, so pressing Record moves nothing. */
-.scene-lab-record-dot { color: var(--coral); fill: currentColor; }
-.scene-lab-record button.is-recording { border-color: var(--coral); color: var(--coral); }
-.scene-lab-record-status { flex: 1 1 18rem; align-self: stretch; display: flex; align-items: center; gap: 8px; min-width: 0; }
-.scene-lab-record-time { color: var(--coral); font-variant-numeric: tabular-nums; }
-.scene-lab-record progress { flex: 0 1 160px; min-width: 80px; accent-color: var(--gold); }
-.scene-lab-record-note { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  color: var(--muted); font-size: .85rem; line-height: 1.5; }
-.scene-lab-record-note.is-bad { color: var(--coral); }
-.scene-lab-record-link { flex: none; color: var(--gold-soft); white-space: nowrap; }
-/* The Cameras strip (components/scenepresets.js): nine slots in one row, in the order of the number
-   keys that cut to them. A slot is its number over its name; rename and delete sit in its corner. */
-.scene-lab-cameras { display: grid; gap: 6px; min-width: 0; }
-/* Its heading line (and Save states', the same class) is one line as tall as the Undo button, its
-   sentence cut short with the whole of it on hover: what a press says never moves the slots or
-   the rows under them (round 9, item 3). */
-.scene-lab-cameras-head { display: flex; align-items: center; gap: 2px 12px; min-width: 0; min-height: 26px; }
-.scene-lab-cameras-head h3 { flex: none; margin: 0; color: var(--muted); font-size: .78rem; letter-spacing: .06em; text-transform: uppercase; }
-.scene-lab-cameras-head .scene-lab-hint { flex: 1 1 260px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.scene-lab-cameras-undo { flex: none; color: var(--muted); font-size: .8rem; }
-.scene-lab-cameras-undo button { min-height: 26px; padding: 0 8px; font-size: .78rem; }
-.scene-lab-slots { display: grid; grid-template-columns: repeat(9, minmax(0, 1fr)); gap: 6px; margin: 0; padding: 0; list-style: none; }
-/* The Save states row (components/scenemoment.js): nine numbers on the Cameras strip's grid. */
-.scene-lab-moment { display: grid; gap: 6px; min-width: 0; }
-.scene-lab-moment-slots { display: grid; grid-template-columns: repeat(9, minmax(0, 1fr)); gap: 6px; margin: 0; padding: 0; list-style: none; }
-.scene-lab-moment-slots li { display: grid; min-width: 0; }
-.scene-lab-moment-slots button { justify-content: center; min-height: 34px; padding: 3px 7px; }
-.scene-lab-moment-slots button[aria-busy="true"] { border-color: var(--gold); }
-.scene-lab-moment-slots kbd { min-width: 1.5em; padding: 0 .3em; border: 1px solid var(--border-soft); border-radius: 4px;
-  color: var(--muted); font: inherit; font-size: .72rem; font-weight: 700; line-height: 1.4; text-align: center; }
-.scene-lab-slot { position: relative; display: grid; min-width: 0; }
-.scene-lab-slot.is-target > button, .scene-lab-slot.is-target > .scene-lab-slot-edit { outline: 2px dashed var(--gold); outline-offset: 1px; }
-.scene-lab-slot.is-dragged { opacity: .45; }
-.scene-lab-slot-cut, .scene-lab-slot-save, .scene-lab-slot-edit { display: grid; justify-content: stretch; justify-items: start;
-  align-content: start; gap: 3px; min-width: 0; min-height: 50px; padding: 5px 7px; text-align: left; }
-.scene-lab-slot-edit { border: 1px solid var(--gold); border-radius: 6px; background: #142338; }
-.scene-lab-slot-save { border-style: dashed; background: transparent; color: var(--muted); }
-.scene-lab-slot-cut[aria-pressed="true"] { border-color: var(--gold); background: rgba(240,189,50,.1); color: var(--gold-soft); }
-.scene-lab-slot kbd { min-width: 1.5em; padding: 0 .3em; border: 1px solid var(--border-soft); border-radius: 4px;
-  color: var(--muted); font: inherit; font-size: .72rem; font-weight: 700; line-height: 1.4; text-align: center; }
-.scene-lab-slot-cut[aria-pressed="true"] kbd { border-color: var(--gold); color: var(--gold-soft); }
-.scene-lab-slot-name { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .8rem; }
-.scene-lab-slot-save .scene-lab-slot-name { display: inline-flex; align-items: center; gap: 3px; }
-.scene-lab-slot-name-field { width: 100%; min-width: 0; padding: 1px 4px; font-size: .8rem; }
-.scene-lab-slot-tools { position: absolute; top: 3px; right: 3px; display: flex; gap: 1px; }
-.scene-lab-slot-tools button { width: 19px; height: 20px; min-height: 0; padding: 0; border-color: transparent; background: transparent;
-  color: var(--muted); }
-.scene-lab-slot-tools button:hover:not(:disabled) { border-color: var(--border-soft); color: var(--text); }
-/* The stage picker, Course/Star/Strategy (components/scenestage.js): its own row across the heading card. */
-.scene-lab-stage-picker { flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; min-width: 0; }
-.scene-lab-target { gap: 10px; min-width: 0; max-width: 100%; padding: 4px 12px 4px 6px; text-align: left; }
-.scene-lab-target img { width: 32px; height: 32px; flex: none; object-fit: contain; }
-.scene-lab-target-words { display: grid; min-width: 0; line-height: 1.25; }
-.scene-lab-target-words strong, .scene-lab-target-words small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.scene-lab-target-words small { color: var(--muted); font-size: .76rem; }
-.scene-lab-stage-picker select { min-width: 0; max-width: 100%; background: var(--surface-2); }
-.scene-lab-stage-note { min-width: 0; color: var(--muted); font-size: .85rem; line-height: 1.4; }
-/* The ghost panel (components/sceneghosts.js): three lists side by side, two then one as the pane narrows. */
-.scene-lab-ghosts { display: grid; gap: 10px; min-width: 0; container-type: inline-size; }
-.scene-lab-ghosts-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
-.scene-lab-ghosts-head h3 { margin: 0; font-size: 1rem; }
-.scene-lab-ghosts-head .scene-lab-hint { margin-right: auto; }
-.scene-lab-ghost-sections { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px 18px; align-items: start; }
-/* One column that never grows past its share: a long strategy name in the header's dropdown ellipsizes
-   instead of widening the list (measured: it pushed Top ghosts over Find a player). */
+
+/* ---- The Ghosts tab (components/sceneghosts.js): "In the scene" beside one list (Top, Yours, or what Find
+   a player found); one column under each other on a narrow tray. */
+.ghost-lab-ghosts { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); align-items: start; gap: 12px 18px; min-width: 0; }
+.ghost-lab-scene-list, .ghost-lab-lists { display: grid; gap: 8px; min-width: 0; }
+.ghost-lab-scene-list header { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 34px; }
+.ghost-lab-scene-list h4 { margin: 0; color: var(--muted); font-size: .78rem; font-weight: 650; letter-spacing: .04em; }
+.ghost-lab-hide-all { min-height: 28px; padding: 0 10px; font-size: .8rem; }
+.ghost-lab-lists-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
+.ghost-lab-segments { display: inline-flex; }
+.ghost-lab-segments button { min-width: 64px; border-radius: 0; }
+.ghost-lab-segments button:first-child { border-radius: 6px 0 0 6px; }
+.ghost-lab-segments button:last-child { border-radius: 0 6px 6px 0; margin-left: -1px; }
+.ghost-lab-segments button[aria-pressed="true"] { position: relative; z-index: 1; background: rgba(240,189,50,.12); }
+.ghost-lab-find { display: inline-flex; align-items: center; gap: 6px; flex: 1 1 12rem; min-width: 0; padding-left: 8px;
+  border: 1px solid #344b64; border-radius: 6px; background: #0d1928; color: var(--muted); }
+.ghost-lab-find input { flex: 1 1 0; min-width: 0; border: 0; background: transparent; }
+.ghost-lab-find input:focus-visible { outline: none; }
+.ghost-lab-find:focus-within { outline: 2px solid #78b9ff; outline-offset: 2px; }
 .scene-lab-ghost-section { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; min-width: 0; }
-/* Every list's heading is its name over its one control, so the three lists' rows start level. */
-.scene-lab-ghost-section header { display: grid; grid-template-columns: minmax(0, 1fr); justify-items: start; gap: 6px; }
-.scene-lab-ghost-section header > select, .scene-lab-ghost-section header > input { height: 34px; box-sizing: border-box; }
-.scene-lab-ghost-section header > select { width: auto; }
-.scene-lab-ghost-section header > input { width: 100%; }
-.scene-lab-ghost-section h4 { margin: 0; font-size: .82rem; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
-.scene-lab-ghost-section select, .scene-lab-ghost-section input[type=search] { min-width: 0; max-width: 100%; background: var(--surface-2); }
+.scene-lab-ghost-section header:empty { display: none; }
+.scene-lab-ghost-section header { display: flex; align-items: center; gap: 8px; }
+.scene-lab-ghost-section select { min-width: 0; max-width: 100%; height: 34px; background: var(--surface); }
 .scene-lab-ghost-list { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
-/* Fixed time and action columns, so every row's time and button line up down the list. */
-.scene-lab-ghost { display: grid; grid-template-columns: 3.4ch minmax(0, 1fr) 7.5ch 5.6rem; align-items: center; gap: 2px 8px;
-  padding: 3px 4px 3px 8px; border: 1px solid transparent; border-radius: 8px; background: var(--surface-2); }
-.scene-lab-ghost.is-shown { border-color: var(--gold); background: rgba(240,189,50,.08); }
-.scene-lab-ghost.is-waiting { border-color: var(--border-soft); border-style: dashed; }
+/* A list row: rank, then the part that watches it (star, flag, name, strategy, time), then the eye; the
+   columns are fixed so every row's time and eye line up down the list. */
+.scene-lab-ghost { position: relative; display: grid; grid-template-columns: 3.2ch minmax(0, 1fr) 34px; align-items: center;
+  gap: 2px 6px; padding: 2px 4px 2px 8px; border: 1px solid transparent; border-radius: 8px; background: var(--surface); }
+.scene-lab-ghost.is-watched { border-color: var(--gold); background: rgba(240,189,50,.08); }
+.scene-lab-ghost.is-shown:not(.is-watched) { border-color: rgba(104,173,242,.5); }
 .scene-lab-ghost-rank { color: var(--muted); font-size: .78rem; font-variant-numeric: tabular-nums; }
-/* The player cell: the ROM's flag (none where unknown), then the name, cut before the flag is. */
-.scene-lab-ghost-who { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.scene-lab-ghost-player { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.ghost-lab-watch { display: grid; grid-template-columns: 1.1em minmax(0, 1fr) 7ch; align-items: center; gap: 6px;
+  min-width: 0; min-height: 40px; padding: 2px 6px; border-color: transparent; background: transparent; text-align: left; }
+.ghost-lab-watch:hover:not(:disabled) { border-color: #496784; background: #142338; }
+.ghost-lab-watch:disabled { opacity: 1; cursor: default; }
+.ghost-lab-watch[aria-pressed="true"] { border-color: transparent; color: var(--text); }
+.scene-lab-ghost-who { display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-areas: "flag name" ". strat";
+  align-items: center; column-gap: 6px; min-width: 0; }
+.scene-lab-ghost-who > .region-flag { grid-area: flag; }
+.scene-lab-ghost-player { grid-area: name; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.scene-lab-ghost-who:not(:has(> .region-flag)) .scene-lab-ghost-player { grid-column: 1 / -1; }
 .scene-lab-ghost-player small { color: var(--muted); font-weight: 400; }
-/* All strategies: the row's strategy on its own line under the name, across the time and button. */
-.scene-lab-ghost-strat { grid-column: 2 / -1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  color: var(--muted); font-size: .76rem; line-height: 1.3; }
+.scene-lab-ghost-strat { grid-area: strat; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--muted); font-size: .74rem; line-height: 1.3; }
+.scene-lab-ghost-who:not(:has(> .region-flag)) .scene-lab-ghost-strat { grid-column: 1 / -1; }
 .scene-lab-ghost-time { text-align: right; font-variant-numeric: tabular-nums; }
-.scene-lab-ghost button { min-height: 30px; padding: 2px 10px; }
-.scene-lab-ghost > button:not(.scene-lab-ghost-more) { justify-self: stretch; justify-content: center; }
-.scene-lab-ghost.is-shown > button:not(.scene-lab-ghost-more) { border-color: var(--gold); color: var(--gold-soft); }
-.scene-lab-ghost-stage { justify-self: stretch; text-align: center; color: var(--gold-soft); font-size: .78rem; white-space: nowrap; }
-.scene-lab-ghost-more { grid-column: 2 / -1; justify-self: start; }
-.scene-lab-ghost .scene-lab-ghost-more { min-height: 26px; padding: 0 8px; font-size: .78rem; }
-.scene-lab-ghost .scene-lab-ghost-view[aria-pressed="true"] { border-color: var(--gold); color: var(--gold-soft); }
+.ghost-lab-eye { justify-self: center; width: 32px; min-width: 32px; min-height: 30px; }
+.ghost-lab-eye.is-waiting { border-style: dashed; }
+.ghost-lab-eye[aria-pressed="true"] { border-color: var(--blue); color: var(--blue); }
+.scene-lab-ghost.is-building .ghost-lab-watch { opacity: .85; }
+.scene-lab-ghost.is-building { border-color: rgba(240,189,50,.45); overflow: hidden; }
+.scene-lab-ghost.is-building::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 2px;
+  background: rgba(240,189,50,.35); }
+.scene-lab-ghost-more { grid-column: 2 / -1; justify-self: start; min-height: 26px; padding: 0 8px; font-size: .78rem; }
 .scene-lab-ghost-reason { grid-column: 2 / -1; color: var(--coral); font-size: .78rem; line-height: 1.4; }
-.scene-lab-ghost-controls { grid-column: 2 / -1; display: flex; flex-wrap: wrap; gap: 6px; }
-.scene-lab-ghost .scene-lab-ghost-controls button { min-height: 26px; padding: 0 8px; font-size: .78rem; gap: 4px; }
-.scene-lab-ghost .scene-lab-ghost-mute[aria-pressed=true] { border-color: var(--coral); color: var(--coral); }
 .scene-lab-ghost-more-list { grid-column: 1 / -1; padding: 4px 0 2px 14px; border-left: 2px solid var(--border-soft); }
 .scene-lab-ghost-more-list .scene-lab-ghost { background: transparent; }
 .scene-lab-ghost-note { margin: 0; color: var(--muted); font-size: .8rem; line-height: 1.5; }
 .scene-lab-ghost-note.is-bad { color: var(--coral); }
 .scene-lab-ghost-pager { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--muted); font-size: .8rem; }
-/* Three lists side by side only where each row still shows an 18-character player name whole (a
-   1280-wide window cut them to about 11). Measured 2026-10-27: such a name in bold with wide letters
-   is 166px and a row's rank, time, button and gaps take 222px, so three need about 1200px of panel;
-   below that, Your and Top ghosts share the row and Find a player takes the next. */
-@container (max-width: 1219px) {
-  .scene-lab-ghost-sections { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .scene-lab-ghost-section[aria-label="Find a player"] { grid-column: 1 / -1; }
+/* "In the scene": the run you watch (a star), then each ghost beside it with its view, Mute and eye. */
+.ghost-lab-in-scene { display: grid; grid-template-columns: 1.1em minmax(0, 1fr) 7ch auto; align-items: center; gap: 6px;
+  min-height: 40px; padding: 2px 4px 2px 8px; border: 1px solid transparent; border-radius: 8px; background: var(--surface); }
+.ghost-lab-in-scene.is-watched { border-color: var(--gold); background: rgba(240,189,50,.08); }
+.ghost-lab-in-scene-tools { display: inline-flex; gap: 4px; min-width: calc(3 * 32px + 8px); justify-content: flex-end; }
+.ghost-lab-in-scene-tools .icon-button { width: 32px; min-width: 32px; min-height: 30px; }
+.scene-lab-ghost-mute[aria-pressed=true] { border-color: var(--coral) !important; color: var(--coral) !important; }
+
+/* ---- Narrow panes: decided by each block's own width. */
+@container (max-width: 899px) {
+  .ghost-lab-play { grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "steps . end" "scrub scrub scrub"; }
 }
-@container (max-width: 640px) {
-  .scene-lab-quality { margin-left: 0; }
-  .scene-lab-title { max-width: 100%; }
+@container (max-width: 760px) {
+  .ghost-lab-top { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "left left" "note right"; }
+  .ghost-lab-ghosts { grid-template-columns: minmax(0, 1fr); }
+  .ghost-lab-keys { grid-template-columns: minmax(0, 1fr); }
 }
 @container (max-width: 560px) {
-  .scene-lab-ghost-sections { grid-template-columns: minmax(0, 1fr); }
+  .ghost-lab-row { grid-template-columns: minmax(0, 1fr); }
+  .ghost-lab-row-name { padding-top: 0; }
 }

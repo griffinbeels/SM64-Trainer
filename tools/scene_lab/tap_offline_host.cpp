@@ -5,6 +5,7 @@
  * same record format, same timings measured on this machine.
  *
  *   tap_offline_host <lab_root> [vi:]<frame_dir>...
+ *   tap_offline_host <lab_root> --stdin                 the same frames, one command per stdin line
  *   tap_offline_host <lab_root> --live [--stdin] [command]...
  *
  * <lab_root> stands in for %LOCALAPPDATA%: the arming file must already be at
@@ -16,7 +17,10 @@
  * prefixed vi: is one UpdateScreen instead (a VI with no new task), which is
  * where the tap's VI regions are copied. Exit 0 when
  * every frame was offered to an armed tap; the session's summary.txt says
- * what it recorded.
+ * what it recorded. With --stdin the first line is "header <dir>", then one
+ * frame command per line ("frame <dir>", "vi <dir>", quit), each answered
+ * "ok" once fed: a writer can delete a folder after its answer, but a folder
+ * name is read once (the cache below), so each frame needs its own name.
  *
  * --live runs the live spool instead: no armed.txt, the producer's tap
  * thread watches <lab_root>\SM64Trainer\scene-lab\live\lease.txt (written by
@@ -86,7 +90,14 @@ unsigned json_number(const std::string &json, const char *key) {
     return at == std::string::npos ? 0u : (unsigned)strtoul(json.c_str() + json.find(':', at) + 1, nullptr, 10);
 }
 
-struct Frame { std::vector<uint8_t> ram, sp; unsigned origin; };
+// frame.json's "vi" keys, in GFX_INFO's VI register order (tap.py's VI_NAMES); origin is regs[10].
+const char *const VI_KEYS[] = {"status", "origin", "width", "intr", "v_current", "burst", "v_sync", "h_sync",
+                               "leap", "h_start", "v_start", "v_burst", "x_scale", "y_scale"};
+const int VI_FIRST_REG = 9;
+
+// vi: every VI register the frame names (a simulated frame names them all; a savestate's names them too),
+// so the present the producer records carries the VI a picture is drawn with.
+struct Frame { std::vector<uint8_t> ram, sp; unsigned origin; std::vector<std::pair<int, unsigned>> vi; };
 
 // Frames by folder, read once: a 30 Hz run must not wait on the disk.
 const Frame *load(std::map<std::string, Frame> &cache, const std::string &dir) {
@@ -101,7 +112,11 @@ const Frame *load(std::map<std::string, Frame> &cache, const std::string &dir) {
         fprintf(stderr, "%s: needs an 8 MiB rdram.bin, a 4 KiB dmem.bin and frame.json\n", dir.c_str());
         return nullptr;
     }
-    frame.origin = json_number(std::string(json.begin(), json.end()), "origin");
+    const std::string text(json.begin(), json.end());
+    frame.origin = json_number(text, "origin");
+    for (int i = 0; i < (int)(sizeof VI_KEYS / sizeof VI_KEYS[0]); ++i)
+        if (i != 1 && text.find(std::string("\"") + VI_KEYS[i] + "\":") != std::string::npos)
+            frame.vi.emplace_back(VI_FIRST_REG + i, json_number(text, VI_KEYS[i]));
     return &cache.emplace(dir, std::move(frame)).first->second;
 }
 
@@ -230,8 +245,9 @@ int main(int argc, char **argv) {
     }
     if (!SetEnvironmentVariableA("LOCALAPPDATA", argv[1])) return 2;
     const bool live = !strcmp(argv[2], "--live");
-    const bool interactive = live && argc > 3 && !strcmp(argv[3], "--stdin");
-    const int commands = live ? (interactive ? 4 : 3) : 2;
+    const int stdin_at = live ? 3 : 2;   // one-shot frames can come from stdin too: a long scene outgrows a command line
+    const bool interactive = argc > stdin_at && !strcmp(argv[stdin_at], "--stdin");
+    const int commands = stdin_at + (interactive ? 1 : 0);
     static uint8_t dmem[0x1000], imem[0x1000], header[0x40];
     static unsigned int regs[32];
     uint8_t *rdram = (uint8_t *)VirtualAlloc(nullptr, 8u << 20, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
@@ -294,6 +310,7 @@ int main(int argc, char **argv) {
         if (!frame) return false;
         memcpy(rdram, frame->ram.data(), frame->ram.size());
         memcpy(dmem, frame->sp.data(), frame->sp.size());
+        for (const auto &reg : frame->vi) regs[reg.first] = reg.second;
         *info.VI_ORIGIN_REG = origin >= 0 ? (unsigned)origin : frame->origin;
         const int64_t begin = now_qpc();
         if (vi_only) st_update_screen(nullptr);

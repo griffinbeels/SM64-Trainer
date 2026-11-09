@@ -1,7 +1,8 @@
-"""A Library community ghost's Ghost button opens it in the Scene viewer (round 9, item 8), on the real page.
+"""A Library community ghost's Ghost button watches it in the Ghost Lab (round 9, items 5 and 8), on the real page.
 
 His words (2026-11-08): "We also need ghost buttons next to all library entries that have a ghost, so that
-it loads directly into the scene viewer."
+it loads directly into the scene viewer." Round 9's Ghost Lab watches that ghost: it becomes the scene, made
+from the ghost when he has no scene of it (POST /open {ghost}), with the picker on its star.
 
 The UI fixture boots the real app with test_ui_attempt_scene.py's scratch lab and fake renderer host
 (headless, no GPU). The Library's community routes answer one planted target and two recordings (a JP one
@@ -86,13 +87,13 @@ def shoot_library_rows(page, folder: Path, name: str) -> None:
 
 
 # Each recording row: its player, whether it has the Ghost button (its accessible name and tooltip,
-# which say it opens the Scene viewer, unlike Add ghost beside it), and its ROM flag.
+# which say it opens the Ghost Lab, unlike Add ghost beside it), and its ROM flag.
 ROWS = """[...document.querySelectorAll('.community-library-recording')].map((row) => ({
   id: row.dataset.recordingId, watch: row.querySelector('.attempt-scene')?.getAttribute('aria-label') ?? null,
   tip: row.querySelector('.attempt-scene')?.title ?? null, flag: row.querySelector('.region-flag')?.alt ?? null }))"""
 
 
-def test_a_library_ghost_opens_in_the_scene_viewer_with_that_ghost_added(tmp_path, monkeypatch):
+def test_a_library_ghost_is_watched_in_the_ghost_lab(tmp_path, monkeypatch):
     with attempt_scene._served(tmp_path, monkeypatch, lab_on=True, extra=_stubs) as (base, seen), \
             sync_playwright() as play:
         scene_ghosts._answer_ghosts(monkeypatch, seen)
@@ -101,11 +102,11 @@ def test_a_library_ghost_opens_in_the_scene_viewer_with_that_ghost_added(tmp_pat
             page.locator(".log-list-card").wait_for(timeout=20000)
             open_library_ghosts(page)
             assert page.evaluate(ROWS) == [
-                {"id": KNOWN, "watch": "Watch in Scene viewer: Kz_Speedruns_Backwards_Long",
-                 "tip": "Watch in Scene viewer", "flag": "JP"},
+                {"id": KNOWN, "watch": "Watch in Ghost Lab: Kz_Speedruns_Backwards_Long",
+                 "tip": "Watch in Ghost Lab", "flag": "JP"},
                 {"id": UNKNOWN, "watch": None, "tip": None, "flag": "JP"}]
             add = page.locator(".community-library-recording").first.locator(".attempt-scene ~ button")
-            assert add.inner_text().strip() == "Add ghost" and "Scene viewer" not in (add.get_attribute("title") or "")
+            assert add.inner_text().strip() == "Add ghost" and "Ghost Lab" not in (add.get_attribute("title") or "")
             for width in (850, 1200, 1600):                     # the button sits in the row, left of Add ghost
                 page.set_viewport_size({"width": width, "height": 1000})
                 page.wait_for_timeout(100)
@@ -117,19 +118,17 @@ def test_a_library_ghost_opens_in_the_scene_viewer_with_that_ghost_added(tmp_pat
                     && Math.abs(middle(button) - middle(add)) <= 1 && button.width > 0; })()""")
                 assert inside, width
             shoot_library_rows(page, tmp_path, "library-ghost-button")
-            stages_before = len(seen["stage"])
-
             page.locator(WATCH).first.click()
             page.wait_for_function(scene_ghosts.DRAWN, timeout=20000)
-            assert seen["stage"][stages_before] == {"course": ui_fixture.FIXTURE_COURSE,
-                                                    "star": ui_fixture.FIXTURE_STAR, "segment": None, "strat": STRAT}
-            page.wait_for_function("() => document.querySelector('.scene-lab-view')")
+            ref = f"library-{KNOWN[:6]}"
             assert seen["ghost"] == [{"recording": KNOWN, "course": ui_fixture.FIXTURE_COURSE,
                                       "star": ui_fixture.FIXTURE_STAR}]
-            assert seen["sets"][-1] == [f"library-{KNOWN[:6]}"]
-            view = page.locator(".scene-lab-view").first
-            assert view.locator(".region-flag").get_attribute("alt") == "JP"
-            assert "Kz_Speedruns_Backwards_Long" in view.inner_text()
+            assert seen["opened"] == [{"ghost": ref}]                     # made into a scene of its own
+            page.wait_for_function("document.querySelector('.ghost-lab-watching strong')?.textContent"
+                                   " === 'Kz_Speedruns_Backwards_Long'", timeout=20000)
+            assert page.locator(".ghost-lab-watching .region-flag").get_attribute("alt") == "JP"
+            assert page.evaluate("[...document.querySelectorAll('.ghost-lab-scene-list li')].map((li) => li.dataset.ref)") == [ref]
+            assert seen["sets"] == []                                     # watched, not shown beside another run
             assert errors == []
         finally:
             browser.close()

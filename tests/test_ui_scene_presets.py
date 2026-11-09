@@ -1,9 +1,11 @@
-"""The Scene viewer's camera presets on the real page (M4 round 6, item 2).
+"""The Ghost Lab's camera presets (saved views) on the real page (M4 round 6, item 2; round 9, item 5).
 
 His words: "I set up a specific camera angle that I really like, and assign it to a camera slot
 position (numbers 1-9 on the keyboard). I should be able to name the camera, and be able to swap to
 the different camera views by pressing each button. I should be able to easily reassign cameras to
-different slots by dragging and dropping."
+different slots by dragging and dropping." Round 9 moved them to the Camera tab's Views row and to Shift with
+1-9 (his words: "prioritize 1-9 for save states, and then Shift 1-9 for camera views"); a plain digit saves a
+save state instead, so nothing here presses one outside a name field.
 
 The UI fixture boots the real app with test_ui_attempt_scene.py's scratch lab (its lab folder under
 tmp_path, so the presets file is scratch too) and fake renderer host; the lab's own preset routes
@@ -20,7 +22,7 @@ from playwright.sync_api import sync_playwright
 
 import test_ui_attempt_scene as attempt_scene
 from frontend_runner import run_frontend
-from test_ui_scene_viewer import CAMERAS, DRAWN, HAS_KEYBOARD, PLAYING, _hold
+from test_ui_scene_viewer import CAMERAS, DRAWN, HAS_KEYBOARD, PLAYING, _hold, camera_tab
 
 STRIP = ".scene-lab-cameras"
 # The strip as drawn: whether it scrolls sideways, and each slot's box.
@@ -62,8 +64,8 @@ def _open(page, base) -> None:
     page.wait_for_function(DRAWN, timeout=20000)
     page.wait_for_function(f"!({PLAYING})", timeout=20000)
     page.keyboard.press("Home")                      # area 1
-    page.wait_for_function("document.querySelector('.scene-lab-cameras .scene-lab-hint').textContent.startsWith('Keys 1-9')",
-                           timeout=20000)
+    page.wait_for_function("document.querySelector('.scene-lab-cameras .scene-lab-hint').textContent"
+                           ".startsWith('Shift with 1 to 9')", timeout=20000)
 
 
 def _saved(lab_root: Path) -> dict:
@@ -96,7 +98,7 @@ def _fits(page, folder: Path) -> None:
         long_name = page.locator('.scene-lab-slot[data-slot="7"] .scene-lab-slot-name')
         assert long_name.inner_text() == LONG and long_name.evaluate("(name) => name.scrollWidth > name.clientWidth")
         print("camera slots", width, slots[0]["width"])
-        page.locator(".scene-lab-player").screenshot(path=str(folder / f"pre-player-{width}.png"))
+        page.locator(".ghost-lab-tray").screenshot(path=str(folder / f"pre-tray-{width}.png"))
         page.locator(STRIP).screenshot(path=str(folder / f"pre-strip-{width}.png"))
     page.set_viewport_size({"width": 1280, "height": 1000})
 
@@ -143,11 +145,11 @@ def _save_and_name(page, lab_root: Path, here: dict) -> None:
 
 
 def _key_cuts_back(page, here: dict) -> None:
-    """Away to the recorded camera, then key 2 cuts back to the saved camera as a free camera."""
+    """Away to the recorded camera, then Shift+2 cuts back to the saved camera as a free camera."""
     page.keyboard.press("r")
     page.wait_for_function("document.querySelector('.scene-lab-tag').textContent === 'Recorded camera'")
     before = page.evaluate("window.__cameras.length")
-    page.keyboard.press("2")
+    page.keyboard.press("Shift+Digit2")
     page.wait_for_function(f"window.__cameras.length > {before}")
     cut = page.evaluate("window.__cameras")[-1]
     assert _near(cut["focus"], here["focus"]) and _near(cut["position"], here["position"]), (cut, here)
@@ -182,6 +184,8 @@ def test_save_name_cut_drag_and_reload_on_the_real_page(tmp_path, monkeypatch):
             (lab_root / "camera-presets.json").write_text(json.dumps({"version": 1, "areas": {"9:1": SEEDED}}),
                                                           encoding="utf-8")
             _open(page, base)
+            camera_tab(page)
+            assert page.locator('.scene-lab-slot[data-slot="9"] kbd').inner_text() == "⇧9"
             _slot_says(page, 9, "Tower")
             flown = _hold(page, "w")                          # free camera, moved forward
             assert flown, "W asked for no free camera"
@@ -191,7 +195,7 @@ def test_save_name_cut_drag_and_reload_on_the_real_page(tmp_path, monkeypatch):
             _drag_then_rename(page, lab_root)
             page.keyboard.press("End")                        # area 2 has its own set, empty: the key says so
             page.wait_for_function("document.querySelectorAll('.scene-lab-cameras .scene-lab-slot-save').length === 9")
-            page.keyboard.press("5")
+            page.keyboard.press("Shift+Digit5")
             page.wait_for_function("document.querySelector('.scene-lab-reason')?.textContent === "
                                    "'No camera saved in slot 5 here yet.'")
             _open(page, base)                                 # the page loaded again reads the same file

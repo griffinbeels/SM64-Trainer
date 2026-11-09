@@ -1,17 +1,23 @@
 """Drive the Slot Library from a command line (Ghost Handoff; the app's buttons do not exist yet).
 
-    uv run python tools/scene_lab/slot_library.py [--root DIR] [--pid P] COMMAND
+    uv run python tools/scene_lab/slot_library.py [--root DIR] [--sets FILE] [--pid P] COMMAND
 
     capture                     keep every occupied slot of the running game
     list                        every kept state, oldest first, and the course sets
     rename ID NAME              name a kept state
     install ID --slot N [--dry-run]     write a kept state into slot N (0-8), capturing all slots first
-    set-assign LEVEL [--star S] [ID ...]    a course's ordered set; no ids removes it
-    set-install LEVEL [--star S] [--dry-run]    what entering that course will do
+    set-show COURSE [--star S]                  the course default, or that star's set over it, slot by slot
+    set-put COURSE [--star S] --slot N ID       this kept state at Usamune's slot N (1-9) of that set
+    set-remove COURSE [--star S] --slot N       slot N out of that set; the kept state stays
+    set-install COURSE [--star S] [--dry-run]   write that context's resolved set now, as the Trainer does on entry
     export ID FILE.sm64state    write a share file
     import FILE.sm64state       add a share file to the library, and write nothing to the game
 
-ID may be the start of an id. Only install and set-install write to game memory, each inside one slot's range.
+COURSE is the course number (Bob-omb Battlefield 1, Whomp's Fortress 2, ...); S the star as the Trainer counts it
+(0 is the course's first star). ID may be the start of an id. Only install and set-install write to game memory,
+each inside one slot's range, and both record what they wrote in the slot ledger, so a running Trainer never takes
+those bytes for a save of his. --sets names the course sets file the set commands read and write (default
+course-sets.json in the library's folder): a scratch file tries a set without touching the sets his play fills.
 Import reads the game once for its Usamune fingerprint; with no game running it accepts the builds the library
 already holds.
 """
@@ -19,19 +25,23 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from pathlib import Path
 
 from sm64_events.core.paths import slot_library_dir
 from sm64_events.slotlibrary import usamune
-from sm64_events.slotlibrary.coursesets import CourseSets, InstallReport, install_for_course, place_states
+from sm64_events.slotlibrary.atlas import default_store
+from sm64_events.slotlibrary.coursesets import CourseSets, InstallReport, place_states
+from sm64_events.slotlibrary.keeper import Context, SetKeeper, SlotLedger, ledger_path
 from sm64_events.slotlibrary.sharefile import export_state, import_state
 from sm64_events.slotlibrary.store import KeptState, SlotLibrary
 from sm64_events.slotlibrary.usamune import Refusal, WriteFailed, routine_fingerprint
-from sm64_events.slotlibrary.watcher import NEVER_SEEN, watch_step
+from sm64_events.slotlibrary.watcher import NEVER_SEEN, read_slot, watch_step
 
 
 def describe(state: KeptState) -> str:
-    return (f"{state.id[:12]}  level {state.level} area {state.area}  mario {state.mario_object:08x}  "
+    build = (state.build or "unknown build").upper()
+    return (f"{state.id[:12]}  {build}  level {state.level} area {state.area}  mario {state.mario_object:08x}  "
             f"{state.source}  {state.first_seen_utc}  {state.name or '(no name)'}")
 
 
@@ -46,10 +56,21 @@ def print_report(report: InstallReport | None, dry_run: bool) -> int:
         verdict = "loads now" if placed.loadable_now else (
             "Usamune will refuse: " + ("Mario differs" if placed.place_matches else "another level or area"))
         print(f"slot {placed.slot}: {placed.state_id[:12]} {action}; {verdict}; pointers match {placed.pointers_match}")
+        if placed.words:
+            print(f"    {placed.words}")
     if report.failed:
         print(f"FAILED at slot {report.failed[0]}: {report.failed[1]}", file=sys.stderr)
         return 2
     return 0
+
+
+def print_timing(started: float, attached: float, atlases) -> None:
+    """Where an install's time went, on stderr: finding Project64, then the checks, translation and write, and of
+    those the atlas build when this place had none yet."""
+    built = "".join(f"; of that, building the atlas for level {level} area {area}: {seconds:.1f} s"
+                    for (level, area), seconds in atlases.built.items())
+    print(f"timing: attach {attached - started:.1f} s, place {time.perf_counter() - attached:.1f} s{built}",
+          file=sys.stderr)
 
 
 def capture(args, library: SlotLibrary) -> int:
@@ -73,19 +94,59 @@ def list_all(library: SlotLibrary, sets: CourseSets) -> int:
         print(describe(state))
     for identity in scan.damaged:
         print(f"DAMAGED record: {identity}", file=sys.stderr)
-    for entry in sets.all():
-        print(f"set: level {entry['level']} star {entry['star']}: " + " ".join(s[:12] for s in entry["states"]))
+    for course, record in sets.courses().items():
+        for star, slots in [(None, record.get("default", {})), *record.get("stars", {}).items()]:
+            named = " ".join(f"{slot}={identity[:12]}" for slot, identity in sorted(slots.items(), key=lambda s: int(s[0])))
+            print(f"set: course {course} {'default' if star is None else f'star {star}'}: {named}")
     return 2 if scan.damaged else 0
 
 
-def accepted_fingerprints(args, library: SlotLibrary) -> set[str]:
+def show_set(sets: CourseSets, course: int, star: int | None) -> int:
+    resolved = sets.resolved(course, star)
+    for slot in range(1, 10):
+        identity, which = resolved.get(slot, (None, None))
+        print(f"slot {slot}: " + (f"{identity[:12]} ({which})" if identity else "-"))
+    return 0
+
+
+def install(args, library: SlotLibrary) -> int:
+    """One kept state into one slot. The slot ledger records it, so a running Trainer's star sets know the bytes are
+    the Trainer's and never take them for a save of his (which would put them into his own sets)."""
+    atlases, started = default_store(), time.perf_counter()
+    memory = usamune.attach(args.pid)
+    attached = time.perf_counter()
+    ledger = SlotLedger(ledger_path(library))
+    ledger.use_build(usamune.check_cartridge(memory).version)
+    report = place_states(memory, library, {args.slot: library.resolve(args.id)}, dry_run=args.dry_run,
+                          atlases=atlases, ours=ledger.hashes())
+    if not args.dry_run:
+        for placed in report.placements:
+            ledger.wrote(placed.slot, placed.state_id, read_slot(memory, placed.slot))
+    print_timing(started, attached, atlases)
+    return print_report(report, args.dry_run)
+
+
+def install_set(args, library: SlotLibrary, sets: CourseSets) -> int:
+    keeper = SetKeeper(library, sets, default_store())
+    report = keeper.apply(usamune.attach(args.pid), dry_run=args.dry_run, context=Context(args.course, args.star))
+    print(f"{'dry run for' if args.dry_run else 'wrote'} {keeper.words(report.context)}: slots {report.written}; "
+          f"his saves kept first: {report.captured}")
+    for slot, why in report.refused:
+        print(f"slot {slot} NOT written: {why}", file=sys.stderr)
+    return 2 if report.refused else 0
+
+
+def accepted_fingerprints(args, library: SlotLibrary) -> tuple[set[str], str | None]:
+    """The running game's fingerprint and build, else every fingerprint the library holds and no build."""
     try:
-        return {routine_fingerprint(usamune.attach(args.pid).read)}
+        memory = usamune.attach(args.pid)
+        build = usamune.check_cartridge(memory)
+        return {routine_fingerprint(memory.read, build)}, build.version
     except Refusal:
         held = {state.fingerprint for state in library.scan().states}
         if not held:
             raise Refusal("start the game once: with no game and an empty library, no Usamune build is known") from None
-        return held
+        return held, None
 
 
 def run(args, library: SlotLibrary, sets: CourseSets) -> int:
@@ -97,18 +158,22 @@ def run(args, library: SlotLibrary, sets: CourseSets) -> int:
         case "rename":
             print(describe(library.rename(library.resolve(args.id), args.name)))
         case "install":
-            report = place_states(usamune.attach(args.pid), library, {args.slot: library.resolve(args.id)}, dry_run=args.dry_run)
-            return print_report(report, args.dry_run)
-        case "set-assign":
-            sets.assign(library, args.level, args.star, [library.resolve(identity) for identity in args.ids])
-            print(f"level {args.level} star {args.star}: {len(args.ids)} states")
+            return install(args, library)
+        case "set-show":
+            return show_set(sets, args.course, args.star)
+        case "set-put":
+            sets.put(library, args.course, args.star, args.slot, library.resolve(args.id))
+            return show_set(sets, args.course, args.star)
+        case "set-remove":
+            if not sets.remove(args.course, args.star, args.slot):
+                raise Refusal(f"slot {args.slot} is not in that set")
+            return show_set(sets, args.course, args.star)
         case "set-install":
-            report = install_for_course(usamune.attach(args.pid), library, sets, args.level, args.star, dry_run=args.dry_run)
-            return print_report(report, args.dry_run)
+            return install_set(args, library, sets)
         case "export":
             print(export_state(library, library.resolve(args.id), args.file))
         case "import":
-            state, is_new = import_state(library, args.file, accepted_fingerprints(args, library))
+            state, is_new = import_state(library, args.file, *accepted_fingerprints(args, library))
             print(f"{'added' if is_new else 'already kept'}: {describe(state)}")
     return 0
 
@@ -116,6 +181,8 @@ def run(args, library: SlotLibrary, sets: CourseSets) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--root", type=Path, help="the library's folder; default the app's user data")
+    parser.add_argument("--sets", type=Path, help="the course sets file; default course-sets.json in the library's "
+                                                  "folder. A scratch file leaves his own sets as his play made them")
     parser.add_argument("--pid", type=int)
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("capture")
@@ -127,14 +194,16 @@ def build_parser() -> argparse.ArgumentParser:
     install.add_argument("id")
     install.add_argument("--slot", type=int, required=True)
     install.add_argument("--dry-run", action="store_true")
-    assign = commands.add_parser("set-assign")
-    assign.add_argument("level", type=int)
-    assign.add_argument("--star")
-    assign.add_argument("ids", nargs="*")
-    install_set = commands.add_parser("set-install")
-    install_set.add_argument("level", type=int)
-    install_set.add_argument("--star")
-    install_set.add_argument("--dry-run", action="store_true")
+    for name in ("set-show", "set-put", "set-remove", "set-install"):
+        command = commands.add_parser(name)
+        command.add_argument("course", type=int)
+        command.add_argument("--star", type=int)
+        if name in ("set-put", "set-remove"):
+            command.add_argument("--slot", type=int, required=True)
+        if name == "set-put":
+            command.add_argument("id")
+        if name == "set-install":
+            command.add_argument("--dry-run", action="store_true")
     export = commands.add_parser("export")
     export.add_argument("id")
     export.add_argument("file", type=Path)
@@ -146,7 +215,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     root = args.root or slot_library_dir()
-    library, sets = SlotLibrary(root), CourseSets(root / "course-sets.json")
+    library, sets = SlotLibrary(root), CourseSets(args.sets or root / "course-sets.json")
     try:
         return run(args, library, sets)
     except (Refusal, WriteFailed) as error:

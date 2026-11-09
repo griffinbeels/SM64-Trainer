@@ -88,7 +88,7 @@ const PLAIN_TABS = {
   "Resources": ResourcesPage, "About": AboutPage,
 };
 
-// The Scene viewer (M4, lab only). This one probe names the lab only when
+// The Ghost Lab (the Scene viewer until round 9; M4, lab only). This one probe names the lab only when
 // SM64_SCENE_LAB names a lab config; anywhere else it answers {lab: null} and
 // the shell stays exactly as it was. The viewer's code loads only after the
 // server names the lab. Also the attempt the Practice log's Ghost button
@@ -107,20 +107,20 @@ function useSceneLab() {
   }, []);
   return [viewer, intent, setIntent];
 }
-const LAB_GROUP = ["Lab", [["Scene viewer", "ghost"]]];
+const LAB_GROUP = ["Lab", [["Ghost Lab", "ghost"]]];
 
 // The lab's door on `t`, the way the Daily Star rides on it: every practice-log
 // row reads one copy with no prop threaded through the log. `open(attempt)` is
-// the Ghost button: the Scene viewer opens that attempt's scene and plays it
+// the Ghost button: the Ghost Lab opens that attempt's scene and plays it
 // (`intent`, the libraryIntent shape: go to that tab and open that thing).
-// `openGhost(ghost)` is a Library row's Ghost button: the viewer opens that
-// ghost's star or segment and adds the ghost ({recording, entity, strat}).
+// `openGhost(ghost)` is a Library row's Ghost button: the Ghost Lab turns to that
+// ghost's star or segment and watches the ghost ({recording, entity, strat}).
 // Null with the lab off, and then no row draws the button.
 function sceneDoor(viewer, intent, setIntent, setTab) {
   if (!viewer) return null;
   return { intent, clearIntent: () => setIntent(null),
-    open: (attempt) => { setIntent({ attempt }); setTab("Scene viewer"); },
-    openGhost: (ghost) => { setIntent({ ghost }); setTab("Scene viewer"); } };
+    open: (attempt) => { setIntent({ attempt }); setTab("Ghost Lab"); },
+    openGhost: (ghost) => { setIntent({ ghost }); setTab("Ghost Lab"); } };
 }
 
 function NavItem({ name, icon, tab, setTab, onSessions, compact = false }) {
@@ -255,7 +255,7 @@ function App() {
   const tracker = useTracker();
   const [SceneViewer, sceneIntent, setSceneIntent] = useSceneLab();
   const navGroups = SceneViewer ? [...NAV_GROUPS, LAB_GROUP] : NAV_GROUPS;
-  const plainTabs = SceneViewer ? { ...PLAIN_TABS, "Scene viewer": SceneViewer } : PLAIN_TABS;
+  const plainTabs = SceneViewer ? { ...PLAIN_TABS, "Ghost Lab": SceneViewer } : PLAIN_TABS;
   // The Daily Star rides on `t` so every surface reads one copy; it lives
   // outside the store because only this layer knows the local date.
   const { daily, markSeen } = useDailyStar(tracker.standingRev);

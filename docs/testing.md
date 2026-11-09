@@ -171,6 +171,13 @@ Playwright itself); check `window.__pointerLockStandIn.armed()` before a
 right press. `tests/test_browser_guard.py` scans every launch path, and every
 browser-lane test fails, freeing the cursor, if it leaves the cursor clipped.
 
+The same door raises Chromium's resource-timing buffer in every page. By default
+Chromium keeps 250 entries and silently drops the rest, and the app loads about
+260 at startup once its database has attempts (2026-11-08). A probe that waits
+for one request's `performance.getEntriesByType('resource')` entry can rely on
+it; one that wants only its own gesture's requests calls
+`performance.clearResourceTimings()` first.
+
 ## One budget across worktrees
 
 A merge check (or `--all`) takes one of two OS-lock slots before creating any
@@ -204,6 +211,16 @@ cancels it (`tools/verify_full.py` uses 30).
 A whole-suite run (each full-run job) fails on a skip whose reason is not in
 `tests/skip_inventory.py`; a narrowed run may skip freely. Add a row only for
 something the machine genuinely cannot run, saying what would lift it.
+
+## His real user data is fenced off
+
+Every test's per-user roots (the app's user data, the Slot Library, the scene lab and the shared installation
+record) land in that test's own temporary folder: `tests/conftest.py::_fence_user_data` rebinds
+`core/paths.py::local_app_data`, the one door they all join their folders to, while LOCALAPPDATA still names his
+real folder. A test that sets its own LOCALAPPDATA keeps it. A test that must reach his real data says so with
+`@pytest.mark.real_user_data(reason=...)`. The fence does not reach a child process or a module that reads
+LOCALAPPDATA itself, which is why every per-user root goes through `core/paths.py`. Why: on 2026-11-08 his Slot
+Library held this suite's fake slot as a captured state. `tests/test_user_data_fence.py` holds the fence.
 
 ## Native host builds
 

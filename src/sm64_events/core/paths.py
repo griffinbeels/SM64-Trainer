@@ -151,10 +151,15 @@ def ghost_population_root() -> Path:
     return _absolute_override("SM64_GHOST_POPULATION") or data_root() / "data" / "ghost_population"
 
 
+def local_app_data() -> Path:
+    """The Windows user's LocalAppData. Every per-user root here joins its own folder to this one door, so the
+    test suite can fence all of them off his real data at once (tests/conftest.py, `_fence_user_data`)."""
+    return Path(os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local"))
+
+
 def user_data_root() -> Path:
     """Windows-user practice state for this build channel."""
-    base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
-    return Path(base) / build_channel.current_build().app_dir_name
+    return local_app_data() / build_channel.current_build().app_dir_name
 
 
 def slot_library_dir() -> Path:
@@ -163,10 +168,14 @@ def slot_library_dir() -> Path:
     return (practice_root() or user_data_root()) / "slot-library"
 
 
+def scene_lab_root() -> Path:
+    """The scene lab's recordings, attempt scenes, slot backups and lab.json (lab only; tools/scene_lab)."""
+    return user_data_root() / "scene-lab"
+
+
 def shared_installation_root() -> Path:
     """The unchanged machine installation record, shared across build channels."""
-    base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
-    return Path(base) / build_channel.STABLE_APP_DIR
+    return local_app_data() / build_channel.STABLE_APP_DIR
 
 
 def migrate_legacy_data_dir() -> None:
@@ -178,8 +187,7 @@ def migrate_legacy_data_dir() -> None:
     if (build_channel.current_build().legacy_beta
             or not is_frozen() or practice_root() is not None):
         return
-    base = Path(os.environ.get("LOCALAPPDATA") or str(
-        Path.home() / "AppData" / "Local"))
+    base = local_app_data()
     new = base / APP_DIR_NAME
     legacy = base / LEGACY_APP_DIR_NAME
     if legacy == new or not legacy.exists():

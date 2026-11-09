@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// The Scene viewer page (ui/components/sceneviewer.js) against a scripted
+// The Ghost Lab page (the Scene viewer until round 9, ui/components/sceneviewer.js) against a scripted
 // server: what it asks for, when, and what it shows. No renderer, GPU or
 // browser: the socket, fetch, canvas, pointer lock and animation frames are
 // stand-ins. The camera's math is components/scenecamera.js; the numbers it
@@ -27,6 +27,10 @@ const REFERENCE = { orbitPerPixel: 0.01, steepestDegrees: 80, levelPerPixel: 0.1
 const FRAMES = Array.from({ length: 5 }, (_, i) => ({ level: 9, area: 1, game_frame: 1000 + i }));
 const POSE = { focus: [10, 200, -30], position: [10, 500, 1170], roll: 0, fov: 45, mario: [40, 80, -60] };
 const PER_DEGREE = 65536 / 360;
+// The running game's nine Usamune slots as GET /api/scene-lab/slot-sets answers outside a course, all of them
+// empty: the save-state strip asks for it while it shows.
+const SLOTS_EMPTY = { context: null, game: { build: "us" }, slots: Array.from({ length: 9 }, (_, i) => ({
+  slot: i + 1, set: null, state: null, translated: null, under: null, picture: null, loaded_last: false })) };
 let sockets, opened, fetches, frames, locked, lockRequests;
 // A test's own answers by URL prefix, asked before the scripted server's (the selector and ghost tests).
 let routes;
@@ -83,6 +87,7 @@ beforeEach(() => {
       ended: null, packages: [{ name: "bob-minute.sm64scene", bytes: 11 << 20 }] });
     if (url === "/api/scene-lab/open") return respond(opened);
     if (url === "/api/scene-lab/close") return respond({ closed: true });
+    if (url === "/api/scene-lab/slot-sets") return respond(SLOTS_EMPTY);
     if (url === "/api/tuning/scenecamera") return respond({ written: Object.keys(JSON.parse(options.body).values).length });
     return respond({}, 404);
   });
@@ -123,10 +128,25 @@ const settled = async (turns = 5) => {
   for (let turn = 0; turn < turns; turn++) await new Promise((resolve) => { setTimeout(resolve, 0); });
 };
 
-async function openScene() {
+// The bar's More menu (the lab's recordings, picture quality, the numbers, the keys), open.
+function openMore(page) {
+  const more = page.getByRole("button", { name: "More" });
+  if (more.getAttribute("aria-expanded") !== "true") fireEvent.click(more);
+  return within(page.container.querySelector(".ghost-lab-more-pop"));
+}
+
+// The tray's Camera tab, chosen: every camera control is in it.
+function cameraTab(page) {
+  fireEvent.click(page.getByRole("tab", { name: /Camera/ }));
+  return page;
+}
+
+// A lab package opened from the More menu (closed again after), its first picture asked for; the tray on
+// `tab` ("camera": every camera control is in it, "ghosts": the tray's default).
+async function openScene({ tab = "camera" } = {}) {
   const page = render(h(SceneViewer, {}));
   const button = await until(() => {
-    const found = page.getByRole("button", { name: "Open" });
+    const found = openMore(page).getByRole("button", { name: "Open" });
     expect(found.disabled).toBe(false);
     return found;
   });
@@ -135,6 +155,8 @@ async function openScene() {
   const socket = sockets[0];
   socket.open();
   await until(() => expect(socket.sent.length).toBe(1));
+  fireEvent.click(page.getByRole("button", { name: "More" }));          // shut again
+  if (tab === "camera") cameraTab(page);
   const root = page.container.querySelector(".scene-lab");
   return { page, socket, root, canvas: root.querySelector("canvas") };
 }
@@ -227,7 +249,7 @@ test("an attempt the lab refuses shows the server's reason and plays nothing", a
   await until(() => expect(page.container.querySelector(".scene-lab-error")?.textContent).toBe(refusal));
   await settled();
   expect(sockets.length).toBe(0);
-  expect(page.getByRole("button", { name: "Open" })).toBeTruthy();       // the packages are still there to pick
+  expect(openMore(page).getByRole("button", { name: "Open" })).toBeTruthy();   // the packages are still there to pick
 });
 
 test("two pictures are in flight at a time and the newest step waiting behind them wins", async () => {
@@ -246,7 +268,7 @@ test("two pictures are in flight at a time and the newest step waiting behind th
   await socket.picture(socket.sent[1]);
   await socket.picture(socket.sent[2]);
   await waitFor(() => expect(page.container.textContent).toContain("Frame 4 of 5"));
-  expect(page.container.textContent).toContain("level 9, area 1, game frame 1003");
+  expect(page.container.querySelector(".scene-lab-frame").title).toContain("level 9, area 1, game frame 1003");
   fireEvent.keyDown(root, { key: "End" });
   await waitFor(() => expect(socket.sent.length).toBe(4));
   expect(socket.sent[3].frame).toBe(4);                // stepping stops at the last frame
@@ -344,10 +366,10 @@ test("a scene still being written grows under the slider, and Play waits at its 
   opened = { ...opened, frames: FRAMES.slice(0, 3), growing: true };
   const { page, socket } = await openScene();
   await socket.picture(socket.sent[0]);
-  await until(() => expect(page.container.textContent).toContain("Frame 1 of 3 so far"));
+  await until(() => expect(page.container.textContent).toContain("Frame 1 of 3+"));
   socket.text({ kind: "grown", session: 2, from: 3, frames: FRAMES.slice(3), growing: false });   // another scene's
   socket.text({ kind: "grown", session: 1, from: 3, frames: FRAMES.slice(3, 4), growing: true });
-  await until(() => expect(page.container.textContent).toContain("Frame 1 of 4 so far"));
+  await until(() => expect(page.container.textContent).toContain("Frame 1 of 4+"));
   clock.now = 10000;
   fireEvent.click(page.getByRole("button", { name: "Play" }));
   const answer = async () => {             // each asked picture arrives (a held one draws on its due frame)
@@ -371,7 +393,7 @@ test("a scene still being written grows under the slider, and Play waits at its 
   expect(socket.pictures().some((request) => request.frame === 4)).toBe(true);   // went on, frame by frame
   await until(() => expect(page.getByRole("button", { name: "Play" })).toBeTruthy());   // whole: it ends
   expect(page.container.textContent).toContain("Frame 5 of 5");
-  expect(page.container.textContent).not.toContain("so far");
+  expect(page.container.querySelector(".scene-lab-frame").textContent).not.toContain("+");   // whole now
 });
 
 test("a picture a play asked for ahead is never shown once the play has stopped", async () => {
@@ -611,7 +633,7 @@ test(", and . step one frame like the arrows; a slider reached with Tab gives th
   expect(fireEvent.keyDown(slider, { key: ".", code: "Period" })).toBe(false);               // the viewer's
   await until(() => expect(socket.last().frame).toBe(at + 1));
   await answerAll(socket);
-  fireEvent.click(page.getByRole("button", { name: "Tune controls" }));
+  fireEvent.click(openMore(page).getByRole("button", { name: "Tune controls" }));
   const field = page.getByRole("region", { name: "Tune controls" }).querySelector("#flightSpeed");
   field.focus();
   const sent = socket.sent.length;
@@ -654,9 +676,16 @@ test("HUD off asks for every picture without the HUD, the one on screen at once,
 test("the header names the scene, never its file: the server's title, else the attempt the Practice log shows, else Recording", async () => {
   const lab = await openScene();
   await lab.socket.picture(lab.socket.sent[0]);
-  const title = () => lab.page.container.querySelector(".scene-lab-title")?.textContent;
+  // The bar says whose run it is (a star, the flag, who, the time); the scene's whole title is its hover.
+  const title = () => lab.page.container.querySelector(".ghost-lab-watching")?.title;
   await until(() => expect(title()).toBe("Recording"));
-  expect(lab.page.container.querySelector(".workshop-hero").textContent).not.toContain("sm64scene");
+  // The bar itself, without the More menu (which lists the lab's own recordings by file, as their picker).
+  const bar = lab.page.container.querySelector(".ghost-lab-top").cloneNode(true);
+  bar.querySelector(".ghost-lab-more-pop").remove();
+  expect(lab.page.container.querySelector(".ghost-lab-watching").textContent).toBe("★Lab recording");
+  expect(bar.textContent).not.toContain("sm64scene");
+  expect(bar.textContent).not.toContain("Scene viewer");                          // no title row
+  expect(lab.page.container.textContent).not.toContain("Scene viewer");
   cleanup();
   sockets = [];
   opened = { ...opened, attempt: 12 };
@@ -665,8 +694,9 @@ test("the header names the scene, never its file: the server's title, else the a
       { id: 12, igt: "11\"03", rta: "11\"60", strat_tag: "Single Jump" }] }] };
   const fallback = render(h(SceneViewer, { t: { ...fromGhostButton(12).t, view } }));
   await until(() => expect(sockets.length).toBe(1));
-  await until(() => expect(fallback.container.querySelector(".scene-lab-title")?.textContent)
+  await until(() => expect(fallback.container.querySelector(".ghost-lab-watching")?.title)
     .toBe("Whomp's Fortress · Shoot into the Wild Blue · Single Jump · 11\"03"));
+  expect(fallback.container.querySelector(".ghost-lab-watching").textContent).toBe("★You11\"03");   // his run, its time
   // A title naming the target wins; a plain one ("Lab recording", "Attempt 12") yields to the attempt
   // the log knows, and stays when the log does not know it.
   expect(sceneTitle({ attempt: 12, title: "Bob-omb Battlefield · Big Bob-omb · Standard · 40\"10",
@@ -879,8 +909,10 @@ test("a tilted view levels as you turn or fly, never on entry, a step, a slide o
 
 // ------------------------------------------------------------------ flight: W A S D and Q E, no button needed
 
-const hint = (page) => page.container.querySelector(".scene-lab-hint").textContent;
-const LOOKING = "Move the mouse to look around";
+// What the picture says while you act on it (the cue): its keys while looking around, the click while
+// choosing a point. The Ghost Lab has no hint paragraph; the More menu lists every key.
+const hint = (page) => page.container.querySelector(".scene-lab-cue")?.textContent ?? "";
+const LOOKING = "W A S D move · Q E down, up";
 
 // Holding the right button adds looking around with the mouse.
 async function startLooking(page, socket, canvas) {
@@ -1060,8 +1092,7 @@ test.each([
   expect(socket.sent.length).toBe(after);
   expect(frames.length).toBe(0);
   expect(locked).toBeNull();
-  const shown = page.container.querySelector(".scene-lab-hint");
-  if (shown) expect(shown.textContent).not.toContain(LOOKING);
+  expect(hint(page)).not.toContain(LOOKING);
 });
 
 test("arrows still step and Space still plays while looking around: one keyboard owner", async () => {
@@ -1229,7 +1260,7 @@ test("a mouse click on a control hands the keyboard back; a button pressed from 
 test("a field that types keeps its keys, Ctrl and Meta combinations stay the browser's, and focus moving to a field lets go", async () => {
   const { page, socket, root } = await openScene();
   const entry = await enterFree(page, socket);
-  fireEvent.click(page.getByRole("button", { name: "Tune controls" }));
+  fireEvent.click(openMore(page).getByRole("button", { name: "Tune controls" }));
   const field = page.getByRole("region", { name: "Tune controls" }).querySelector("#flightSpeed");
   const picker = root.querySelector(".scene-lab-quality select");
   const sent = socket.sent.length;
@@ -1339,7 +1370,7 @@ test("Set focus asks where the clicked point is and turns the camera to orbit it
   const first = await enterFree(page, socket);
   fireEvent.click(page.getByRole("button", { name: "Set focus" }));
   expect(page.getByRole("button", { name: "Set focus" }).getAttribute("aria-pressed")).toBe("true");
-  expect(page.container.querySelector(".scene-lab-hint").textContent).toContain("Click a surface");
+  expect(hint(page)).toContain("Click a surface");                    // the cue on the picture says what to do
   fireEvent.pointerDown(canvas, { button: 0, pointerId: 4, clientX: 160, clientY: 360 });
   await waitFor(() => expect(socket.last()).toMatchObject({ kind: "pick", frame: 0, u: 0.25, v: 0.75 }));
   expect(socket.last().camera).toEqual(first);
@@ -1512,14 +1543,28 @@ test("a click maps onto the picture inside its letterbox", () => {
 
 // ------------------------------------------------------------------ the rest of the page
 
-test("the hint teaches only what applies now", async () => {
+// Round 9, item 5 (his words: "no AI slop overexplanations"): no paragraph of keys under the camera. The
+// More menu lists every key, and the picture's cue says what applies while you act on it.
+test("the keys: the More menu lists every one, the cue on the picture says what applies while you act, and hintFor teaches each camera", async () => {
   const { page, socket, canvas } = await openScene();
-  expect(hint(page)).toContain("W A S D move the camera from this picture");
+  expect(page.container.textContent).not.toContain("W A S D move the camera from this picture");   // no hint paragraph
+  const keys = openMore(page);
+  for (const does of ["Play or pause", "Save this frame in that slot", "Cut to that saved view", "Fly (Shift faster, Alt slower)",
+    "Look around while held", "Look at Mario", "Recorded camera", "Mute"]) {
+    expect(keys.getByText(does)).toBeTruthy();
+  }
+  expect(keys.getByText("Shift 1 to 9").closest("div").textContent).toBe("Shift 1 to 9Cut to that saved view");
+  fireEvent.click(page.getByRole("button", { name: "More" }));                   // shut again
+  expect(hint(page)).toBe("");                                                  // nothing being done: nothing said
   await enterFree(page, socket);
-  expect(hint(page)).toContain("hold the right button to look around.");
-  expect(hint(page)).toContain("Drag to turn around the focus point");
+  expect(hint(page)).toBe("");
   fireEvent.pointerDown(canvas, { button: 2, buttons: 2, pointerId: 3 });
   await waitFor(() => expect(hint(page)).toContain(LOOKING));
+  const recorded = { freeAvailable: true, picking: false, looking: false, free: false, pathOn: false, rig: null, view: null,
+    ghosts: [], scene: { free_camera: { available: true, reason: null } } };
+  expect(hintFor(recorded)).toContain("W A S D move the camera from this picture");
+  expect(hintFor({ ...recorded, free: true })).toContain("Drag to turn around the focus point");
+  expect(hintFor({ ...recorded, looking: true })).toContain("Move the mouse to look around");
   expect(hintFor({ freeAvailable: false, scene: { free_camera: { reason: "No state." } } })).toContain("No state.");
 });
 
@@ -1529,7 +1574,7 @@ test("without a free camera the controls say why instead of doing nothing", asyn
   expect(page.getByRole("button", { name: "Free camera" }).disabled).toBe(true);
   expect(page.getByRole("button", { name: "Look at Mario" }).disabled).toBe(true);
   expect(page.getByRole("button", { name: "Set focus" }).disabled).toBe(true);
-  expect(page.container.querySelector(".scene-lab-hint").textContent)
+  expect(page.container.querySelector(".ghost-lab-camera-note").textContent)   // the Camera tab's one line
     .toContain("Only the recorded camera is available: This recording carries no scene state.");
   fireEvent.pointerDown(canvas, { button: 2, buttons: 2, pointerId: 3 });
   expect(HTMLCanvasElement.prototype.requestPointerLock).not.toHaveBeenCalled();
@@ -1561,12 +1606,13 @@ let sessionSerial = 100;
 const queries = (path) => fetches.filter(([url]) => url.startsWith(path))
   .map(([url]) => Object.fromEntries(new URL(url, "http://page").searchParams));
 const opens = () => fetches.filter(([url]) => url === "/api/scene-lab/open").map(([, , body]) => JSON.parse(body));
+// The stage picker's words, and the bar's one line (the Ghost Lab says why a stage is missing there).
 const selectorWords = (page) => {
   const root = page.container.querySelector(".scene-lab-stage-picker");
   return { name: root.querySelector(".scene-lab-target-words strong")?.textContent,
     course: root.querySelector(".scene-lab-target-words small")?.textContent ?? null,
     strat: root.querySelector("select")?.value ?? null,
-    note: root.querySelector(".scene-lab-stage-note")?.textContent ?? null };
+    note: page.container.querySelector(".ghost-lab-top-note")?.textContent || null };
 };
 
 // The viewer arriving with Practice's `view`; the lab answers a stage per strategy (`stage`: Single
@@ -1614,7 +1660,7 @@ test("arriving with no scene open opens the stage of what Practice has selected,
   expect(opens()).toEqual([{ attempt: 40 }]);
   await until(() => expect(selectorWords(page)).toEqual({ name: "To the Top of the Fortress", course: "Whomp's Fortress",
     strat: "Single Jump", note: null }));
-  expect(page.queryByRole("button", { name: "Open" })).toBeNull();                 // the lab's file list stays away
+  expect(page.queryByRole("button", { name: "Open" })).toBeNull();                 // the lab's file list stays in More
   expect(socket.pictures()[0]).toMatchObject({ frame: 0, camera: null });
   await settled();
   expect(page.getByRole("button", { name: "Play" })).toBeTruthy();
@@ -1626,7 +1672,8 @@ test("with nothing selected anywhere the selector asks for a choice and opens no
   await settled();
   expect(queries("/api/scene-lab/stage")).toEqual([]);
   expect(selectorWords(page).name).toBe("Choose a star");
-  expect(page.getByRole("button", { name: "Open" })).toBeTruthy();                  // the lab's own recordings
+  expect(page.container.querySelector(".scene-lab-player")).toBeNull();
+  expect(openMore(page).getByRole("button", { name: "Open" })).toBeTruthy();        // the lab's own recordings, in More
 });
 
 test("a strategy picked in the selector opens its stage, or says why there is none and closes the other's scene", async () => {
@@ -1683,49 +1730,54 @@ test("from the Ghost button the selector names that attempt's target at once, th
 
 // Round 9, item 8, his words: "We also need ghost buttons next to all library entries that have a ghost,
 // so that it loads directly into the scene viewer." A Library row's Ghost button hands the viewer
-// {recording, entity, strat}; `stage(query)` answers /stage, `ghost` answers /ghost.
+// {recording, entity, strat}; `answer` is the lab's GET /ghost. Since item 5 the Ghost Lab WATCHES that
+// ghost: its star turns up in the picker and the run becomes the scene (his attempt's scene when it is
+// one of his, else made from the ghost, POST /open {ghost}); no stage of his is needed for it.
 const KIM = { ref: "lib-kim", player: "Kim", time: "10\"66", strat: "TJ Owlless", version: "jp", rank: 1, more: 0 };
-function libraryGhost(ghost, stage, answer = { item: KIM }) {
-  routes.set("/api/scene-lab/stage", (url) => respond(stage(new URL(url, "http://page").searchParams)));
+function libraryGhost(ghost, answer = { item: KIM }) {
   routes.set("/api/target/strategies", () => respond({ strategies: [{ name: "Single Jump" }, { name: "TJ Owlless" }] }));
   routes.set("/api/scene-lab/open", (url, options) => respond({ ...opened, session: ++sessionSerial,
-    attempt: JSON.parse(options.body).attempt }));
+    attempt: JSON.parse(options.body).attempt ?? null }));
   routes.set("/api/scene-lab/ghost", () => respond(answer));
   return render(h(SceneViewer, { t: { view: VIEW, sceneLab: { intent: { ghost }, clearIntent: () => {} } } }));
 }
-const LIBRARY_KIM = { recording: "a".repeat(64), entity: "star:2:1", strat: "Nothing saved" };
+const LIBRARY_KIM = { recording: "a".repeat(64), entity: "star:2:1", strat: "TJ Owlless" };
+const watchingWords = (page) => page.container.querySelector(".ghost-lab-watching")?.textContent ?? null;
 
-test("a Library ghost opens its star's stage on its own strategy, else any of his, and joins the scene", async () => {
-  const page = libraryGhost(LIBRARY_KIM, (query) => (query.get("strategies") === "all" ? stageOf("TJ Owlless", 44)
-    : stageOf(query.get("strat"), STAGES[query.get("strat")])));
+test("a Library ghost is watched: its star in the picker, the lab's row for it, and the run made into the scene", async () => {
+  const page = libraryGhost(LIBRARY_KIM);
   const socket = await sceneUp(1);
-  expect(queries("/api/scene-lab/stage")).toEqual([{ course: "2", star: "1", strat: "Nothing saved" },
-    { course: "2", star: "1", strategies: "all" }]);
-  expect(opens()).toEqual([{ attempt: 44 }]);
-  await until(() => expect(ghostsSent(socket).length).toBe(1));
   expect(queries("/api/scene-lab/ghost?")).toEqual([{ recording: "a".repeat(64), course: "2", star: "1" }]);
-  expect(ghostsSent(socket)[0].set).toEqual([{ ref: "lib-kim", label: "Kim" }]);
-  socket.text({ id: ghostsSent(socket)[0].id, kind: "ghosts", shown: ["lib-kim"], refused: [] });
-  const view = await until(() => within(page.container.querySelector('[aria-label="Camera"]'))
-    .getByRole("button", { name: /Kim's view$/ }));
-  expect(view.querySelector(".region-flag").alt).toBe("JP");
+  expect(opens()).toEqual([{ ghost: "lib-kim" }]);                                 // not one of his: made from the ghost
+  expect(queries("/api/scene-lab/stage")).toEqual([]);                              // no stage of his is needed
+  await until(() => expect(watchingWords(page)).toBe("★Kim10\"66"));               // the bar: whose run, its time
+  expect(page.container.querySelector(".ghost-lab-watching .region-flag").alt).toBe("JP");
   expect(selectorWords(page)).toMatchObject({ strat: "TJ Owlless", note: null });
+  const watched = within(page.getByRole("region", { name: "In the scene" })).getAllByRole("listitem")[0];
+  expect([watched.dataset.ref, watched.classList.contains("is-watched"), watched.textContent]).toEqual(
+    ["lib-kim", true, "★Kim10\"66"]);
+  expect(ghostsSent(socket)).toEqual([]);                                           // it IS the scene, not beside it
+  expect(page.getByRole("tab", { name: /Ghosts/ }).textContent).toContain("Watching Kim");
 });
 
-test("a Library ghost with no stage of his says why in one sentence, and one the lab cannot find says why on the panel", async () => {
-  const none = libraryGhost(LIBRARY_KIM, (query) => stageOf(query.get("strat") || "Single Jump", null));
-  await until(() => expect(selectorWords(none).note).toBe("This ghost can't be shown yet: you have no saved scene of this star."));
-  await settled();
-  expect([queries("/api/scene-lab/ghost?"), opens()]).toEqual([[], []]);
-  expect(none.container.querySelector(".scene-lab-player")).toBeNull();
+test("a Library ghost that is one of his opens his own scene of it; one the lab cannot find, or whose star is unknown, says why on the bar", async () => {
+  const mine = libraryGhost(LIBRARY_KIM, { item: { ...KIM, ref: "lib-mine", player: "You", attempt: 44 } });
+  await sceneUp(1);
+  expect(opens()).toEqual([{ attempt: 44 }]);
+  await until(() => expect(watchingWords(mine)).toBe("★You10\"66"));
   cleanup();
   fetches.length = 0;
-  const lost = libraryGhost({ ...LIBRARY_KIM, strat: "Single Jump" }, (query) => stageOf("Single Jump", 40),
-    { item: null, reason: "That ghost could not be found. Open it from the Library again." });
-  const socket = await sceneUp(sockets.length + 1);
-  await until(() => expect(lost.container.querySelector(".scene-lab-ghosts").textContent)
-    .toContain("That ghost could not be found. Open it from the Library again."));
-  expect(ghostsSent(socket)).toEqual([]);
+  const lost = libraryGhost(LIBRARY_KIM, { item: null, reason: "That ghost could not be found. Open it from the Library again." });
+  await until(() => expect(selectorWords(lost).note).toBe("That ghost could not be found. Open it from the Library again."));
+  await settled();
+  expect(opens()).toEqual([]);
+  expect(lost.container.querySelector(".scene-lab-player")).toBeNull();
+  cleanup();
+  fetches.length = 0;
+  const unknown = libraryGhost({ ...LIBRARY_KIM, entity: "route:7" });
+  await until(() => expect(selectorWords(unknown).note).toBe(STAGE_WORDS.unplaced));
+  await settled();
+  expect([queries("/api/scene-lab/ghost?"), opens()]).toEqual([[], []]);
 });
 
 // The lab's lists: 23 of yours (the first is the stage's own run), 12 top ghosts per strategy (All
@@ -1751,32 +1803,34 @@ function ghostRoutes() {
       pages: Math.max(1, Math.ceil(rows.length / 10)), reason: null });
   });
 }
-const ghostRow = (page, ref) => page.container.querySelector(`li[data-ref="${ref}"]`);
+// The Ghosts tab (round 9, item 5): "In the scene" (the run you watch, then each ghost shown beside it) and the
+// list beside it, Top or Yours one at a time, or what Find a player found. A row of that list, a row of "In
+// the scene", a list row's eye (show beside the run you watch, or hide), and the list chosen.
+const ghostRow = (page, ref) => page.container.querySelector(`.ghost-lab-lists li[data-ref="${ref}"]`);
+const sceneRow = (page, ref) => page.container.querySelector(`.ghost-lab-scene-list li[data-ref="${ref}"]`);
+const eye = (page, ref) => ghostRow(page, ref).querySelector("button.ghost-lab-eye");
+const showList = (page, words) => fireEvent.click(within(page.getByRole("group", { name: "Ghost list" }))
+  .getByRole("button", { name: words }));
+function ghostsTab(page) {
+  fireEvent.click(page.getByRole("tab", { name: /Ghosts/ }));
+  return page;
+}
 const ghostsSent = (socket) => socket.sent.filter((message) => message.kind === "ghosts");
 const asked = (section) => queries("/api/scene-lab/ghosts").filter((query) => query.section === section);
 
-test("the ghost panel pages and sorts your ghosts, the stage's own run is the stage, and Top ghosts starts on All strategies", async () => {
+test("the ghost panel lists Top or Yours, one at a time: Top first on All strategies; Yours pages, sorts, and marks the run you watch", async () => {
   ghostRoutes();
   const page = arrive();
   await sceneUp(1);
-  await until(() => expect(ghostRow(page, "yours-1")).not.toBeNull());
-  expect(asked("yours")).toEqual([{ section: "yours", course: "2", star: "1", strat: "Single Jump", sort: "fastest", page: "1" }]);
-  expect(ghostRow(page, "yours-0").textContent).toContain("The stage");
-  expect(ghostRow(page, "yours-0").querySelector("button")).toBeNull();
-  const yours = page.getByRole("region", { name: "Your ghosts" });
-  expect(yours.textContent).toContain("Page 1");
-  fireEvent.click(within(yours).getByRole("button", { name: "Next" }));
-  await until(() => expect(yours.querySelector("li").dataset.ref).toBe("yours-10"));
-  expect(asked("yours").at(-1)).toMatchObject({ page: "2", sort: "fastest" });
-  fireEvent.change(within(yours).getByRole("combobox", { name: "Sort your ghosts" }), { target: { value: "newest" } });
-  await until(() => expect(yours.querySelector("li").dataset.ref).toBe("yours-22"));
-  expect(asked("yours").at(-1)).toMatchObject({ page: "1", sort: "newest" });
-
   // Round 9, item 7: Top ghosts first lists every strategy at once, each row naming its strategy, and
   // each row (item 11) wears the flag of the ROM its recording names, none where it names none.
-  const top = page.getByRole("region", { name: "Top ghosts" });
+  const top = await until(() => page.getByRole("region", { name: "Top ghosts" }));
   await until(() => expect(top.querySelectorAll("li").length).toBe(10));
   expect(asked("top")).toEqual([{ section: "top", strategies: "all", course: "2", star: "1", page: "1" }]);
+  const lists = within(page.getByRole("group", { name: "Ghost list" }));
+  expect([pressed(lists.getByRole("button", { name: "Top" })), pressed(lists.getByRole("button", { name: "Yours" }))])
+    .toEqual(["true", "false"]);
+  expect([page.queryByRole("region", { name: "Your ghosts" }), asked("yours")]).toEqual([null, []]);   // one at a time
   const picker = within(top).getByRole("combobox", { name: "Strategy for top ghosts" });
   expect([picker.value, picker.options[0].textContent]).toEqual(["", "All strategies"]);
   expect([...top.querySelectorAll(".scene-lab-ghost-rank")].map((rank) => rank.textContent).slice(0, 3)).toEqual(["#1", "#2", "#3"]);
@@ -1790,6 +1844,27 @@ test("the ghost panel pages and sorts your ghosts, the stage's own run is the st
   expect(asked("top").at(-1).strategies).toBeUndefined();
   expect(top.querySelector(".scene-lab-ghost-strat")).toBeNull();                       // one strategy: no strategy line
   expect(selectorWords(page).strat).toBe("Single Jump");                              // the stage keeps its strategy
+
+  showList(page, "Yours");
+  await until(() => expect(ghostRow(page, "yours-1")).not.toBeNull());
+  expect(page.queryByRole("region", { name: "Top ghosts" })).toBeNull();
+  expect(asked("yours")).toEqual([{ section: "yours", course: "2", star: "1", strat: "Single Jump", sort: "fastest", page: "1" }]);
+  // The stage's own run (attempt 40) is the run you watch: pressed, with a star, and no eye (it is the scene).
+  const stage = ghostRow(page, "yours-0");
+  const watching = within(stage).getByRole("button", { name: "Watching You 11\"03" });
+  expect([stage.classList.contains("is-watched"), pressed(watching), watching.disabled,
+    stage.querySelector(".ghost-lab-star").textContent, stage.querySelectorAll("button").length]).toEqual([true, "true", true, "★", 1]);
+  const other = within(ghostRow(page, "yours-1")).getByRole("button", { name: "Watch You 12\"03" });
+  expect([pressed(other), other.disabled, eye(page, "yours-1").getAttribute("aria-label")])
+    .toEqual(["false", false, "Show You beside the run you watch"]);
+  const yours = page.getByRole("region", { name: "Your ghosts" });
+  expect(yours.textContent).toContain("Page 1");
+  fireEvent.click(within(yours).getByRole("button", { name: "Next" }));
+  await until(() => expect(yours.querySelector("li").dataset.ref).toBe("yours-10"));
+  expect(asked("yours").at(-1)).toMatchObject({ page: "2", sort: "fastest" });
+  fireEvent.change(within(yours).getByRole("combobox", { name: "Sort your ghosts" }), { target: { value: "newest" } });
+  await until(() => expect(yours.querySelector("li").dataset.ref).toBe("yours-22"));
+  expect(asked("yours").at(-1)).toMatchObject({ page: "1", sort: "newest" });
   expect(queries("/api/scene-lab/stage").length).toBe(1);
 });
 
@@ -1799,9 +1874,15 @@ test("each page is asked once in a scene's life: paging back, sorting back, anot
   ghostRoutes();
   const first = arrive();
   await sceneUp(1);
-  await until(() => expect(ghostRow(first, "yours-1")).not.toBeNull());
-  await until(() => expect(asked("top").length).toBe(1));
-  const yours = first.getByRole("region", { name: "Your ghosts" });
+  const top = await until(() => first.getByRole("region", { name: "Top ghosts" }));
+  await until(() => expect(top.querySelectorAll("li").length).toBe(10));
+  fireEvent.change(within(top).getByRole("combobox"), { target: { value: "TJ Owlless" } });
+  await until(() => expect(top.querySelector("li").dataset.ref).toBe("top-TJ Owlless-0"));
+  fireEvent.change(within(top).getByRole("combobox"), { target: { value: "" } });          // All strategies again
+  await until(() => expect(top.querySelector("li").dataset.ref).toBe("top-Single Jump-0"));
+  showList(first, "Yours");
+  const yours = await until(() => first.getByRole("region", { name: "Your ghosts" }));
+  await until(() => expect(yours.querySelector("li")?.dataset.ref).toBe("yours-0"));
   fireEvent.click(within(yours).getByRole("button", { name: "Next" }));
   await until(() => expect(yours.querySelector("li").dataset.ref).toBe("yours-10"));
   fireEvent.click(within(yours).getByRole("button", { name: "Previous" }));
@@ -1811,11 +1892,10 @@ test("each page is asked once in a scene's life: paging back, sorting back, anot
   await until(() => expect(yours.querySelector("li").dataset.ref).toBe("yours-22"));
   fireEvent.change(sort, { target: { value: "fastest" } });
   await until(() => expect(yours.querySelector("li").dataset.ref).toBe("yours-0"));
-  const top = first.getByRole("region", { name: "Top ghosts" }), strategy = within(top).getByRole("combobox");
-  fireEvent.change(strategy, { target: { value: "TJ Owlless" } });
-  await until(() => expect(top.querySelector("li").dataset.ref).toBe("top-TJ Owlless-0"));
-  fireEvent.change(within(top).getByRole("combobox"), { target: { value: "" } });          // All strategies again
-  await until(() => expect(top.querySelector("li").dataset.ref).toBe("top-Single Jump-0"));
+  showList(first, "Top");                                                            // each list again: from what it holds
+  await until(() => expect(ghostRow(first, "top-Single Jump-0")).not.toBeNull());
+  showList(first, "Yours");
+  await until(() => expect(ghostRow(first, "yours-0")).not.toBeNull());
   expect(asked("yours").map((query) => [query.sort, query.page])).toEqual([["fastest", "1"], ["fastest", "2"], ["newest", "1"]]);
   expect(asked("top").map((query) => query.strategies ?? query.strat)).toEqual(["all", "TJ Owlless"]);
   const before = asked("yours").length + asked("top").length;
@@ -1830,6 +1910,8 @@ test("each page is asked once in a scene's life: paging back, sorting back, anot
   const again = render(h(SceneViewer, { t: { view: VIEW } }));                      // the same scene, come back to
   await until(() => expect(sockets.length).toBe(2));
   sockets[1].open();
+  await until(() => expect(ghostRow(again, "top-Single Jump-1")).not.toBeNull());
+  showList(again, "Yours");
   await until(() => expect(ghostRow(again, "yours-1")).not.toBeNull());
   await settled();
   expect(asked("yours").length + asked("top").length).toBe(before);
@@ -1874,46 +1956,55 @@ test("Find a player asks once typing stops or on Enter, lists each player's best
   await until(() => expect(ghostRow(page, "SullyLikesBigChungus-2")).toBeNull());
 });
 
-test("Add and Remove send the whole list; the lab's answer selects rows, gives a refusal its reason, and the picture is asked again", async () => {
+// His words on the first concepts (round 9, item 5): "the "add" and "open" are a bit confusing. I didn't
+// understand the difference on first glance". A row's eye now shows its ghost beside the run you watch.
+test("the eye shows a ghost beside the run you watch and hides it: the whole list goes, the lab's answer marks rows, a refusal says why, and the picture is asked again", async () => {
   ghostRoutes();
   const page = arrive();
   const socket = await sceneUp(1);
   await until(() => expect(ghostRow(page, "top-Single Jump-1")).not.toBeNull());
   const pictures = socket.pictures().length;
-  fireEvent.click(within(ghostRow(page, "top-Single Jump-0")).getByRole("button", { name: /^Add/ }));
+  const shownWords = (ref) => [eye(page, ref).getAttribute("aria-label"), pressed(eye(page, ref)),
+    ghostRow(page, ref).classList.contains("is-shown")];
+  expect(shownWords("top-Single Jump-0")).toEqual(["Show Player 1 beside the run you watch", "false", false]);
+  fireEvent.click(eye(page, "top-Single Jump-0"));
   await until(() => expect(ghostsSent(socket).length).toBe(1));
   expect(ghostsSent(socket)[0]).toMatchObject({ session: sessionSerial, set: [{ ref: "top-Single Jump-0", label: "Player 1" }] });
-  const adding = within(ghostRow(page, "top-Single Jump-0")).getByRole("button");         // loading until answered
-  expect([adding.textContent.trim(), adding.disabled]).toEqual(["Adding...", true]);
-  expect(ghostRow(page, "top-Single Jump-0").classList.contains("is-shown")).toBe(false);
+  expect([...shownWords("top-Single Jump-0"), eye(page, "top-Single Jump-0").disabled])   // on its way until answered
+    .toEqual(["Showing Player 1...", "false", false, true]);
+  expect(sceneRow(page, "top-Single Jump-0")).not.toBeNull();                            // "In the scene", on its way
   await settled();
   expect(socket.pictures().length).toBe(pictures);                                       // nothing redrawn before
   socket.text({ id: ghostsSent(socket)[0].id, kind: "ghosts", shown: ["top-Single Jump-0"], refused: [] });
   await until(() => expect(socket.pictures().length).toBe(pictures + 1));
   expect(socket.pictures().at(-1)).toMatchObject({ frame: 0 });                            // the picture on screen again
   await socket.picture(socket.pictures().at(-1));
+  expect(shownWords("top-Single Jump-0")).toEqual(["Hide Player 1", "true", true]);
+  expect(page.getByRole("tab", { name: /Ghosts/ }).textContent).toContain("1 beside you");
 
-  fireEvent.click(within(ghostRow(page, "top-Single Jump-1")).getByRole("button", { name: /^Add/ }));
+  fireEvent.click(eye(page, "top-Single Jump-1"));
   await until(() => expect(ghostsSent(socket).length).toBe(2));
   expect(ghostsSent(socket)[1].set.map((ghost) => ghost.ref)).toEqual(["top-Single Jump-0", "top-Single Jump-1"]);
   socket.text({ id: ghostsSent(socket)[1].id, kind: "ghosts", shown: ["top-Single Jump-0"],
     refused: [{ ref: "top-Single Jump-1", reason: "Recorded on another version of the course." }] });
   await until(() => expect(ghostRow(page, "top-Single Jump-1").textContent).toContain("Recorded on another version of the course."));
-  expect(ghostRow(page, "top-Single Jump-1").classList.contains("is-shown")).toBe(false);
-  expect(within(ghostRow(page, "top-Single Jump-1")).getByRole("button", { name: /^Add/ })).toBeTruthy();
+  expect(shownWords("top-Single Jump-1")).toEqual(["Show Player 2 beside the run you watch", "false", false]);
+  expect(sceneRow(page, "top-Single Jump-1")).toBeNull();
 
-  fireEvent.click(within(ghostRow(page, "top-Single Jump-0")).getByRole("button", { name: /^Remove/ }));
-  fireEvent.click(within(ghostRow(page, "yours-2")).getByRole("button", { name: /^Add/ }));
+  fireEvent.click(eye(page, "top-Single Jump-0"));                                       // hide one
+  fireEvent.click(eye(page, "top-Single Jump-2"));                                       // and show another before the answer
   await until(() => expect(ghostsSent(socket).length).toBe(4));
   expect(ghostsSent(socket)[2].set).toEqual([]);
-  expect(ghostsSent(socket)[3].set.map((ghost) => ghost.ref)).toEqual(["yours-2"]);
-  socket.text({ id: ghostsSent(socket)[3].id, kind: "ghosts", shown: ["yours-2"], refused: [] });
+  expect(ghostsSent(socket)[3].set.map((ghost) => ghost.ref)).toEqual(["top-Single Jump-2"]);
+  socket.text({ id: ghostsSent(socket)[3].id, kind: "ghosts", shown: ["top-Single Jump-2"], refused: [] });
   socket.text({ id: ghostsSent(socket)[2].id, kind: "ghosts", shown: [], refused: [] });     // an older list's, late
   await settled();
-  expect(ghostRow(page, "yours-2").classList.contains("is-shown")).toBe(true);
+  expect(ghostRow(page, "top-Single Jump-2").classList.contains("is-shown")).toBe(true);
   expect(ghostRow(page, "top-Single Jump-0").classList.contains("is-shown")).toBe(false);
-  expect(page.getByRole("region", { name: "Ghosts" }).textContent).toContain("1 in the scene.");
-  fireEvent.click(page.getByRole("button", { name: "Remove all" }));
+  expect([...page.getByRole("region", { name: "In the scene" }).querySelectorAll("li")].map((row) => row.dataset.ref))
+    .toEqual(["stage", "top-Single Jump-2"]);                                            // the run you watch, then beside it
+  expect(page.getByRole("tab", { name: /Ghosts/ }).textContent).toContain("1 beside you");
+  fireEvent.click(page.getByRole("button", { name: "Hide all" }));
   await until(() => expect(ghostsSent(socket).at(-1).set).toEqual([]));
 });
 
@@ -1924,27 +2015,30 @@ test("a ghost in the scene has its own Mute; a recording without sound says its 
   routes.set("/api/scene-lab/audio/", () => new Promise(() => {}));        // its blocks on their way
   const page = arrive();
   const socket = await sceneUp(1);
+  showList(page, "Yours");
   await until(() => expect(ghostRow(page, "yours-2")).not.toBeNull());
-  expect(within(ghostRow(page, "yours-2")).queryByRole("button", { name: /^Mute/ })).toBeNull();   // not in the scene
-  fireEvent.click(within(ghostRow(page, "yours-2")).getByRole("button", { name: /^Add/ }));
+  expect(within(ghostRow(page, "yours-2")).queryByRole("button", { name: /^Mute/ })).toBeNull();   // a list row shows and watches
+  expect(sceneRow(page, "yours-2")).toBeNull();                                                   // not in the scene
+  fireEvent.click(eye(page, "yours-2"));
   await until(() => expect(ghostsSent(socket).length).toBe(1));
   socket.text({ id: ghostsSent(socket)[0].id, kind: "ghosts", shown: ["yours-2"], refused: [] });
-  const mute = await until(() => within(ghostRow(page, "yours-2")).getByRole("button", { name: /^Mute/ }));
-  expect([mute.getAttribute("aria-pressed"), mute.disabled, mute.title]).toEqual(["false", false,
-    "Mute this ghost's sound effects"]);
+  const mute = await until(() => within(sceneRow(page, "yours-2")).getByRole("button", { name: /^Mute/ }));
+  expect([mute.getAttribute("aria-label"), mute.getAttribute("aria-pressed"), mute.disabled, mute.title]).toEqual(
+    ["Mute You 13\"03", "false", false, "Mute this ghost's sound effects"]);
   fireEvent.click(mute);
-  await until(() => expect(within(ghostRow(page, "yours-2")).getByRole("button", { name: /^Mute/ })
+  await until(() => expect(within(sceneRow(page, "yours-2")).getByRole("button", { name: /^Mute/ })
     .getAttribute("aria-pressed")).toBe("true"));
   expect(fetches.some(([url]) => url.includes("track=ghost%3Ayours-2"))).toBe(true);
   routes.set("/api/scene-lab/audio/", () => respond({ detail: "This ghost's sound could not be made." }, 404));
-  fireEvent.click(within(ghostRow(page, "yours-2")).getByRole("button", { name: /^Remove/ }));
+  fireEvent.click(eye(page, "yours-2"));
   await until(() => expect(ghostsSent(socket).length).toBe(2));
   socket.text({ id: ghostsSent(socket)[1].id, kind: "ghosts", shown: [], refused: [] });
-  fireEvent.click(within(ghostRow(page, "yours-3")).getByRole("button", { name: /^Add/ }));
+  await until(() => expect(sceneRow(page, "yours-2")).toBeNull());
+  fireEvent.click(eye(page, "yours-3"));
   await until(() => expect(ghostsSent(socket).length).toBe(3));
   socket.text({ id: ghostsSent(socket)[2].id, kind: "ghosts", shown: ["yours-3"], refused: [] });
   const failed = await until(() => {                                          // a ghost whose sound failed says so
-    const button = within(ghostRow(page, "yours-3")).getByRole("button", { name: /^Mute/ });
+    const button = within(sceneRow(page, "yours-3")).getByRole("button", { name: /^Mute/ });
     expect(button.disabled).toBe(true);
     return button;
   });
@@ -1954,11 +2048,12 @@ test("a ghost in the scene has its own Mute; a recording without sound says its 
 // His words (round 5, item 5): "we need one button per active ghost in the scene to follow their
 // recorded POV."
 const GHOST_CAMERA = { focus: [100, 200, -300], position: [600, 700, 1200], roll: -700, fov: 50 };
+// Players 1 and 2 of Top ghosts shown beside the run you watch (their eyes, on the Ghosts tab).
 async function twoGhostsIn(page, socket) {
   await until(() => expect(ghostRow(page, "top-Single Jump-1")).not.toBeNull());
-  for (const ref of ["top-Single Jump-0", "top-Single Jump-1"]) {
-    fireEvent.click(within(ghostRow(page, ref)).getByRole("button", { name: /^Add/ }));
-    await until(() => expect(within(ghostRow(page, ref)).getByRole("button", { name: /^Adding/ })).toBeTruthy());
+  for (const [ref, player] of [["top-Single Jump-0", "Player 1"], ["top-Single Jump-1", "Player 2"]]) {
+    fireEvent.click(within(ghostRow(page, ref)).getByRole("button", { name: `Show ${player} beside the run you watch` }));
+    await until(() => expect(within(ghostRow(page, ref)).getByRole("button", { name: `Showing ${player}...` })).toBeTruthy());
   }
   const pictures = socket.pictures().length;
   socket.text({ id: ghostsSent(socket).at(-1).id, kind: "ghosts", shown: ["top-Single Jump-0", "top-Single Jump-1"],
@@ -1975,6 +2070,9 @@ test("each ghost in the scene has a view button: the stage from its own camera, 
   const page = arrive();
   const socket = await sceneUp(1);
   await twoGhostsIn(page, socket);
+  const rowView = (ref, name) => within(sceneRow(page, ref)).getByRole("button", { name: `Their view: ${name}` });
+  expect(pressed(rowView("top-Single Jump-1", "Player 2's view"))).toBe("false");        // "In the scene" has one each too
+  cameraTab(page);
   const bar = within(page.container.querySelector('[aria-label="Camera"]'));
   const theirs = bar.getByRole("button", { name: /^(US |JP )?Player 2's view$/ });
   expect(bar.getByRole("button", { name: /^(US |JP )?Player 1's view$/ })).toBeTruthy();
@@ -1987,8 +2085,9 @@ test("each ghost in the scene has a view button: the stage from its own camera, 
   await until(() => expect(socket.pictures().at(-1).camera).toEqual({ ghost: "top-Single Jump-1" }));
   expect([pressed(theirs), pressed(bar.getByRole("button", { name: "Recorded camera" }))]).toEqual(["true", "false"]);
   expect(tag(page)).toBe("Player 2's view");
-  const row = within(ghostRow(page, "top-Single Jump-1"));
-  expect(pressed(row.getByRole("button", { name: "Their view: Player 2's view" }))).toBe("true");
+  ghostsTab(page);
+  expect(pressed(rowView("top-Single Jump-1", "Player 2's view"))).toBe("true");
+  cameraTab(page);
   await socket.picture(socket.pictures().at(-1), { camera: "free",
     view: { ghost: "top-Single Jump-1", camera: GHOST_CAMERA } });
 
@@ -2012,8 +2111,9 @@ test("each ghost in the scene has a view button: the stage from its own camera, 
   expect([tag(page), pressed(theirs)]).toEqual(["Free camera", "false"]);
   await socket.picture(socket.pictures().at(-1));
 
-  // The row's own button, then Recorded camera (R) back to the stage's own view.
-  fireEvent.click(within(ghostRow(page, "top-Single Jump-0")).getByRole("button", { name: "Their view: Player 1's view" }));
+  // The row's own button ("In the scene"), then Recorded camera (R) back to the stage's own view.
+  ghostsTab(page);
+  fireEvent.click(rowView("top-Single Jump-0", "Player 1's view"));
   await until(() => expect(socket.pictures().at(-1).camera).toEqual({ ghost: "top-Single Jump-0" }));
   expect(tag(page)).toBe("Player 1's view");
   await socket.picture(socket.pictures().at(-1), { camera: "free", view: { ghost: "top-Single Jump-0", camera: GHOST_CAMERA } });
@@ -2027,14 +2127,17 @@ test("removing the ghost whose view is on screen goes back to the recorded camer
   const page = arrive();
   const socket = await sceneUp(1);
   await twoGhostsIn(page, socket);
+  cameraTab(page);
   const bar = within(page.container.querySelector('[aria-label="Camera"]'));
   fireEvent.click(bar.getByRole("button", { name: /^(US |JP )?Player 1's view$/ }));
   await until(() => expect(socket.pictures().at(-1).camera).toEqual({ ghost: "top-Single Jump-0" }));
   await socket.picture(socket.pictures().at(-1), { camera: "free", view: { ghost: "top-Single Jump-0", camera: GHOST_CAMERA } });
-  fireEvent.click(within(ghostRow(page, "top-Single Jump-0")).getByRole("button", { name: /^Remove/ }));
+  ghostsTab(page);
+  fireEvent.click(within(ghostRow(page, "top-Single Jump-0")).getByRole("button", { name: "Hide Player 1" }));
   await until(() => expect(socket.pictures().at(-1).camera).toBeNull());
   expect(tag(page)).toBe("Recorded camera");
   socket.text({ id: ghostsSent(socket).at(-1).id, kind: "ghosts", shown: ["top-Single Jump-1"], refused: [] });
+  cameraTab(page);
   await until(() => expect(bar.queryByRole("button", { name: /^(US |JP )?Player 1's view$/ })).toBeNull());
   expect(bar.getByRole("button", { name: /^(US |JP )?Player 2's view$/ })).toBeTruthy();
 });
@@ -2052,6 +2155,7 @@ test("without the free camera the view buttons stay, disabled, with the reason",
   const page = arrive();
   const socket = await sceneUp(1);
   await twoGhostsIn(page, socket);
+  cameraTab(page);
   const view = within(page.container.querySelector('[aria-label="Camera"]')).getByRole("button", { name: /^(US |JP )?Player 1's view$/ });
   expect([view.disabled, view.title]).toEqual([true, "The lab config names no symbol map."]);
   const sent = socket.pictures().length;
@@ -2305,6 +2409,7 @@ test("the cinematic cameras follow a ghost in the scene, and Mario again once it
   const page = arrive();
   const socket = await sceneUp(1);
   await twoGhostsIn(page, socket);
+  cameraTab(page);
   const follow = rigBar(page).getByRole("combobox");
   expect([...follow.options].map((option) => option.textContent)).toEqual(["Mario", "Player 1", "Player 2"]);
   fireEvent.change(follow, { target: { value: "top-Single Jump-1" } });
@@ -2313,7 +2418,8 @@ test("the cinematic cameras follow a ghost in the scene, and Mario again once it
   expect(tag(page)).toBe("Front · Player 2");
   await socket.picture(socket.pictures().at(-1), { camera: "free", camera_used: RIG_CAMERA,
     rig: { kind: "front", target: "top-Single Jump-1", shot: "medium", side: null, pulled: 1 } });
-  fireEvent.click(within(ghostRow(page, "top-Single Jump-1")).getByRole("button", { name: /^Remove/ }));
+  ghostsTab(page);
+  fireEvent.click(within(ghostRow(page, "top-Single Jump-1")).getByRole("button", { name: "Hide Player 2" }));
   socket.text({ id: ghostsSent(socket).at(-1).id, kind: "ghosts", shown: ["top-Single Jump-0"], refused: [] });
   await until(() => expect(rigAsked(socket)?.target).toBe("stage"));
   expect([follow.value, tag(page)]).toEqual(["stage", "Front · Mario"]);
@@ -2354,8 +2460,9 @@ test("the same scene left and come back to draws its ghosts again; a new stage s
   ghostRoutes();
   const first = arrive();
   const socket = await sceneUp(1);
+  showList(first, "Yours");
   await until(() => expect(ghostRow(first, "yours-2")).not.toBeNull());
-  fireEvent.click(within(ghostRow(first, "yours-2")).getByRole("button", { name: /^Add/ }));
+  fireEvent.click(eye(first, "yours-2"));
   await until(() => expect(ghostsSent(socket).length).toBe(1));
   socket.text({ id: ghostsSent(socket)[0].id, kind: "ghosts", shown: ["yours-2"], refused: [] });
   await until(() => expect(ghostRow(first, "yours-2").classList.contains("is-shown")).toBe(true));
@@ -2368,6 +2475,8 @@ test("the same scene left and come back to draws its ghosts again; a new stage s
   sockets[1].open();
   await until(() => expect(ghostsSent(sockets[1]).length).toBe(1));
   expect(ghostsSent(sockets[1])[0].set.map((ghost) => ghost.ref)).toEqual(["yours-2"]);
+  await until(() => expect(sceneRow(again, "yours-2")).not.toBeNull());                 // "In the scene" again
+  showList(again, "Yours");
   await until(() => expect(ghostRow(again, "yours-2")?.classList.contains("is-shown")).toBe(true));
   routes.delete("/api/scene-lab/status");
   fireEvent.change(await until(() => again.getByRole("combobox", { name: "Strategy" })), { target: { value: "TJ Owlless" } });
@@ -2376,19 +2485,293 @@ test("the same scene left and come back to draws its ghosts again; a new stage s
   expect(ghostsSent(fresh)).toEqual([]);
   await until(() => expect(ghostRow(again, "yours-2")).not.toBeNull());
   expect(ghostRow(again, "yours-2").classList.contains("is-shown")).toBe(false);
+  expect(sceneRow(again, "yours-2")).toBeNull();
+});
+
+// ------------------------------------------------------------------ the Ghost Lab's watch, strip, keys, tray and More
+// Round 9, item 5. His words: "Number keys sounds good. I think we should prioritize 1-9 for save states, and
+// then Shift 1-9 for camera views, since save stating is more likely as an action." The strip under the play
+// bar is Usamune's nine slots (GET /slots); a press saves the frame on screen there: POST /moment builds the
+// save state, POST /moment/{id}/write puts it in the slot. `write(body)` answers the write.
+const BUILT = { id: "m1", exact: true, build: "us" };
+function momentRoutes(write = (body) => respond({ written: true, slot: body.slot, build: "us" })) {
+  routes.set("/api/scene-lab/moment/", (url, options) => write(JSON.parse(options.body)));    // before its prefix
+  routes.set("/api/scene-lab/moment", (url, options) => respond({ ...BUILT, frame: JSON.parse(options.body).frame }));
+}
+const moments = () => fetches.filter(([url]) => url.startsWith("/api/scene-lab/moment"))
+  .map(([url, , body]) => [url, JSON.parse(body)]);
+const stripWords = (page) => page.container.querySelector(".ghost-lab-strip-line").textContent;
+const numbered = (rows) => rows.map((row, i) => ({ ...row, package_frame: i }));   // the recording's own frame numbers
+const late = (body) => ({ ok: true, status: 200, json: () => Promise.resolve(body) });
+
+test("1 to 9 save the frame on screen into that Usamune slot, as a tile's click does; the line under the tiles says what happened", async () => {
+  opened = { ...opened, frames: numbered(FRAMES) };
+  const writes = [];
+  momentRoutes((body) => new Promise((resolve) => {
+    writes.push((answer = { written: true, slot: body.slot, build: "us" }) => resolve(late(answer)));
+  }));
+  const { page, socket, root } = await openScene({ tab: "ghosts" });
+  await socket.picture(socket.sent[0]);
+  const strip = within(page.getByRole("group", { name: "Save states" }));
+  const tile = (n) => strip.getByRole("button", { name: new RegExp(`^Slot ${n},`) });
+  await until(() => expect(tile(3).getAttribute("aria-label")).toBe("Slot 3, empty. Save this frame here (3)."));
+  // The first frame cannot be a save state: every tile waits, the line says why, a key asks nothing.
+  expect([tile(3).disabled, stripWords(page)]).toEqual([true, "This is the first frame. Pick a later frame."]);
+  fireEvent.keyDown(root, { key: "3", code: "Digit3" });
+  await settled();
+  expect(moments()).toEqual([]);
+  fireEvent.keyDown(root, { key: "ArrowRight" });
+  await until(() => expect(socket.pictures().at(-1)).toMatchObject({ frame: 1 }));
+  await socket.picture(socket.pictures().at(-1));
+  await until(() => expect([tile(3).disabled, stripWords(page)]).toEqual([false, ""]));
+
+  fireEvent.keyDown(root, { key: "3", code: "Digit3" });                             // the key: slot 3
+  await until(() => expect(writes.length).toBe(1));
+  expect(moments()).toEqual([["/api/scene-lab/moment", { package: "bob-minute.sm64scene", frame: 1 }],
+    ["/api/scene-lab/moment/m1/write", { slot: 3 }]]);                        // the lab draws its picture
+  expect(stripWords(page)).toBe("Saving frame 2 in slot 3...");                     // on its way: every tile waits
+  expect([page.container.querySelector('[data-slot="3"]').classList.contains("is-busy"), tile(7).disabled]).toEqual([true, true]);
+  const slotsRead = fetches.filter(([url]) => url === "/api/scene-lab/slot-sets").length;
+  writes[0]();
+  await until(() => expect(stripWords(page)).toBe("Frame 2 is in slot 3."));
+  expect(page.container.querySelector(".ghost-lab-strip-line .region-flag").alt).toBe("US");   // the build it came from
+  await until(() => expect(fetches.filter(([url]) => url === "/api/scene-lab/slot-sets").length).toBeGreaterThan(slotsRead));
+
+  fireEvent.click(tile(7));                                                         // a tile: the same press
+  await until(() => expect(writes.length).toBe(2));
+  expect(moments().at(-1)).toEqual(["/api/scene-lab/moment/m1/write", { slot: 7 }]);
+  writes[1]({ refused: "place", reason: "The game is in Whomp's Fortress. Go to Bob-omb Battlefield, then press again." });
+  await until(() => expect(stripWords(page)).toBe("The game is in Whomp's Fortress. Go to Bob-omb Battlefield, then press again."));
+  expect(page.container.querySelector(".ghost-lab-strip-line").classList.contains("is-bad")).toBe(true);
+  fireEvent.keyDown(root, { key: "4", code: "Digit4", altKey: true });               // Alt with a number is not a save
+  await settled();
+  expect(moments().length).toBe(4);
+});
+
+test("Shift with 1 to 9 cuts to the camera saved in that slot for this place, never a save; an empty slot says so", async () => {
+  const SAVED_CAMERA = { focus: [100, 200, -300], position: [600, 700, 1200], roll: 0, fov: 45 };
+  routes.set("/api/scene-lab/camera-presets", () => respond({ slots: [{ slot: 4, name: "Camera 4", camera: SAVED_CAMERA }] }));
+  opened = { ...opened, frames: numbered(FRAMES) };
+  momentRoutes();
+  const { page, socket, root } = await openScene();
+  await socket.picture(socket.sent[0]);
+  fireEvent.keyDown(root, { key: "ArrowRight" });                                   // a frame that could be saved
+  await until(() => expect(socket.pictures().at(-1)).toMatchObject({ frame: 1 }));
+  await socket.picture(socket.pictures().at(-1));
+  await until(() => expect(queries("/api/scene-lab/camera-presets")).toEqual([{ level: "9", area: "1" }]));
+  await settled();
+  fireEvent.keyDown(root, { key: "$", code: "Digit4", shiftKey: true });             // event.code: Shift+4 is still Digit4
+  await until(() => expect(socket.pictures().at(-1).camera?.position).toBeTruthy());
+  close(socket.pictures().at(-1).camera.position, SAVED_CAMERA.position, 3);
+  close(socket.pictures().at(-1).camera.focus, SAVED_CAMERA.focus, 3);
+  expect(tag(page)).toBe("Free camera");
+  fireEvent.keyDown(root, { key: "%", code: "Digit5", shiftKey: true });
+  await until(() => expect(page.container.querySelector(".scene-lab-notice")?.textContent).toBe("No camera saved in slot 5 here yet."));
+  await settled();
+  expect(moments()).toEqual([]);
+});
+
+test("a row's watch makes its run the scene: his attempt's scene, else one made from the ghost, while its row and the play bar show the progress", async () => {
+  ghostRoutes();
+  opened = { ...opened, frames: numbered(FRAMES) };
+  const page = arrive();
+  await sceneUp(1);
+  showList(page, "Yours");
+  await until(() => expect(ghostRow(page, "yours-3")).not.toBeNull());
+  const made = [];
+  routes.set("/api/scene-lab/open", (url, options) => (JSON.parse(options.body).attempt != null
+    ? respond({ detail: "This attempt's scene was deleted." }, 404)
+    : new Promise((resolve) => { made.push(() => resolve(late({ ...opened, session: ++sessionSerial, attempt: null }))); })));
+  routes.set("/api/scene-lab/status", () => respond({ ready: true, problems: [], hold: null, session: null, ended: null,
+    packages: [], resim: { what: "scene", stage: "re-simulating", done: 131, total: 318 } }));
+  fireEvent.click(within(ghostRow(page, "yours-3")).getByRole("button", { name: "Watch You 14\"03" }));
+  await until(() => expect(made.length).toBe(1));
+  expect(opens()).toEqual([{ attempt: 40 }, { attempt: 903 }, { ghost: "yours-3" }]);   // his scene of it first
+  // Meanwhile the row and the play bar show /status's progress and the old scene plays on; another row may
+  // still take over (the lab ends the older build), this one waits.
+  const row = ghostRow(page, "yours-3");
+  const progress = await until(() => {
+    const bar = within(row).getByRole("progressbar", { name: "Making your scene" });
+    expect(bar.getAttribute("aria-valuenow")).toBe("41");                           // 131 of 318
+    return bar;
+  });
+  expect([row.classList.contains("is-building"), progress.getAttribute("aria-valuetext")]).toEqual([true, "Re-making the run"]);
+  const playing = page.container.querySelector(".ghost-lab-play .ghost-lab-build");
+  expect([playing.textContent.includes("Making your scene"), playing.textContent.includes("41%")]).toEqual([true, true]);
+  expect([within(ghostRow(page, "yours-1")).getByRole("button", { name: /^Watch/ }).disabled,
+    within(row).getByRole("button", { name: /^Watch/ }).disabled]).toEqual([false, true]);
+  expect([sockets.length, page.container.querySelector(".scene-lab-player") != null]).toEqual([1, true]);
+  expect(page.container.querySelector(".ghost-lab-top-note").textContent).toBe("");   // his scene's refusal is quiet
+  made[0]();
+  const socket = await sceneUp(2);
+  await until(() => expect(ghostRow(page, "yours-3").classList.contains("is-watched")).toBe(true));
+  const watched = within(ghostRow(page, "yours-3")).getByRole("button", { name: "Watching You 14\"03" });
+  expect([pressed(watched), ghostRow(page, "yours-3").querySelector(".ghost-lab-star").textContent]).toEqual(["true", "★"]);
+  expect(ghostRow(page, "yours-0").classList.contains("is-watched")).toBe(false);
+  expect([page.container.querySelector('[role="progressbar"]'), watchingWords(page)]).toEqual([null, "★You14\"03"]);
+  // Its save states come from it: the ghost's own re-made scene.
+  momentRoutes();
+  fireEvent.keyDown(page.container.querySelector(".scene-lab"), { key: "ArrowRight" });
+  await until(() => expect(socket.pictures().at(-1)).toMatchObject({ frame: 1 }));
+  await socket.picture(socket.pictures().at(-1));
+  fireEvent.keyDown(page.container.querySelector(".scene-lab"), { key: "2", code: "Digit2" });
+  await until(() => expect(moments().length).toBe(2));
+  expect(moments()[0]).toEqual(["/api/scene-lab/moment", { ghost: "yours-3", frame: 1 }]);
+});
+
+// The lead's frozen contract for fast ghost loading (2026-11-08): POST /open {ghost} answers once the first
+// frames are built, "growing" with its "resim" table; each grown message adds frames and the newest table, and
+// the last one has none that says "building". The share built is frames / (records - first_record).
+const BUILDING = { start: "x", building: true, records: 11, first_record: 1, built_to: 3, parting_frame: null,
+  save_states: { allowed: true, reason: null, until: null, check: "load" } };
+const STILL_BUILDING = "This part of the run is still being built.";
+const frameSlider = (page) => page.container.querySelector('.ghost-lab-play input[aria-label="Frame"]');
+const frameWords = (page) => page.container.querySelector(".ghost-lab-play .scene-lab-frame").textContent;
+
+test("a watched run opens at its first frames and grows: the bar fills, a drag stops at the last frame built, and Stop keeps what it has", async () => {
+  ghostRoutes();
+  opened = { ...opened, frames: numbered(FRAMES) };
+  const page = arrive();
+  await sceneUp(1);
+  showList(page, "Yours");
+  await until(() => expect(ghostRow(page, "yours-3")).not.toBeNull());
+  let session = null;
+  routes.delete("/api/scene-lab/open");
+  routes.set("/api/scene-lab/open/cancel", () => respond({ cancelled: true }));
+  routes.set("/api/scene-lab/open", (url, options) => {
+    if (JSON.parse(options.body).attempt != null) return respond({ detail: "This attempt's scene was deleted." }, 404);
+    session = ++sessionSerial;
+    return respond({ ...opened, frames: numbered(FRAMES).slice(0, 3), growing: true, resim: BUILDING, session, attempt: null });
+  });
+  fireEvent.click(within(ghostRow(page, "yours-3")).getByRole("button", { name: "Watch You 14\"03" }));
+  const socket = await sceneUp(2);
+  // 3 of its 10 frames: the play bar and the row say 30%, the slider spans all 10, unfilled past frame 3.
+  const bar = await until(() => {
+    const found = page.container.querySelector(".ghost-lab-play .ghost-lab-build");
+    expect(found.getAttribute("aria-valuenow")).toBe("30");
+    return found;
+  });
+  expect([bar.textContent.includes("Making your scene"), ghostRow(page, "yours-3").className]).toEqual(
+    [true, "scene-lab-ghost is-watched is-building"]);
+  expect([frameSlider(page).max, frameWords(page).startsWith("Frame 1 of 10")]).toEqual(["9", true]);
+  expect(Number(page.container.querySelector(".ghost-lab-unbuilt").dataset.reach)).toBeCloseTo(2 / 9, 3);
+  // A drag past the part built stops at its last frame.
+  fireEvent.input(frameSlider(page), { target: { value: "8" } });
+  await until(() => expect(frameWords(page).startsWith("Frame 3 of 10")).toBe(true));
+  expect(frameSlider(page).value).toBe("2");
+  // Two more frames built: 50%. A press on a frame the lab will not save yet says why on the strip's line.
+  socket.text({ kind: "grown", session, from: 3, frames: numbered(FRAMES).slice(3), growing: true,
+    resim: { ...BUILDING, built_to: 5 } });
+  await until(() => expect(bar.getAttribute("aria-valuenow")).toBe("50"));
+  expect(Number(page.container.querySelector(".ghost-lab-unbuilt").dataset.reach)).toBeCloseTo(4 / 9, 3);
+  routes.set("/api/scene-lab/moment", () => respond({ refused: "building", reason: STILL_BUILDING }));
+  fireEvent.keyDown(page.container.querySelector(".scene-lab"), { key: "4", code: "Digit4" });
+  await until(() => expect(stripWords(page)).toBe(STILL_BUILDING));
+  // Stop: the lab ends the build, the scene keeps its 5 frames and is whole.
+  fireEvent.click(page.getByRole("button", { name: "Stop making the scene" }));
+  await until(() => expect(fetches.filter(([url, method]) => url === "/api/scene-lab/open/cancel" && method === "POST")).toHaveLength(1));
+  socket.text({ kind: "grown", session, from: 5, frames: [], growing: false,
+    resim: { ...BUILDING, built_to: 5, building: false, cancelled: true } });
+  await until(() => expect(page.container.querySelector('[role="progressbar"]')).toBeNull());
+  expect([frameSlider(page).max, frameWords(page).startsWith("Frame 3 of 5"),
+    page.container.querySelector(".ghost-lab-unbuilt")]).toEqual(["4", true, null]);
+});
+
+test("a newer watch takes over from one still on its way: the older's answer neither opens nor speaks", async () => {
+  ghostRoutes();
+  opened = { ...opened, frames: numbered(FRAMES) };
+  const page = arrive();
+  await sceneUp(1);
+  showList(page, "Yours");
+  await until(() => expect(ghostRow(page, "yours-1")).not.toBeNull());
+  const answers = [];
+  routes.delete("/api/scene-lab/open");
+  routes.set("/api/scene-lab/open", (url, options) => (JSON.parse(options.body).attempt != null
+    ? respond({ detail: "This attempt's scene was deleted." }, 404)
+    : new Promise((resolve) => { answers.push(resolve); })));
+  fireEvent.click(within(ghostRow(page, "yours-3")).getByRole("button", { name: /^Watch/ }));
+  await until(() => expect(answers).toHaveLength(1));
+  fireEvent.click(within(ghostRow(page, "yours-1")).getByRole("button", { name: /^Watch/ }));
+  await until(() => expect(answers).toHaveLength(2));
+  expect(["yours-3", "yours-1"].map((ref) => ghostRow(page, ref).classList.contains("is-building"))).toEqual([false, true]);
+  answers[0]({ ok: false, status: 409, json: () => Promise.resolve({ detail: "cancelled" }) });   // the lab ended it
+  await settled();
+  expect([page.container.querySelector(".ghost-lab-top-note").textContent, sockets.length]).toEqual(["", 1]);
+  answers[1](late({ ...opened, session: ++sessionSerial, attempt: null }));
+  await sceneUp(2);
+  await until(() => expect(ghostRow(page, "yours-1").classList.contains("is-watched")).toBe(true));
+  expect(ghostRow(page, "yours-3").classList.contains("is-watched")).toBe(false);
+});
+
+test("the tray opens on Ghosts, says what each tab holds, and the arrow keys move between its tabs", async () => {
+  ghostRoutes();
+  const page = arrive();
+  await sceneUp(1);
+  const ghosts = page.getByRole("tab", { name: /Ghosts/ }), camera = page.getByRole("tab", { name: /Camera/ });
+  expect([ghosts.getAttribute("aria-selected"), camera.getAttribute("aria-selected")]).toEqual(["true", "false"]);
+  expect([ghosts.textContent, camera.textContent]).toEqual(["GhostsWatching you", "CameraRecorded camera"]);
+  expect(page.getByRole("tabpanel").id).toBe("ghost-lab-panel-ghosts");             // the Camera tab's panel is hidden
+  fireEvent.keyDown(ghosts, { key: "ArrowRight" });
+  expect([camera.getAttribute("aria-selected"), document.activeElement]).toEqual(["true", camera]);
+  expect(page.getByRole("tabpanel").id).toBe("ghost-lab-panel-camera");
+  expect(page.getByRole("button", { name: "Free camera" })).toBeTruthy();
+  fireEvent.keyDown(camera, { key: "ArrowRight" });                                  // round again
+  expect(ghosts.getAttribute("aria-selected")).toBe("true");
+});
+
+// The page's own rule (onKey): "a focused control [keeps] the keys it acts on itself ... so only a control
+// reached with Tab keeps them". A tab reached with Tab acts on Left and Right (it moves to the next tab), so
+// those keys are the tab's alone, as a slider keeps its arrows (ownKey). On 944d69d3 the arrow also reached the
+// keyboard owner and stepped the scene a frame.
+test("an arrow key on a focused tab moves the tab and steps no frame", async () => {
+  ghostRoutes();
+  const page = arrive();
+  const socket = await sceneUp(1);
+  await settled();
+  const ghosts = page.getByRole("tab", { name: /Ghosts/ });
+  ghosts.focus();
+  fireEvent.keyDown(ghosts, { key: "ArrowRight" });
+  expect(page.getByRole("tab", { name: /Camera/ }).getAttribute("aria-selected")).toBe("true");
+  await settled();
+  expect(socket.pictures().map((picture) => picture.frame)).toEqual([0]);           // only the first picture
+});
+
+test("More holds what is used rarely: the lab's recordings, Pictures, Tune controls, the numbers and every key; Esc or a press elsewhere shuts it", async () => {
+  const { page, socket } = await openScene();
+  await socket.picture(socket.sent[0]);
+  const more = page.getByRole("button", { name: "More" }), pop = page.container.querySelector(".ghost-lab-more-pop");
+  expect([more.getAttribute("aria-expanded"), pop.hidden]).toEqual(["false", true]);
+  expect(page.queryByRole("button", { name: "Tune controls" })).toBeNull();          // none of it on the page itself
+  const menu = openMore(page);
+  expect([more.getAttribute("aria-expanded"), pop.hidden]).toEqual(["true", false]);
+  const pictures = pop.querySelector(".scene-lab-quality select");
+  expect([pop.querySelector(".scene-lab-quality").textContent.startsWith("Pictures"),
+    [...pictures.options].map((option) => option.textContent)]).toEqual([true, ["Faster (JPEG)", "Exact pixels (slower)"]]);
+  expect(menu.getByRole("button", { name: "Tune controls" })).toBeTruthy();
+  expect(pop.querySelector(".ghost-lab-numbers").textContent).toContain("input to picture");
+  expect(pop.querySelectorAll(".ghost-lab-keys > div").length).toBe(15);
+  expect([menu.getByRole("button", { name: "Open" }) != null, pop.textContent.includes("bob-minute.sm64scene")]).toEqual([true, true]);
+  fireEvent.keyDown(document, { key: "Escape" });
+  await until(() => expect(pop.hidden).toBe(true));
+  openMore(page);
+  fireEvent.pointerDown(document.body);
+  await until(() => expect(pop.hidden).toBe(true));
+  expect(more.getAttribute("aria-expanded")).toBe("false");
 });
 
 test("a closed scene shows the server's reason and offers Open again", async () => {
   const { page, socket } = await openScene();
   socket.text({ id: socket.sent[0].id, error: "Closed after a while without use, to free the renderer.", closed: true });
-  await waitFor(() => expect(page.container.textContent).toContain("Closed after a while without use"));
-  expect(page.getByRole("button", { name: "Open" })).toBeTruthy();
+  await waitFor(() => expect(page.container.querySelector(".ghost-lab-top-note").textContent)   // the bar's one line
+    .toContain("Closed after a while without use"));
+  expect(openMore(page).getByRole("button", { name: "Open" })).toBeTruthy();
 });
 
 test("Tune controls changes how the camera moves on the next movement and SAVE sends only what changed", async () => {
   const { page, socket, canvas } = await openScene();
   await enterFree(page, socket);
-  fireEvent.click(page.getByRole("button", { name: "Tune controls" }));
+  fireEvent.click(openMore(page).getByRole("button", { name: "Tune controls" }));       // in the bar's More menu
+  fireEvent.click(page.getByRole("button", { name: "More" }));                          // shut again
   const panel = page.getByRole("region", { name: "Tune controls" });
   const input = panel.querySelector("#orbitPerPixel");
   expect(Number(input.value)).toBe(REFERENCE.orbitPerPixel);
