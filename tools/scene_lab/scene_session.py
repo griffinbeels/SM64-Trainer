@@ -19,6 +19,8 @@ render byte for byte). A free camera is {"focus": xyz, "position": xyz} in the g
 coordinates, optionally with its own "roll" (the game's s16 angle the screen turns by) and
 "fov" (degrees); without them the frame's own apply. The scene evaluator re-runs SM64's own
 scene-graph code for that camera and the host draws the whole rebuilt RDRAM with the new list.
+The evaluator runs under Unicorn in a simulation process of its own (evaluator_child.py, through
+GameCodeEvaluator): this process never loads Unicorn, which is GPL-2.0-only (sim_boundary.py).
 The pose's camera (focus, position, roll, fov) redraws the recorded picture exactly, which is
 what lets a free camera start from the picture on screen, but for Mario's model: every moved
 camera draws his most detailed one whatever its distance (camera_state.full_detail), where the
@@ -42,9 +44,10 @@ A free-camera picture sends the host only the RDRAM words that differ from what 
 already holds (HostImage): a drag changes a few KiB of the 8 MiB, the next frame tens of KiB.
 After a free-camera picture of a new frame, the frames that follow it (backward when stepping
 back) are resolved ahead, so playing or stepping finds states ready: by the state resolvers'
-child processes (state_resolver.py, RESOLVED_AHEAD frames) once the package is whole and they
-are ready; before that by a second thread (evaluator.prepare, LOOK_AHEAD_FRAMES), whose work
-shares the server's Python lock with the views (Play with the camera moving lost frames to it).
+child processes (state_resolver.py, RESOLVED_AHEAD frames, started by the evaluator's process)
+once the package is whole and they are ready; before that by a second thread (evaluator.prepare,
+LOOK_AHEAD_FRAMES), in the evaluator's process, whose work shares that process's Python lock with
+the views (in the server, Play with the camera moving lost frames to it).
 
 Ghosts (stage_ghosts.py): set_ghosts loads each added ghost's recording into the renderer once, and
 every picture after it, recorded or free camera, names the ghosts and each one's frame, so the
@@ -89,7 +92,6 @@ the GPU hold check; tests and e3_measure.py --fake inject fake_viewer_host.py's 
 """
 from __future__ import annotations
 
-import importlib.util
 import logging
 import math
 import re
@@ -330,35 +332,34 @@ def command_host(command: list[str], keeps_rdram: bool = True):
 
 
 class GameCodeEvaluator:
-    """The free camera's evaluator factory: evaluator.Evaluator over the open package, running
-    SM64's own scene-graph code under Unicorn (a lab-only package, never a project dependency)."""
+    """The free camera's evaluator factory: evaluator.Evaluator over the open package, running SM64's
+    own scene-graph code under Unicorn, in a simulation process of its own (evaluator_child.py): this
+    process never loads Unicorn (sim_boundary.py), and the evaluator's process starts its own state
+    resolvers (start_resolvers). It starts as the scene opens (starts_early), beside the renderer:
+    the process and Unicorn take ~0.4 s more than the evaluator alone did (measured 2026-11-09)."""
+
+    starts_early = True
 
     def __init__(self, map_path: Path | None, source: Path, rom_path: Path | None = None):
         self.map_path, self.source, self.rom_path = map_path, source, rom_path
 
     def unavailable(self, package: scene_package.Package) -> str | None:
+        import evaluator_child
         if package.states is None:
             return "This recording carries no scene state, so it can only be shown from the recorded camera."
         if self.map_path is None or not self.map_path.is_file():
             return ("The lab config names no symbol map (MappingUS.map), which the free camera needs "
                     "to run the game's drawing code.")
-        if importlib.util.find_spec("unicorn") is None:
+        if self.rom_path is None:
+            return "The free camera needs the ROM's file, and this scene was opened without it."
+        if not evaluator_child.has_unicorn():
             return ("The free camera runs the game's drawing code under Unicorn, which this server "
                     "lacks: start it with uv run --with unicorn.")
         return None
 
     def __call__(self, package: scene_package.Package, rom: bytes):
-        import e2_georender
-        import evaluator
-        return evaluator.Evaluator(package, rom, e2_georender.load_map(self.map_path), source=self.source)
-
-    def resolvers(self, package: scene_package.Package, deliver, warm: int | None = None):
-        """The state resolvers' children over a whole package's bytes (state_resolver.Resolvers),
-        each resolving frame `warm` before it says ready; None without the ROM's path."""
-        if self.rom_path is None or not isinstance(package.data, bytes):
-            return None
-        import state_resolver
-        return state_resolver.Resolvers(package.data, self.rom_path, self.map_path, deliver, warm=warm)
+        import evaluator_child
+        return evaluator_child.EvaluatorClient(package, self.rom_path, self.map_path, self.source, wait=False)
 
 
 def _ms(since: float) -> float:
@@ -460,6 +461,7 @@ class SceneSession:
         self.sound = scene_audio.SceneSound.of(package, [outlines[index]["present"] for index in frames])
         self.evaluator_factory, self.free_reason = evaluator_factory, free_reason
         self._evaluator = None
+        self._evaluator_asked = False                    # a free camera, a pose or warm() used the evaluator
         self.image = HostImage() if getattr(host, "keeps_rdram", False) else None
         self._ahead: ThreadPoolExecutor | None = None    # the look-ahead thread, with the evaluator
         self._ahead_generation = 0                       # bumped by every free-camera request
@@ -540,7 +542,7 @@ class SceneSession:
                       unavailable(package) if unavailable else None, encoder)
         session.growth, session.path, session.live_sound = growth, path, live_sound
         session.path_reader_factory = path_reader_factory or rig_path.PathReader
-        session._start_path()
+        session._start_helpers()
         if growth is None:
             session.read_stat, session.whole_at = (stat.st_size, stat.st_mtime_ns), time.monotonic()
         try:
@@ -723,7 +725,10 @@ class SceneSession:
         timings["hud_ms"] = _ms(started)
         return cuts[-1].blanked
 
-    def _evaluator_or_reason(self):
+    def _evaluator_or_reason(self, early: bool = False):
+        """The evaluator, made on the first ask, or None and why the free camera cannot draw. `early`
+        (open(), for a factory that starts_early: the evaluator's process) only starts it, so it opens
+        beside the renderer; every other ask waits for it to be open (opened())."""
         if self.free_reason is None and self._evaluator is None:
             try:
                 self._evaluator = self.evaluator_factory(self.package, self.rom)
@@ -733,7 +738,27 @@ class SceneSession:
                 self.free_reason = f"The free camera could not start: {error}"
             if self._evaluator is not None and hasattr(self._evaluator, "prepare"):
                 self._ahead = ThreadPoolExecutor(max_workers=1, thread_name_prefix="scene-lab-ahead")
+        if not early:
+            self._evaluator_asked = True
+            opened = getattr(self._evaluator, "opened", None)
+            reason = opened() if opened is not None else None
+            if reason:
+                self.free_reason = f"The free camera could not start: {reason}"
+                self._drop_evaluator()
         return self._evaluator, self.free_reason
+
+    def _drop_evaluator(self) -> None:
+        """Ends the evaluator (its process, when it has one) and its look-ahead thread."""
+        ahead, self._ahead = self._ahead, None
+        if ahead is not None:
+            self._ahead_generation += 1                  # a running job stops after its frame
+            ahead.shutdown(wait=True, cancel_futures=True)
+        resolvers, self._resolvers = self._resolvers, None
+        if resolvers is not None:
+            resolvers.close()
+        evaluator, self._evaluator = self._evaluator, None
+        if hasattr(evaluator, "close"):                  # the evaluator's process (evaluator_child) ends
+            evaluator.close()
 
     def _look_ahead(self, frame: int) -> None:
         """After a free-camera picture of `frame`, resolve the LOOK_AHEAD_FRAMES frames that follow
@@ -764,18 +789,24 @@ class SceneSession:
     def _resolve_ahead(self, targets: list[int]) -> bool:
         """Hands `targets` to the state resolvers' children (state_resolver.py), started the first
         time the package is whole; False while they cannot take them (an evaluator without them, a
-        growing package, children not ready yet or gone): the look-ahead thread resolves them."""
+        growing package, children not ready yet or gone): the look-ahead thread resolves them. The
+        game-code evaluator's process starts its own (evaluator_child: start_resolvers); an
+        evaluator in this process (tests' doubles) is given the factory's (attach)."""
         evaluator = self._evaluator
-        if not hasattr(evaluator, "attach"):
+        own = hasattr(evaluator, "start_resolvers")
+        if not own and not hasattr(evaluator, "attach"):
             return False
         if not self._resolvers_tried and self.growth is None:
             self._resolvers_tried = True
             start = getattr(self.evaluator_factory, "resolvers", None)
             try:
-                self._resolvers = start(self.package, evaluator.delivered, warm=targets[0]) if start else None
-            except (OSError, ValueError):                # the look-ahead thread goes on as before
+                if own:
+                    self._resolvers = evaluator.start_resolvers(targets[0], RESOLVED_AHEAD)
+                else:
+                    self._resolvers = start(self.package, evaluator.delivered, warm=targets[0]) if start else None
+            except (OSError, ValueError, RuntimeError):  # the look-ahead thread goes on as before
                 self._resolvers = None
-            if self._resolvers is not None:
+            if self._resolvers is not None and not own:
                 evaluator.attach(self._resolvers, RESOLVED_AHEAD)
         return evaluator.ahead(targets)
 
@@ -971,7 +1002,9 @@ class SceneSession:
         index = self._index(frame)
         if not all(_number(value) and 0 <= value <= 1 for value in (u, v)):
             raise ValueError("a pick names a place in the picture: u and v from 0 to 1")
-        evaluator, reason = (None, None) if camera is None and self._evaluator is None else self._evaluator_or_reason()
+        # The recorded camera's pick only asks the evaluator (started early) for Mario: it is no free-camera use.
+        evaluator, reason = (None, None) if camera is None and self._evaluator is None \
+            else self._evaluator_or_reason(early=camera is None)
         missed = {"point": None, "distance": None, "mario": None}
         try:
             if camera is None:
@@ -1226,6 +1259,13 @@ class SceneSession:
         self._take_path()                          # a reader in this process is done already
         return future
 
+    def _start_helpers(self) -> None:
+        """The child processes an opening scene starts beside the renderer: the evaluator's, for a
+        factory that starts_early (GameCodeEvaluator), and the path reader (_start_path)."""
+        if getattr(self.evaluator_factory, "starts_early", False):
+            self._evaluator_or_reason(early=True)
+        self._start_path()
+
     def _start_path(self) -> None:
         """Mario's path for the cinematic cameras, read beside the opening scene (prepare_path) where
         they can draw: the free camera's evaluator and its symbol map are there."""
@@ -1328,8 +1368,9 @@ class SceneSession:
         waits for it (the lab calls it once the page is idle after the first picture, then
         warm_ahead once it is idle again): the free camera's evaluator and one view of `frame` from
         its recorded camera (pose: ~200 ms in all, measured 2026-10-27). Nothing where the free
-        camera cannot draw; a failure here is the first camera's to report."""
-        if self.free_reason is not None or self._evaluator is not None:
+        camera cannot draw; a failure here is the first camera's to report. An evaluator started
+        early (its process, opening beside the renderer) is warmed here too."""
+        if self.free_reason is not None or self._evaluator_asked:
             return
         try:
             self.pose(frame)
@@ -1341,7 +1382,7 @@ class SceneSession:
         first, and a state resolver child's first frame is cold: ~115 ms), the children for the ones
         after (_look_ahead's first start: process creation measured 0.2-1.3 s, 2026-10-27), and the
         walls of that frame's place. Once a scene; nothing before warm() started the evaluator."""
-        if self._evaluator is None or self._warmed_ahead:
+        if self._evaluator is None or not self._evaluator_asked or self._warmed_ahead:
             return
         self._warmed_ahead = True
         try:
@@ -1436,14 +1477,8 @@ class SceneSession:
     def close(self) -> int:
         """Ends the host (its pipe closes; viewer.Host.close waits for the exit) and drops the
         evaluator's sandboxes and the package's caches, after any look-ahead finishes."""
-        ahead, self._ahead = self._ahead, None
-        if ahead is not None:
-            self._ahead_generation += 1                  # a running job stops after its frame
-            ahead.shutdown(wait=True, cancel_futures=True)
-        resolvers, self._resolvers = self._resolvers, None
-        if resolvers is not None:
-            resolvers.close()
-        self._evaluator = self._last_view = self._last_walk = None
+        self._drop_evaluator()
+        self._last_view = self._last_walk = None
         self.ghost_sounds.close()
         reader, self._path_reader = self._path_reader, None
         if reader is not None:

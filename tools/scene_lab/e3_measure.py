@@ -91,7 +91,7 @@ def machine() -> dict:
 class Server:
     """The real scene viewer routes, behind the Trainer's local access check, on a free port."""
 
-    def __init__(self, config: Path, fake: bool):
+    def __init__(self, config: Path, fake: bool, fake_host: bool = False):
         import uvicorn
         from fastapi import FastAPI
 
@@ -102,11 +102,12 @@ class Server:
         self.port = self.listener.getsockname()[1]
         app = FastAPI()
         options = {}
-        if fake:
+        if fake or fake_host:
             import fake_viewer_host
             import scene_session
-            options = {"host_factory": scene_session.command_host(fake_viewer_host.command(delay_ms=4)),
-                       "evaluator_factory": lambda package, rom: fake_viewer_host.FakeEvaluator(delay_s=0.004)}
+            options = {"host_factory": scene_session.command_host(fake_viewer_host.command(delay_ms=4))}
+            if fake:
+                options["evaluator_factory"] = lambda package, rom: fake_viewer_host.FakeEvaluator(delay_s=0.004)
         self.lab = mount_scene_lab(app, config, session_options=options, measure_loop=True)
         mount_local_access(app, port=self.port, protected=True)
         self.server = uvicorn.Server(uvicorn.Config(app, log_level="warning", ws_per_message_deflate=False,
@@ -316,19 +317,20 @@ def free_camera(page: Page, count: int, steps: int, args, rng: random.Random) ->
 
 
 def measure(args) -> dict:
-    if not args.fake:                    # first, before anything is built or started
+    drawn = not (args.fake or args.fake_host)
+    if drawn:                            # first, before anything is built or started
         gpu_gate.require_gpu(games=not args.while_playing, ignore=tuple(args.ignore_gpu_user))
-    report: dict = {"package": args.package, "fake": args.fake, "machine": machine(),
+    report: dict = {"package": args.package, "fake": args.fake, "fake_host": args.fake_host, "machine": machine(),
                     "note": "page decode and draw excluded; see the viewer's readout"}
     if args.while_playing:
         report["while_playing"] = gpu_gate.game_reasons(tuple(args.ignore_gpu_user))
-    if not args.fake:
+    if drawn:
         import viewer
         started = time.perf_counter()
         viewer.build()                   # a compile, when the host is not cached, never counts as opening
         report["host_build_ms"] = round((time.perf_counter() - started) * 1000, 1)
     rng = random.Random(args.seed)
-    with Server(args.lab_config, args.fake) as server:
+    with Server(args.lab_config, args.fake, args.fake_host) as server:
         page = Page(server.port)
         started = time.perf_counter()
         opened = page.post("/api/scene-lab/open", {"package": args.package})
@@ -370,6 +372,9 @@ def main(argv=None) -> int:
                              "applies) and record what was running, since it loads the numbers")
     parser.add_argument("--fake", action="store_true", help="protocol doubles instead of the renderer and "
                         "evaluator: checks this instrument, measures nothing real")
+    parser.add_argument("--fake-host", action="store_true", help="the real evaluator (the game's code under "
+                        "Unicorn) with the renderer's protocol double (4 ms a picture): the server's own cost "
+                        "of a free camera, CPU only, beside a running game")
     args = parser.parse_args(argv)
     report = measure(args)
     text = json.dumps(report, indent=2)

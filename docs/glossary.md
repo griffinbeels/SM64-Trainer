@@ -1583,8 +1583,12 @@ about 4 ms, the next task about 22 ms with the recorded answers (52 ms
 searching, while walkers need their matrices put back), and a jump to any task
 about 60 ms (2026-10-25). A viewer has its two [[state resolver]]s work out
 the next tasks while it draws this one (a second thread until they are ready).
+In the Trainer it works in a [[simulation process]] of its own, which starts as
+a scene opens, never in the server: a view costs the server under 1 ms more
+than when it ran there (2026-11-09).
 
-- **Lives** -- `tools/scene_lab/evaluator.py` (what a viewer calls); the
+- **Lives** -- `tools/scene_lab/evaluator.py` (what a viewer calls); its
+  process (`tools/scene_lab/evaluator_child.py`); the
   game-code sandbox and its proofs (`tools/scene_lab/e2_georender.py`, with
   native hooks in `tools/scene_lab/cpu_hooks.c`)
 - **Not** -- the [[renderer]], which draws a list; the evaluator makes the
@@ -2009,13 +2013,34 @@ out itself, so every picture is the same bytes. One child goes on [[frame]] afte
 [[frame]] while Play stays ahead; the other takes [[frame]]s further on when the
 first falls behind. Windows gives them below-normal priority; they start the
 first time the free camera moves in a whole scene and stop with it. A [[frame]]
-they cannot do, the server works out as before.
+they cannot do, the evaluator works out itself. They are [[simulation process]]es,
+started by the evaluator's own process, and hand their states to it.
 
 - **Lives** -- `tools/scene_lab/state_resolver.py`; used by the evaluator
-  (`tools/scene_lab/evaluator.py`); started and closed with the scene
+  (`tools/scene_lab/evaluator.py`) in its process
+  (`tools/scene_lab/evaluator_child.py`); started and closed with the scene
   (`tools/scene_lab/scene_session.py`)
 - **Not** -- the [[picture encoder]], which compresses pictures; a resolver
   draws nothing
+
+### Simulation process
+
+A child process that executes SM64's own code under Unicorn: the [[scene
+evaluator]]'s process, its [[state resolver]]s, the save-state builder, the
+[[ghost]] re-simulation and the US/JP slot [[atlas]] builder. Unicorn is GPL-2.0-only,
+and GPL-2.0-only code cannot share a program with the GPL-3.0 libraries the
+Trainer's own process loads (PyAV's FFmpeg, pystray). So only these processes
+load Unicorn, and they never load those libraries: each refuses them from its
+first line. The Trainer code they execute is the code licensed
+GPL-2.0-or-later. In the installed app they are the separate program
+SM64TrainerSim.exe.
+
+- **Lives** -- `tools/scene_lab/sim_boundary.py` (which processes they are,
+  what they never load, the Trainer modules they run);
+  `tests/test_sim_boundary.py` holds the running processes to those lists
+- **Not** -- the server or the export child, which load PyAV and ask the
+  evaluator's process for every free-camera view; nor the cutter or the stems
+  child, which execute no game code under Unicorn
 
 ### Attempt scene
 

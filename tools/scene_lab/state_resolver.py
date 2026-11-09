@@ -22,7 +22,9 @@ evaluator over the session's own package bytes (handed over in shared memory: th
 open the file, which the cutter replaces when it adds the sound) and resolves the frames it is
 given, below normal priority, one at a time; the server only copies each answer in. Two children
 leapfrog in runs of frames (_choice), so the 40-55 ms stretches keep 30 fps too. They start once
-the package is whole (a growing scene is not one package yet) and stop with the scene.
+the package is whole (a growing scene is not one package yet) and stop with the scene. Since the
+evaluator left the server (Unicorn is GPL-2.0-only: sim_boundary.py), they are the children of the
+evaluator's own process (evaluator_child.py), and deliver into its evaluator; the server holds none.
 
 Run as a child (python_child: the venv's site-packages, no launcher):
     python -m state_resolver --memory NAME --package-bytes N --rom R --map M [--evaluator module:callable]
@@ -112,6 +114,11 @@ class Resolvers:
 
     def _usable(self) -> bool:
         return not self.closed and self.alive > 0 and self.ready > 0
+
+    @property
+    def usable(self) -> bool:
+        """A child is ready and the pool open: ahead() would take frames (the evaluator's process reports it)."""
+        return self._usable()
 
     def ahead(self, indices) -> bool:
         """The frames Play needs next, in order: the queue becomes these (after any a caller waits
@@ -367,4 +374,6 @@ def serve(argv=None) -> int:
 
 
 if __name__ == "__main__":
+    import sim_boundary
+    sim_boundary.enter()
     raise SystemExit(serve())
