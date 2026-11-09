@@ -55,7 +55,7 @@ int32_t sg_model_open(const uint8_t *rom, size_t bytes, sg_model **out)
     model = calloc(1, sizeof(*model));
     if (!model) return leave(SG_OUT_OF_MEMORY);
     model->owner = GetCurrentThreadId();
-    status = sg_assets_load(model, rom, bytes);
+    status = sg_assets_load(model, rom, bytes, 1);
     if (status != SG_OK) {
         sg_assets_free(model);
         free(model);

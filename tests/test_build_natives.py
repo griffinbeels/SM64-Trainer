@@ -42,7 +42,25 @@ def natives(tmp_path, monkeypatch):
     monkeypatch.setattr(module, "natives", lambda: (fake,))
     world["scanned"] = []
     monkeypatch.setattr(module, "scan", lambda paths, log: world["scanned"].append(list(paths)))
+    world["data_scanned"] = []
+    monkeypatch.setattr(module, "model_data_scan", lambda paths: world["data_scanned"].append(list(paths)))
     return module, world, tmp_path / "bundle" / "fake.dll"
+
+
+def test_a_native_holding_model_data_is_never_cached_or_installed(natives, monkeypatch):
+    """Every compiled native passes the model data scan before the cache keeps it."""
+    module, world, target = natives
+
+    def refuse(paths):
+        raise RuntimeError(f"{Path(paths[0]).name} holds Nintendo model data")
+    monkeypatch.setattr(module, "model_data_scan", refuse)
+    lines = []
+    assert module.ensure(log=lines.append) == {"fake.dll": "missing"}
+    assert not target.exists() and any("holds Nintendo model data" in line for line in lines)
+    assert not any((module.cache_root() / "fake.dll").glob("*/fake.dll")), "the flagged build stays out of the cache"
+    monkeypatch.setattr(module, "model_data_scan", lambda paths: world["data_scanned"].append(list(paths)))
+    assert module.ensure(log=lambda _: None) == {"fake.dll": "built"}
+    assert world["compiles"] == 2 and len(world["data_scanned"]) == 1
 
 
 def test_a_fresh_checkout_builds_once_and_a_second_checkout_copies(natives, tmp_path, monkeypatch):

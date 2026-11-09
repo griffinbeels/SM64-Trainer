@@ -40,6 +40,29 @@ count, animation offsets, skeleton channel indices and allocation budgets.
 This establishes memory bounds, not ROM provenance or arbitrary ROM support.
 The caller must separately establish its expected ROM/version identity.
 
+## Model data comes from the player's ROM
+
+No Nintendo vertex, display-list, light, geo-layout or animation data is
+compiled in (since 2026-11-09; before, the decomp's literal arrays were, see
+`.tasks/features/ghost-lab-beta/ip-audit.md` C1). `tools/build_model.py`
+`_romify` turns each decomp definition into empty storage of its size plus a
+row (`rom_data.h`): the owner (Mario or a held kind), the ROM block and the
+segmented address the decomp names it by (its name's address suffix, else
+its comment). A display list or geo layout keeps only a template
+(`rom_gfx_template.h`, `rom_geo_template.h`): each command's tag and the
+pointers between definitions. At open, `rom_data.c` reads each row from its
+block (a MIO0 group or the raw geo segment beside it, both cartridges' offsets
+in `assets.c` `jp_blocks`): every ROM opcode must be the template's and every
+ROM pointer the address of the row the template points to, so the filled
+graph is the compiled graph with the cartridge's numbers. A Mario row that
+does not read refuses the ROM (`SG_INVALID_ROM`, which the renderer's ROM
+check already reports); a held kind's leaves that kind unavailable, as its
+textures do. Validation checks the rows without writing them. The fill adds
+about 2 ms to open. `tools/native_data_scan.py` refuses any built native that
+still holds samples of the decomp's data; `tools/build_natives.py` runs it on
+every compile. A new list macro needs a template (`TEMPLATE_MACROS`), or the
+build refuses it.
+
 ## Build and verification
 
 `tools/build_model.py` builds an x86 MSVC `/MT` static library in caller-owned
@@ -87,8 +110,9 @@ of indexing outside the atlas.
 
 Held objects (`SG_POSE_HELD`, `held.c`: the Bob-omb, the small penguin, King
 Bob-omb, Chuckya, the small breakable box, Mips and Ukiki, plus the ridden Owl
-and Koopa shell) are compiled from their upstream geo, lists and
-animations like Mario (`HELD_MODELS` in `tools/build_model.py`). The build
+and Koopa shell) are built from their upstream geo, lists and
+animations like Mario (`HELD_MODELS` in `tools/build_model.py`), their data
+filled from the ROM like his. The build
 walks each geo's display lists for the RGBA16 textures it reaches and
 generates `held_cells.h`: the kinds, each texture's atlas cell and size, and
 its ROM segment (the model's MIO0 block, the same in the US and Usamune US
@@ -138,8 +162,8 @@ tiles are refused (`SG_MESH_UNSUPPORTED_MATERIAL`). The metal environment map
 
 The mesh's `held_first_vertex` marks where a held object's vertices begin, and
 the optional `ambient` buffer keeps each vertex's ambient light colour beside
-its diffuse (`color`). Each held kind's `gdSPDefLights1` table is generated into
-`held_cells.h` and served by `sg_model_get_held_lights`. Vanish/ghost opacity is a
+its diffuse (`color`). Each held kind's `gdSPDefLights1` rows, as the ROM filled
+them, are served by `sg_model_get_held_lights`. Vanish/ghost opacity is a
 renderer concern. Replaying geometry alone does not reproduce the entire
 game's material pipeline.
 
@@ -149,4 +173,6 @@ imported from n64decomp/sm64 revision
 `06ec56df7f951f88da05f468cdcacecba496145a`, with exact primary URLs and SHA-256
 hashes. libsm64's archive supplies `LICENSE.md` (CC0-1.0), preserved in staging.
 That license label does not characterize separately imported decomp model
-source or user-supplied ROM textures/animations. No ROM assets are vendored.
+source or user-supplied ROM textures/animations. No ROM assets are vendored,
+and the decomp's model sources are build inputs only: their data reaches a
+binary only from the player's ROM, at open.

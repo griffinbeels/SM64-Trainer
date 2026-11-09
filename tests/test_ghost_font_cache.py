@@ -45,4 +45,4 @@ def test_jp_names_borrow_the_cached_us_font(tmp_path):
     report = json.loads(result.stdout)
     assert report["ok"] and report["checks"] > 25 and report["rom"] == all(roms)
     if all(roms):
-        assert (home / "SM64Trainer/plugin-cache/us-dialogue-font.bin").stat().st_size == 48 + 32 + 256 * 64
+        assert (home / "SM64Trainer/plugin-cache/us-dialogue-font.bin").stat().st_size == 48 + 32 + 256 * 64 + 256

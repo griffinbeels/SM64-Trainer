@@ -10,8 +10,9 @@ namespace ghost_font_cache {
 namespace {
 using ghost_annotation::UsFont;
 constexpr char magic[8]={'S','M','6','4','U','F','N','T'};
-constexpr uint32_t version=1,header_bytes=48;
-constexpr uint32_t payload_bytes=sizeof(UsFont::present)+sizeof(UsFont::tiles);
+constexpr uint32_t version=2,header_bytes=48;
+constexpr uint32_t font_bytes=sizeof(UsFont::present)+sizeof(UsFont::tiles);
+constexpr uint32_t payload_bytes=font_bytes+sizeof(UsFont::widths);
 constexpr uint32_t file_bytes=header_bytes+payload_bytes;
 void put32(uint8_t *p,uint32_t v) {for(unsigned i=0;i<4;++i)p[i]=uint8_t(v>>(8*i));}
 uint32_t get32(const uint8_t *p) {return uint32_t(p[0])|(uint32_t(p[1])<<8)|(uint32_t(p[2])<<16)|(uint32_t(p[3])<<24);}
@@ -33,18 +34,29 @@ std::vector<uint8_t> payload(const UsFont &font) {
     std::vector<uint8_t> out(payload_bytes);
     std::memcpy(out.data(),font.present.data(),font.present.size());
     std::memcpy(out.data()+font.present.size(),font.tiles.data(),font.tiles.size());
+    std::memcpy(out.data()+font_bytes,font.widths.data(),font.widths.size());
     return out;
 }
-// Every header field, the stored digest and the cache's expected digest.
-bool decode(const std::vector<uint8_t> &file,const char *expected,UsFont &out) {
+// The font is the cache's (present || tiles) and so are its widths.
+bool expected_font(const std::vector<uint8_t> &body,const Cache &cache) {
+    uint8_t font[32]{},widths[32]{};
+    return body.size()==payload_bytes
+        && ghost_assets::sha256(std::vector<uint8_t>(body.begin(),body.begin()+font_bytes),font)
+        && ghost_assets::sha256(std::vector<uint8_t>(body.begin()+font_bytes,body.end()),widths)
+        && hex_equals(font,cache.digest) && hex_equals(widths,cache.widths);
+}
+// Every header field, the stored digest and the cache's expected font. A
+// version 1 file (no widths) is refused: the next US load writes version 2.
+bool decode(const std::vector<uint8_t> &file,const Cache &expected,UsFont &out) {
     if(file.size()!=file_bytes || std::memcmp(file.data(),magic,8) || get32(file.data()+8)!=version
             || get32(file.data()+12)!=payload_bytes)return false;
     const std::vector<uint8_t> body(file.begin()+header_bytes,file.end());
     uint8_t digest[32]{};
-    if(!ghost_assets::sha256(body,digest) || std::memcmp(digest,file.data()+16,32) || !hex_equals(digest,expected))
+    if(!ghost_assets::sha256(body,digest) || std::memcmp(digest,file.data()+16,32) || !expected_font(body,expected))
         return false;
     std::memcpy(out.present.data(),body.data(),out.present.size());
     std::memcpy(out.tiles.data(),body.data()+out.present.size(),out.tiles.size());
+    std::memcpy(out.widths.data(),body.data()+font_bytes,out.widths.size());
     return true;
 }
 bool make_parents(const std::wstring &file) {
@@ -76,15 +88,16 @@ bool read(const Cache &cache,UsFont &out) {
     CloseHandle(file);
     if(!ok || got!=file_bytes)return false;
     data.resize(file_bytes);
-    return decode(data,cache.digest,out);
+    return decode(data,cache,out);
 }
 bool write(const Cache &cache,const UsFont &font) {
     if(cache.file.empty() || !cache.digest)return false;
     const std::vector<uint8_t> body=payload(font);
     uint8_t digest[32]{};
-    if(!ghost_assets::sha256(body,digest) || !hex_equals(digest,cache.digest))return false;
+    if(!ghost_assets::sha256(body,digest) || !expected_font(body,cache))return false;
     UsFont existing;
-    if(read(cache,existing) && existing.present==font.present && existing.tiles==font.tiles)return true;
+    if(read(cache,existing) && existing.present==font.present && existing.tiles==font.tiles
+            && existing.widths==font.widths)return true;
     std::vector<uint8_t> data(header_bytes);
     std::memcpy(data.data(),magic,8);put32(data.data()+8,version);put32(data.data()+12,payload_bytes);
     std::memcpy(data.data()+16,digest,32);

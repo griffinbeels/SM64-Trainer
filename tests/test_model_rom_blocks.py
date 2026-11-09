@@ -1,7 +1,8 @@
 """The model knows where Usamune JP keeps every ROM block it reads.
 
-renderer/model/assets.c names each block by its US offset (Mario's three, and
-every held model's segment from tools/build_model.py HELD_MODELS) and maps it
+renderer/model/assets.c names each block by its US offset (Mario's three, every
+held model's segment from tools/build_model.py HELD_MODELS, and the raw geo
+segment each model's layouts are read from) and maps it
 to the JP cartridge through `jp_blocks`. A block with no JP row would leave a
 held kind or Mario undrawn on JP; this pins the table without any ROM. The
 bytes at each offset are proven by tests/test_native_model.py, given the ROMs
@@ -29,22 +30,32 @@ def defines():
     return values
 
 
-def jp_blocks():
+def jp_blocks(raw=None):
+    """{US offset: (JP offset, JP shift)}; raw True/False keeps only the raw
+    geo segments or only the others."""
     table = re.search(r"jp_blocks\[\] = \{(.*?)\n\};", ASSETS, re.S)[1]
     named = defines()
     rows = {}
-    for us, jp, shift in re.findall(r"\{(\w+), (0x[0-9a-f]+)u, (-?0x[0-9a-f]+|0)\}", table):
-        rows[named[us] if us in named else int(us.rstrip("u"), 16)] = (int(jp, 16), int(shift, 16))
+    for us, jp, shift, _span, is_raw in re.findall(
+            r"\{(\w+), (0x[0-9a-f]+)u, (-?0x[0-9a-f]+|0), (\w+), ([01])\}", table):
+        if raw is None or raw == (is_raw == "1"):
+            rows[named[us] if us in named else int(us.rstrip("u"), 16)] = (int(jp, 16), int(shift, 16))
     return rows
 
 
 def test_every_block_the_model_reads_has_a_jp_row():
     named = defines()
+    builder = build_model()
     used = {named["ANIM_BASE"], named["TEXTURE_BASE"], named["COMMON1_BASE"]}
-    for model in build_model().HELD_MODELS.values():
+    geo = set(builder.MARIO_SEGMENTS.values()) - {named["TEXTURE_BASE"]}
+    for model in builder.HELD_MODELS.values():
         used.add(model.segment)
         used.update(block for _segment, block in model.texture_segments)
-    assert used == set(jp_blocks()), used ^ set(jp_blocks())
+        geo.add(model.geo_block)
+    assert used == set(jp_blocks(raw=False)), used ^ set(jp_blocks(raw=False))
+    # The raw geo segments the model's layouts are read from (rom_data.h).
+    assert geo == set(jp_blocks(raw=True)), geo ^ set(jp_blocks(raw=True))
+    assert set(builder.MARIO_SEGMENTS.values()) <= set(jp_blocks())
 
 
 def test_jp_blocks_are_distinct_and_inside_the_cartridge():
