@@ -11,7 +11,7 @@ from pathlib import Path, PurePosixPath
 import subprocess
 
 from sm64_events.core.childproc import quiet_spawn_kwargs
-from sm64_events.core.update_plan import BUNDLED_NATIVES
+from sm64_events.core.update_plan import BUNDLED_NATIVES, LAB_NATIVES
 
 DATA_FILES = frozenset({
     "behaviours_jp.tsv", "behaviours_us.tsv", "build_shifts.tsv", "defaults.seed.json",
@@ -21,6 +21,24 @@ DATA_FILES = frozenset({
     "setup_baseline.json", "sheet_ladders.seed.json", "sheet_library.seed.json.gz", "symbols_jp.tsv",
     "symbols_us.tsv", "video_checks.seed.json.gz",
 })
+#: THE list of Ghost Lab modules (tools/scene_lab) the installed app carries,
+#: by the bare names they import each other by (sm64_events/scenelab_code.py).
+#: It is the import closure of every lab module the app reaches;
+#: tests/test_scenelab_code.py recomputes that closure and fails on a module
+#: missing here, one listed but unreached, or a name that shadows another module.
+#: Left out on purpose: audio_bench, audio_sync_check, e1, e3_measure, fixture,
+#: handoff_relocate and slot_library, developer and evidence tools nothing reaches.
+LAB_MODULES = (
+    "attempt_cutter", "attempt_scenes", "attempt_span", "audio_capture", "audio_clock", "audio_layer",
+    "audio_session", "camera_paths", "camera_presets", "camera_rig", "camera_state", "closure",
+    "cold_boot", "cpu_hooks", "e2_georender", "evaluator", "export_sound", "fake_viewer_host",
+    "frame_sim", "ghost_resim", "ghost_sound", "gpu_gate", "handoff_slot", "handoff_try", "hud",
+    "live_audio", "live_spool", "moment_slot", "package", "pick", "picture_encoder", "provenance",
+    "recamera", "replay", "rig_path", "savestate_frames", "scene_audio", "scene_export",
+    "scene_session", "sim_scene", "slot_atlas", "stage_ghosts", "stage_sim", "start_check",
+    "state_resolver", "stems_check", "stems_layer", "stems_live", "stems_probe", "tap", "viewer",
+    "webview_pictures",
+)
 ROOT_DATA_FILES = frozenset({
     "behaviours_jp.tsv", "behaviours_us.tsv", "defaults.seed.json",
     "library_overrides.json", "rank_standards.seed.json", "sheet_ladders.seed.json",
@@ -29,9 +47,12 @@ ROOT_DATA_FILES = frozenset({
     "error-reporting.json", "release-version.json",
 })
 NATIVE_FILES = BUNDLED_NATIVES  # owned by core/update_plan.py
-# Build outputs git ignores in the data folder. Neither is copied as data:
-# the natives are bundled by name, ffmpeg.exe by build_exe's --add-binary.
-BUILT_FOLDERS = frozenset({"plugin", "ffmpeg"})
+# Build outputs in the data folder. None is copied as data: the natives and
+# the Ghost Lab's natives (lab/, tools/build_natives.py writes them) are
+# bundled by name, ffmpeg.exe by build_exe's --add-binary.
+BUILT_FOLDERS = frozenset({"plugin", "ffmpeg", "lab"})
+#: What the lab/ build folder may hold: update_plan's LAB_NATIVES, nothing else.
+LAB_FOLDER = "lab"
 COLLECTION_NAME = "griffman1212.sm64ghosts"
 SEED_DESCRIPTOR = "beta-ghost-seed.json"
 VENDOR_HIDDEN = {
@@ -66,6 +87,10 @@ def data_inputs(directory: Path) -> tuple[Path, ...]:
                 or entry.name in DATA_FILES and not entry.is_file()
                 or entry.name in BUILT_FOLDERS and not entry.is_dir()):
             raise ValueError("unexpected first-party data input")
+    lab = directory / LAB_FOLDER
+    if lab.is_dir() and any(entry.is_symlink() or entry.is_junction() or not entry.is_file()
+                            or entry.name not in LAB_NATIVES for entry in lab.iterdir()):
+        raise ValueError("unexpected first-party data input in lab/")
     files = tuple(directory / name for name in sorted(DATA_FILES))
     if any(not path.is_file() for path in files):
         raise ValueError("required first-party data input is missing")
@@ -144,7 +169,8 @@ def check_bundle_path(relative: str, *, ui_paths: Collection[str], is_dir: bool 
         return
     elif parts[1:3] == ("sm64_events", "data"):
         suffix = path.relative_to("_internal/sm64_events/data").as_posix()
-        if suffix not in DATA_FILES and suffix not in {"plugin/" + item for item in NATIVE_FILES}:
+        if (suffix not in DATA_FILES and suffix not in {"plugin/" + item for item in NATIVE_FILES}
+                and suffix not in {"lab/" + item for item in LAB_NATIVES}):
             raise ValueError("bundle contains an unexpected first-party data input")
     elif parts[1:3] == ("sm64_events", "ui"):
         if path.relative_to("_internal/sm64_events/ui").as_posix() not in ui_paths:
