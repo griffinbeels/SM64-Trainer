@@ -304,11 +304,11 @@ def renderer_host(config):
     def start(header: str) -> OwnedHost:
         plugin = config.pj64_plugin
         if plugin is None or not (plugin / replay.CONFIG_FILES[0]).is_file():
-            raise Refused("The lab config does not name Project64's Plugin folder, which holds the "
-                          "renderer settings the pictures are drawn with.")
+            raise Refused("The Ghost Lab cannot find Project64's Plugin folder, which holds the settings its "
+                          "pictures are drawn with. Finish the setup steps, then try again.")
         if config.renderer != "trainer":
-            raise Refused('The lab config names another renderer. The Ghost Lab draws only with the '
-                          'Trainer\'s own renderer, so remove "renderer" from the lab config.')
+            raise Refused('This developer lab file (SM64_SCENE_LAB) names another renderer. The Ghost Lab draws '
+                          'only with the Trainer\'s own renderer, so remove "renderer" from that file.')
         try:
             renderer = replay.trainer_renderer()
         except SystemExit as missing:
@@ -348,13 +348,13 @@ class GameCodeEvaluator:
         if package.states is None:
             return "This recording carries no scene state, so it can only be shown from the recorded camera."
         if self.map_path is None or not self.map_path.is_file():
-            return ("The lab config names no symbol map (MappingUS.map), which the free camera needs "
-                    "to run the game's drawing code.")
+            return ("The free camera needs the game's address map, and this copy of the Trainer does not have "
+                    "it. Reinstall the Trainer to get it back.")
         if self.rom_path is None:
             return "The free camera needs the ROM's file, and this scene was opened without it."
         if not evaluator_child.has_unicorn():
-            return ("The free camera runs the game's drawing code under Unicorn, which this server "
-                    "lacks: start it with uv run --with unicorn.")
+            return ("The free camera needs a part of the Trainer that is missing from this copy (the Unicorn "
+                    "emulator). Reinstall the Trainer to get it back.")
         return None
 
     def __call__(self, package: scene_package.Package, rom: bytes):
@@ -507,9 +507,10 @@ class SceneSession:
         scene whose package has no sound yet plays the recorder's own (scene_audio.LiveSound)."""
         held = gpu_gate.hold_reason()
         if held:
-            raise Refused(f"The renderer is on hold until Griffin lifts it: {held}")
+            raise Refused(f"The Ghost Lab's pictures are on hold on this computer: {held}")
         if not config.rom.is_file():
-            raise Refused("The ROM named in the lab config is missing.")
+            raise Refused("The game's ROM file that the Ghost Lab uses is missing. Open the game in Project64 once "
+                          "while the Trainer is running, or choose its ROM file again.")
         growth = None if sidecar is None else Growth(path, sidecar)
         try:
             if path.stat().st_size > scene_package.MAX_PACKAGE_BYTES:

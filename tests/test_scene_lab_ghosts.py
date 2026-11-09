@@ -287,7 +287,8 @@ def test_the_stage_is_his_fastest_finished_attempt_of_the_strategy_with_a_scene(
         assert (anyone["attempt"], anyone["target"]["strat"], len(anyone["scenes"])) == (14, "Single Jump", 4)
         nothing = client.get("/api/scene-lab/stage", params={"course": 2, "star": 3}).json()
         assert (nothing["attempt"], nothing["time"], nothing["scenes"]) == (None, None, [])
-        assert nothing["reason"] == "No saved scene for this strategy yet: play it with the scene lab on."
+        assert nothing["reason"] == ("No saved scene for this strategy yet. Play it with scene recording on, and its scene "
+                                 "appears here.")
 
 
 def test_a_stage_with_no_finished_attempt_is_the_newest_scene_and_segments_name_themselves(lab, world):

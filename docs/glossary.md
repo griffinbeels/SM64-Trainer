@@ -1552,10 +1552,10 @@ slot passes a load check in the simulation (one switch: `SAVE_STATES` in
 `tools/scene_lab/ghost_resim.py`). Another player's [[ghost]] works the same
 way: the act is its [[star]]'s, and the scene names the cartridge its player
 recorded it on beside the one it ran on. Either cartridge plays these scenes
-(2026-11-09): the lab runs every [[ghost]] on its own ROM, whichever cartridge
+(2026-11-09): the lab plays every [[ghost]] on its own ROM, whichever cartridge
 recorded it, and makes JP scenes and JP save states the same way. A start is
-the ROM's own, so a start made on the other cartridge is refused and the
-simulated [[reset]] is used: Mario follows the [[ghost]] exactly, but moving
+the ROM's own, so the lab refuses a start made on the other cartridge and
+uses the simulated [[reset]] instead: Mario follows the [[ghost]] exactly, but moving
 platforms and enemies may be at another point in their cycle. Three of his Whomp's Fortress [[ghost]]s and two
 other players' (2026-11-08): no parting record from any start. The lab writes
 the scene while it simulates, so the viewer opens it as a growing scene: the
@@ -1566,8 +1566,8 @@ under half a second.
 
 - **Lives** -- `tools/scene_lab/ghost_resim.py` (from a ghost),
   `tools/scene_lab/stage_sim.py` (a stage), `tools/scene_lab/sim_scene.py`
-  (the producer feed); `src/sm64_events/server/scene_resim.py` runs them in a
-  child process; lab only
+  (the producer feed); `src/sm64_events/server/scene_resim.py` starts each in a
+  child process
 - **Not** -- an [[attempt scene]], which the cutter cuts from the live recording
 
 ### Scene evaluator
@@ -1671,8 +1671,16 @@ which it cannot draw again, keeps him and says so. The page takes the keyboard w
 sidebar or a [[ghost button]]) and after a mouse click on its controls; a field that types keeps its
 keys, and Esc, leaving the window or the page lets go of every key.
 
-It is lab-only and off by default: it exists only when `SM64_SCENE_LAB` names a lab config (the ROM,
-the package folder, Project64's Plugin folder, the symbol map). Nothing starts until someone opens a
+It is on in the installed app, as its own sidebar entry in the Play group: the app needs no lab config.
+Its ROM is the [[Lab ROM]] that setup found, its maps ship with the app, and its Plugin folder is
+the one setup found. While one of these is missing, the empty stage names it in full, and while the
+Trainer has no [[Lab ROM]] it shows the ROM card with **Choose ROM file**. Once the Trainer has a ROM,
+the installed app's server starts the stage warmer by itself, with the [[Practice tab]]'s
+[[target]] first, so a new player's first [[ghost]] opens from a stage already made. The server keeps a
+list of the stages a warm could not make beside the stage cache, and later starts skip them (a click
+still tries one). A source checkout has it only when `SM64_SCENE_LAB` names a developer's lab
+config (the ROM, the package folder, Project64's Plugin folder, the symbol map); there the ROM is the
+config's own file, never copied. Nothing starts until someone opens a
 scene; the hidden [[renderer]] helper and the evaluator start then and stop on Close, after a while
 unused, when no page shows the scene, and when the server stops. The page keeps two pictures in
 flight, asks for the next as soon as one arrives, and a newer step or camera move replaces the one
@@ -2025,6 +2033,19 @@ started by the evaluator's own process, and hand their states to it.
 - **Not** -- the [[picture encoder]], which compresses pictures; a resolver
   draws nothing
 
+### Simulation program
+
+SM64TrainerSim.exe: the installed app's second program, beside SM64Trainer.exe in the same folder
+(its own `_sim` folder of parts). It carries Unicorn, numpy and the Trainer code licensed
+GPL-2.0-or-later, and nothing under the GPL-3.0 or LGPL-3.0 (no PyAV, no pystray), no OpenSSL; every
+[[simulation process]] is a process of this program. Players never start it: the Trainer does, one
+process per job.
+
+- **Lives** -- `src/sm64_events/scenelab_code.py` (SIM_PROGRAM, and LAB_CHILDREN: which program
+  each child belongs to), `sim_entry.py` (its entry), `tools/build_exe.py` (sim_args, its build),
+  `tools/bundle_policy.py` (check_programs, what it may hold)
+- **Not** -- the Trainer itself, which never holds Unicorn
+
 ### Simulation process
 
 A child process that executes SM64's own code under Unicorn: the [[scene
@@ -2034,10 +2055,11 @@ and GPL-2.0-only code cannot share a program with the GPL-3.0 libraries the
 Trainer's own process loads (PyAV's FFmpeg, pystray). So only these processes
 load Unicorn, and they never load those libraries: each refuses them from its
 first line. The Trainer code they execute is the code licensed
-GPL-2.0-or-later. In the installed app they are the separate program
-SM64TrainerSim.exe.
+GPL-2.0-or-later. In the installed app they are processes of the
+[[simulation program]], SM64TrainerSim.exe.
 
-- **Lives** -- `tools/scene_lab/sim_boundary.py` (which processes they are,
+- **Lives** -- `src/sm64_events/scenelab_code.py` (LAB_CHILDREN: the children it gives
+  SIM_PROGRAM are these processes); `tools/scene_lab/sim_boundary.py` (ENTRIES, read from that table,
   what they never load, the Trainer modules they run);
   `tests/test_sim_boundary.py` holds the running processes to those lists
 - **Not** -- the server or the export child, which load PyAV and ask the
