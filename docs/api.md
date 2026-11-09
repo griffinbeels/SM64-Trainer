@@ -1075,11 +1075,17 @@ The settings string the page exports carries EVERY tunable, not just the ones
 that differ from the defaults, so it still means the same thing after a default
 is codified.
 
-## Ghost Lab (M4 lab, source checkouts only, off by default)
+## Ghost Lab (on in the installed app; a developer's lab config in a source checkout)
 
-Exists only when `SM64_SCENE_LAB` names a lab config (`main.py::_mount_scene_lab`
-is the one reader); otherwise only the probe exists, answering `{lab: null}`, and
-the shell shows no Lab entry. The config is a private JSON file of absolute paths:
+`main.py::_mount_scene_lab` is the one reader of its switch. The installed app mounts it with no
+config at all (`core/lab_inputs.py::IN_APP`, Griffin's D2): its inputs are the ROM store's copy
+(`scenelab/roms.py`), the maps bundled with the app and the Plugin folder setup found, and every
+route that cannot work yet says why in the player's words (the `/stage` reason, `/status`
+problems). Only the installed app serves `GET /api/scene-lab/roms` and `POST /api/scene-lab/roms/pick`,
+and only its live server copies the ROM from the running game in the background and starts the
+stage warmer once a ROM is known. A source checkout mounts it only when `SM64_SCENE_LAB` names a lab
+config; otherwise only the probe exists, answering `{lab: null}`, and the shell shows no Ghost Lab
+entry. The developer's config is a private JSON file of absolute paths:
 `{"rom", "packages", "pj64_plugin", "map"}` plus optional `"renderer"`
 (only `trainer`, the default: a scene opens only with this checkout's own renderer,
 loaded where the bundle keeps it, and any other value is refused when a scene opens),
@@ -1093,7 +1099,8 @@ under `<lab_root>\attempts\<journal key>\`, one folder per journal file. Finishe
 stay until Settings' Ghost files deletes them (`POST /api/ghost/storage/purge`); a
 restarted server serves one again only when its journal still holds that attempt id
 with the same start and end, and deletes takes the last server left unfinished.
-Run the server with `uv run --with unicorn==2.1.4` for the free camera;
+From a source checkout, run the server with `uv run --with unicorn==2.1.4` for the free camera (the
+installed app carries Unicorn in its [simulation program](glossary.md#simulation-program));
 `run-test-server.bat` does both whenever `%LOCALAPPDATA%\SM64Trainer\scene-lab\lab.json`
 exists (`run-scene-lab.bat` does the same, and stops with an error when it does not). One scene is open
 at a time; its renderer helper, evaluator, picture encoder (a child process that

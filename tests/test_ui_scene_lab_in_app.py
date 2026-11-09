@@ -2,7 +2,8 @@
 
 The UI fixture boots the real app offline; the lab is mounted the way main.py mounts it in the installed app: no
 lab.json, its config from core/lab_inputs.py with a ROM store that holds nothing yet. The sidebar shows the Ghost
-Lab, the page opens without an error, and it shows the store's sentence. CPU only: a headless browser without the
+Lab as its own entry in the Play group, the page opens without an error, and its empty stage shows the ROM card:
+the store's whole sentence (the bar's one line cuts it at 1280) and Choose ROM file. CPU only: a headless browser without the
 GPU, and the renderer is never started (nothing can open without a ROM)."""
 import sys
 from pathlib import Path
@@ -16,7 +17,8 @@ sys.path.insert(0, str(ROOT / "tools" / "scene_lab"))
 import gpu_gate  # noqa: E402
 import ui_fixture  # noqa: E402
 from sm64_events.core import lab_inputs  # noqa: E402
-from sm64_events.server import scene_lab_api  # noqa: E402
+from sm64_events.scenelab import roms  # noqa: E402
+from sm64_events.server import lab_roms_api, scene_lab_api  # noqa: E402
 
 REASON = "The Ghost Lab needs the Super Mario 64 Usamune v1.93u ROM. Open it in Project64 once (a test's words)."
 # A page that grabs the pointer confines his real cursor to the test's viewport (2026-11 note): stub it.
@@ -31,7 +33,20 @@ class EmptyStore:
         return REASON
 
 
-@pytest.mark.parametrize("width", [850, 1280])
+class NoRomStore(roms.RomStore):
+    """The ROM routes' store with nothing found, that never looks at this computer's Project64."""
+
+    def __init__(self, root):
+        super().__init__(root, pj64_dir=lambda: None, registry=None, reader=lambda: None)
+
+    def copy_from_game(self):
+        return None
+
+    def scan_folders(self, pj64_dir=None):
+        return []
+
+
+@pytest.mark.parametrize("width", [850, 1280, 1600])
 def test_the_apps_ghost_lab_opens_and_says_it_needs_the_rom(width, tmp_path, monkeypatch):
     monkeypatch.setattr(gpu_gate, "HOLD", tmp_path / "no-hold.txt")
     (tmp_path / "Plugin").mkdir()
@@ -40,6 +55,7 @@ def test_the_apps_ghost_lab_opens_and_says_it_needs_the_rom(width, tmp_path, mon
 
     def create_app(*args, **kwargs):
         app = original(*args, **kwargs)
+        app.include_router(lab_roms_api.create_rom_router(NoRomStore(tmp_path / "roms")))   # before the lab's own
         scene_lab_api.mount_scene_lab(app, None, app_inputs=lambda: lab_inputs.app_inputs(
             store=EmptyStore(), lab_file=lambda name: None, plugin=lambda: tmp_path / "Plugin",
             lab_root=tmp_path / "lab-root"))
@@ -60,6 +76,16 @@ def test_the_apps_ghost_lab_opens_and_says_it_needs_the_rom(width, tmp_path, mon
             entry.click()
             page.locator(".scene-lab").wait_for(timeout=20000)
             page.get_by_text(REASON).first.wait_for(timeout=20000)
+            card = page.locator(".ghost-lab-empty .rom-pick[data-state=missing]")
+            card.wait_for(timeout=20000)
+            sentence = card.locator(".rom-pick-reason")
+            assert sentence.text_content() == roms.missing_sentence("us")
+            assert sentence.evaluate("e => e.scrollWidth <= e.clientWidth && e.scrollHeight <= e.clientHeight + 1")
+            assert card.get_by_role("button", name="Choose ROM file").is_visible()
+            labels = page.locator(".app-sidebar .nav-group-label").all_text_contents()
+            assert "Lab" not in [label.strip() for label in labels]                     # no one-item Lab group
+            play = page.locator(".app-sidebar .nav-group", has=page.locator(".nav-group-label", has_text="Play"))
+            assert play.locator(".nav-item", has_text="Ghost Lab").count() == 1
             assert page.locator(".nav-item.on").text_content().strip() == "Ghost Lab"   # 850: an icon, text hidden
             assert statuses and statuses[-1]["ready"] is False and statuses[-1]["problems"][0] == REASON
             assert errors == []

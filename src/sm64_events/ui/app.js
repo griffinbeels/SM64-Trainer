@@ -88,9 +88,10 @@ const PLAIN_TABS = {
   "Resources": ResourcesPage, "About": AboutPage,
 };
 
-// The Ghost Lab (the Scene viewer until round 9; M4, lab only). This one probe names the lab only when
-// SM64_SCENE_LAB names a lab config; anywhere else it answers {lab: null} and
-// the shell stays exactly as it was. The viewer's code loads only after the
+// The Ghost Lab (the Scene viewer until round 9). This one probe names the lab
+// in the installed app (on by default, Griffin's D2) and in a developer's lab
+// (SM64_SCENE_LAB); a source checkout without one answers {lab: null} and the
+// shell stays exactly as it was. The viewer's code loads only after the
 // server names the lab. Also the attempt the Practice log's Ghost button
 // handed over, until the viewer takes it.
 function useSceneLab() {
@@ -107,7 +108,10 @@ function useSceneLab() {
   }, []);
   return [viewer, intent, setIntent];
 }
-const LAB_GROUP = ["Lab", [["Ghost Lab", "ghost"]]];
+// The Ghost Lab is a destination of its own in the Play group, after the
+// Library (D2: "its own sidebar entry"), not a one-item "Lab" group.
+const LAB_ITEM = ["Ghost Lab", "ghost"];
+const withLab = (groups) => groups.map(([label, items]) => (label === "Play" ? [label, [...items, LAB_ITEM]] : [label, items]));
 
 // The lab's door on `t`, the way the Daily Star rides on it: every practice-log
 // row reads one copy with no prop threaded through the log. `open(attempt)` is
@@ -254,7 +258,7 @@ function App() {
   }, []);
   const tracker = useTracker();
   const [SceneViewer, sceneIntent, setSceneIntent] = useSceneLab();
-  const navGroups = SceneViewer ? [...NAV_GROUPS, LAB_GROUP] : NAV_GROUPS;
+  const navGroups = SceneViewer ? withLab(NAV_GROUPS) : NAV_GROUPS;
   const plainTabs = SceneViewer ? { ...PLAIN_TABS, "Ghost Lab": SceneViewer } : PLAIN_TABS;
   // The Daily Star rides on `t` so every surface reads one copy; it lives
   // outside the store because only this layer knows the local date.
@@ -384,7 +388,7 @@ function App() {
     ${t.notice && html`<div class="app-notice" role="status">${t.notice}</div>`}
     <${MobileNav} tab=${tab} setTab=${setTab}
       openMore=${() => setMoreOpen(true)} />
-    <${MobileMore} open=${moreOpen} close=${() => setMoreOpen(false)} lab=${SceneViewer ? LAB_GROUP[1] : []}
+    <${MobileMore} open=${moreOpen} close=${() => setMoreOpen(false)} lab=${SceneViewer ? [LAB_ITEM] : []}
       tab=${tab} setTab=${setTab} openSettings=${() => setSettingsOpen(true)} />
     <${UpdatePopup} t=${t} />
     ${/* Root-mounted like the update popup: the desktop shell can ask to close

@@ -143,6 +143,15 @@ saves it when it beats that strategy's PB, with the usual rank celebration.
 a pipe entry, a Bowser fight, a castle movement) and it becomes a first-class
 practice target with the same history, PBs, ranks and replays a star gets.
 
+**Ghost Lab.** Open **Ghost Lab** in the sidebar to watch a ghost from any angle:
+your own runs, and other players' ghosts for the star you pick. It works as soon as
+the setup wizard is done; there is nothing else to set up. Pick a star, then a
+ghost. The Ghost Lab plays the run again inside a copy of the game that runs on
+your computer, so you can move the camera anywhere, step one frame at a time, and
+press 1 to 9 to put that moment into the matching Usamune save state slot. After
+setup, the trainer prepares each course in the background while your computer is
+not busy, so ghosts open quickly later. It pauses whenever your game runs slow.
+
 **Ghost Overlay.** Race recorded Mario poses in the game window, following the
 live camera and terrain through the trainer's GLideN64 renderer. Adjust colour,
 visibility, sound and the route drawn ahead. Your current PB supplies the default

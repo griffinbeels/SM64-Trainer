@@ -109,6 +109,7 @@ import { SceneSound, syncWords } from "./sceneaudio.js";
 import { RecordBar } from "./scenerecord.js";
 import { CameraPresets, CameraSlots, placeKey, placeOf, presetCamera } from "./scenepresets.js";
 import { RecordingSwitch } from "./scenerecording.js";
+import { RomPick } from "./rompick.js";
 import { heardInto, pictureAt, recordedTimes } from "./sceneclock.js";
 import { CinematicBar, CinematicSettings, orbitFolded, orbitPhase, rigChanged, rigHint, rigName, rigRequest, seenOnScreen,
   startRig } from "./scenerigs.js";
@@ -1945,6 +1946,35 @@ function barNote(link, status, stageNote) {
   return null;
 }
 
+// What the empty stage says while the lab cannot open anything yet (D6: the tab shows why, never hides): in the
+// installed app with no ROM found, the ROM card (rompick.js: the store's whole sentence, the file pick, and the
+// found line once the game is open in Project64); otherwise each problem the lab names, in full (the bar's one
+// line cuts a long sentence). Asked only while the lab is not ready (a ready lab never asks for the ROM routes); a
+// developer's lab has no ROM routes (404), so it shows only the problems.
+function useRomCard() {
+  const [needed, setNeeded] = useState(false);
+  useEffect(() => {
+    let live = true;
+    getJSON("/api/scene-lab/roms")
+      .then((answer) => { if (live) setNeeded(!Object.values(answer?.regions || {}).some((region) => region?.found)); })
+      .catch(() => { if (live) setNeeded(false); });
+    return () => { live = false; };
+  }, []);
+  return needed;
+}
+
+function LabSetup({ status, onFound }) {
+  const romCard = useRomCard();
+  const [found, setFound] = useState(false);
+  if (romCard && !found) {
+    return html`<div class="ghost-lab-setup"><${RomPick} region="us"
+      onFound=${() => { setFound(true); onFound(); }} /></div>`;
+  }
+  const problems = status.problems || [];
+  if (!problems.length) return null;
+  return html`<div class="ghost-lab-setup">${problems.map((problem) => html`<p class="ghost-lab-setup-line">${problem}</p>`)}</div>`;
+}
+
 // The Ghost Lab's one bar: the stage picker, the run you watch, a note, the scene recording's sign, More and
 // Close. Where it wraps (narrow panes: the note and the right side take the second line) depends on the
 // pane's width alone.
@@ -2217,6 +2247,8 @@ export function SceneViewer({ t }) {
       ${tuning && html`<${TunePanel} link=${link} />`}`
       : html`<section class="practice-card ghost-lab-empty">
         ${building ? html`<${BuildProgress} build=${building} stop=${stop} />` : html`<${Icon} name="ghost" size=${28} />`}
+        ${!building && status?.ready === false && html`<${LabSetup} status=${status}
+          onFound=${() => refresh.current().then(() => target && choose(target))} />`}
       </section>`}
   </div>`;
 }
