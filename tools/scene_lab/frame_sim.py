@@ -44,6 +44,7 @@ import re
 import struct
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -58,15 +59,11 @@ THREAD_PC, THREAD_FPCSR = 0x11C, 0x12C          # OSThread fields (libultra's TH
 OBJECT_BYTES, OBJECT_COUNT = 0x260, 240
 MARIO_BYTES = 0xC8
 
-# Thread 5's fixed frames (verified against the boot record by check_frame).
-THREAD5_STACK_TOP = 0x80206E00
-THREAD5_SP = THREAD5_STACK_TOP - 16 - 0x28
-VSYNC_SP = THREAD5_SP - 0x18
-LOOP_HEAD = 0x80248B70                         # thread5_game_loop, the head of its loop
-LOOP_RETURN = 0x80248BE0                       # thread5_game_loop, after jal display_and_vsync
-RESUME = 0x802480F4                            # display_and_vsync, after jal send_display_list
-USAMUNE_VI_COUNT = 0x80417BDC                  # Usamune's own VI counter (its state block + 0x90)
+# Where thread 5 stops and resumes differs per cartridge build: SimBuild, read off each build's own code (below).
 NEVER = 0x80000800                             # an emu_start stop address nothing else reaches: routine calls return here
+STACK_PAD = 16                                 # libultra's osCreateThread starts a thread's sp this far below its stack's top
+USAMUNE_VI_OFFSET = 0x90                       # Usamune's own VI counter, in its state block
+USAMUNE_IMAGE, USAMUNE_IMAGE_END = 0x80400000, 0x80424000   # Usamune's code, as its entry copies it (both builds)
 
 STUB_NAMES = ("osRecvMesg", "osSendMesg", "osContStartReadData", "osContGetReadData", "osGetTime",
               "osWritebackDCache", "osWritebackDCacheAll", "osInvalDCache", "osInvalICache",
@@ -137,6 +134,143 @@ class Symbols:
         at = bisect.bisect_right(self.addresses, address) - 1
         return self.names[at] if at >= 0 else "?"
 
+    def next_after(self, address: int) -> int | None:
+        """The address of the first symbol past `address`: where a symbol's own bytes end."""
+        at = bisect.bisect_right(self.addresses, address)
+        return self.addresses[at] if at < len(self.addresses) else None
+
+
+# --- one cartridge build's own facts ---------------------------------------------------------------
+# US (v1.93u) and JP (v1.93j) lay their code out differently, so where thread 5 stops and resumes is read off the
+# build's own code each time, never fixed: a module-wide value would serve one build and silently misplace the
+# other (the atlas and the stage warm hold both in one process). Measured 2026-11-09 on both cold boots: these
+# readings give US 0x802480F4 / 0x80248B70 / 0x80248BE0 / sp 0x80206DC8, JP 0x802480C4 / 0x80248B40 / 0x80248BB0 /
+# sp 0x802071C8, and over 120 frames the synthetic resume equals the cold boot's own thread 5 byte for byte.
+J_OP, BEQ_ZERO, ADDIU_SP, SW_RA, LW_A0_SP = 0x03, 0x1000, 0x27BD, 0xAFBF, 0x8FA4   # MIPS words: high halves
+
+
+@dataclass(frozen=True)
+class SimBuild:
+    """Where one build's thread 5 stops and resumes (scene tap moment, loop frames), and the RAM it keeps there."""
+    version: str            # "us" | "jp"
+    resume: int             # display_and_vsync, after jal send_display_list: the scene tap's moment
+    loop_head: int          # thread5_game_loop's loop head (rendering_init returns here)
+    loop_return: int        # thread5_game_loop, after jal display_and_vsync
+    thread5_sp: int         # thread5_game_loop's frame
+    vsync_sp: int           # display_and_vsync's frame, inside it
+    script_slot: int        # where thread 5 keeps the level script address, from thread5_sp
+    return_slot: int        # where display_and_vsync keeps its return address, from vsync_sp
+    usamune_vi_count: int   # Usamune's own VI counter (its state block + USAMUNE_VI_OFFSET)
+    scene_bss: int          # the captured span that holds gControllers and gMarioStates (layout scene_bss_start)
+    site: int | None        # the jal into Usamune's save and load dispatcher (None: no Usamune code there)
+
+
+def version_of(rom: bytes) -> str | None:
+    """The cartridge's build from its header: "us", "jp" or None."""
+    from sm64_events.memory.version_probe import version_from_header  # noqa: PLC0415
+    return version_from_header(bytes(rom[:0x40])) if len(rom) >= 0x40 else None
+
+
+def _word(ram: np.ndarray, address: int) -> int:
+    return struct.unpack_from(">I", ram, phys(address))[0]
+
+
+def jal_site_after(ram: np.ndarray, function: int, callee: int, limit: int = 0x400) -> int:
+    """The address after the delay slot of the first `jal callee` inside `function`."""
+    jal = 0x0C000000 | (phys(callee) >> 2)
+    words = np.frombuffer(ram[phys(function):phys(function) + limit].tobytes(), ">u4")
+    hits = np.flatnonzero(words == jal)
+    if not hits.size:
+        raise SystemExit(f"no jal {callee:08x} in {function:08x}")
+    return function + int(hits[0]) * 4 + 8
+
+
+def _frame_bytes(ram: np.ndarray, function: int) -> int:
+    """A function's frame size, from its first word (addiu sp, sp, -N)."""
+    word = _word(ram, function)
+    if word >> 16 != ADDIU_SP or not word & 0x8000:
+        raise SystemExit(f"{function:08x} does not open with a stack frame")
+    return 0x10000 - (word & 0xFFFF)
+
+
+def _usamune_site(ram: np.ndarray, symbols) -> int | None:
+    start = symbols["try_print_debug_mario_level_info"]
+    words = np.frombuffer(ram[phys(start):phys(start) + 0x200].tobytes(), ">u4")
+    for i, word in enumerate(words.tolist()):
+        if word >> 26 == J_OP and USAMUNE_IMAGE <= (0x80000000 | (word & 0x3FFFFFF) << 2) < USAMUNE_IMAGE_END:
+            return start + i * 4
+    return None
+
+
+def read_build(ram: np.ndarray, symbols, version: str) -> SimBuild:
+    """This build's SimBuild from the game code in `ram` (IPL3's copy of the main segment is enough) and its map."""
+    from sm64_events.memory.layout import layout_for  # noqa: PLC0415
+    layout = layout_for(version)
+    resume = jal_site_after(ram, symbols["display_and_vsync"], symbols["send_display_list"])
+    loop = symbols["thread5_game_loop"]
+    loop_return = jal_site_after(ram, loop, symbols["display_and_vsync"])
+    loop_head = None
+    for at in range(loop_return, loop_return + 0x100, 4):              # the loop's closing `b head`
+        word = _word(ram, at)
+        target = at + 4 + ((word & 0xFFFF) - (0x10000 if word & 0x8000 else 0)) * 4
+        if word >> 16 == BEQ_ZERO and target < loop_return:
+            loop_head = target
+            break
+    script_call = jal_site_after(ram, loop, symbols["level_script_execute"]) - 4   # its delay slot loads the script
+    script = _word(ram, script_call)
+    stack = symbols.next_after(symbols["gThread5Stack"]) if hasattr(symbols, "next_after") else None
+    if loop_head is None or script >> 16 != LW_A0_SP or stack is None:
+        raise SystemExit(f"thread5_game_loop at {loop:08x} is not the loop this simulator resumes")
+    vsync = symbols["display_and_vsync"]
+    saves_ra = [_word(ram, vsync + 4 * i) for i in range(1, 4) if _word(ram, vsync + 4 * i) >> 16 == SW_RA]
+    if not saves_ra:
+        raise SystemExit(f"display_and_vsync at {vsync:08x} does not save its return address")
+    thread5_sp = stack - STACK_PAD - _frame_bytes(ram, loop)
+    return SimBuild(version, resume, loop_head, loop_return, thread5_sp, thread5_sp - _frame_bytes(ram, vsync),
+                    script & 0xFFFF, saves_ra[0] & 0xFFFF, layout.usamune_state_start + USAMUNE_VI_OFFSET,
+                    layout.scene_bss_start, _usamune_site(ram, symbols))
+
+
+# Names the simulator reads that STROOP's JP map does not name, each read off the build's own code (measured
+# 2026-11-09: on US both readings equal the map's sCurrentCmd 0x8038BE28 and gRandomSeed16 0x8038EEE0, and on JP
+# they give the same two addresses; JP's engine code differs from US's, so this is read, never assumed).
+LUI, ADDIU, ORI, SW, LHU = 0x0F, 0x09, 0x0D, 0x2B, 0x25
+
+
+def _stores_of(ram: np.ndarray, function: int, opcode: int, rt: int | None, words: int = 64) -> list[int]:
+    """Absolute addresses `function` reaches with `opcode` (and register rt) through lui-based pointers."""
+    high: dict[int, int] = {}
+    found = []
+    for i in range(words):
+        word = _word(ram, function + 4 * i)
+        op, rs, target, imm = word >> 26, (word >> 21) & 31, (word >> 16) & 31, word & 0xFFFF
+        signed = imm - 0x10000 if imm & 0x8000 else imm
+        if op == LUI:
+            high[target] = imm << 16
+        elif op == ADDIU and rs in high:
+            high[target] = (high[rs] + signed) & 0xFFFFFFFF
+        elif op == ORI and rs in high:
+            high[target] = high[rs] | imm
+        elif op == opcode and rs in high and (rt is None or target == rt):
+            found.append((high[rs] + signed) & 0xFFFFFFFF)
+    return found
+
+
+def complete_symbols(symbols, ram: np.ndarray) -> None:
+    """Add what the map lacks of sCurrentCmd (level_script_execute's first word store through a lui pointer: it
+    stores its argument there, after the halfword sScriptStatus) and gRandomSeed16 (random_u16's first `lhu`), once
+    the engine segment holding both functions is in `ram`. A name the map has stays the map's."""
+    by_name = getattr(symbols, "by_name", None)
+    if by_name is None:
+        return
+    readers = {"sCurrentCmd": ("level_script_execute", SW, None), "gRandomSeed16": ("random_u16", LHU, None)}
+    for name, (function, opcode, rt) in readers.items():
+        if name in by_name or function not in by_name or not _word(ram, by_name[function]):
+            continue
+        hits = _stores_of(ram, by_name[function], opcode, rt)
+        if hits:
+            by_name[name] = hits[0] | 0x80000000
+
 
 def field_of(table, offset: int) -> str:
     name = table[0][1]
@@ -173,12 +307,21 @@ def category(symbols: Symbols, address: int) -> str:
 
 
 # --- the session -------------------------------------------------------------------------------
+# The identity extras of a session armed before its arming named them (tap.identity_spec): Usamune US's.
+US_IDENTITY = {"global_timer": (0x32D5D4, 4), "curr_level": (0x32DDF8, 2), "curr_area": (0x33BACA, 2)}
+
+
 class Frame:
     __slots__ = ("index", "timer", "level", "area", "qpc", "spans", "level_blocks", "level_key", "segments")
 
 
 def frames_of(session: Path):
-    """The tap's tasks in order, each with its spans in big-endian bytes, without its picture."""
+    """The tap's tasks in order, each with its spans in big-endian bytes, without its picture. The identity
+    extras are read where the session's arming put them (its `# identity=` line: either build's addresses);
+    a session armed before that line existed is a US one."""
+    identity = dict(US_IDENTITY)
+    if (session / "armed.txt").is_file():
+        identity.update({name: (address, size) for name, address, size in tap.identity_spec(session)})
     path = session / "tap.bin"
     with path.open("rb") as handle, mmap.mmap(handle.fileno(), 0, access=mmap.ACCESS_READ) as data:
         frame = None
@@ -194,9 +337,9 @@ def frames_of(session: Path):
                     yield frame
                 frame = Frame()
                 frame.index = record.fields["task_index"]
-                frame.timer = tap.word_value(record.extras, 0x32D5D4, 4)
-                frame.level = tap.word_value(record.extras, 0x32DDF8, 2)
-                frame.area = tap.word_value(record.extras, 0x33BACA, 2)
+                frame.timer = tap.word_value(record.extras, *identity["global_timer"])
+                frame.level = tap.word_value(record.extras, *identity["curr_level"])
+                frame.area = tap.word_value(record.extras, *identity["curr_area"])
                 frame.qpc = qpc
                 frame.spans, frame.level_blocks, frame.level_key = [], [], False
                 frame.segments = ()
@@ -214,13 +357,23 @@ def frames_of(session: Path):
 
 # --- the CPU -----------------------------------------------------------------------------------
 class GameCpu:
-    """Thread 5 alone over a private RDRAM. Messages it waits for arrive at once; time stands still."""
+    """Thread 5 alone over a private RDRAM. Messages it waits for arrive at once; time stands still. `build` is the
+    cartridge's own SimBuild, read off the code in `ram` unless given; `extra_stubs` names more libultra calls to
+    answer (cold_boot's thread and device calls) for this CPU only."""
 
-    def __init__(self, ram: np.ndarray, rom: bytes, symbols: Symbols, fcsr: int, count_blocks: bool = False):
+    def __init__(self, ram: np.ndarray, rom: bytes, symbols: Symbols, fcsr: int, count_blocks: bool = False, *,
+                 build: SimBuild | None = None, extra_stubs: tuple[str, ...] = ()):
         import unicorn
         from unicorn import mips_const
         self.unicorn, self.mips = unicorn, mips_const
         self.symbols, self.rom = symbols, rom
+        if build is None:
+            version = version_of(rom)
+            if version is None:
+                raise SystemExit("the ROM is not a Usamune US or JP cartridge")
+            build = read_build(ram, symbols, version)
+        self.build = build
+        complete_symbols(symbols, ram)
         self.uc = uc = unicorn.Uc(unicorn.UC_ARCH_MIPS, unicorn.UC_MODE_MIPS64 | unicorn.UC_MODE_BIG_ENDIAN)
         uc.ctl_set_cpu_model(mips_const.UC_CPU_MIPS64_R4000)
         backing = np.zeros(RDRAM_BYTES + 4096, np.uint8)
@@ -244,13 +397,13 @@ class GameCpu:
                     "osInvalICache": self._flush, "wait_for_audio_frames": self._audio_frames,
                     "osEepromLongRead": self._eeprom_read,
                     "osEepromRead": self._eeprom_read, "osGetTime": self._time}
-        for name in STUB_NAMES:
+        for name in dict.fromkeys(STUB_NAMES + tuple(extra_stubs)):
             if name not in symbols.by_name:
                 continue
             handler = handlers.get(name, lambda: 0)
             at = sext(symbols[name])
             uc.hook_add(unicorn.UC_HOOK_CODE, self._stub(name, handler), begin=at, end=at)
-        uc.hook_add(unicorn.UC_HOOK_CODE, self._on_resume_point, begin=sext(RESUME), end=sext(RESUME))
+        uc.hook_add(unicorn.UC_HOOK_CODE, self._on_resume_point, begin=sext(build.resume), end=sext(build.resume))
         uc.hook_add(unicorn.UC_HOOK_INTR, self._on_exception)
         if count_blocks:
             uc.hook_add(unicorn.UC_HOOK_BLOCK, self._on_block)
@@ -267,7 +420,7 @@ class GameCpu:
 
     def _audio_frames(self) -> int:
         """A level load spins on gAudioFrameCount, which only the audio thread counts: those frames pass."""
-        self.put_u32(0x80226B80, self.arg(0))
+        self.put_u32(self.symbols["gAudioFrameCount"], self.arg(0))
         return 0
 
     def _flush(self) -> int:
@@ -364,9 +517,18 @@ class GameCpu:
 
     def enter_resume(self, script_address: int) -> None:
         """Thread 5 as the tap leaves it: only the stack frames matter; no saved register is live."""
-        self.put_u32(VSYNC_SP + 0x14, LOOP_RETURN)
-        self.put_u32(THREAD5_SP + 0x24, script_address)
-        self.uc.reg_write(self.mips.UC_MIPS_REG_SP, sext(VSYNC_SP))
+        build = self.build
+        self.put_u32(build.vsync_sp + build.return_slot, build.loop_return)
+        self.put_u32(build.thread5_sp + build.script_slot, script_address)
+        self.uc.reg_write(self.mips.UC_MIPS_REG_SP, sext(build.vsync_sp))
+
+    @property
+    def resume(self) -> int:
+        return self.build.resume
+
+    def script_held(self) -> bool:
+        """Thread 5's own copy of the level script address equals the interpreter's."""
+        return self.u32(self.build.thread5_sp + self.build.script_slot) == self.u32(self.symbols["sCurrentCmd"])
 
     def scheduler_model(self) -> None:
         """What thread 3 leaves by the time the graphics task has finished."""
@@ -380,8 +542,9 @@ class GameCpu:
             uc.emu_stop()
         self.armed = True
 
-    def run_frame(self, begin: int = RESUME) -> bool:
-        self.armed = begin != RESUME
+    def run_frame(self, begin: int | None = None) -> bool:
+        begin = self.build.resume if begin is None else begin
+        self.armed = begin != self.build.resume
         try:
             self.uc.emu_start(sext(begin), sext(NEVER), timeout=BUDGET_US)
         except self.unicorn.UcError as error:
@@ -389,7 +552,7 @@ class GameCpu:
             self.violations.append(f"unicorn {error} at {pc:08x} in {self.symbols.name_of(pc)}")
             return False
         pc = self.uc.reg_read(self.mips.UC_MIPS_REG_PC) & 0xFFFFFFFF
-        if pc != RESUME:
+        if pc != self.build.resume:
             self.violations.append(f"stopped at {pc:08x} in {self.symbols.name_of(pc)}")
             return False
         if self.flush_due:
@@ -411,7 +574,6 @@ def compare(cpu: GameCpu, spans, pool: np.ndarray, pool_known: bool) -> np.ndarr
 
 
 POOL_BEGIN, POOL_BYTES = 0x5C010, 1462240
-SCENE_BSS = 0x8033AF90                         # the captured span holding gControllers and gMarioStates
 TAIL_BYTES = 4096                              # the task region: the gfx pool's tail
 
 
@@ -484,9 +646,9 @@ class Tally:
             if real_value is not None:
                 row["relations"][relation(cpu.u32(word), real_value)] += 1
 
-    def _mario_moved(self, frame: Frame) -> bool:
-        span = next(data for begin, data in frame.spans if begin == phys(SCENE_BSS))
-        at = phys(self.symbols["gMarioStates"]) - phys(SCENE_BSS)
+    def _mario_moved(self, frame: Frame, scene_bss: int) -> bool:
+        span = next(data for begin, data in frame.spans if begin == phys(scene_bss))
+        at = phys(self.symbols["gMarioStates"]) - phys(scene_bss)
         pos, action = span[at + 0x3C:at + 0x48].tobytes(), span[at + 0x0C:at + 0x10].tobytes()
         moved = self.last_pos is not None and pos != self.last_pos
         self.mario_moved += moved
@@ -499,10 +661,10 @@ class Tally:
         tail = sum(int(diff_runs(cpu.ram, data, begin).size) for begin, data in frame.spans if data.size == TAIL_BYTES)
         cats, labels = self._add_labels(frame, where)
         self._add_words(cpu, frame, pool, where)
-        held = cpu.u32(THREAD5_SP + 0x24) == cpu.u32(self.symbols["sCurrentCmd"])
+        held = cpu.script_held()
         self.report["frames"].append({
             "index": frame.index, "timer": frame.timer, "level": frame.level, "area": frame.area,
-            "mario_moved": self._mario_moved(frame), "seed_moved": seed_moved, "bytes": int(where.size),
+            "mario_moved": self._mario_moved(frame, cpu.build.scene_bss), "seed_moved": seed_moved, "bytes": int(where.size),
             "gfx_tail_bytes": tail, "script_held": held, "by_category": cats, "by_label": labels,
             "instructions": instructions})
         return int(where.size)
@@ -512,13 +674,13 @@ def first_entry(cpu: GameCpu, symbols: Symbols, current: Frame) -> int:
     """Where the run enters: a session's first task is rendering_init's own, ahead of the loop."""
     if current.index != 0:
         cpu.enter_resume(cpu.u32(symbols["sCurrentCmd"]))
-        return RESUME
+        return cpu.build.resume
     jal = 0x0C000000 | (phys(symbols["send_display_list"]) >> 2)
     lo, hi = phys(symbols["rendering_init"]), phys(symbols["config_gfx_pool"])
     sites = np.flatnonzero(np.frombuffer(cpu.ram[lo:hi].tobytes(), ">u4") == jal)
     if sites.size != 1:
         raise SystemExit("rendering_init should send one display list")
-    cpu.uc.reg_write(cpu.mips.UC_MIPS_REG_SP, sext(VSYNC_SP))
+    cpu.uc.reg_write(cpu.mips.UC_MIPS_REG_SP, sext(cpu.build.vsync_sp))
     return symbols["rendering_init"] + int(sites[0]) * 4 + 8
 
 
@@ -573,7 +735,7 @@ class Corrector:
         elif corrected:
             self._rebuild(frame, keep_seed=self.mode == "stale-seed")
         sp = self.cpu.uc.reg_read(self.cpu.mips.UC_MIPS_REG_SP) & 0xFFFFFFFF
-        if corrected and sp == VSYNC_SP:
+        if corrected and sp == self.cpu.build.vsync_sp:
             self.cpu.enter_resume(self.cpu.u32(self.cpu.symbols["sCurrentCmd"]))
         self.cpu.scheduler_model()
 
@@ -619,7 +781,8 @@ def inject_vi(cpu: GameCpu, frame: Frame, last_vi: int) -> int:
     end-of-loop hook differences into a lag count (state block +0x90, +0x94, +0x98)."""
     value = captured_word(frame, cpu.symbols["sNumVblanks"])
     cpu.put_u32(cpu.symbols["sNumVblanks"], value)
-    cpu.put_u32(USAMUNE_VI_COUNT, cpu.u32(USAMUNE_VI_COUNT) + value - last_vi)
+    counter = cpu.build.usamune_vi_count
+    cpu.put_u32(counter, cpu.u32(counter) + value - last_vi)
     return value
 
 
@@ -631,7 +794,8 @@ def run(args) -> int:
     frame0 = next(stream)
     fcsr = int(args.fcsr, 16) if args.fcsr is not None else struct.unpack_from(
         ">I", ram, phys(symbols["gGameLoopThread"]) + THREAD_FPCSR)[0]
-    check_frame(ram, symbols, frame0)
+    build = read_build(ram, symbols, version_of(rom) or "us")
+    check_frame(ram, symbols, frame0, build)
     boot = ram.copy()
     pool = np.zeros(POOL_BYTES, np.uint8)
 
@@ -644,7 +808,7 @@ def run(args) -> int:
     while current.index < args.start:
         current = next(stream)
         absorb(current)
-    cpu = GameCpu(ram, rom, symbols, fcsr, count_blocks=args.count)
+    cpu = GameCpu(ram, rom, symbols, fcsr, count_blocks=args.count, build=build)
     cpu.time_step = args.time_step
     corrector = Corrector(args, cpu, boot, pool)
     corrector.overlay(current)          # for k > 0, the state is the boot record plus the spans alone
@@ -654,12 +818,12 @@ def run(args) -> int:
               "frames": []}
     tally = Tally(symbols, report)
     seconds, done, last_vi = 0.0, 0, cpu.u32(symbols["sNumVblanks"])
-    pad_at, seed_at = phys(symbols["gControllerPads"]) - phys(SCENE_BSS), corrector.seed_at
+    pad_at, seed_at = phys(symbols["gControllerPads"]) - phys(build.scene_bss), corrector.seed_at
     for frame in stream:
         if done >= args.frames:
             break
         absorb(frame)
-        pads = next(data for start, data in frame.spans if start == phys(SCENE_BSS))
+        pads = next(data for start, data in frame.spans if start == phys(build.scene_bss))
         cpu.pads = pads[pad_at:pad_at + 24].tobytes()
         if args.inject_vblanks:
             last_vi = inject_vi(cpu, frame, last_vi)
@@ -668,7 +832,7 @@ def run(args) -> int:
         seed_before = cpu.ram[seed_at:seed_at + 2].tobytes()
         begun, before = time.perf_counter(), cpu.instructions
         ok = cpu.run_frame(begin)
-        begin, seconds, done = RESUME, seconds + time.perf_counter() - begun, done + 1
+        begin, seconds, done = build.resume, seconds + time.perf_counter() - begun, done + 1
         differing = tally.add(cpu, frame, pool, cpu.ram[seed_at:seed_at + 2].tobytes() != seed_before,
                               cpu.instructions - before)
         if args.verbose or not ok or frame.index % args.every == 0:
@@ -684,13 +848,13 @@ def run(args) -> int:
     return 0
 
 
-def check_frame(ram: np.ndarray, symbols: Symbols, frame0: Frame) -> None:
+def check_frame(ram: np.ndarray, symbols: Symbols, frame0: Frame, build: SimBuild) -> None:
     """The boot record shows thread 5 where this probe says it is, or the premise is wrong."""
-    return_to = struct.unpack_from(">I", ram, phys(VSYNC_SP + 0x14))[0]
+    return_to = struct.unpack_from(">I", ram, phys(build.vsync_sp + build.return_slot))[0]
     saved_pc = struct.unpack_from(">I", ram, phys(symbols["gGameLoopThread"]) + THREAD_PC)[0]
     print(f"thread 5 at the boot record: saved PC in {symbols.name_of(saved_pc)}; rendering_init returns "
-          f"to {return_to:08x} (want {LOOP_HEAD:08x})")
-    if return_to != LOOP_HEAD or symbols.name_of(saved_pc) != "osStartThread":
+          f"to {return_to:08x} (want {build.loop_head:08x})")
+    if return_to != build.loop_head or symbols.name_of(saved_pc) != "osStartThread":
         raise SystemExit("the boot record does not show thread 5 where this probe resumes it")
     in_record = 0
     for begin, data in frame0.spans:

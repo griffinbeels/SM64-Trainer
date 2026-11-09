@@ -41,15 +41,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import handoff_slot as slots  # noqa: E402
 
 sim = slots.sim
+from sm64_events.memory.layout import layout_for  # noqa: E402
 from sm64_events.slotlibrary.usamune import BODY_BYTES, SEGMENT_BYTES, US  # noqa: E402
 
-BODY_START, SEGMENT_TABLE = US.body_start, US.segment_table   # its scenes are recordings of Usamune US
-
-CURR_DEMO_INPUT = 0x8032D5F0         # the dispatcher saves only while this is 0 (read off its code, 0x8041266C)
+# Every address below is the build's own (a package's ROM names it): the slot routines, body and segment table from
+# usamune.build_for, gCurrDemoInput (the dispatcher saves only while it is 0; read off its code, US 0x8041266C) and
+# gRandomSeed16 from the map (frame_sim.complete_symbols adds the seed JP's map lacks), the spans from layout.py.
+# compare_command replays his US tap sessions: US layout's slot_tail_*, power_meter_hud_* and the seed's word.
+TAIL = (0x361270, (US.body_start + BODY_BYTES) & 0x1FFFFFFF)
+POWER_METER_HUD = (0x3325F0, 0x332600)
 RANDOM_SEED_WORD = slots.RANDOM_SEED & ~3
-BODY_END = BODY_START + BODY_BYTES
-TAIL = (0x361270, BODY_END & 0x1FFFFFFF)   # layout.py's slot_tail_*: the body past the older bss span
-POWER_METER_HUD = (0x3325F0, 0x332600)     # layout.py's power_meter_hud_*: the one trailer source outside them
 THREAD5_FCSR = 0x01000800            # thread 5's saved FPCSR in every boot record so far (frame_sim.THREAD_FPCSR)
 WARM_FRAMES = 30                     # enough for the bytes the game recomputes each frame; measured in the tests
 FRAME_BUDGET_US = 2_000_000          # one frame far past this has left the rails: a refusal, not a hang
@@ -96,6 +97,9 @@ class PackageMoments:
         self.package = package
         if package.states is None:
             raise Refused("no-state")
+        # Where its arming put the clocks and the place (either build's addresses); a package without them is US.
+        self.identity = dict(sim.US_IDENTITY)
+        self.identity.update({name: (address, size) for name, address, size in package.identity})
 
     def __len__(self) -> int:
         return len(self.package)
@@ -104,8 +108,8 @@ class PackageMoments:
         fields, extras, spans, level, _known = self.package.scene_regions(index)
         pool = sim.be32(level[sim.POOL_BEGIN:sim.POOL_BEGIN + sim.POOL_BYTES]).copy()
         pieces = [(begin, sim.be32(data)) for begin, data in spans]
-        return Moment(index, fields["task_index"], _extra(extras, 0x32D5D4, 4), _extra(extras, 0x32DDF8, 2),
-                      _extra(extras, 0x33BACA, 2), pieces, pool)
+        return Moment(index, fields["task_index"], _extra(extras, *self.identity["global_timer"]),
+                      _extra(extras, *self.identity["curr_level"]), _extra(extras, *self.identity["curr_area"]), pieces, pool)
 
     def code_windows(self) -> list:
         return self.package.states.code_windows()
@@ -117,15 +121,18 @@ def _extra(extras, address: int, size: int) -> int | None:
 
 def base_image(rom: bytes, map_path: Path, windows: list) -> np.ndarray:
     """RDRAM before any game state: the ROM's main and engine segments and Usamune's boot-copied code.
-    Everything the game changes lies in the spans, or the build's check says so."""
+    Everything the game changes lies in the spans, or the build's check says so. The segments come from the
+    map's section rows (`.main 0x80246000 0xf4580 load address 0x1000`): STROOP's JP map puts both segments'
+    `__romPos` symbols at 0x761BE0, Usamune's image, so those symbols cannot place them."""
     ram = np.zeros(sim.RDRAM_BYTES, np.uint8)
     text = map_path.read_text(encoding="utf-8", errors="replace")
     for segment in ("main", "engine"):
-        start = int(re.search(rf"0x0*([0-9a-f]+)\s+_{segment}SegmentStart\b", text)[1], 16)
-        rom_start = int(re.search(rf"0x0*([0-9a-f]*)\s+_{segment}SegmentRomStart\b", text)[1] or "0", 16)
-        rom_end = int(re.search(rf"0x0*([0-9a-f]+)\s+_{segment}SegmentRomEnd\b", text)[1], 16)
+        row = re.search(rf"^\.{segment}\s+0x0*([0-9a-f]+)\s+0x([0-9a-f]+)\s+load address 0x0*([0-9a-f]+)", text, re.M)
+        if row is None:
+            raise Refused("no-code", f"the map has no .{segment} section row")
+        start, size, rom_start = int(row[1], 16), int(row[2], 16), int(row[3], 16)
         at = sim.phys(start)
-        ram[at:at + rom_end - rom_start] = np.frombuffer(rom, np.uint8, rom_end - rom_start, rom_start)
+        ram[at:at + size] = np.frombuffer(rom, np.uint8, size, rom_start)
     for address, length, offset in windows:
         ram[sim.phys(address):sim.phys(address) + length] = np.frombuffer(rom, np.uint8, length, offset)
     return ram
@@ -143,8 +150,8 @@ def covers(moment: Moment, low: int, high: int) -> bool:
 
 
 def feed(cpu: slots.SlotCpu, moment: Moment) -> None:
-    span = next(data for begin, data in moment.spans if begin == sim.phys(sim.SCENE_BSS))
-    at = sim.phys(cpu.symbols["gControllerPads"]) - sim.phys(sim.SCENE_BSS)
+    span = next(data for begin, data in moment.spans if begin == sim.phys(cpu.build.scene_bss))
+    at = sim.phys(cpu.symbols["gControllerPads"]) - sim.phys(cpu.build.scene_bss)
     cpu.pads = span[at:at + 24].tobytes()
     sim.inject_vi(cpu, moment, cpu.u32(cpu.symbols["sNumVblanks"]))
 
@@ -155,7 +162,7 @@ def run_from(cpu: slots.SlotCpu, recorded: Moment, following: Moment) -> bool:
     cpu.scheduler_model()
     cpu.violations.clear()
     feed(cpu, following)
-    return cpu.run_frame(sim.RESUME)
+    return cpu.run_frame()
 
 
 def warm_up(cpu: slots.SlotCpu, source, frame: int, frames: int) -> int:
@@ -210,7 +217,7 @@ class CountingCpu(slots.SlotCpu):
         self.random_calls = self.random_at_site = 0
         self.reached = False
         random_u16 = sim.sext(self.symbols["random_u16"])
-        site = sim.sext(slots.SITE)
+        site = sim.sext(self.build.site)
         self.uc.hook_add(self.unicorn.UC_HOOK_CODE, self._on_random, begin=random_u16, end=random_u16)
         self.uc.hook_add(self.unicorn.UC_HOOK_CODE, self._on_count_site, begin=site, end=site)
         # The audio thread's half of the sound never runs here and a package keeps none of its heap, so the
@@ -250,6 +257,20 @@ PRESENTATION = frozenset({"gProfilerFrameData", "gActiveSPTask", "sNumVblanks", 
 POOL_HEAD = (sim.POOL_BEGIN, sim.POOL_BEGIN + 0x400)
 
 
+def recorded_build(before: Moment, target: Moment, rom: bytes, source):
+    """The ROM's build's layout and the recording's code windows, once both frames hold that build's game state and
+    the recording holds its Usamune code."""
+    version = sim.version_of(rom)
+    scene_bss = sim.phys(layout_for(version).scene_bss_start) if version else None
+    if scene_bss is None or not (covers(before, scene_bss, scene_bss + 4) and covers(target, scene_bss, scene_bss + 4)):
+        raise Refused("no-state")
+    windows = source.code_windows()
+    save_routine = layout_for(version).usamune_slot_save
+    if not any(sim.phys(address) <= sim.phys(save_routine) < sim.phys(address) + length for address, length, _ in windows):
+        raise Refused("no-code")
+    return layout_for(version), windows
+
+
 def build(source, rom: bytes, map_path: Path, frame: int, index: int, *, symbols: sim.Symbols | None = None,
           warm: int = WARM_FRAMES) -> BuiltMoment:
     """Usamune's slot for `frame`, or Refused. Nothing here touches a running game."""
@@ -262,28 +283,27 @@ def build(source, rom: bytes, map_path: Path, frame: int, index: int, *, symbols
     target, before = source.moment(frame), source.moment(frame - 1)
     if not next_frame(before, target):
         raise Refused("jump")
-    if not (covers(before, sim.phys(sim.SCENE_BSS), sim.phys(sim.SCENE_BSS) + 4) and covers(target, sim.phys(sim.SCENE_BSS), sim.phys(sim.SCENE_BSS) + 4)):
-        raise Refused("no-state")
-    windows = source.code_windows()
-    if not any(sim.phys(address) <= sim.phys(slots.SAVE) < sim.phys(address) + length for address, length, _ in windows):
-        raise Refused("no-code")
+    layout, windows = recorded_build(before, target, rom, source)
     symbols = symbols or sim.Symbols(map_path)
     sim.BUDGET_US = FRAME_BUDGET_US
     cpu = CountingCpu(base_image(rom, map_path, windows), rom, symbols, THREAD5_FCSR)
-    cpu.uc.reg_write(cpu.mips.UC_MIPS_REG_SP, sim.sext(sim.VSYNC_SP))
+    cpu.uc.reg_write(cpu.mips.UC_MIPS_REG_SP, sim.sext(cpu.build.vsync_sp))
     cpu.call(symbols["sound_init"])      # a stop_sound walks gSoundBanks' lists, which a package does not keep
-    has_tail = covers(before, *TAIL) and covers(before, *POWER_METER_HUD)
-    has_seed = covers(before, sim.phys(RANDOM_SEED_WORD), sim.phys(RANDOM_SEED_WORD) + 4)
+    seed_word = sim.phys(symbols["gRandomSeed16"]) & ~3
+    has_tail = covers(before, sim.phys(layout.slot_tail_start), sim.phys(layout.slot_tail_end)) and \
+        covers(before, sim.phys(layout.power_meter_hud_start), sim.phys(layout.power_meter_hud_end))
+    has_seed = covers(before, seed_word, seed_word + 4)
     warmed = 0 if has_tail else warm_up(cpu, source, frame, warm)
     found: dict = {}
 
     def save() -> None:
-        if cpu.u32(CURR_DEMO_INPUT) != 0:
+        if cpu.u32(symbols["gCurrDemoInput"]) != 0:
             raise Refused("demo")
-        table = sim.phys(SEGMENT_TABLE)
-        found.update(data=cpu.save_slot(index), current_area=cpu.u32(slots.CURRENT_AREA_POINTER),
+        table = sim.phys(cpu.usamune.segment_table)
+        found.update(data=cpu.save_slot(index), current_area=cpu.u32(cpu.usamune.current_area_pointer),
                      segments=cpu.ram[table:table + SEGMENT_BYTES].tobytes(), fingerprint=slots.routine_fingerprint(cpu),
-                     seed=cpu.u16(slots.RANDOM_SEED) if has_seed else None, action=cpu.u32(BODY_START + 0x0C))
+                     seed=cpu.u16(symbols["gRandomSeed16"]) if has_seed else None,
+                     action=cpu.u32(cpu.usamune.body_start + 0x0C))
     cpu.begin_counting()
     cpu.pending = save
     ran = run_from(cpu, before, target)

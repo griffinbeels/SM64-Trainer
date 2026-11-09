@@ -258,14 +258,16 @@ def test_a_recording_covers_a_span_only_when_one_piece_holds_all_of_it():
 
 
 def test_the_base_image_holds_the_rom_segments_and_usamunes_code_and_nothing_else(tmp_path):
+    """The segments come from the map's section rows. STROOP's JP map puts both segments' __romPos symbols at
+    Usamune's image (0x761BE0), so a map whose symbols lie must still place them by the rows."""
     rom = bytes(i % 251 for i in range(0x4000))
     map_path = tmp_path / "map"
-    map_path.write_text("  0x0000000080246000   _mainSegmentStart = ADDR (.main)\n"
-                        "  0x0000000000001000   _mainSegmentRomStart = __romPos\n"
-                        "  0x0000000000001100   _mainSegmentRomEnd = (__romPos + SIZEOF (.main))\n"
+    map_path.write_text(".main           0x0000000080246000    0x100 load address 0x0000000000001000\n"
+                        "  0x0000000080246000   _mainSegmentStart = ADDR (.main)\n"
+                        "  0x0000000000002000   _mainSegmentRomStart = __romPos\n"
+                        ".engine         0x0000000080378800    0x80 load address 0x0000000000001100\n"
                         "  0x0000000080378800   _engineSegmentStart = ADDR (.engine)\n"
-                        "  0x0000000000001100   _engineSegmentRomStart = __romPos\n"
-                        "  0x0000000000001180   _engineSegmentRomEnd = (__romPos + SIZEOF (.engine))\n", encoding="utf-8")
+                        "  0x0000000000002000   _engineSegmentRomStart = __romPos\n", encoding="utf-8")
     ram = moment_slot.base_image(rom, map_path, [(0x80400000, 0x40, 0x2000)])
     assert ram[0x246000:0x246100].tobytes() == rom[0x1000:0x1100]
     assert ram[0x378800:0x378880].tobytes() == rom[0x1100:0x1180]
