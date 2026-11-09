@@ -114,6 +114,55 @@ def test_lab_module_installed_imports_by_bare_name_and_touches_no_path(monkeypat
     assert sys.path == before
 
 
+def test_the_trainer_collects_every_lab_module_by_name_and_never_unicorn():
+    import build_exe
+    args = build_exe.app_args(None)
+    hidden = {args[i + 1] for i, arg in enumerate(args) if arg == "--hidden-import"}
+    assert set(bundle_policy.LAB_MODULES) <= hidden
+    assert str(LAB) in {args[i + 1] for i, arg in enumerate(args) if arg == "--paths"}
+    assert "unicorn" not in {args[i + 1] for i, arg in enumerate(args) if arg == "--collect-all"}
+    added = [args[i + 1] for i, arg in enumerate(args) if arg == "--add-data"]
+    from sm64_events.core.update_plan import LAB_NATIVE_FOLDER, LAB_NATIVES
+    for name in LAB_NATIVES:
+        source = build_exe.DATA_DIR / "lab" / name
+        assert f"{source}{build_exe.SEP}{LAB_NATIVE_FOLDER.removeprefix('_internal/')}" in added
+    for name in bundle_policy.PINNED_MAPS:
+        assert f"{build_exe.DATA_DIR / 'maps' / name}{build_exe.SEP}sm64_events/data/maps" in added
+
+
+def test_the_simulation_program_carries_unicorn_and_the_children_that_run_it(tmp_path):
+    import build_exe
+    from sm64_events.scenelab_code import SIM_PROGRAM, child_modules
+    args = build_exe.sim_args(distpath=tmp_path)
+    assert args[0].endswith("sim_entry.py") and args[args.index("--name") + 1] == "SM64TrainerSim"
+    assert args[args.index("--contents-directory") + 1] == bundle_policy.SIM_CONTENTS == "_sim"
+    hidden = {args[i + 1] for i, arg in enumerate(args) if arg == "--hidden-import"}
+    assert hidden == set(child_modules(SIM_PROGRAM)) == set(bundle_policy.SIM_MODULES)
+    collected = {args[i + 1] for i, arg in enumerate(args) if arg == "--collect-all"}
+    assert "unicorn" in collected and not collected & bundle_policy.SIM_FORBIDDEN
+    excluded = {args[i + 1] for i, arg in enumerate(args) if arg == "--exclude-module"}
+    assert {"_ssl", "_hashlib"} <= excluded <= bundle_policy.SIM_FORBIDDEN
+    assert "--windowed" in args and "--onefile" not in args
+
+
+def test_the_install_notices_cover_both_programs(tmp_path, monkeypatch):
+    """One licenses folder serves the install: the build stages it from the
+    Trainer's packages and, once merged, the simulation program's (_sim)."""
+    import build_exe
+    import third_party_notices
+    app = tmp_path / "SM64Trainer"
+    (app / "_internal").mkdir(parents=True)
+    asked, staged = [], []
+    monkeypatch.setattr(third_party_notices, "bundled_import_names",
+                        lambda _app, exe="SM64Trainer", contents="_internal": asked.append((exe, contents)) or {exe})
+    monkeypatch.setattr(third_party_notices, "stage", lambda _internal, names, _ffmpeg: staged.append(names))
+    monkeypatch.setattr(build_exe, "write_retired_natives", lambda _app: None)
+    assert build_exe.stage_notices(tmp_path, Path("ffmpeg.exe")) == app and staged == [{"SM64Trainer"}]
+    (app / "SM64TrainerSim.exe").write_bytes(b"MZ")
+    build_exe.stage_notices(tmp_path, Path("ffmpeg.exe"))
+    assert staged[-1] == {"SM64Trainer", "SM64TrainerSim"} and asked[-1] == ("SM64TrainerSim", "_sim")
+
+
 def test_the_lab_natives_are_a_list_of_their_own():
     """BUNDLED_NATIVES has readers that expect exactly its two names
     (core/paths.py unpacks it, the beta self-check zips it strictly), so the
@@ -145,4 +194,15 @@ def test_bundled_lab_file_answers_only_inside_the_installed_app(monkeypatch, tmp
     assert paths.bundled_lab_file("tap_offline_host.exe") == lab / "tap_offline_host.exe"
     assert paths.bundled_lab_file("MappingJP.map") == maps / "MappingJP.map"
     assert paths.bundled_lab_file("MappingUS.map") is None
+
+
+def test_unicorn_is_a_pinned_runtime_dependency():
+    """The free camera's CPU hooks are built against Unicorn 2.1.4's internals,
+    and the simulation program is built from this environment."""
+    import tomllib
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    assert "unicorn==2.1.4" in project["project"]["dependencies"]
+    assert not any(dep.startswith("unicorn") for group in project["dependency-groups"].values() for dep in group)
+    from importlib.metadata import version
+    assert version("unicorn") == "2.1.4"
 

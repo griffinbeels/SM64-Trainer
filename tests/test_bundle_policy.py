@@ -10,6 +10,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import bundle_policy as policy
 
 
+SOURCE_DATA = Path(__file__).resolve().parents[1] / "src" / "sm64_events" / "data"
+
+
 @pytest.fixture
 def data_directory(tmp_path):
     directory = tmp_path / "data"
@@ -17,6 +20,9 @@ def data_directory(tmp_path):
     for name in policy.DATA_FILES:
         (directory / name).write_bytes(b"runtime fixture")
     (directory / "plugin").mkdir()
+    (directory / "maps").mkdir()
+    for name in policy.PINNED_MAPS:      # committed, pinned bytes
+        (directory / "maps" / name).write_bytes((SOURCE_DATA / "maps" / name).read_bytes())
     return directory
 
 
@@ -26,8 +32,35 @@ def test_data_inputs_preserve_all_tracked_runtime_data(data_directory):
     repo = Path(__file__).resolve().parents[1]
     result = subprocess.run(["git", "ls-files", "-z", "--", "src/sm64_events/data"],
                             cwd=repo, capture_output=True, check=True, **quiet_spawn_kwargs())
-    tracked = {Path(name).name for name in result.stdout.decode().split("\0") if name}
-    assert {path.name for path in policy.data_inputs(data_directory)} == tracked
+    tracked = {Path(name).relative_to("src/sm64_events/data").as_posix()
+               for name in result.stdout.decode().split("\0") if name}
+    shipped = {path.relative_to(data_directory).as_posix()
+               for path in (*policy.data_inputs(data_directory), *policy.map_inputs(data_directory))}
+    assert shipped == tracked
+
+
+def test_the_lab_maps_are_pinned_and_a_changed_byte_refuses_the_build(data_directory):
+    """STROOP's maps at the commit tools/scene_lab/cold_boot.py pins: the
+    reviewed bytes, and nothing else, reach the installed app."""
+    import hashlib
+    from sm64_events.core.paths import LAB_MAPS
+    assert set(policy.PINNED_MAPS) == set(LAB_MAPS)
+    for name, digest in policy.PINNED_MAPS.items():
+        assert hashlib.sha256((SOURCE_DATA / "maps" / name).read_bytes()).hexdigest() == digest
+    assert [path.name for path in policy.map_inputs(data_directory)] == sorted(LAB_MAPS)
+    maps = data_directory / "maps"
+    data = bytearray((maps / "MappingJP.map").read_bytes())
+    data[100] ^= 1
+    (maps / "MappingJP.map").write_bytes(bytes(data))
+    with pytest.raises(ValueError, match="maps/MappingJP.map is not the reviewed file"):
+        policy.map_inputs(data_directory)
+    (maps / "MappingJP.map").unlink()
+    with pytest.raises(ValueError, match="maps/"):
+        policy.map_inputs(data_directory)
+    for name in LAB_MAPS:
+        policy.check_bundle_path(f"_internal/sm64_events/data/maps/{name}", ui_paths={"index.html"})
+    with pytest.raises(ValueError, match="unexpected first-party data"):
+        policy.check_bundle_path("_internal/sm64_events/data/maps/MappingEU.map", ui_paths={"index.html"})
 
 
 @pytest.mark.parametrize("name", ["local-service.json", ".env", "sdk", "temporary.txt"])
@@ -158,3 +191,81 @@ def test_the_retired_native_name_holds_only_the_placeholder_text(monkeypatch):
         for other in (None, hashlib.sha256(b"MZ a program").hexdigest()):
             with pytest.raises(ValueError, match="unexpected"):
                 policy.check_bundle_path(path, ui_paths={"index.html"}, digest=other)
+
+
+@pytest.mark.parametrize("path", [
+    "SM64TrainerSim.exe", "_sim/python314.dll", "_sim/base_library.zip", "_sim/unicorn/lib/unicorn.dll",
+    "_sim/unicorn-2.1.4.dist-info/METADATA", "_sim/numpy/_core/_multiarray_umath.cp314-win_amd64.pyd",
+    "_sim/_sha256.pyd", "_sim/libffi-8.dll", "_sim/build-channel.json", "_sim/release-version.json",
+])
+def test_the_simulation_program_keeps_its_runtime_in_its_own_folder(path):
+    policy.check_bundle_path(path, ui_paths={"index.html"})
+
+
+@pytest.mark.parametrize("path", [
+    "_sim/av/__init__.pyd", "_sim/av.libs/avcodec-61.dll", "_sim/pystray/_win32.pyc", "_sim/webview/util.pyc",
+    "_sim/av-17.1.dist-info/METADATA", "_sim/sm64_events/data/maps/MappingUS.map", "_sim/notes.txt",
+    "_internal/unicorn/lib/unicorn.dll", "_internal/unicorn-2.1.4.dist-info/METADATA", "_other/x.dll",
+    "_sim/_ssl.pyd", "_sim/_hashlib.pyd", "_sim/libssl-3-x64.dll", "_sim/libcrypto-3-x64.dll",
+    "_sim/pyaudiowpatch/__init__.pyc", "_sim/capstone/lib/capstone.dll", "_sim/error-reporting.json",
+])
+def test_unicorn_and_the_gpl3_packages_never_share_a_program(path):
+    """The license ruling (2026-11-09): Unicorn (GPL-2.0-only) stays out of the
+    Trainer, and the simulation program holds no PyAV (GPL-3.0 FFmpeg),
+    pystray (LGPL-3.0), pyaudiowpatch or OpenSSL (Apache-2.0), capstone or
+    webview (l0-sim-license.md)."""
+    with pytest.raises(ValueError, match="unexpected|must|Unicorn|first-party"):
+        policy.check_bundle_path(path, ui_paths={"index.html"})
+
+
+def test_a_built_app_whose_programs_mix_is_refused(monkeypatch, tmp_path):
+    held = {"SM64Trainer.exe": {"numpy", "av", "pystray", "sm64_events"},
+            "SM64TrainerSim.exe": {"numpy", "unicorn", "sm64_events", "_sha256", "libffi-8.dll"}}
+    unlicensed: list[str] = []
+    monkeypatch.setattr(policy, "program_modules", lambda app, exe, contents: held[exe])
+    monkeypatch.setattr(policy, "unlicensed_sim_modules", lambda app: unlicensed)
+    with pytest.raises(ValueError, match="lacks SM64TrainerSim.exe"):
+        policy.check_programs(tmp_path)
+    (tmp_path / "SM64TrainerSim.exe").write_bytes(b"MZ")
+    (tmp_path / "_sim").mkdir()
+    policy.check_programs(tmp_path)
+    held["SM64Trainer.exe"].add("unicorn")
+    with pytest.raises(ValueError, match="SM64Trainer.exe holds unicorn"):
+        policy.check_programs(tmp_path)
+    held["SM64Trainer.exe"].discard("unicorn")
+    held["SM64TrainerSim.exe"] |= {"av", "pystray"}
+    with pytest.raises(ValueError, match="SM64TrainerSim.exe holds av, pystray"):
+        policy.check_programs(tmp_path)
+    held["SM64TrainerSim.exe"] -= {"av", "pystray"}
+    held["SM64TrainerSim.exe"] |= {"_hashlib.pyd", "libcrypto-3-x64.dll", "av.libs"}
+    with pytest.raises(ValueError, match="holds _hashlib, av, libcrypto"):
+        policy.check_programs(tmp_path)
+    held["SM64TrainerSim.exe"] -= {"_hashlib.pyd", "libcrypto-3-x64.dll", "av.libs"}
+    unlicensed.append("state_resolver")
+    with pytest.raises(ValueError, match="carries 1 modules of ours without '# SPDX-License-Identifier: "
+                                         "GPL-2.0-or-later': state_resolver"):
+        policy.check_programs(tmp_path)
+
+
+def test_every_module_of_ours_in_the_simulation_program_needs_the_gpl2_line(monkeypatch, tmp_path):
+    """unlicensed_sim_modules maps each archive module back to the file it was
+    built from (sim_entry, a lab module, an sm64_events module or package) and
+    ignores third-party modules; the line counts within a file's first three."""
+    spdx = policy.SIM_SPDX + "\n"
+    files = {
+        "sim_entry.py": '"""The entry."""\n' + spdx,
+        "tools/scene_lab/state_resolver.py": '"""No license line."""\n',
+        "tools/scene_lab/ghost_resim.py": "#!/usr/bin/env python\n# coding: utf-8\n" + spdx,
+        "tools/scene_lab/late_line.py": "a = 1\nb = 2\nc = 3\n" + spdx,
+        "src/sm64_events/__init__.py": spdx,
+        "src/sm64_events/core/__init__.py": "",
+        "src/sm64_events/core/paths.py": spdx,
+    }
+    for name, text in files.items():
+        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / name).write_text(text, encoding="utf-8")
+    monkeypatch.setattr(policy, "_REPO", tmp_path)
+    monkeypatch.setattr(policy, "_archive_modules", lambda exe: {
+        "sim_entry", "state_resolver", "ghost_resim", "late_line", "sm64_events", "sm64_events.core",
+        "sm64_events.core.paths", "numpy", "numpy._core", "unicorn.unicorn_py3", "json"})
+    assert policy.unlicensed_sim_modules(tmp_path) == ["late_line", "sm64_events.core", "state_resolver"]
