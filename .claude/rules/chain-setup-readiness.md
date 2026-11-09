@@ -58,8 +58,16 @@ paths:
 - **The setup gate:** the check's `gate_differs` lists the baseline's `gate`
   items (Wermi's build v7, the PJ64 Fixups) that are PROVEN different.
   `setupflow.js` `canAdvance` holds a page with an open gate item; the footer's
-  Continue anyway opens the warning, and accepting it writes
-  `onboarding.baseline_risk` (`POST /api/setup/baseline-risk`). The header
+  Continue anyway opens the warning (`gateStop`), and accepting it writes
+  `onboarding.baseline_risk` (`POST /api/setup/baseline-risk`). Missing
+  fixups are also a server step: `readiness(fixups_needed=)` answers `fixups`
+  (or `close`) after the plugin install and before `reopen`, until they are
+  installed or accepted; the wizard draws it inside the install stage.
+- **The checklist:** every page shows ONE sub-step card; finished sub-steps
+  are one-line checks above it (`setuppages.js` `DoneSteps`) and later ones
+  stay hidden. A checkpoint is evidence where the trainer can read it; the
+  Connect page's download and unpack cannot be read, so the user's click is
+  their checkpoint and finding the right Project64 finishes them regardless. The header
   notes an unaccepted difference to every user. `core/fixups.py` is the one
   fix the trainer performs: Install (and `POST /api/setup/fixups`) downloads
   the baseline's pinned release, checks the archive and DLL hashes, keeps the
@@ -121,6 +129,13 @@ incorrect transformation. For motion, sample computed positions during a real
 click; a declared transition or a settled screenshot alone cannot prove movement.
 
 ## Failure catalogue
+
+- 2026-11-09, hop 5, on the first draft's three numbered lines: "it should
+  be a CHECKLIST leveraging progressive disclosure. When we overwhelm the user
+  with too many steps in a single page, it's easy for them to ignore it and
+  just skip ahead." The same draft showed the missing-fixups warning beside
+  "Open your game", before its turn. `test_another_build_stops_the_wizard_until_the_warning_is_accepted`
+  now counts one card per sub-step and reads the checks above it.
 
 - 2026-11-09, hop 5: "we spent weeks working with Apeduden, only to figure
   out that the *real* root cause was him not using the right build of Pj64.

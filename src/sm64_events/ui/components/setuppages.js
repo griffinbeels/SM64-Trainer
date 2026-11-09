@@ -1,5 +1,5 @@
 import { h } from "preact";
-import { useRef } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import htm from "htm";
 import { Icon } from "./icons.js";
 import { RegionFlag, REGIONS } from "./regionflag.js";
@@ -23,6 +23,7 @@ const STAGE_COPY = {
 // The line under a stage's title follows the server's step in place.
 function stageDetail(step, emu) {
   if (step === "reopen") return "Start Project64 v1.6 to load Practice Replay.";
+  if (step === "fixups") return "The standard speedrun fix for Project64 1.6. We download it and put it in your Plugin folder.";
   if (step === "rom" && emu.rom?.state !== "unsupported") {
     return "In Project64, choose File → Open ROM and open your Usamune practice ROM.";
   }
@@ -62,31 +63,39 @@ function checkItem(setup, id) {
   return (setup?.emu?.setup_check?.items || []).find(item => item.id === id);
 }
 
-// The one build the trainer is tested with, and how to get it.
-function GetWermiBuild({ setup }) {
+// The download of the one build the trainer is tested with.
+function DownloadBuild({ setup, onClick }) {
   const build = checkItem(setup, BUILD);
-  return html`<div class="setup-get-build" data-testid="setup-get-build">
-    <ol>
-      <li>Download Wermi's Build v7 of Project64.</li>
-      <li>Open the file you downloaded. Choose a folder outside Program Files, such as your Games folder.</li>
-      <li>Open the Project64 in that new folder.</li>
-    </ol>
-    ${build?.download && html`<a class="primary-button setup-download" href=${build.download}
-      target="_blank" rel="noopener noreferrer">Download Wermi's Build v7</a>`}
-  </div>`;
+  return build?.download && html`<a class="primary-button setup-download" href=${build.download}
+    target="_blank" rel="noopener noreferrer" onclick=${onClick}>Download Wermi's Build v7</a>`;
+}
+
+// The sub-steps already finished, as one-line checks. The one to do now is
+// the card under them; later ones stay hidden until their turn (his rule,
+// 2026-11-09: "a CHECKLIST leveraging progressive disclosure ... checkpoints
+// for each sub-step", so nobody skims a page of steps and skips ahead).
+export function DoneSteps({ labels }) {
+  if (!labels.length) return null;
+  return html`<ul class="setup-done-steps" aria-label="Finished steps" data-testid="setup-done-steps">
+    ${labels.map(label => html`<li key=${label}><${Icon} name="check" size=${16}/><span>${label}</span></li>`)}
+  </ul>`;
 }
 
 // What still differs from the tested setup on this page, how to fix each
 // item, and the fix the trainer can do by itself (the PJ64 Fixups).
-export function GateWarning({ page, setup, accepted, busy, onFixups }) {
+export function GateWarning({ page, setup, accepted, busy, onFixups, children }) {
   const open = gateOpen(page, setup, accepted);
   if (!open.length) return null;
   const emu = setup.emu;
   return html`<div class="setup-gate" role="status" data-testid="setup-gate">
     <p class="setup-warning"><${Icon} name="warning" size=${18}/>${" "}
       The trainer is only tested with Wermi's Build v7 and the PJ64 Fixups. Your Project64 is different.</p>
-    ${open.includes(BUILD) && html`<${GetWermiBuild} setup=${setup}/>`}
-    <${SetupCheckList} check=${emu.setup_check} only=${open}/>
+    ${children}
+    ${page === "connect" ? html`<${SetupDisclosure} label="What we found">
+        <${SetupCheckList} check=${emu.setup_check} only=${open}/></${SetupDisclosure}>`
+      : html`<${SetupCheckList} check=${emu.setup_check} only=${open}/>`}
+    ${open.includes(BUILD) && page !== "connect" && html`<div class="setup-install-action">
+      <${DownloadBuild} setup=${setup}/></div>`}
     ${open.includes(FIXUPS) && html`<div class="setup-install-action">
       ${emu.fixups?.error && html`<p class="setup-error" role="alert">${emu.fixups.error}</p>`}
       ${emu.pj64_running && html`<p>Close Project64 so we can add the PJ64 Fixups.</p>`}
@@ -110,28 +119,71 @@ export function Project64Help() {
   </div>`;
 }
 
-const CONNECT_COPY = {
-  wrong: ["This is not Wermi's Build v7", "Close this Project64. Then get the build below and open it."],
-  found: ["Project64 found", "Your emulator is connected. Moving on…"],
-  missing: ["Get Project64, then open it", "We'll find its folder and check that it is the right build."],
+// The Connect page's sub-steps: [check shown once done, title, detail].
+// "open" and "swap" finish by evidence (the trainer finds the right
+// Project64). Nothing can read a download or an unpack, so the user's own
+// click is their checkpoint; finding the right Project64 finishes them too.
+const CONNECT_STEPS = {
+  download: ["Wermi's Build v7 downloaded", "Download Wermi's Build v7",
+             "This is the Project64 build the trainer is tested with."],
+  unpack: ["Project64 unpacked", "Unpack Project64",
+           "Open the file you downloaded. Choose a folder outside Program Files, such as your Games folder."],
+  open: ["Project64 found", "Open Project64",
+         "Open Project64.exe in the folder you chose. The trainer finds it by itself."],
+  swap: ["", "Close this Project64, then open the new one",
+         "Open Project64.exe in the folder you chose. The trainer checks it again by itself."],
 };
+const FOUND_CHECKS = ["Project64 found", "This is Wermi's Build v7"];
 
-export function ConnectPage({ setup, accepted = [] }) {
-  const target = setup?.emu?.target || {};
-  const found = target.state === "ready";
-  const state = !found ? "missing" : gateOpen("connect", setup, accepted).length ? "wrong" : "found";
-  const [title, detail] = CONNECT_COPY[state];
-  return html`<div class="setup-connect">
-    <${SetupStatus} done=${state === "found"} title=${title} detail=${detail}/>
-    ${found ? html`<code class="setup-path">${setup.emu.pj64_dir}</code>` : html`<${NotFound} target=${target} setup=${setup}/>`}
-    ${state === "wrong" && html`<${GateWarning} page="connect" setup=${setup} accepted=${accepted}/>`}
-    <${Project64Help}/>
+function connectState(setup, accepted) {
+  if (setup?.emu?.target?.state !== "ready") return "missing";
+  return gateOpen("connect", setup, accepted).length ? "wrong" : "found";
+}
+
+// Which sub-step shows now, and the checks above it.
+function useConnectSteps(state) {
+  const [clicked, setClicked] = useState({});
+  // Another build was found: getting the right one starts over.
+  useEffect(() => { if (state === "wrong") setClicked({}); }, [state]);
+  const order = ["download", "unpack", state === "wrong" ? "swap" : "open"];
+  const current = state === "found" ? null : order.find(id => !clicked[id]) || order[2];
+  const done = state === "found" ? FOUND_CHECKS
+    : order.slice(0, order.indexOf(current)).map(id => CONNECT_STEPS[id][0]);
+  const mark = (ids, value = true) => setClicked(now => ({...now, ...Object.fromEntries(ids.map(id => [id, value]))}));
+  return {current, done, mark};
+}
+
+function ConnectStepActions({ step, setup, mark }) {
+  if (step === "download") return html`<div class="setup-step-actions">
+    <${DownloadBuild} setup=${setup} onClick=${() => mark(["download"])}/>
+    <button type="button" class="setup-step-link" onclick=${() => mark(["download"])}>I downloaded it</button>
+    <button type="button" class="setup-step-link" onclick=${() => mark(["download", "unpack"])}>I already have this build</button>
+  </div>`;
+  if (step === "unpack") return html`<div class="setup-step-actions">
+    <button type="button" class="primary-button" onclick=${() => mark(["unpack"])}>I unpacked it</button>
+    <button type="button" class="setup-step-link" onclick=${() => mark(["download"], false)}>Go back</button>
+  </div>`;
+  return html`<div class="setup-step-actions">
+    <button type="button" class="setup-step-link" onclick=${() => mark(["unpack"], false)}>Go back</button>
   </div>`;
 }
 
-function NotFound({ target, setup }) {
-  return html`${target.state && target.state !== "missing" && html`<p class="setup-warning">${target.message}</p>`}
-    <${GetWermiBuild} setup=${setup}/>`;
+export function ConnectPage({ setup, accepted = [] }) {
+  const target = setup?.emu?.target || {};
+  const state = connectState(setup, accepted);
+  const { current, done, mark } = useConnectSteps(state);
+  const [, title, detail] = current ? CONNECT_STEPS[current] : ["", "Project64 found", "Your emulator is connected. Moving on…"];
+  const card = html`<${DoneSteps} labels=${done}/>
+    <${SetupStatus} done=${!current} title=${title} detail=${detail}>
+      ${current && html`<${ConnectStepActions} step=${current} setup=${setup} mark=${mark}/>`}
+    </${SetupStatus}>`;
+  return html`<div class="setup-connect" data-connect-step=${current || "found"}>
+    ${state === "missing" && target.state && target.state !== "missing"
+      && html`<p class="setup-warning">${target.message}</p>`}
+    ${state === "wrong" ? html`<${GateWarning} page="connect" setup=${setup} accepted=${accepted}>${card}</${GateWarning}>` : card}
+    ${state !== "missing" && html`<code class="setup-path">${setup.emu.pj64_dir}</code>`}
+    <${Project64Help}/>
+  </div>`;
 }
 
 function RomHelp() {
@@ -193,6 +245,23 @@ function useStageDirection(stage) {
   return last.current.direction;
 }
 
+// The install page's finished stages as checks: each stage's own
+// acknowledgment, plus the setup check itself once only the gate is left.
+function stageChecks(stage, step, gated) {
+  const at = STAGE_ORDER.indexOf(stage);
+  const labels = at > 0 ? STAGE_ORDER.slice(0, at).map(name => STAGE_COPY[name][2]) : [];
+  if (step === "fixups") return [...labels, STAGE_COPY.install[2]];
+  return step === "ready" && gated ? [...labels, "Game, replay pictures and inputs checked"] : labels;
+}
+
+function FixupsDetails({ setup }) {
+  return html`<${SetupDisclosure} label="What we found">
+    <${SetupCheckList} check=${setup.emu.setup_check} only=${[FIXUPS]}/>
+    <p>We download <code>RSP.dll</code> from its author's GitHub page. Your old file is kept beside it
+      as <code>RSP.before-fixups</code>.</p>
+  </${SetupDisclosure}>`;
+}
+
 // One card per visible stage (`shown`, the modal's useShownStep): the card
 // swaps only when the stage changes; the server's finer steps change its text.
 export function EmuSetupPane({ setup, shown, installing, onInstall, onRemove, onResume, manual,
@@ -201,15 +270,18 @@ export function EmuSetupPane({ setup, shown, installing, onInstall, onRemove, on
   const { step, stage, acknowledging } = shown;
   const rom = useStageRom(emu, step);
   const direction = useStageDirection(stage);
+  const gated = gateOpen("install", setup, accepted).length > 0;
   return html`<div class="setup-install" data-stage=${stage} data-substep=${step}>
+    <${DoneSteps} labels=${stageChecks(stage, step, gated)}/>
     <${SetupSwap} identity=${stage} direction=${direction} className="setup-substep-swap">
       <${EmuStepStatus} step=${step} acknowledging=${acknowledging} emu=${emu}
-        gated=${gateOpen("install", setup, accepted).length > 0}
-        installing=${installing} onInstall=${onInstall}/>
+        gated=${gated}
+        installing=${installing} onInstall=${onInstall} onFixups=${onFixups}/>
       <${RomResult} rom=${rom}/>
-      ${emu.verification?.installed && html`<${GateWarning} page="install" setup=${setup}
+      ${step === "ready" && html`<${GateWarning} page="install" setup=${setup}
         accepted=${accepted} busy=${installing} onFixups=${onFixups}/>`}
-      ${stage === "install" && html`<${InstallDetails} emu=${emu}/>`}
+      ${step === "fixups" && html`<${FixupsDetails} setup=${setup}/>`}
+      ${step === "install" && html`<${InstallDetails} emu=${emu}/>`}
       ${step === "verify" && html`<${VerificationHelp} emu=${emu} installing=${installing} onResume=${onResume}/>`}
       ${["reopen", "emulator"].includes(step) && html`<${Project64Help}/>`}
       ${["rom", "verify", "ready"].includes(step) && html`<${RomHelp}/>`}
@@ -268,10 +340,19 @@ function ManageReplay({emu, installing, onRemove}) {
 }
 
 // With the gate open, a working game is not yet "everything is set up".
-const GATED_READY = ["Your game is connected", "One more thing is different from the tested setup."];
+const GATED_READY = ["One thing left", "Your game works. Your Project64 is still different from the tested setup."];
 
-function EmuStepStatus({step, acknowledging, emu, installing, onInstall, gated}) {
-  const [title, , acknowledgment] = STAGE_COPY[stageOf(step)];
+function FixupsAction({ emu, installing, onFixups }) {
+  return html`<div class="setup-install-action">
+    ${emu.fixups?.error && html`<p class="setup-error" role="alert">${emu.fixups.error}</p>`}
+    <button class="primary-button" type="button" disabled=${installing}
+        onclick=${onFixups}>${installing ? "Installing…" : "Install the PJ64 Fixups"}</button>
+  </div>`;
+}
+
+function EmuStepStatus({step, acknowledging, emu, installing, onInstall, onFixups, gated}) {
+  const [stageTitle, , acknowledgment] = STAGE_COPY[stageOf(step)];
+  const title = step === "fixups" ? "Install the PJ64 Fixups" : stageTitle;
   const ready = step === "ready" && !acknowledging;
   const [readyTitle, readyDetail] = gated ? GATED_READY : ["Setup checked", stageDetail(step, emu)];
   return html`<${SetupStatus} done=${acknowledging || (step === "ready" && !gated)}
@@ -282,5 +363,6 @@ function EmuStepStatus({step, acknowledging, emu, installing, onInstall, gated})
       <button class="primary-button" type="button" disabled=${installing}
           onclick=${onInstall}>${installing ? "Installing…" : "Install Practice Replay"}</button>
     </div>`}
+    ${step === "fixups" && !acknowledging && html`<${FixupsAction} emu=${emu} installing=${installing} onFixups=${onFixups}/>`}
   </${SetupStatus}>`;
 }

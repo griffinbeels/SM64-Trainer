@@ -5515,11 +5515,13 @@
   /* The gate: Wermi's build v7 and the PJ64 Fixups (setuppages.js GateWarning). */
   .setup-gate { margin: .8rem 0; }
   .setup-gate .setup-warning svg, .setup-untested-note svg { display: inline-block; vertical-align: -3px; margin-right: .3rem; }
-  .setup-get-build { margin: .6rem 0 1rem 68px; color: #c6d4e4; font-size: .95rem; line-height: 1.6; }
-  .setup-gate .setup-get-build { margin-left: 0; }
-  .setup-get-build ol { margin: 0 0 .8rem; padding-left: 1.4rem; }
-  .setup-get-build li { display: list-item; list-style: decimal; }
-  .setup-gate .setup-get-build { margin-bottom: 1.2rem; }
+  /* Finished sub-steps: one-line checks above the step to do now. */
+  .setup-done-steps { list-style: none; margin: 0 0 .9rem; padding: 0 0 0 14px; display: grid; gap: .35rem; }
+  .setup-done-steps li { display: flex; align-items: center; gap: .7rem; color: #9fd8b8; font-size: .93rem; line-height: 1.4; }
+  .setup-done-steps svg { flex: 0 0 auto; color: #83ecb0; border: 1px solid #3f8f66; border-radius: 50%; padding: 2px; box-sizing: content-box; background: #14392c; }
+  .setup-step-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem 1rem; margin-top: .4rem; }
+  .setup-step-link { min-height: 44px; border: 0; background: transparent; color: #8fc8ff; padding: .3rem .2rem; text-decoration: underline; cursor: pointer; }
+  .setup-step-link:hover { color: #fff; }
   .setup-download { display: inline-flex; align-items: center; min-height: 46px; padding: .8rem 1.3rem; text-decoration: none; }
   .setup-risk-continue, .setup-risk-confirm {
     gap: .45rem; min-height: 44px; border: 1px solid #e6b852; border-radius: 6px;

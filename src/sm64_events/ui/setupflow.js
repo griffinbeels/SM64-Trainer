@@ -14,12 +14,12 @@ export const RESUME_KEY = "sm64.setupResume.v1";
 // inside one stage never swaps the card (his report, 2026-10-17: "bouncing
 // visually between so many steps").
 export const STAGE_OF = {
-  close: "close", install: "install", emulator: "game", reopen: "game", rom: "game",
+  close: "close", install: "install", fixups: "install", emulator: "game", reopen: "game", rom: "game",
   verify: "check", ready: "check", unavailable: "unavailable", checking: "checking",
 };
 export const STAGE_ORDER = ["close", "install", "game", "check"];
 // Progress order of the steps; a step without a rank has no place in it.
-const STEP_RANK = {close: 0, install: 1, emulator: 2, reopen: 2, rom: 3, verify: 4, ready: 5};
+const STEP_RANK = {close: 0, install: 1, fixups: 1.5, emulator: 2, reopen: 2, rom: 3, verify: 4, ready: 5};
 // Shown for less than one poll or so, a stage resolved by itself: no acknowledgment.
 export const SEEN_MS = 1500;
 // An earlier step is shown only after it persists this long.
@@ -92,6 +92,14 @@ export function pageDone(page, setup, step = setupStep(setup)) {
   if (page === "connect") return setup?.emu?.target?.state === "ready";
   if (page === "install") return step === "ready";
   return false;
+}
+
+// Where Continue is a warning: a finished page with an open gate item, and
+// the fixups step itself (the server holds there until installed or accepted).
+export function gateStop(page, setup, step, accepted = []) {
+  const open = gateOpen(page, setup, accepted);
+  if (page === "install" && step === "fixups") return open.filter(id => id === FIXUPS);
+  return pageDone(page, setup, step) ? open : [];
 }
 
 export function canAdvance(page, setup, step = setupStep(setup), accepted = []) {

@@ -31,12 +31,15 @@ def scenario():
     return layer, observed
 
 
-def no_setup_check(monkeypatch):
+def no_setup_check(monkeypatch, layer=None):
     """For a fixture that models the plugin over an empty Project64 folder:
     serve no setup check, so the build-and-fixups gate (which a real check of
-    that folder would open) stays out of a test about something else."""
+    that folder would open) stays out of a test about something else.
+    `layer` also becomes the fixture's capture layer."""
     import ui_fixture
     from types import SimpleNamespace
+    if layer is not None:
+        monkeypatch.setattr(ui_fixture, "_FixtureCaptureLayer", lambda *a, **kw: layer)
     real = ui_fixture.create_app
     stub = SimpleNamespace(compare=lambda *_: None, diagnostic_status=lambda *_: None)
     monkeypatch.setattr(ui_fixture, "create_app",
@@ -741,7 +744,6 @@ def test_restored_bundle_recovers_the_open_setup_modal(tmp_path, monkeypatch):
 @pytest.mark.parametrize("auto_refresh", [False, True])
 def test_source_build_mismatch_waits_for_explicit_install_in_setup(tmp_path, monkeypatch, auto_refresh):
     """Source and packaged servers preserve external copies until explicit Install."""
-    import ui_fixture
     from test_capturelayer import FakeProcesses, FakeRegistry, write_overlay
     from sm64_events.core.capturelayer import (
         CaptureLayer, GRAPHICS_DLL_VALUE, PLUGIN_DLL, REGISTRY_DLL_SUBKEY,
@@ -764,7 +766,7 @@ def test_source_build_mismatch_waits_for_explicit_install_in_setup(tmp_path, mon
     write_overlay(settings, consented_at="2026-09-01T00:00:00Z",
                   pj64_dir=str(folder), installed_sha256="0" * 64)
     layer = CaptureLayer(registry, processes, settings, source, auto_refresh=auto_refresh)
-    monkeypatch.setattr(ui_fixture, "_FixtureCaptureLayer", lambda *a, **kw: layer)
+    no_setup_check(monkeypatch, layer)
     observed = dict(target=dict(state="ready", pid=123),
                     rom=dict(MISSING_ROM), checks={})
 
@@ -821,6 +823,7 @@ def test_denied_packaged_refresh_reveals_a_reachable_install_action(tmp_path, mo
     layer.refresh_loop(TwoTicks())
     assert len(attempts) == 1
     monkeypatch.setattr(ui_fixture, "_FixtureCaptureLayer", lambda *a, **kw: layer)
+    no_setup_check(monkeypatch)
     observed = dict(target=dict(state="ready", pid=None), rom=dict(MISSING_ROM), checks={})
     with serve_ui(setup_observer=lambda _: observed) as url, get_driver().launch(viewport=(850, 600)) as page:
         page.goto(url + "/ui/index.html")
@@ -862,6 +865,7 @@ def test_an_older_install_moves_without_reopening_setup_or_offers_install(tmp_pa
     layer.auto_refresh = packaged
     processes.image_path = str(folder / "Project64.exe")
     monkeypatch.setattr(ui_fixture, "_FixtureCaptureLayer", lambda *a, **kw: layer)
+    no_setup_check(monkeypatch)
     observed = dict(target=dict(state="ready", pid=123), rom=dict(US_ROM), checks=dict(ALL_CHECKS))
     with serve_ui(setup_observer=lambda _: observed) as url, get_driver().launch(viewport=(850, 600)) as page:
         page.goto(url + "/ui/index.html")
@@ -917,6 +921,7 @@ def test_what_v191_left_in_an_update_window_opens_on_install_and_one_click_clean
     layer, registry, plugin = v191_window(folder, bundled, tmp_path / "capture.json", auto_refresh=app == "stable",
                                           installer=STABLE_APP if app == "stable" else BETA_APP)
     monkeypatch.setattr(ui_fixture, "_FixtureCaptureLayer", lambda *a, **kw: layer)
+    no_setup_check(monkeypatch)
     observed = dict(target=dict(state="ready", pid=None), rom=dict(MISSING_ROM), checks={})
     with serve_ui(setup_observer=lambda _: observed) as url, get_driver().launch(viewport=(850, 600)) as page:
         page.goto(url + "/ui/index.html")

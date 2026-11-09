@@ -2284,7 +2284,8 @@ stop the trainer working), *recommended* (differs from what we test with) or
 
 The two [[setup check]] items a user must match or knowingly skip: Wermi's
 Build v7 of Project64 and the PJ64 Fixups. The setup wizard never leaves a
-page by itself while one of them is proven different. Its Continue button
+page by itself while one of them is proven different, and missing fixups are
+their own step right after the plugin install. Its Continue button
 becomes a warning that asks first, and the server records the items the user
 accepted (`onboarding.baseline_risk`). The header shows a note to every user
 with a difference they have not accepted. An item that reads *can't tell*

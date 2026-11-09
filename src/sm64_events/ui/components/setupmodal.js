@@ -8,7 +8,7 @@ import { Icon } from "./icons.js";
 import { EMU, N64 } from "../platform.js";
 import { SetupSwap, useSetupAttention, useShownStep } from "./setupmotion.js";
 import { ConnectPage, EmuSetupPane, N64SetupPane, CompletionPage } from "./setuppages.js";
-import { SETUP_TITLES, ACKNOWLEDGE_MS, canAdvance, canReviewForward, gateOpen, pageDone,
+import { SETUP_TITLES, ACKNOWLEDGE_MS, canAdvance, canReviewForward, gateStop,
          pagesFor, readResume, saveResume, setupStep } from "../setupflow.js";
 
 const html = htm.bind(h);
@@ -195,8 +195,12 @@ export function SetupModal({ onClose, onComplete, initialPlatform, initialPane, 
   const install = () => mutate("POST", "/api/setup/capture-layer", {consent: true});
   const fixups = () => mutate("POST", "/api/setup/fixups");
   // The page did its part, but the gate is open: Continue is a warning.
-  const risky = !offline && pageDone(page, setup, shown.step) ? gateOpen(page, setup, accepted) : [];
-  const acceptRisk = () => risk.accept(risky, () => go(page === "connect" ? "install" : "complete"));
+  const risky = offline ? [] : gateStop(page, setup, shown.step, accepted);
+  // After the warning: Connect moves on; the install page follows the server's next step.
+  const acceptRisk = () => risk.accept(risky, () => {
+    if (page === "connect") go("install");
+    else if (shown.step === "ready") go("complete");
+  });
   const remove = () => mutate("DELETE", "/api/setup/capture-layer");
   const resume = () => mutate("POST", "/api/pause", {paused: false}, true);
   async function finish() {

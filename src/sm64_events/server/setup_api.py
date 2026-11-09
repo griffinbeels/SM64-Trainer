@@ -21,6 +21,10 @@ from sm64_events.core.paths import mode_settings_path
 log = logging.getLogger("sm64.setup")
 
 
+#: the setup check's row for the PJ64 Fixups (data/setup_baseline.json)
+FIXUPS_ITEM = "rsp_plugin"
+
+
 class PlatformBody(BaseModel):
     platform: str
 
@@ -82,10 +86,13 @@ def setup_json(mode_cfg: ModeConfig, capture_layer: CaptureLayer,
     note = getattr(observer, "note_setup_state", None)
     if note is not None:
         note(onboarding)
+    check = setup_check(layer, observed, profile)
+    accepted = (onboarding.get("baseline_risk") or {}).get("items", ())
+    fixups_needed = FIXUPS_ITEM in (check or {}).get("gate_differs", ()) and FIXUPS_ITEM not in accepted
     return {"platform": mode_cfg.mode.value,
             TrackerMode.EMU.value: {**layer.as_dict(), **observed,
-                    "verification": readiness(layer, observed),
-                    "setup_check": setup_check(layer, observed, profile),
+                    "verification": readiness(layer, observed, fixups_needed=fixups_needed),
+                    "setup_check": check,
                     "fixups": fixups.status() if fixups is not None else None},
             "onboarding": onboarding,
             TrackerMode.N64.value: {"available": False}}
