@@ -244,6 +244,40 @@ def test_a_folder_the_caller_names_is_scanned_when_setup_has_no_record(tmp_path,
     assert store.rom_for("us").read_bytes() == rom("us") and store.rom_for("jp").read_bytes() == rom("jp")
 
 
+def test_a_scan_reads_no_file_of_a_version_already_kept_past_its_header(tmp_path, project64, monkeypatch):
+    """Most players have no JP ROM, so the scan for it repeats; their US file must not be read whole each time."""
+    (project64 / "roms" / "SM64_USAMUNE_v1.93j.n64").unlink()
+    (project64 / "roms" / "Usamune US.z64").write_bytes(rom("us"))
+    store = store_for(tmp_path, pj64=project64)
+    store.adopt(rom("us"))
+    sizes = []
+    real_open = Path.open
+
+    class Counted:
+        def __init__(self, path, file):
+            self.path, self.file = path, file
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            self.file.close()
+
+        def read(self, size=-1):
+            sizes.append((self.path.name, size))
+            return self.file.read(size)
+
+        def seek(self, *args):
+            return self.file.seek(*args)
+
+    def counting_open(self, *args, **kwargs):
+        return Counted(self, real_open(self, *args, **kwargs))
+
+    monkeypatch.setattr(Path, "open", counting_open)
+    assert store.scan_folders() == []
+    assert ("Usamune US.z64", 0x40) in sizes and ("Usamune US.z64", ROM_BYTES + 1) not in sizes
+
+
 def test_a_scan_that_found_nothing_waits_before_the_next(tmp_path, project64):
     clock = Clock()
     store = store_for(tmp_path, pj64=project64, clock=clock)

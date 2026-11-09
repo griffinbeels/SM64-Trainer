@@ -427,7 +427,8 @@ def _build_capture_layer(poller, replay):
         auto_refresh=current_build().channel == 'stable',
         installer=installer_identity())
     from sm64_events.core.setup_runtime import SetupRuntime
-    setup_observer = SetupRuntime(WinProcesses(), Pj64Memory, poller, replay)
+    from sm64_events.scenelab.roms import default_store as lab_rom_store   # setup copies the practice ROM too
+    setup_observer = SetupRuntime(WinProcesses(), Pj64Memory, poller, replay, rom_store=lab_rom_store())
     if not capture_layer.auto_refresh:
         return capture_layer, setup_observer
     try:

@@ -54,7 +54,12 @@ def _observed(capture_layer, observer):
 
 def setup_check(layer, observed, profile) -> dict | None:
     """The setup check (`core/setup_profile.py`) for this observation."""
-    return profile.compare(layer.as_dict(), observed.get("rom")) if profile is not None else None
+    if profile is None:
+        return None
+    lab_roms = observed.get("lab_roms")    # the Ghost Lab's ROM copies, when setup watches a ROM store
+    if lab_roms is None:
+        return profile.compare(layer.as_dict(), observed.get("rom"))
+    return profile.compare(layer.as_dict(), observed.get("rom"), lab_roms)
 
 
 def setup_json(mode_cfg: ModeConfig, capture_layer: CaptureLayer,

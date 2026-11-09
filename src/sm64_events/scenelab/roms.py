@@ -7,11 +7,16 @@ The Ghost Lab runs the game's own code, so it needs the exact cartridge: Super M
 v1.93j (JP), 8 MiB each. A ROM is known by its header (the internal name, exactly, and the country letter) and
 its size, never by its file name: on his machine a file named `.n64` holds a `.z64` image. Three ways find it:
 
-A. The game running in Project64 (`copy_from_game`). It costs the player nothing and is exact: it is the image
-   he plays. A copy from the game replaces a stored copy of the same region whose bytes differ.
+A. The game running in Project64. It costs the player nothing and is exact: it is the image he plays. Setup
+   copies it through its own reader while the wizard watches the game (`copy_from`, from
+   `core/setup_runtime.py`), and `follow_game` copies it in the background with the store's own reader
+   (`copy_from_game`). A copy from the game replaces a stored copy of the same region whose bytes differ.
 B. Project64's ROM folders (`scan_folders`): the files Project64 last opened and its ROM folder, from its own
-   registry settings, and `roms` beside Project64.exe, from setup's record. `rom_for` tries this on a miss.
-C. A file the player chooses (`adopt`), when neither found it.
+   registry settings, and `roms` beside Project64.exe. Setup scans these in the same pass, and `rom_for` does
+   on a miss, so both regions are found where present.
+C. A file the player chooses (`adopt`), only when neither found the US ROM: the setup check's ROM row and the
+   Ghost Lab's no-ROM card (`ui/components/rompick.js`). No step of its own: his rule (2026-09-16) is no
+   onboarding past the original.
 
 The copy lives at `<lab root>/roms/<region>.z64` in the N64's big-endian order, with a record beside it. Nothing
 here writes to Project64, its folders or its registry, and nothing here sends a byte off this computer.
@@ -193,16 +198,25 @@ class RomStore:
         return None if self.rom_for(region) is not None else missing_sentence(region)
 
     def status(self) -> dict:
-        """What the pick shows: per region, found or not, where the copy came from, and the sentence."""
+        """What the pick shows: per region, found or not, where the copy came from, and the sentence. A miss
+        scans Project64's folders first, as `rom_for` does."""
+        with self._lock:
+            self.scan_folders()
+            return {"regions": self.held()}
+
+    def held(self) -> dict:
+        """Per region what is kept now, without looking anywhere for more: found, label, version, source
+        (game, folder or picked), whether it is the build his files were, and the sentence when missing."""
         regions = {}
-        for region, kind in CARTRIDGES.items():
-            found = self.rom_for(region)
-            record = self._record(region) if found is not None else None
-            regions[region] = {"found": found is not None, "label": kind.label, "version": kind.version,
-                               "source": record.get("source") if record else None,
-                               "known_build": bool(record and record.get("sha256") == KNOWN_SHA256[region]),
-                               "reason": None if found is not None else missing_sentence(region)}
-        return {"regions": regions}
+        with self._lock:
+            for region, kind in CARTRIDGES.items():
+                found = self._intact(region) is not None
+                record = self._record(region) if found else None
+                regions[region] = {"found": found, "label": kind.label, "version": kind.version,
+                                   "source": record.get("source") if record else None,
+                                   "known_build": bool(record and record.get("sha256") == KNOWN_SHA256[region]),
+                                   "reason": None if found else missing_sentence(region)}
+        return regions
 
     # -- A: the running game -----------------------------------------------------------------------------------
 
@@ -263,7 +277,7 @@ class RomStore:
             self._scanned_at = now
             found = []
             for path in self._candidate_files(Path(pj64_dir) if pj64_dir else self._pj64_dir()):
-                image = self._read_candidate(path)
+                image = self._read_candidate(path, [region for region in missing if region not in found])
                 region = identify(image) if image is not None else None
                 if region in missing and region not in found:
                     self._keep(region, image, FOLDER, path)
@@ -305,14 +319,15 @@ class RomStore:
         return [entry for entry in entries if entry.is_file()]
 
     @staticmethod
-    def _read_candidate(path: Path) -> bytes | None:
-        """The file as a big-endian image, if it is a ROM's size and its header names a Usamune build."""
+    def _read_candidate(path: Path, wanted: list[str]) -> bytes | None:
+        """The file as a big-endian image, if it is a ROM's size and its header names a `wanted` Usamune build.
+        Only such a file is read past its header, so a held region's file is never read again."""
         try:
             if path.stat().st_size != ROM_BYTES:
                 return None
             with path.open("rb") as file:
                 head = to_big_endian(file.read(HEADER_SIZE))
-                if head is None or region_of_header(head) is None:
+                if head is None or region_of_header(head) not in wanted:
                     return None
                 file.seek(0)
                 data = file.read(ROM_BYTES + 1)
@@ -404,6 +419,32 @@ def default_store() -> RomStore:
         if _default is None:
             _default = RomStore(paths.scene_lab_root() / "roms")
         return _default
+
+
+FOLLOW_INTERVAL_S = 5.0
+
+
+def follow_game(store: RomStore | None = None, *, interval_s: float = FOLLOW_INTERVAL_S) -> Callable[[], None]:
+    """Copy the practice ROM whenever Project64 runs one, in the background: a daemon thread asks the store every
+    `interval_s` (`copy_from_game`, its own reader; one header read per ask once a cartridge is copied), never on
+    the poller's thread. The lab mount starts it; it returns `stop`, which ends the thread and waits for it."""
+    stop = threading.Event()
+
+    def follow():
+        while not stop.wait(interval_s):
+            try:
+                (store or default_store()).copy_from_game()
+            except (OSError, RuntimeError):
+                log.warning("could not copy the practice ROM from the game this time", exc_info=True)
+
+    worker = threading.Thread(target=follow, name="lab-rom-follow", daemon=True)
+    worker.start()
+
+    def stop_following() -> None:
+        stop.set()
+        worker.join(timeout=5.0)
+
+    return stop_following
 
 
 def rom_for(region: str) -> Path | None:

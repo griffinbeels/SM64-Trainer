@@ -11,3 +11,4 @@
 .rom-pick-detail { color: var(--muted); font-size: .82rem; }
 .rom-pick-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .rom-pick-problem { color: var(--danger, #ffb1b1); font-size: .85rem; }
+.setup-check-action { display: grid; gap: 6px; justify-items: start; margin-top: 8px; }

@@ -58,6 +58,11 @@ paths:
   target's pid and keeps it while that process runs (`alive()`); an observation is
   one header read. A fresh reader per poll re-walked Project64's memory every
   second (38 attaches in one minute of play, 2026-09-28).
+- **The Ghost Lab's ROM rides setup, never gates it:** with a practice ROM open,
+  `SetupRuntime._lab_roms` copies it through that same reader (once per process
+  and cartridge, `scenelab/roms.py`) and searches Project64's folders for the
+  other version. Readiness never reads it; the setup check shows one `lab_rom`
+  row, with the pick only while the US ROM is missing (2026-11-09: no step).
 - **A proven check holds through a gap:** `onboarding.SteadyChecks` keeps a
   check true until it has been false for 3 s, keyed by Project64 pid, ROM and
   plugin pid; another of any of those proves everything again. A real stall
