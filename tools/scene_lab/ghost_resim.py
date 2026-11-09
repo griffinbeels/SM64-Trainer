@@ -266,16 +266,8 @@ class GhostScenes:
         costs no more scene reads than it took."""
         first = clip.frames[0]
 
-        def base_of(words: dict):
-            """What a scene's first frame lies over: the reset of its own level, area and act, which holds the level's
-            data the game loaded outside the scene's regions and main pool (its textures; over the castle's boot
-            RAM the level drew black, the first real pictures showed, 2026-11-09); the boot where no reset is made."""
-            def base() -> np.ndarray:
-                try:
-                    return self.stages.reset(words["level"], words["area"], words["act"] or 1)
-                except stage_sim.StageError:
-                    return self.stages.boot()[0]
-            return base
+        def base_of(words: dict, detail: dict):
+            return lambda: self._scene_base(words, detail, act)
 
         if self.starts_dir is not None:
             try:
@@ -290,23 +282,50 @@ class GhostScenes:
         resets = []
         for path, stamp, words in self._scenes():
             if words_match(words, clip):
-                yield Start(OWN_SCENE, lambda path=path, words=words: self._read_start(path, base_of(words)),
-                            f"{OWN_SCENE}:{stamp}", {"scene": path.name})
+                detail = {"scene": path.name}
+                yield Start(OWN_SCENE, lambda path=path, words=words, detail=detail: self._read_start(
+                    path, base_of(words, detail)), f"{OWN_SCENE}:{stamp}", detail)
             elif words_reset(words, first):
                 resets.append((path, stamp, words))
         wanted = act if act is not None else next((words["act"] for _p, _s, words in resets), None)
         for path, stamp, words in resets:
             if wanted is None or words["act"] == wanted:
-                yield Start(ANOTHER_RESET,
-                            lambda path=path, words=words: self._with_clocks(self._read_start(path, base_of(words)), first),
-                            f"{ANOTHER_RESET}:{stamp}",
-                            {"scene": path.name, "act": words["act"], "seed": "the reset's own"})
+                detail = {"scene": path.name, "act": words["act"], "seed": "the reset's own"}
+                yield Start(ANOTHER_RESET, lambda path=path, words=words, detail=detail: self._with_clocks(
+                    self._read_start(path, base_of(words, detail)), first), f"{ANOTHER_RESET}:{stamp}", detail)
         chosen = wanted or 1
         detail = {"level": first.level, "area": first.area, "act": chosen, "seed": "the simulated reset's own"}
         if wanted is None:
             detail["act_assumed"] = True
         yield Start(SIMULATED_RESET, lambda: self._with_clocks(self.stages.reset(first.level, first.area, chosen).copy(), first),
                     f"{SIMULATED_RESET}:{self.stages.key(first.level, first.area, chosen)}", detail)
+
+    def _scene_base(self, words: dict, detail: dict, ghost_act: int | None) -> np.ndarray:
+        """What a scene's first frame lies over: the reset of its own level, area and act, which holds the level's
+        data the game loaded outside the scene's regions and main pool (segment 0x09, WF's textures, begins at
+        0x801C1000, just past the main pool's end; over the castle's boot RAM the level drew black, the first real
+        pictures showed, 2026-11-09). The act is the scene's own first-frame gCurrActNum. Where that says nothing in
+        a course with an act selector, the ghost's star act is taken when known (`detail["act_from"]` says so),
+        else the start is refused (StageError: the next start is tried); a course without one uses act 1, the key
+        its reset has. Where no reset can be made (the castle's own levels, scene_warm.py), the boot, and `detail`
+        says why. `detail["base"]` names what it lay over."""
+        level, area, scene_act = words["level"], words["area"], words["act"]
+        if 1 <= self.stages.course_of_level(level) <= stage_sim.LAST_ACT_COURSE:
+            chosen = scene_act or ghost_act
+            if not chosen:
+                raise stage_sim.StageError("This scene names no act, and its course has six, so the level it lies "
+                                           "over cannot be chosen.")
+            if not scene_act:
+                detail["act_from"] = "the ghost's star (the scene names none)"
+        else:
+            chosen = 1
+        try:
+            ram = self.stages.reset(level, area, chosen)
+        except stage_sim.StageError as error:
+            detail.update(base="boot", base_reason=str(error))
+            return self.stages.boot()[0]
+        detail["base"] = f"reset {level}-{area}-{chosen}"
+        return ram
 
     def _downloaded(self, clip, clip_sha: str) -> Start | None:
         """A start that came with someone else's ghost (start_frame.accept_start_blob kept it apart), once it
