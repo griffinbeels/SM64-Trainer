@@ -1,0 +1,14 @@
+/* src/sm64_events/ui/rompick.css -- the Ghost Lab's one-time ROM step (components/rompick.js).
+   One card that wraps its words and never grows wider than its container. */
+.rom-pick {
+  display: grid; gap: 10px; justify-items: start;
+  max-width: 640px; min-width: 0; padding: 16px 18px;
+  border: 1px solid var(--border-soft); border-radius: 8px; background: var(--surface);
+}
+.rom-pick p { margin: 0; line-height: 1.45; overflow-wrap: anywhere; }
+.rom-pick-line { color: var(--text); font-size: .95rem; }
+.rom-pick-found > span { color: var(--green); font-weight: 750; }
+.rom-pick-detail { color: var(--muted); font-size: .82rem; }
+.rom-pick-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.rom-pick-problem { color: var(--danger, #ffb1b1); font-size: .85rem; }
+.setup-check-action { display: grid; gap: 6px; justify-items: start; margin-top: 8px; }
