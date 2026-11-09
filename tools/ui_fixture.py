@@ -1398,7 +1398,7 @@ def serve_ui(*args, **kwargs):
 
 
 def _fixture_runtime(database, scratch_path, capture_layer_status, capture_layer_refuse,
-                     bundled_library, setup_observer, capture_layer_install=None):
+                     bundled_library, setup_observer, capture_layer_install=None, course_art=None):
     # Today's Daily Star announcement starts dismissed, so it never covers a
     # page a test is driving (its backdrop intercepted clicks in the
     # frame-readout tests, 2026-09-24). tests/test_ui_daily_star.py clears it
@@ -1490,6 +1490,7 @@ def _fixture_runtime(database, scratch_path, capture_layer_status, capture_layer
     with reusing_calibrations():
         app = create_app(poller, broadcaster, service=service, compare=compare,
                          inputs=inputs, capture_layer=capture_layer, setup_observer=setup_observer,
+                         course_art=course_art,
                          adoptions_path=scratch_path
                          / "library_adoptions.json",
                          mode_path=scratch_path / "tracker_mode.json",
@@ -1729,8 +1730,13 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
               capture_layer_refuse: str | None = None,
               capture_layer_install: dict | None = None,
               setup_observer=None,
-              bundled_library: bool = True):
+              bundled_library: bool = True,
+              course_art=None):
     """Yield the base URL of an offline instance; stop it on the way out.
+
+    `course_art` is a `sm64_events.course_art.CourseArt` over a SCRATCH cache;
+    None (every gate) serves the plain stand-in portraits and never looks for
+    a ROM, so no fixture reads the player's ROM or writes the real data dir.
 
     `bundled_library=False` gives the app an EMPTY library (round 33): every
     fitted star row in the bundled library becomes a sheet-fitted rank
@@ -1878,7 +1884,7 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
             _pad_journal(db_path, pad_journal)
         app, service = _fixture_runtime(database, Path(compare_cache_scratch.name),
                                         capture_layer_status, capture_layer_refuse, bundled_library, setup_observer,
-                                        capture_layer_install)
+                                        capture_layer_install, course_art)
         _fixture_replay_routes(app, database)
         listener = _bound_socket()
         port = listener.getsockname()[1]

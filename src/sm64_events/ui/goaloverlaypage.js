@@ -30,7 +30,8 @@ const html = htm.bind(h);
 const MOMENT_MS = 1600;
 const RECONNECT_MS = 2000;
 // Events that change the art or the segment list rather than the view.
-const STATIC_REFRESH_ON = new Set(["icons_changed", "segments_changed", "origins_changed"]);
+const STATIC_REFRESH_ON = new Set(["icons_changed", "segments_changed", "origins_changed",
+  "course_art_changed"]);
 
 // ---- live data ---------------------------------------------------------------
 
@@ -51,7 +52,8 @@ async function loadTarget() {
 
 async function loadArt() {
   const [courseIcons, segments, vocab] = await Promise.all([
-    getJSON("/api/icons/courses").catch(() => ({})),
+    // The listing's `courses` map, the shape the main page's store keeps.
+    getJSON("/api/icons/courses").then((body) => body.courses || {}).catch(() => ({})),
     getJSON("/api/segments").catch(() => []),
     getJSON("/api/segments/vocab").catch(() => ({})),
   ]);

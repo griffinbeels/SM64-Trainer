@@ -21,7 +21,6 @@ Also pins the scale-to-fit contract: the selector row must never regrow a
 horizontal scrollbar (the 2026-07-24 UX fix this shipped with).
 """
 import re
-import struct
 from pathlib import Path
 
 from source_scan import strip_comments
@@ -162,60 +161,23 @@ def test_special_and_substitute_stems_all_have_a_real_file():
     was written to fix (whole-branch review I4, 2026-07-25). The JS onerror
     fallback hides a missing file in playtests; only this test sees it.
     """
+    from sm64_events.course_art import PORTRAITS_BY_STEM
     star_icons = UI / "assets" / "star_icons"
-    course_icons = UI / "assets" / "course_icons"
     missing = []
     for stem in _stems_from("SPECIAL_COURSE_ICONS") + _stems_from("COURSE_SUBSTITUTE_ICONS"):
         if (star_icons / f"{stem}.png").exists():
             continue
-        if list(course_icons.glob(f"{stem}.*")):
+        # A course portrait: cut from the player's ROM, or its stand-in tile
+        # until then (tests/test_course_art.py), so it always has a picture.
+        if stem in PORTRAITS_BY_STEM:
             continue
         missing.append(stem)
     assert not missing, f"no art file for {missing}"
 
 
-def _pixel_size(path):
-    """(width, height) from a PNG or WEBP header — the two formats we ship.
-
-    Deliberately raises on anything else instead of returning a pass: a new
-    format silently reporting "fine" is how the floor below stops meaning
-    anything.
-    """
-    data = path.read_bytes()
-    if path.suffix.lower() == ".png":
-        return struct.unpack(">II", data[16:24])
-    assert path.suffix.lower() == ".webp", f"unhandled format: {path.name}"
-    chunk = data[12:16]
-    if chunk == b"VP8X":
-        return (int.from_bytes(data[24:27], "little") + 1,
-                int.from_bytes(data[27:30], "little") + 1)
-    if chunk == b"VP8 ":
-        return (int.from_bytes(data[26:28], "little") & 0x3FFF,
-                int.from_bytes(data[28:30], "little") & 0x3FFF)
-    assert chunk == b"VP8L", f"unhandled webp chunk {chunk!r} in {path.name}"
-    bits = int.from_bytes(data[21:25], "little")
-    return (bits & 0x3FFF) + 1, ((bits >> 14) & 0x3FFF) + 1
-
-
-# Portraits render in ~104px picker cells and up to ~174px in the practice
-# banner, so a 3x-DPI display asks for ~520px of real art. The set is 500-740px
-# and this dict is EMPTY, which is the state worth defending: ttc (64x64) and rr
-# (100x100) shipped as thumbnails that visibly blurred next to their neighbours
-# until they were re-ripped at 600x600 (audit 2026-07-25). Name an exception
-# here only with the same intent — a stopgap someone is going to replace.
-KNOWN_LOW_RES_PORTRAITS = {}
-MIN_PORTRAIT_PIXELS = 256
-
-
-def test_course_portraits_are_big_enough_for_the_grid():
-    small = {}
-    for path in sorted((UI / "assets" / "course_icons").iterdir()):
-        width, height = _pixel_size(path)
-        if min(width, height) < MIN_PORTRAIT_PIXELS:
-            small[path.name] = (width, height)
-    assert small == KNOWN_LOW_RES_PORTRAITS, (
-        "course portraits below the grid's render size changed: "
-        f"{small} vs the known set {KNOWN_LOW_RES_PORTRAITS}")
+# The course portraits' size floor moved with the portraits themselves: they
+# are cut from the player's ROM at run time, and tests/test_course_art.py
+# holds every generated one to the grid's render size.
 
 
 # The structural half of the 2026-07-26 unification — that art resolution is

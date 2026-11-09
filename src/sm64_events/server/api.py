@@ -137,23 +137,8 @@ def _icon_stems() -> list[str]:
         return []
 
 
-# Course portrait art (ui/assets/course_icons), resolved like _ICON_DIR above
-# and globbed per call for the same reason: a dropped file shows up without a
-# restart.
-_COURSE_ICON_DIR = Path(__file__).resolve().parents[1] / "ui" / "assets" / "course_icons"
-
-# Windows drops a Thumbs.db into any folder whose thumbnails get previewed, and
-# the staging copy of this art already has one. Listing it would invent a
-# "Thumbs" course whose portrait 404s, so the map takes image files only.
-_IMAGE_SUFFIXES = frozenset({".png", ".webp", ".jpg", ".jpeg", ".gif", ".avif"})
-
-
-def _course_icon_map(directory: Path) -> dict[str, str]:
-    """stem -> filename for every image in a course-portrait directory."""
-    if not directory.is_dir():
-        return {}
-    return {path.stem: path.name for path in sorted(directory.iterdir())
-            if path.is_file() and path.suffix.lower() in _IMAGE_SUFFIXES}
+# Course portraits are not bundled: they are cut from the player's own ROM
+# (sm64_events/course_art.py) and served by server/course_art_api.py.
 
 
 # User-uploaded icons (spec addendum 2026-07-24): any image file, stored in
@@ -1227,22 +1212,6 @@ def create_api_router(service) -> APIRouter:
     async def icons():
         """The icon picker's grid: bundled stems + uploaded user icons."""
         return {"icons": _icon_stems(), "user_icons": _user_icon_names()}
-
-    @router.get("/icons/courses")
-    async def course_icons():
-        """Course portrait art: stem -> actual filename.
-
-        The set is MIXED-extension (.webp and .png), so the client cannot
-        build a URL from a stem alone — it asks for the listing, exactly as
-        /api/icons does for star_icons. Consequence, and the reason for the
-        endpoint: re-art or a higher-resolution rip appears by dropping the
-        file in the folder, with no code change.
-
-        Four main courses are absent on purpose — HMC, SSL, DDD and SL are not
-        entered through a painting, so the game has no portrait for them. The
-        UI falls back to their star-1 icon (ui/entities.js optionIcon).
-        """
-        return {"courses": _course_icon_map(_COURSE_ICON_DIR)}
 
     @router.post("/icons/upload")
     async def icon_upload(name: str, request: Request):

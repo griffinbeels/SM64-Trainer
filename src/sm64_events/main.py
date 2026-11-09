@@ -677,9 +677,17 @@ def build(*, recorder_lock=None):
         refresh_library_on_start=True, community_account=community_account,
         community_sync=community_sync,
         multiplayer=_build_multiplayer(replay, community_account, appearance=ghost.live_appearance),
+        course_art=_course_art(),
         protect_local_api=True, local_port=server_port()), tracker=service, live_audio=_scene_lab_live_audio(),
         ghost_sources={"tracker": service, "replay": replay, "ghost": ghost, "community": community_sync},
         game_timer=lambda: poller.latest.global_timer if poller.latest is not None else None)
+
+
+def _course_art():
+    """Course portraits cut from the player's own ROM (interface I3), cached in the data folder."""
+    from sm64_events.core import paths
+    from sm64_events.course_art import CourseArt
+    return CourseArt(paths.course_art_dir())
 
 
 _LIVE_SOUND: list = []          # the one LiveAudio of this process, once asked for

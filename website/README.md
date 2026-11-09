@@ -161,7 +161,7 @@ sources when the product changes instead of extending old marketing copy.
 | --- | --- | --- |
 | [logo.png](assets/logo.png) | 256 × 256 | Repository [logo master](../assets/sm64_tracker.png), reduced from 1024 × 1024 as RGBA with Lanczos; canonical project mark |
 | [star.png](assets/star.png) | 256 × 256 | Identical to [star_1.png](../src/sm64_events/ui/assets/star_1.png); decoration |
-| [bob.webp](assets/bob.webp) | 621 × 621 | Identical to the [Bob-omb Battlefield course art](../src/sm64_events/ui/assets/course_icons/bob.webp); illustration, not ghost gameplay |
+| [bob.webp](assets/bob.webp) | 621 × 621 | The game's own Bob-omb Battlefield painting, the same file the app shipped until 2026-11-09, when the app stopped shipping Nintendo pictures (it now cuts them from each player's ROM). Awaiting Griffin's decision on a replacement; `tests/test_course_art.py` lists it as the one pending copy. Illustration, not ghost gameplay |
 | [practice-gold.png](assets/practice-gold.png) | 1072 × 613 | Authentic community development-build Bomb Clip GOLD capture; hero and social image |
 | [trainer-app.png](assets/trainer-app.png) | 1500 × 1100 | Authentic Trainer Practice/analysis capture with the earlier full interface layout |
 

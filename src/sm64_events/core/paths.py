@@ -233,6 +233,13 @@ def user_icons_dir() -> Path:
     return data_root() / "data" / "icons"
 
 
+def course_art_dir() -> Path:
+    # Course portraits cut from the player's own ROM (sm64_events/course_art.py),
+    # one folder per ROM. In the DATA dir for user_icons_dir's reason: the
+    # install's ui/assets is read-only when frozen, and ships no Nintendo art.
+    return data_root() / "data" / "course_art"
+
+
 def compilations_dir() -> Path:
     # Generated failure compilations. Lives UNDER replays_root() (== the
     # ReplayService save_root) on purpose: the existing /api/replay/reveal

@@ -8,16 +8,17 @@ Original: **https://www.furaffinity.net/view/7557800/**
 
 **Folder version: https://www.reddit.com/r/speedrun/comments/27fvua/for\_sm64\_runners\_in\_search\_of\_split\_icons/**
 
-## Course portraits — `src/sm64_events/ui/assets/course_icons/`
+## Course portraits — not shipped (since 2026-11-09)
 
-Screenshots taken from Super Mario 64 itself — the course paintings and entry
-areas. Nintendo's artwork, used here in a free, non-commercial practice tool.
-
-Tick Tock Clock and Rainbow Ride were re-captured at 600×600 (2026-07-25)
-because the originals were 64×64 and 100×100 thumbnails that blurred in the
-picker; the size floor in `tests/test_star_icons.py` keeps that from recurring.
-Four main courses — HMC, SSL, DDD and SL — have no portrait at all, because
-they are not entered through a painting; they fall back to their star-1 icon.
+The course paintings are Nintendo's artwork, and the Trainer no longer ships
+them. `src/sm64_events/course_art.py` copies each one out of the player's own
+Usamune ROM on their computer when the app runs, and keeps the copies in their
+data folder (`data/course_art/`); without a ROM the app draws its own plain
+tile with the course's short name. The 13 files that used to live in
+`ui/assets/course_icons/` are fingerprinted in `tests/test_course_art.py`, which
+fails if one comes back. Four main courses — HMC, SSL, DDD and SL — have no
+portrait, because their "painting" is a pool, a water ripple or a plain wall;
+they use a hand-picked star icon.
 
 ## Empty-state cast — `src/sm64_events/ui/assets/empty/`
 
