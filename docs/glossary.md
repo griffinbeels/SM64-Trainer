@@ -1350,11 +1350,14 @@ Defender's scanner it says so and the build continues.
 
 ### Third-party source archive
 
-One of the two tar files every release attaches beside its installer:
+One of the three tar files every release attaches beside its installer:
 `SM64Trainer-third-party-source-plugin.tar` (the sources our build tools make
 the [[renderer]] plugin from: the pinned GLideN64 tree, Qt, FreeType, libpng
-and zlib) and `SM64Trainer-third-party-source-ffmpeg.tar` (the sources of the
-bundled ffmpeg.exe and of PyAV's FFmpeg). Each carries a `.sha256`. The
+and zlib), `SM64Trainer-third-party-source-ffmpeg.tar` (the sources of the
+bundled ffmpeg.exe and of PyAV's FFmpeg) and
+`SM64Trainer-third-party-source-unicorn.tar` (Unicorn's source release, the
+CPU emulator in which the [[Ghost Lab]] executes the game's own code). Each carries a
+`.sha256`. The
 compiler's own runtime (GCC's, winpthreads, the MinGW-w64 C runtime) stays
 out: the GPL v3 counts it as a System Library, and its notices ship in the
 app instead. The GPL asks that the complete source come
