@@ -113,6 +113,15 @@ def _mount_baseline_gate(router, capture_layer, fixups, profile, record, payload
             return JSONResponse(status_code=409, content={
                 "detail": "Close Project64, then install the PJ64 Fixups."})
         _install_fixups(fixups, layer)
+        if fixups.status().get("reason") == "access_denied":
+            # Windows protects this Plugin folder. Install asks for administrator
+            # permission once and its helper copies the fixups with the plugin.
+            try:
+                _install_fixups(fixups, capture_layer.install(True))
+            except LayerRefused as exc:
+                return JSONResponse(status_code=409, content={"detail": str(exc)})
+            except OSError as failure:
+                return _failed_operation(failure, "installation")
         error = fixups.status()["error"]
         return JSONResponse(status_code=409, content={"detail": error}) if error else payload()
 

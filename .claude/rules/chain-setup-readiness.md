@@ -63,8 +63,12 @@ paths:
   notes an unaccepted difference to every user. `core/fixups.py` is the one
   fix the trainer performs: Install (and `POST /api/setup/fixups`) downloads
   the baseline's pinned release, checks the archive and DLL hashes, keeps the
-  old `RSP.dll` once as `RSP.before-fixups` and never elevates; its failure
-  never fails the plugin install (`emu.fixups.error`). The fixups have no
+  old `RSP.dll` once as `RSP.before-fixups`; its failure never fails the
+  plugin install (`emu.fixups.error`). In a protected Plugin folder the
+  install's one UAC helper copies the kept download beside the plugin, inside
+  the same rollback, only when its bytes match the bundled baseline's hash
+  (`plugin_elevation_worker.fixups_source`); the fixups-only route reaches
+  that prompt by running Install (`reason: access_denied`). The fixups have no
   stated license, so they are never bundled.
 - **One reader per process:** `setup_runtime.py` attaches one `Pj64Memory` by the
   target's pid and keeps it while that process runs (`alive()`); an observation is

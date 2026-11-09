@@ -11,8 +11,14 @@ the folder."). The DLL's hash is the setup check's own ``rsp_plugin`` row, so
 
 The file it replaces is kept once beside it as ``RSP.before-fixups`` (not a
 .dll, so Project64 never lists it). Nothing is written while Project64 holds
-the file. No elevation: a protected Plugin folder fails with a sentence the
-wizard shows, and the user continues through the warning.
+the file.
+
+A protected Plugin folder (Program Files) needs administrator permission
+(his decision, 2026-11-09: "we can ask for admin permission when installing").
+This module never elevates. The capture layer's one UAC transaction
+(`core/plugin_elevation_worker.py`) copies the kept download (`cached`) beside
+the graphics plugin, after checking it against the bundled baseline's hash
+itself, so one permission prompt covers both.
 """
 from __future__ import annotations
 
@@ -36,6 +42,15 @@ TIMEOUT_S = 30
 class FixupError(Exception):
     """A failure, worded for the person looking at the wizard."""
 
+    def __init__(self, message, reason="failed"):
+        super().__init__(message)
+        self.reason = reason
+
+
+def tested_sha256(baseline: dict) -> str:
+    """The tested RSP.dll's hash: the setup check's `rsp_plugin` row."""
+    return next(item["sha256"] for item in baseline["items"] if item["id"] == "rsp_plugin")
+
 
 def _download(url: str) -> bytes:
     request = urllib.request.Request(url, headers={"User-Agent": "SM64Trainer"})
@@ -55,13 +70,24 @@ class Fixups:
 
     def __init__(self, baseline: dict, cache_dir: Path, download=_download):
         self._release = baseline["fixups"]
-        self._dll_sha = next(item["sha256"] for item in baseline["items"] if item["id"] == "rsp_plugin")
+        self._dll_sha = tested_sha256(baseline)
         self._cache = Path(cache_dir) / f"pj64fixups-{self._release['version']}-{RSP_DLL}"
         self._download = download
         self._error: str | None = None
+        self._reason: str | None = None
 
     def status(self) -> dict:
-        return {"version": self._release["version"], "error": self._error}
+        return {"version": self._release["version"], "error": self._error, "reason": self._reason}
+
+    def cached(self) -> Path:
+        """The tested DLL as a file on disk, downloaded if it is not kept yet."""
+        dll = self._dll()
+        try:
+            if self._cache.read_bytes() == dll:
+                return self._cache
+        except OSError:
+            pass
+        raise FixupError("We could not keep the PJ64 Fixups download on this computer.")
 
     def _dll(self) -> bytes:
         try:
@@ -99,9 +125,9 @@ class Fixups:
         try:
             result = self._install(Path(plugin_dir))
         except FixupError as error:
-            self._error = str(error)
+            self._error, self._reason = str(error), error.reason
             raise
-        self._error = None
+        self._error = self._reason = None
         return result
 
     def _install(self, plugin_dir: Path) -> str:
@@ -131,7 +157,7 @@ class Fixups:
             except OSError:
                 pass
             log.warning("could not write the PJ64 Fixups to %s: %s", target, error)
-            raise FixupError("We could not put the PJ64 Fixups in your Plugin folder. Windows blocked the "
-                             "change. Move your Project64 folder out of Program Files, then try again.") from error
+            raise FixupError("We could not put the PJ64 Fixups in your Plugin folder. Windows blocked the change.",
+                             reason="access_denied" if isinstance(error, PermissionError) else "failed") from error
         log.info("PJ64 Fixups %s installed at %s", self._release["version"], target)
         return "installed"

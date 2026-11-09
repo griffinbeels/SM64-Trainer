@@ -49,7 +49,10 @@ def test_install_replaces_the_old_plugin_keeps_it_once_and_downloads_once(tmp_pa
     # A second Project64 folder uses the kept copy; its own old file is kept too.
     other = tmp_path / "Other" / "Plugin"
     assert fixups.install(other) == "installed" and len(calls) == 1
-    assert not (other / BACKUP).exists() and fixups.status() == {"version": "9.9", "error": None}
+    assert not (other / BACKUP).exists()
+    assert fixups.status() == {"version": "9.9", "error": None, "reason": None}
+    # The kept download is a real file: the administrator helper copies from it.
+    assert fixups.cached().read_bytes() == DLL and len(calls) == 1
     # Reinstalling over a changed file never overwrites the first kept copy.
     (plugin / RSP_DLL).write_bytes(b"something else")
     fixups.install(plugin)
@@ -70,7 +73,22 @@ def test_a_failed_or_different_download_changes_nothing_and_says_why(tmp_path, s
         fixups.install(plugin)
     assert (plugin / RSP_DLL).read_bytes() == b"stock rsp"
     assert sorted(path.name for path in plugin.iterdir()) == [RSP_DLL]
-    assert words in fixups.status()["error"]
+    assert words in fixups.status()["error"] and fixups.status()["reason"] == "failed"
+
+
+def test_a_refused_write_is_named_so_setup_can_ask_for_permission(tmp_path, monkeypatch):
+    from sm64_events.core import fixups as module
+    plugin = tmp_path / "Plugin"
+    plugin.mkdir()
+    fixups = _fixups(tmp_path)
+
+    def denied(source, target):
+        raise PermissionError(13, "Access is denied", str(target))
+    monkeypatch.setattr(module.os, "replace", denied)
+    with pytest.raises(FixupError, match="Windows blocked"):
+        fixups.install(plugin)
+    assert fixups.status()["reason"] == "access_denied"
+    assert list(plugin.iterdir()) == []       # the scratch copy is gone too
 
 
 def test_an_archive_whose_dll_is_not_the_tested_one_is_refused(tmp_path):

@@ -62,10 +62,10 @@ class FakeCaptureLayer:
 
 class FakeFixups:
     def __init__(self, error=None):
-        self.error, self.folders = error, []
+        self.error, self.reason, self.folders = error, None, []
 
     def status(self):
-        return {"version": "9.9", "error": self.error}
+        return {"version": "9.9", "error": self.error, "reason": self.reason}
 
     def install(self, plugin_dir):
         from sm64_events.core.fixups import FixupError
@@ -156,6 +156,27 @@ def test_the_fixups_route_waits_for_a_closed_project64_and_reports_a_failure(cli
     layer.fixups.error = "Windows blocked the change."
     failed = client.post("/api/setup/fixups")
     assert failed.status_code == 409 and failed.json()["detail"] == "Windows blocked the change."
+
+
+def test_a_protected_folder_gets_the_fixups_through_installs_permission_prompt(client, layer):
+    """Windows refuses the plain copy, so the route runs Install: its one
+    administrator prompt covers the plugin and the fixups."""
+    from sm64_events.core.fixups import FixupError
+    layer._status = _installed()
+    calls = []
+
+    def install(plugin_dir):
+        calls.append("fixups")
+        if "install" not in calls:
+            layer.fixups.error, layer.fixups.reason = "Windows blocked the change.", "access_denied"
+            raise FixupError("Windows blocked the change.", reason="access_denied")
+        layer.fixups.error = layer.fixups.reason = None
+
+    layer.fixups.install = install
+    layer.fixups.status = lambda: {"version": "9.9", "error": layer.fixups.error, "reason": layer.fixups.reason}
+    layer.install = lambda consent: calls.append("install") or _installed()
+    assert client.post("/api/setup/fixups").status_code == 200
+    assert calls == ["fixups", "install", "fixups"]
 
 
 def test_accepting_the_warning_records_only_gate_items(client):
