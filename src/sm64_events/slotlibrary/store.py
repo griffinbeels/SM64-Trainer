@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Runs in the simulation program (SM64TrainerSim.exe); licenses/README.md lists its GPL-2.0-or-later code.
 """The Slot Library on disk: one kept state is its exact slot bytes, packed, plus a small versioned record.
 
 A state's id is the sha256 of its raw bytes, so saving the same bytes twice keeps one state, and two different

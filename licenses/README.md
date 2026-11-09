@@ -28,7 +28,32 @@ That code is:
   `scene_tap.cpp` and `scene_spool.cpp`) and `ghost_sound_host.cpp` (with
   its ghost sound, `ghost_audio.cpp` and `ghost_assets.cpp`);
 - the Ghost Lab's native hooks inside Unicorn's process:
-  `tools/scene_lab/cpu_hooks.c`.
+  `tools/scene_lab/cpu_hooks.c`;
+- the Ghost Lab's simulation program, `SM64TrainerSim.exe` (its entry
+  `sim_entry.py`), and every trainer module it loads, each marked
+  `SPDX-License-Identifier: GPL-2.0-or-later`
+  (`tools/scene_lab/sim_boundary.py` MODULES is the list): in
+  `tools/scene_lab/`, `audio_clock.py`, `audio_layer.py`,
+  `audio_session.py`, `camera_state.py`, `cold_boot.py`, `cpu_hooks.py`,
+  `e2_georender.py`, `evaluator.py`, `evaluator_child.py`, `frame_sim.py`,
+  `ghost_resim.py`, `handoff_slot.py`, `live_spool.py`, `moment_slot.py`,
+  `package.py`, `pick.py`, `provenance.py`, `savestate_frames.py`,
+  `sim_boundary.py`, `sim_scene.py`, `slot_atlas.py`, `stage_cache.py`,
+  `stage_sim.py`, `start_check.py`, `state_resolver.py`, `stems_check.py`,
+  `stems_layer.py`, `stems_probe.py`, `tap.py`; in `src/sm64_events/`,
+  `__init__.py`, `core/__init__.py`, `core/build_channel.py`,
+  `core/childproc.py`, `core/events.py`, `core/lab_inputs.py`,
+  `core/paths.py`, `core/snapshot.py`, `core/update_plan.py`,
+  `core/version.py`, `detectors/__init__.py`, `detectors/anchors.py`,
+  `detectors/counter_epoch.py`, `ghost/__init__.py`, `ghost/clip.py`,
+  `ghost/native_layout.py`, `ghost/start_frame.py`, `inputs/__init__.py`,
+  `inputs/frame.py`, `memory/__init__.py`, `memory/addresses.py`,
+  `memory/base.py`, `memory/behaviours.py`, `memory/ghost_layout.py`,
+  `memory/layout.py`, `memory/objects.py`, `memory/version_probe.py`,
+  `scenelab/__init__.py`, `scenelab/roms.py`, `scenelab_code.py`,
+  `slotlibrary/__init__.py`, `slotlibrary/atlas.py`,
+  `slotlibrary/relocate.py`, `slotlibrary/store.py`,
+  `slotlibrary/usamune.py`.
 
 The plugin as one file follows GLideN64's license, GPL v2, and Unicorn
 follows its own, GPL v2 only. Unicorn must only run in a process that loads
@@ -102,6 +127,9 @@ Configuration", "Linker script" and the objects it linked
 that commit has no license file), but the maps are output of the
 decompilation build, not STROOP's own code; STROOP is credited as where we
 got them.
+
+Nintendo's course paintings are not distributed: the app copies each one out
+of the player's own Usamune ROM when it runs (`src/sm64_events/course_art.py`).
 
 When a release changes one of these (a new ffmpeg.exe, a PyAV bump, a new
 vendored file), refresh its texts and its row. The build refuses an

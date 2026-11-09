@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Runs in the simulation program (SM64TrainerSim.exe); licenses/README.md lists its GPL-2.0-or-later code.
 """Where the Ghost Lab's inputs come from: the ROMs, the symbol maps and Project64's Plugin folder.
 
 Two sources, and this module is the one door to both:
@@ -57,6 +59,12 @@ def _store():
         return importlib.import_module("sm64_events.scenelab.roms")
     except ImportError:
         return None
+
+
+def _kept_store():
+    """The ROM store as a Ghost Lab tool or child reads it: the copies kept, never a search (roms.KeptCopies)."""
+    from sm64_events.scenelab.roms import KeptCopies
+    return KeptCopies()
 
 
 def _lab_file():
@@ -123,7 +131,7 @@ def tool_config(lab_json: Path | str | None = None) -> dict:
     if lab_json is None and frozen():
         named = os.environ.get(ENV)
         if not named:
-            return app_inputs()
+            return app_inputs(store=_kept_store())
         lab_json = named
     if lab_json is None:
         from sm64_events.core.paths import scene_lab_root

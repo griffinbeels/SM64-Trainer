@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Runs in the simulation program (SM64TrainerSim.exe); licenses/README.md lists its GPL-2.0-or-later code.
 """The simulation processes: the only processes that load Unicorn, and what they never load beside it.
 
 Unicorn 2.1.4 as shipped is GPL-2.0-only (the Ghost Lab beta's license ruling, 2026-11-09: QEMU's v2-only
@@ -47,13 +49,14 @@ MODULES = (
     "start_check", "state_resolver", "stems_check", "stems_layer", "stems_probe", "tap",
     # src/sm64_events
     "sm64_events", "sm64_events.core", "sm64_events.core.build_channel", "sm64_events.core.childproc",
-    "sm64_events.core.events", "sm64_events.core.paths", "sm64_events.core.snapshot", "sm64_events.core.update_plan",
+    "sm64_events.core.events", "sm64_events.core.lab_inputs", "sm64_events.core.paths", "sm64_events.core.snapshot",
+    "sm64_events.core.update_plan", "sm64_events.core.version",
     "sm64_events.detectors", "sm64_events.detectors.anchors", "sm64_events.detectors.counter_epoch",
     "sm64_events.ghost", "sm64_events.ghost.clip", "sm64_events.ghost.native_layout", "sm64_events.ghost.start_frame",
     "sm64_events.inputs", "sm64_events.inputs.frame",
     "sm64_events.memory", "sm64_events.memory.addresses", "sm64_events.memory.base", "sm64_events.memory.behaviours",
     "sm64_events.memory.ghost_layout", "sm64_events.memory.layout", "sm64_events.memory.objects",
-    "sm64_events.memory.version_probe", "sm64_events.scenelab_code",
+    "sm64_events.memory.version_probe", "sm64_events.scenelab", "sm64_events.scenelab.roms", "sm64_events.scenelab_code",
     "sm64_events.slotlibrary", "sm64_events.slotlibrary.atlas", "sm64_events.slotlibrary.relocate",
     "sm64_events.slotlibrary.store", "sm64_events.slotlibrary.usamune",
 )

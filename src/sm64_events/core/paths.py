@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Runs in the simulation program (SM64TrainerSim.exe); licenses/README.md lists its GPL-2.0-or-later code.
 # src/sm64_events/core/paths.py
 """THE single source of truth for where runtime state lives.
 
@@ -308,14 +310,29 @@ def migrate_capture_layer_settings() -> None:
 WRAPPER_DLL_NAME, ENCODER_DLL_NAME = BUNDLED_NATIVES
 
 
+def _bundled(relative: Path) -> Path | None:
+    """A file the installed app carries, by its path inside a program's
+    contents folder. The app is two programs in one folder (sm64_events/
+    scenelab_code.py): the Trainer's `_internal` holds the data, and the
+    simulation program's own contents folder (`_sim`, its ``sys._MEIPASS``)
+    holds only its code, so a lookup from the simulation program falls back
+    to the Trainer's `_internal` beside it."""
+    roots = [Path(getattr(sys, "_MEIPASS", "")), Path(sys.executable).resolve().parent / "_internal"]
+    for root in dict.fromkeys(roots):
+        cand = root / relative
+        if cand.is_file():
+            return cand
+    return None
+
+
 def bundled_plugin_file(name: str) -> Path | None:
     """A native file shipped with this build under ``sm64_events/data/plugin``:
-    beside a frozen exe under ``sys._MEIPASS``, else the package's own data
-    folder; None when this build carries none (a clone that never built it),
-    which the setup screen reports rather than installing nothing."""
+    beside a frozen exe under ``sys._MEIPASS`` (from the simulation program, the
+    Trainer's, `_bundled`), else the package's own data folder; None when this
+    build carries none (a clone that never built it), which the setup screen
+    reports rather than installing nothing."""
     if is_frozen():
-        cand = Path(getattr(sys, "_MEIPASS", "")) / "sm64_events" / "data" / "plugin" / name
-        return cand if cand.exists() else None
+        return _bundled(Path("sm64_events") / "data" / "plugin" / name)
     cand = Path(__file__).resolve().parents[1] / "data" / "plugin" / name
     return cand if cand.exists() else None
 
@@ -352,8 +369,7 @@ def bundled_lab_file(name: str) -> Path | None:
         raise ValueError(f"{name} is not a Ghost Lab file this build carries")
     if not is_frozen():
         return None
-    cand = Path(getattr(sys, "_MEIPASS", "")) / relative
-    return cand if cand.is_file() else None
+    return _bundled(relative)
 
 
 def update_state_path() -> Path:
@@ -442,7 +458,8 @@ def bundled_symbol_map(name: str) -> Path:
     a missing map is a packaging bug the first read should name loudly, not a
     None that quietly empties the catalogue."""
     if is_frozen():
-        return Path(getattr(sys, "_MEIPASS", "")) / name
+        # The simulation program reads it from the Trainer's folder (_bundled).
+        return _bundled(Path(name)) or Path(getattr(sys, "_MEIPASS", "")) / name
     return Path(__file__).resolve().parent.parent / "data" / name
 
 

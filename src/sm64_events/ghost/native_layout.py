@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Runs in the simulation program (SM64TrainerSim.exe); licenses/README.md lists its GPL-2.0-or-later code.
 """Byte layout, limits and status codes of the native ghost formats, in one place.
 
 The C headers own these values (plugin/gfxwrap/ghost_capture.h, ghost_clip.h,

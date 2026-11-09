@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Runs in the simulation program (SM64TrainerSim.exe); licenses/README.md lists its GPL-2.0-or-later code.
 """Build the atlas for one level and area from cold boots of both Usamune ROMs (simulation only; no recording).
 
     uv run --with unicorn==2.1.4 --with capstone python tools/scene_lab/slot_atlas.py build --level 9 --area 1 --out FILE

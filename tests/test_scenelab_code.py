@@ -141,7 +141,10 @@ def test_the_simulation_program_carries_unicorn_and_the_children_that_run_it(tmp
     collected = {args[i + 1] for i, arg in enumerate(args) if arg == "--collect-all"}
     assert "unicorn" in collected and not collected & bundle_policy.SIM_FORBIDDEN
     excluded = {args[i + 1] for i, arg in enumerate(args) if arg == "--exclude-module"}
-    assert {"_ssl", "_hashlib"} <= excluded <= bundle_policy.SIM_FORBIDDEN
+    # Every forbidden library a Python import could bring in is left out by name (check_programs is the backstop),
+    # and nothing a simulation process imports is (tests/test_sim_boundary.py: the sim excludes stay unloaded).
+    assert {"av", "pystray", "pyaudiowpatch", "capstone", "webview", "_ssl", "_hashlib"} <= excluded
+    assert not excluded & {"unicorn", "numpy", *bundle_policy.SIM_MODULES}
     assert "--windowed" in args and "--onefile" not in args
 
 
@@ -206,3 +209,28 @@ def test_unicorn_is_a_pinned_runtime_dependency():
     from importlib.metadata import version
     assert version("unicorn") == "2.1.4"
 
+
+
+def test_the_simulation_program_finds_the_trainers_data_beside_it(tmp_path, monkeypatch):
+    """The simulation program's own contents folder (_sim, its _MEIPASS) holds only its code; the natives, maps and
+    symbol tables live in the Trainer's _internal beside it, and every lookup from either program finds them."""
+    from sm64_events.core import paths
+    app = tmp_path / "SM64Trainer"
+    lab = app / "_internal" / "sm64_events" / "data" / "lab"
+    lab.mkdir(parents=True)
+    (lab / "tap_offline_host.exe").write_bytes(b"MZ")
+    (app / "_internal" / "sm64_events" / "data" / "maps").mkdir(parents=True)
+    (app / "_internal" / "sm64_events" / "data" / "maps" / "MappingUS.map").write_text("m", encoding="utf-8")
+    (app / "_internal" / "sm64_events" / "data" / "plugin").mkdir(parents=True)
+    (app / "_internal" / "sm64_events" / "data" / "plugin" / "sm64_trainer_gfx.dll").write_bytes(b"MZ")
+    (app / "_internal" / "symbols_us.tsv").write_text("s", encoding="utf-8")
+    (app / "_sim").mkdir()
+    monkeypatch.setattr(paths, "is_frozen", lambda: True)
+    for program, contents in (("SM64TrainerSim.exe", "_sim"), ("SM64Trainer.exe", "_internal")):
+        monkeypatch.setattr(sys, "_MEIPASS", str(app / contents), raising=False)
+        monkeypatch.setattr(sys, "executable", str(app / program))
+        assert paths.bundled_lab_file("tap_offline_host.exe") == lab / "tap_offline_host.exe", program
+        assert paths.bundled_lab_file("MappingUS.map").read_text(encoding="utf-8") == "m"
+        assert paths.bundled_plugin_dll() == app / "_internal" / "sm64_events" / "data" / "plugin" / "sm64_trainer_gfx.dll"
+        assert paths.bundled_symbol_map("symbols_us.tsv").read_text(encoding="utf-8") == "s"
+        assert paths.bundled_lab_file("viewer_host.exe") is None

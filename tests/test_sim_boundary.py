@@ -344,3 +344,57 @@ def test_a_scene_export_draws_its_free_camera_through_the_evaluator_process(reco
     assert "unicorn" not in children["scene_export"] and "e2_georender" not in children["scene_export"]
     assert {"unicorn", "e2_georender"} <= set(children["evaluator_child"])
     assert _offenders(children["evaluator_child"]) == {"gpl3": [], "unlisted": []}
+
+
+# The stdlib asks for these inside try/except ImportError (urllib and http.client for ssl, hashlib for _hashlib),
+# so a simulation program built without them still imports everything it needs.
+GUARDED_BY_THE_STDLIB = {"ssl", "_ssl", "_hashlib"}
+
+
+def test_nothing_a_simulation_process_imports_is_left_out_of_the_simulation_program():
+    """tools/build_exe.py builds SM64TrainerSim.exe without SIM_EXCLUDE (the GPL-3.0 and Apache-2.0 libraries, and
+    what only the Trainer's own lazy paths reach). Each module a simulation process may import (MODULES), imported in
+    a fresh process, loads none of them: an excluded name there would be an ImportError in the installed app."""
+    sys.path.insert(0, str(ROOT / "tools"))
+    import build_exe
+    script = ("import importlib, json, sys\n"
+              f"sys.path[:0] = [{str(LAB)!r}, {str(SRC)!r}]\n"
+              "import sim_boundary\n"
+              "for name in sim_boundary.MODULES: importlib.import_module(name)\n"
+              "print(json.dumps(sorted(sys.modules)))\n")
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, encoding="utf-8",
+                            timeout=120, **quiet_spawn_kwargs())
+    assert result.returncode == 0, result.stderr[-2000:]
+    loaded = set(json.loads(result.stdout.strip().splitlines()[-1]))
+    assert "numpy" in loaded                                   # the scan imported the simulation's modules
+    left_out = set(build_exe.SIM_EXCLUDE) - GUARDED_BY_THE_STDLIB
+    def excluded(name):
+        return any(name == out or name.startswith(out + ".") for out in left_out)
+    assert sorted(name for name in loaded if excluded(name)) == []
+    assert sorted(name for name in sim_boundary.MODULES if excluded(name)) == []    # nothing it may import is out
+
+
+def _source(module: str) -> Path:
+    top, *rest = module.split(".")
+    if top != "sm64_events":
+        return LAB / f"{top}.py"
+    base = SRC / top / Path(*rest) if rest else SRC / top
+    return base / "__init__.py" if base.is_dir() else base.with_suffix(".py")
+
+
+def test_every_module_a_simulation_process_may_load_is_licensed_gpl2_or_later_and_listed():
+    """Unicorn's process may only run code under GPL-2.0-or-later (Griffin's D9, 2026-11-09): each module of
+    MODULES carries the SPDX line in its first lines, and licenses/README.md names it (the build's check_programs
+    refuses an unmarked module that actually ships; this holds the list before a build)."""
+    readme = (ROOT / "licenses" / "README.md").read_text(encoding="utf-8")
+    listed = readme.split("the Ghost Lab's simulation program, `SM64TrainerSim.exe`", 1)[1].split("\n\n", 1)[0]
+    listed = " ".join(listed.split())
+    unmarked, unlisted = [], []
+    for module in (*sim_boundary.MODULES, "sim_entry"):
+        path = ROOT / "sim_entry.py" if module == "sim_entry" else _source(module)
+        if "# SPDX-License-Identifier: GPL-2.0-or-later" not in path.read_text(encoding="utf-8").splitlines()[:3]:
+            unmarked.append(module)
+        named = path.name if path.parent == LAB or path.parent == ROOT else path.relative_to(SRC / "sm64_events").as_posix()
+        if f"`{named}`" not in listed:
+            unlisted.append(module)
+    assert unmarked == [] and unlisted == []

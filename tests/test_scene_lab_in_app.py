@@ -445,7 +445,7 @@ def test_a_tool_reads_the_lab_root_config_from_source_and_the_apps_inputs_frozen
                                                encoding="utf-8")
     assert lab_inputs.tool_config() == {"rom": "C:/lab/us.z64", "map": "C:/lab/m.map"}
     monkeypatch.setattr(lab_inputs, "frozen", lambda: True)
-    monkeypatch.setattr(lab_inputs, "_store", lambda: Store({"us": scene_lab_root() / "lab.json"}))
+    monkeypatch.setattr(lab_inputs, "_kept_store", lambda: Store({"us": scene_lab_root() / "lab.json"}))
     monkeypatch.setattr(lab_inputs, "_lab_file", lambda: lambda name: None)
     frozen = lab_inputs.tool_config()
     assert frozen["rom"] == scene_lab_root() / "lab.json" and frozen["roms"]["jp"] is None

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Runs in the simulation program (SM64TrainerSim.exe); licenses/README.md lists its GPL-2.0-or-later code.
 """The source-audio layer of a scene package: bytes in, refusals out (M4 E4-audio).
 
 A layer payload carries one recording's isolated game audio and the clock

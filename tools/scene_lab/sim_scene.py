@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Runs in the simulation program (SM64TrainerSim.exe); licenses/README.md lists its GPL-2.0-or-later code.
 """Simulated frames into a scene package through the real producer (Ghost Handoff re-simulation).
 
     writer = SimScene(out_package, work_folder, rom_path, symbols, vi, sidecar=..., on_publish=...)

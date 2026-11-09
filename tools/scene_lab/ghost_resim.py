@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Runs in the simulation program (SM64TrainerSim.exe); licenses/README.md lists its GPL-2.0-or-later code.
 """A ghost becomes a scene: its recorded pads re-run the game from a start, in the simulation, and the
 frames become a scene package the Scene viewer opens as its stage (Ghost Handoff re-simulation).
 Simulation only: nothing here touches Project64 or the running game.

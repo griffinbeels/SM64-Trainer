@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Runs in the simulation program (SM64TrainerSim.exe); licenses/README.md lists its GPL-2.0-or-later code.
 """Where a free camera goes in the game's RAM before geo_process_root draws it (M4 lab).
 
     place(memory, camera, lakitu_address, fov_state_address)

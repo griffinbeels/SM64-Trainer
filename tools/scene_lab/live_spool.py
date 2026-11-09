@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Runs in the simulation program (SM64TrainerSim.exe); licenses/README.md lists its GPL-2.0-or-later code.
 """The live spool: the scene tap recording every graphics task while the Trainer's lab runs.
 
     live_spool.py status [--lab-root DIR]          the newest session's health and task span

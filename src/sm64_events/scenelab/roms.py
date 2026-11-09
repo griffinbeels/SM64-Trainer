@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Runs in the simulation program (SM64TrainerSim.exe); licenses/README.md lists its GPL-2.0-or-later code.
 """The Ghost Lab's ROM store: each region's Usamune ROM, found once and kept as a private copy.
 
 Interface I3 of the Ghost Lab beta: `rom_for(region) -> Path | None` and `missing_reason(region) -> str | None`,
@@ -200,6 +202,12 @@ class RomStore:
 
     def missing_reason(self, region: str) -> str | None:
         return None if self.rom_for(region) is not None else missing_sentence(region)
+
+    def kept(self, region: str) -> Path | None:
+        """The private copy for `region` as it is now, never looking anywhere for more (`KeptCopies`)."""
+        cartridge(region)
+        with self._lock:
+            return self._intact(region)
 
     def status(self) -> dict:
         """What the pick shows: per region, found or not, where the copy came from, and the sentence. A miss
@@ -449,6 +457,19 @@ def follow_game(store: RomStore | None = None, *, interval_s: float = FOLLOW_INT
         worker.join(timeout=5.0)
 
     return stop_following
+
+
+class KeptCopies:
+    """I3 for a Ghost Lab tool or child process: the copies the Trainer already keeps, and never a search. A
+    simulation process (tools/scene_lab/sim_boundary.py) never reads Project64's settings or memory: the Trainer's
+    server finds the ROM, and a child only reads what it kept (core/lab_inputs.py::tool_config)."""
+
+    def rom_for(self, region: str) -> Path | None:
+        dev = dev_lab_roms()
+        return dev[cartridge(region).region] if dev is not None else default_store().kept(region)
+
+    def missing_reason(self, region: str) -> str | None:
+        return None if self.rom_for(region) is not None else missing_sentence(region)
 
 
 DEV_LAB_ENV = "SM64_SCENE_LAB"

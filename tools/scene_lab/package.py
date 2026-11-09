@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Runs in the simulation program (SM64TrainerSim.exe); licenses/README.md lists its GPL-2.0-or-later code.
 """Write, read and verify a portable scene package (M4 v0/v1, experimental).
 
     package.py write <source> <rom.z64> <out.sm64scene> [--codec lzma|zlib|stored] [--block N] [--group N]

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Runs in the simulation program (SM64TrainerSim.exe); licenses/README.md lists its GPL-2.0-or-later code.
 """Arm, read and replay scene-tap sessions (plugin/gfxwrap/scene_tap.cpp).
 
     tap.py summary <session>

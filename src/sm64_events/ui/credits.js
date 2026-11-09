@@ -28,7 +28,7 @@ export const CREDIT_GROUPS = [
     title: "The game and its research",
     items: [
       { name: "Super Mario 64", by: "Nintendo",
-        what: "The game itself. Course portraits and character renders in the trainer are Nintendo's, used in a free, non-commercial practice tool." },
+        what: "The game itself. The trainer ships none of its course pictures: it copies each course's painting out of your own ROM on your computer. Character renders in the trainer are Nintendo's, used in a free, non-commercial practice tool." },
       { name: "Super Mario 64 decompilation", by: "the n64decomp team",
         url: "https://github.com/n64decomp/sm64",
         what: "The game's source code, rebuilt from the cartridge. It names what lives at each memory address, including every one of Mario's actions." },
@@ -97,7 +97,7 @@ export const CREDIT_GROUPS = [
         notices: "licenses/ffmpeg" },
       { name: "cxd4", by: "Iconoclast, kept by the mupen64plus team", url: "https://github.com/mupen64plus/mupen64plus-rsp-cxd4",
         what: "Runs the game's own sound program again, so the Ghost Lab can play the music and the sound effects apart. Public domain (CC0).",
-        notices: "licenses/cxd4" },
+        notices: "licenses/cxd4", covers: ["native:scene_cxd4.dll"] },
     ],
   },
   {
@@ -119,7 +119,7 @@ export const CREDIT_GROUPS = [
       { name: "Unicorn", by: "Nguyen Anh Quynh, Dang Hoang Vu and the Unicorn contributors, built on QEMU",
         url: "https://github.com/unicorn-engine/unicorn",
         what: "Runs the game's own code for the Ghost Lab: its free camera, rebuilt ghosts and save states. GPL-2.0.",
-        notices: "licenses/python/unicorn", covers: ["python:unicorn"] },
+        notices: "licenses/python/unicorn", covers: ["python:unicorn", "native:scene_cpu_hooks.dll"] },
       { name: "ProcTap", by: "m96-chan", url: "https://github.com/m96-chan/ProcTap",
         what: "Records Project64's own audio. MIT.", covers: ["python:proc-tap"] },
       { name: "PyAudioWPatch", by: "s0d3s, from PyAudio by Hubert Pham", url: "https://github.com/s0d3s/PyAudioWPatch",

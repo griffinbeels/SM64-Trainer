@@ -264,7 +264,7 @@ def test_builder_rejects_stale_natives_without_attempting_compilation(monkeypatc
     monkeypatch.setitem(sys.modules, "build_natives", SimpleNamespace(ensure=ensure))
     with pytest.raises(RuntimeError, match="stale"):
         build_beta.check_prerequisites(str(ffmpeg))
-    assert calls == [{"build": False, "strict": True}]
+    assert calls == [{"build": False, "strict": True, "lab": True}]      # the Ghost Lab's natives too
 
 
 def test_check_only_never_builds_writes_or_reexecutes(monkeypatch, tmp_path):

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Runs in the simulation program (SM64TrainerSim.exe); licenses/README.md lists its GPL-2.0-or-later code.
 """Turn a Project64 1.6 savestate into scene-lab frame inputs (E0 probe, private data).
 
 A savestate holds the whole emulated machine at one VI: RDRAM, DMEM and the VI

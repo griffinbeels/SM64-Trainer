@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Runs in the simulation program (SM64TrainerSim.exe); licenses/README.md lists its GPL-2.0-or-later code.
 """Run SM64's own game loop in Unicorn and compare each frame to the scene tap (Ghost Handoff probe).
 
     uv run --with unicorn==2.1.4 --with capstone python tools/scene_lab/frame_sim.py scan

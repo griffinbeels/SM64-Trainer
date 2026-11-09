@@ -85,7 +85,8 @@ def test_a_release_build_scans_our_own_files_and_refuses_a_flagged_one(tmp_path,
         *(defender_scan.Verdict(Path(p), "clean", "no threat") for p in paths[1:])])
     with pytest.raises(defender_scan.ThreatFound):
         build_exe.scan_built(app, "SM64Trainer")
-    assert scanned == ["SM64Trainer.exe", "sm64_trainer_gfx.dll", "SM64GpuEncoderV1.dll"]
+    from sm64_events.core.update_plan import LAB_NATIVES
+    assert scanned == ["SM64Trainer.exe", "sm64_trainer_gfx.dll", "SM64GpuEncoderV1.dll", *LAB_NATIVES]
 
 
 def test_a_beta_build_refuses_a_flagged_native_before_building(tmp_path, monkeypatch):
@@ -97,7 +98,7 @@ def test_a_beta_build_refuses_a_flagged_native_before_building(tmp_path, monkeyp
     ffmpeg.write_bytes(b"fixture")
     monkeypatch.setattr(build_beta.importlib.util, "find_spec", lambda name: object())
     monkeypatch.setitem(sys.modules, "build_natives", SimpleNamespace(
-        ensure=lambda **kwargs: {}, BUNDLE=bundle, natives=lambda: [SimpleNamespace(name="sm64_trainer_gfx.dll")]))
+        ensure=lambda **kwargs: {}, bundle_files=lambda lab=True: [bundle / "sm64_trainer_gfx.dll"]))
     monkeypatch.setattr(defender_scan, "scan", lambda paths, **kwargs: [
         defender_scan.Verdict(Path(paths[0]), "threat", "Threat : Trojan:Win32/Bearfoos.A!ml")])
     with pytest.raises(defender_scan.ThreatFound, match="sm64_trainer_gfx.dll"):

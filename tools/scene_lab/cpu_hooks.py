@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Runs in the simulation program (SM64TrainerSim.exe); licenses/README.md lists its GPL-2.0-or-later code.
 """The E2 evaluator's Unicorn hooks: reference semantics in Python, the same in native code.
 
 e2_georender.Sandbox decodes every load and store before it executes (Unicorn 2.1.4's MIPS

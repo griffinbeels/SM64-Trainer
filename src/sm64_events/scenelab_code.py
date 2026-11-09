@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
-# Runs in the Ghost Lab's simulation program beside Unicorn (GPL v2 only): licenses/README.md.
+# Runs in the simulation program (SM64TrainerSim.exe); licenses/README.md lists its GPL-2.0-or-later code.
 """THE door to the Ghost Lab's own code, the modules in tools/scene_lab, and
 the one table of which program runs each lab child process.
 

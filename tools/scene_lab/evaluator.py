@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Runs in the simulation program (SM64TrainerSim.exe); licenses/README.md lists its GPL-2.0-or-later code.
 """The free-camera evaluator: a recorded scene re-rendered by SM64's own code (M4 E3/E5 lab).
 
     evaluator = Evaluator.open(package.sm64scene, rom.z64, MappingUS.map)

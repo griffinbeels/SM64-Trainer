@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Runs in the simulation program (SM64TrainerSim.exe); licenses/README.md lists its GPL-2.0-or-later code.
 """G0-G3 on a recorded session: is it the game's own sound, and do the stems split it? (M4 stems)
 
     stems_probe.py from-tap <tap or live spool session> --rom <z64> --map <MappingUS.map> [--lle-src <cxd4>]

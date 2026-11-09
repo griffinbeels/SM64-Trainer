@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Runs in the simulation program (SM64TrainerSim.exe); licenses/README.md lists its GPL-2.0-or-later code.
 """A stage for a course and act he never recorded, made by the game's own code in the simulation (Ghost
 Handoff re-simulation). Simulation only: nothing here touches Project64 or the running game.
 

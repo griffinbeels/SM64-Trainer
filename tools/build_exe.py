@@ -51,11 +51,33 @@ COLLECT = ["av", "proctap", "pyaudiowpatch", "pycaw",
 # emulator, and its engine is a DLL inside the package (unicorn/lib/unicorn.dll)
 # that the binding loads by path. Never collected into the Trainer.
 SIM_COLLECT = ["unicorn", "numpy"]
-# Left out of the simulation program by name. Everything else SIM_FORBIDDEN
-# names is not excluded but refused (bundle_policy.check_programs): a lab
-# module that still reaches PyAV or pystray must fail the build, not lose
-# its import at run time.
-SIM_EXCLUDE = ["_ssl", "_hashlib"]
+# Left out of the simulation program by name. PyInstaller follows imports
+# inside functions too, so the lab modules' lazy paths that no simulation
+# process runs (audio_layer's FLAC encode -> PyAV, the recorder's capture
+# -> pyaudiowpatch/proctap/pycaw/comtypes, frame_sim's scan CLI -> capstone,
+# the picture tools -> PIL) would otherwise carry those libraries in.
+# OpenSSL is Apache-2.0 and the program needs no network: hashlib falls back
+# to CPython's built-in hash modules. tests/test_sim_boundary.py proves no
+# simulation process imports any of them (sim_boundary.MODULES at run time),
+# and bundle_policy.check_programs still refuses a build that holds one.
+SIM_EXCLUDE = ["_ssl", "_hashlib", "ssl", "av", "pystray", "pyaudiowpatch", "proctap", "pycaw", "comtypes",
+               "capstone", "PIL", "webview", "fastapi", "starlette", "uvicorn", "pydantic", "sentry_sdk",
+               "yt_dlp", "psutil", "scipy", "yaml", "setuptools", "pkg_resources", "tkinter",
+               # unicorn's and numpy's test and build tooling, which --collect-all would carry in
+               "pytest", "_pytest", "PyInstaller", "pefile", "altgraph", "pygments", "colorama", "iniconfig",
+               "pluggy", "py", "cffi", "pycparser", "win32ctypes", "packaging",
+               # The Trainer's own modules a simulation process never loads (sim_boundary.MODULES is what it does):
+               # the live recording's sound and the game's memory reader, reached through lazy imports only.
+               "audio_capture", "closure", "live_audio", "scene_audio", "stems_live",
+               "sm64_events.core.capturelayer", "sm64_events.core.capturelayer_win",
+               "sm64_events.core.heap_observation", "sm64_events.core.procmem", "sm64_events.core.recorder_lock",
+               "sm64_events.core.release_contract", "sm64_events.memory.pj64", "sm64_events.memory.winprocess",
+               "sm64_events.replay", "sm64_events.storage"]
+# Left out of the Trainer: Unicorn is the simulation program's alone. The
+# Trainer's lab modules reach it only through functions its own processes
+# never call (a free camera, a re-simulation or a save state runs in a
+# simulation process); check_programs refuses a Trainer that holds it.
+TRAINER_EXCLUDE = ["unicorn"]
 
 
 def needs_reexec(environ) -> bool:
@@ -90,6 +112,7 @@ def app_args(ffmpeg: "str | None", *, name: str = "SM64Trainer",
         # so each one is named here.
         "--paths", str(REPO / "tools" / "scene_lab"),
         *(arg for module in LAB_MODULES for arg in ("--hidden-import", module)),
+        *(arg for module in TRAINER_EXCLUDE for arg in ("--exclude-module", module)),
         "--icon", str(REPO / "assets" / "ukiki.ico"),
         "--runtime-hook", str(REPO / "tools" / "rthook_comtypes.py"),
         # The UI is READ FROM DISK at runtime (server/app.py _UI_INDEX), not
@@ -325,12 +348,12 @@ def ready_natives() -> None:
     sys.path.insert(0, str(REPO / "tools"))
     import build_natives
     import defender_scan
-    build_natives.ensure(strict=True)
-    defender_scan.require_clean([build_natives.BUNDLE / native.name for native in build_natives.natives()],
-                                strict=True)
+    build_natives.ensure(strict=True, lab=True)
+    defender_scan.require_clean(build_natives.bundle_files(lab=True), strict=True)
 
 
 PLUGIN_FOLDER = Path("_internal") / "sm64_events" / "data" / "plugin"
+LAB_FOLDER = Path("_internal") / "sm64_events" / "data" / "lab"
 
 
 def write_retired_natives(app_dir: Path) -> None:
@@ -345,11 +368,12 @@ def write_retired_natives(app_dir: Path) -> None:
 
 def our_files(app_dir: Path, exe_name: str) -> list[Path]:
     """The files of a built app that this repository compiled: the app's own
-    exe, the natives (core/update_plan.py BUNDLED_NATIVES) and the simulation
-    program's exe, which every normal build has (check_programs refuses one
-    without it); the legacy private beta builder has none."""
+    exe, the natives (core/update_plan.py BUNDLED_NATIVES), the Ghost Lab's
+    natives (LAB_NATIVES) and the simulation program's exe, which every
+    normal build has (check_programs refuses one without it)."""
     sim = [app_dir / SIM_EXE] if (app_dir / SIM_EXE).is_file() else []
-    return [app_dir / f"{exe_name}.exe", *(app_dir / PLUGIN_FOLDER / name for name in BUNDLED_NATIVES), *sim]
+    return [app_dir / f"{exe_name}.exe", *(app_dir / PLUGIN_FOLDER / name for name in BUNDLED_NATIVES),
+            *(app_dir / LAB_FOLDER / name for name in LAB_NATIVES), *sim]
 
 
 def scan_built(app_dir: Path, exe_name: str) -> None:

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Runs in the simulation program (SM64TrainerSim.exe); licenses/README.md lists its GPL-2.0-or-later code.
 """Move a slot's Mario to the object place the running game gives him, by rewriting slot data only.
 
 A practice reset reloads the area without clearing the object pool, so Mario's object lands in a place that

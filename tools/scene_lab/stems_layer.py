@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Runs in the simulation program (SM64TrainerSim.exe); licenses/README.md lists its GPL-2.0-or-later code.
 """The source-stems layer of an attempt scene: its music and its sound effects on its own sound's
 samples (M4 round 4, lab only).
 

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Runs in the simulation program (SM64TrainerSim.exe); licenses/README.md lists its GPL-2.0-or-later code.
 """Set focus's point (M4 lab): where one picture's display list drew one pixel, found on the CPU.
 
     walked = walk(ram, task_data_ptr)          # every triangle that writes depth, in camera space

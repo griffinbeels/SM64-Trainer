@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Runs in the simulation program (SM64TrainerSim.exe); licenses/README.md lists its GPL-2.0-or-later code.
 """One recorded frame as a Usamune slot, built from what a scene package keeps (Ghost Handoff, lab only).
 
     uv run python tools/scene_lab/moment_slot.py build --package P --rom R --map M --frame K --out SLOT.bin

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
-# Runs in the Ghost Lab's simulation program beside Unicorn (GPL v2 only): licenses/README.md.
+# Runs in the simulation program (SM64TrainerSim.exe); licenses/README.md lists its GPL-2.0-or-later code.
 """PyInstaller entry point for SM64TrainerSim.exe, the installed app's second
 program: the Ghost Lab's child processes that run Unicorn.
 

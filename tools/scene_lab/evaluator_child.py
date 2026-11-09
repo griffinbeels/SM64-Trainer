@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Runs in the simulation program (SM64TrainerSim.exe); licenses/README.md lists its GPL-2.0-or-later code.
 """The free camera's evaluator process (Ghost Lab beta, sim-split): evaluator.Evaluator in a child of its own.
 
     client = EvaluatorClient(package, rom_path, map_path, source)    # RuntimeError: why it could not start

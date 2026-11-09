@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Runs in the simulation program (SM64TrainerSim.exe); licenses/README.md lists its GPL-2.0-or-later code.
 """A ghost's start frame: the game state its recording began from, kept beside the ghost so the scene lab
 can re-simulate the run exactly from the ghost's own pads after the attempt's scene is gone, and carried
 with a ghost upload so a friend's lab can do the same.

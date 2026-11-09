@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Runs in the simulation program (SM64TrainerSim.exe); licenses/README.md lists its GPL-2.0-or-later code.
 # src/sm64_events/inputs/frame.py
 """One game frame's controller state, and the razor that identifies the pad.
 

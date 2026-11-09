@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Runs in the simulation program (SM64TrainerSim.exe); licenses/README.md lists its GPL-2.0-or-later code.
 """A simulated frame as a Usamune save-state slot: Usamune's own routines write and load it (Ghost Handoff).
 
     uv run --with unicorn==2.1.4 --with capstone python tools/scene_lab/handoff_slot.py candidates <session>

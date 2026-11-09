@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Runs in the simulation program (SM64TrainerSim.exe); licenses/README.md lists its GPL-2.0-or-later code.
 """Usamune v1.93's nine save-state slots in the running game, and the one checked way to write them.
 
 Griffin decided the Trainer writes to game memory for Ghost Handoff (2026-11-04). Every write goes through

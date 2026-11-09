@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Runs in the simulation program (SM64TrainerSim.exe); licenses/README.md lists its GPL-2.0-or-later code.
 """E2a probe: re-run SM64's OWN scene-graph renderer offline, under a moved camera.
 
     uv run --with unicorn python tools/scene_lab/e2_georender.py regen <frame_dir> <out_dir>
