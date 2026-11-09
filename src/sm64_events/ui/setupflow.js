@@ -75,21 +75,38 @@ export function shownWake(state) {
   return state.ack ? state.ack.until : state.behind == null ? null : state.behind + HOLD_MS;
 }
 
-export function canAdvance(page, setup, step = setupStep(setup)) {
+// The gate (core/setup_profile.py gate_differs): Wermi's build v7 and the
+// PJ64 Fixups. A page with an open gate item never moves on by itself: the
+// user fixes it, or reads the warning and continues (accepted).
+export const BUILD = "emulator_build";
+export const FIXUPS = "rsp_plugin";
+const GATE_OF = {connect: [BUILD], install: [BUILD, FIXUPS]};
+
+export function gateOpen(page, setup, accepted = []) {
+  const differs = setup?.emu?.setup_check?.gate_differs || [];
+  return (GATE_OF[page] || []).filter(id => differs.includes(id) && !accepted.includes(id));
+}
+
+// What a page has proven, before the gate: the emulator found, the setup checked.
+export function pageDone(page, setup, step = setupStep(setup)) {
   if (page === "connect") return setup?.emu?.target?.state === "ready";
   if (page === "install") return step === "ready";
   return false;
+}
+
+export function canAdvance(page, setup, step = setupStep(setup), accepted = []) {
+  return pageDone(page, setup, step) && gateOpen(page, setup, accepted).length === 0;
 }
 
 export function pagesFor(platform) {
   return platform === N64 ? ["platform", "console"] : EMU_PAGES;
 }
 
-export function canReviewForward(page, reached, setup, step) {
+export function canReviewForward(page, reached, setup, step, accepted = []) {
   const pages = pagesFor(reached.platform);
   const next = pages[pages.indexOf(page) + 1];
   if (!next || !reached.pages.includes(next)) return false;
-  return page === "platform" || canAdvance(page, setup, step);
+  return page === "platform" || canAdvance(page, setup, step, accepted);
 }
 
 export function readResume() {

@@ -31,6 +31,18 @@ def scenario():
     return layer, observed
 
 
+def no_setup_check(monkeypatch):
+    """For a fixture that models the plugin over an empty Project64 folder:
+    serve no setup check, so the build-and-fixups gate (which a real check of
+    that folder would open) stays out of a test about something else."""
+    import ui_fixture
+    from types import SimpleNamespace
+    real = ui_fixture.create_app
+    stub = SimpleNamespace(compare=lambda *_: None, diagnostic_status=lambda *_: None)
+    monkeypatch.setattr(ui_fixture, "create_app",
+                        lambda *args, **kwargs: real(*args, **{**kwargs, "setup_profile": stub}))
+
+
 def wait_page(page, name):
     page.wait_for(f'.setup-modal[data-page="{name}"]')
     page.wait_ms(360)  # settle the outgoing view before strict selector clicks
@@ -707,6 +719,7 @@ def test_restored_bundle_recovers_the_open_setup_modal(tmp_path, monkeypatch):
     layer = CaptureLayer(registry, processes, tmp_path / "capture.json",
                          lambda: source if source.is_file() else None)
     monkeypatch.setattr(ui_fixture, "_FixtureCaptureLayer", lambda *a, **kw: layer)
+    no_setup_check(monkeypatch)
     observed = dict(target=dict(state="ready", pid=123),
                     rom=dict(state="supported", region="us", name="SM64 USAMUNE v1.93u"),
                     checks=dict(plugin=True, pictures=True, inputs=True, game=True))

@@ -5,8 +5,8 @@ import { Icon } from "./icons.js";
 import { RegionFlag, REGIONS } from "./regionflag.js";
 import { castSrc } from "./emptystate.js";
 import { SetupDisclosure, SetupSwap } from "./setupmotion.js";
-import { SetupCheckNotes } from "./setupcheck.js";
-import { STAGE_ORDER, stageOf } from "../setupflow.js";
+import { SetupCheckNotes, SetupCheckList } from "./setupcheck.js";
+import { STAGE_ORDER, stageOf, gateOpen, BUILD, FIXUPS } from "../setupflow.js";
 
 const html = htm.bind(h);
 const GUIDE = "https://wermi.neocities.org/emuguide/";
@@ -58,12 +58,50 @@ export function RomResult({ rom }) {
   </div>`;
 }
 
+function checkItem(setup, id) {
+  return (setup?.emu?.setup_check?.items || []).find(item => item.id === id);
+}
+
+// The one build the trainer is tested with, and how to get it.
+function GetWermiBuild({ setup }) {
+  const build = checkItem(setup, BUILD);
+  return html`<div class="setup-get-build" data-testid="setup-get-build">
+    <ol>
+      <li>Download Wermi's Build v7 of Project64.</li>
+      <li>Open the file you downloaded. Choose a folder outside Program Files, such as your Games folder.</li>
+      <li>Open the Project64 in that new folder.</li>
+    </ol>
+    ${build?.download && html`<a class="primary-button setup-download" href=${build.download}
+      target="_blank" rel="noopener noreferrer">Download Wermi's Build v7</a>`}
+  </div>`;
+}
+
+// What still differs from the tested setup on this page, how to fix each
+// item, and the fix the trainer can do by itself (the PJ64 Fixups).
+export function GateWarning({ page, setup, accepted, busy, onFixups }) {
+  const open = gateOpen(page, setup, accepted);
+  if (!open.length) return null;
+  const emu = setup.emu;
+  return html`<div class="setup-gate" role="status" data-testid="setup-gate">
+    <p class="setup-warning"><${Icon} name="warning" size=${18}/>${" "}
+      The trainer is only tested with Wermi's Build v7 and the PJ64 Fixups. Your Project64 is different.</p>
+    ${open.includes(BUILD) && html`<${GetWermiBuild} setup=${setup}/>`}
+    <${SetupCheckList} check=${emu.setup_check} only=${open}/>
+    ${open.includes(FIXUPS) && html`<div class="setup-install-action">
+      ${emu.fixups?.error && html`<p class="setup-error" role="alert">${emu.fixups.error}</p>`}
+      ${emu.pj64_running && html`<p>Close Project64 so we can add the PJ64 Fixups.</p>`}
+      <button class="primary-button" type="button" disabled=${busy || emu.pj64_running}
+        onclick=${onFixups}>${busy ? "Installing…" : "Install the PJ64 Fixups"}</button>
+    </div>`}
+  </div>`;
+}
+
 export function Project64Help() {
   return html`<div class="setup-help-list">
-    <${SetupDisclosure} label="I don't have Project64">
-      <p>Install Project64 v1.6, then open it. We'll find its folder automatically.</p>
-      <${GuideLink} path="getting_emu/">Get Project64 v1.6</${GuideLink}>
-      <p>Use a folder you can write to, such as your Games folder.</p>
+    <${SetupDisclosure} label="I already have another Project64">
+      <p>Use Wermi's Build v7 anyway. It is the standard build for SM64 speedrunning, and it is the
+        only one the trainer is tested with. You can keep your old Project64 in its own folder.</p>
+      <${GuideLink} path="getting_emu/">Read the emulator guide</${GuideLink}>
     </${SetupDisclosure}>
     <${SetupDisclosure} label="It's open, but isn't detected">
       <p>Check that you're using version 1.6. If you have several copies open, close the extras.
@@ -72,16 +110,28 @@ export function Project64Help() {
   </div>`;
 }
 
-export function ConnectPage({ setup }) {
-  const emu = setup?.emu;
-  const found = emu?.target?.state === "ready";
+const CONNECT_COPY = {
+  wrong: ["This is not Wermi's Build v7", "Close this Project64. Then get the build below and open it."],
+  found: ["Project64 found", "Your emulator is connected. Moving on…"],
+  missing: ["Get Project64, then open it", "We'll find its folder and check that it is the right build."],
+};
+
+export function ConnectPage({ setup, accepted = [] }) {
+  const target = setup?.emu?.target || {};
+  const found = target.state === "ready";
+  const state = !found ? "missing" : gateOpen("connect", setup, accepted).length ? "wrong" : "found";
+  const [title, detail] = CONNECT_COPY[state];
   return html`<div class="setup-connect">
-    <${SetupStatus} done=${found} title=${found ? "Project64 found" : "Open Project64 v1.6"}
-        detail=${found ? "Your emulator is connected. Moving on…" : "We'll find its folder so we can add Practice Replay."}/>
-    ${found && html`<code class="setup-path">${emu.pj64_dir}</code>`}
-    ${!found && emu?.target?.state && emu.target.state !== "missing" && html`<p class="setup-warning">${emu.target.message}</p>`}
+    <${SetupStatus} done=${state === "found"} title=${title} detail=${detail}/>
+    ${found ? html`<code class="setup-path">${setup.emu.pj64_dir}</code>` : html`<${NotFound} target=${target} setup=${setup}/>`}
+    ${state === "wrong" && html`<${GateWarning} page="connect" setup=${setup} accepted=${accepted}/>`}
     <${Project64Help}/>
   </div>`;
+}
+
+function NotFound({ target, setup }) {
+  return html`${target.state && target.state !== "missing" && html`<p class="setup-warning">${target.message}</p>`}
+    <${GetWermiBuild} setup=${setup}/>`;
 }
 
 function RomHelp() {
@@ -115,7 +165,11 @@ function InstallDetails({ emu }) {
       ${previous
         ? html`Your current plugin, <code>${previous}</code>, stays in the folder and is selected again when you remove Practice Replay.`
         : html`No previous graphics plugin is recorded, so removing Practice Replay keeps it selected until you pick another plugin in Project64.`}</p>
-    <p>You can remove Practice Replay here in Settings any time. Project64 must be closed.</p>
+    <p>Adds the PJ64 Fixups 2.0, the standard speedrun fix for Project64 1.6. We download
+      <code>RSP.dll</code> from its author's GitHub page and put it in the same folder. Your old
+      file is kept beside it as <code>RSP.before-fixups</code>.</p>
+    <p>You can remove Practice Replay here in Settings any time. Project64 must be closed.
+      The PJ64 Fixups stay.</p>
   </${SetupDisclosure}>`;
 }
 
@@ -141,7 +195,8 @@ function useStageDirection(stage) {
 
 // One card per visible stage (`shown`, the modal's useShownStep): the card
 // swaps only when the stage changes; the server's finer steps change its text.
-export function EmuSetupPane({ setup, shown, installing, onInstall, onRemove, onResume, manual }) {
+export function EmuSetupPane({ setup, shown, installing, onInstall, onRemove, onResume, manual,
+                               accepted = [], onFixups }) {
   const emu = setup.emu;
   const { step, stage, acknowledging } = shown;
   const rom = useStageRom(emu, step);
@@ -149,8 +204,11 @@ export function EmuSetupPane({ setup, shown, installing, onInstall, onRemove, on
   return html`<div class="setup-install" data-stage=${stage} data-substep=${step}>
     <${SetupSwap} identity=${stage} direction=${direction} className="setup-substep-swap">
       <${EmuStepStatus} step=${step} acknowledging=${acknowledging} emu=${emu}
+        gated=${gateOpen("install", setup, accepted).length > 0}
         installing=${installing} onInstall=${onInstall}/>
       <${RomResult} rom=${rom}/>
+      ${emu.verification?.installed && html`<${GateWarning} page="install" setup=${setup}
+        accepted=${accepted} busy=${installing} onFixups=${onFixups}/>`}
       ${stage === "install" && html`<${InstallDetails} emu=${emu}/>`}
       ${step === "verify" && html`<${VerificationHelp} emu=${emu} installing=${installing} onResume=${onResume}/>`}
       ${["reopen", "emulator"].includes(step) && html`<${Project64Help}/>`}
@@ -209,13 +267,18 @@ function ManageReplay({emu, installing, onRemove}) {
     </${SetupDisclosure}>`;
 }
 
-function EmuStepStatus({step, acknowledging, emu, installing, onInstall}) {
+// With the gate open, a working game is not yet "everything is set up".
+const GATED_READY = ["Your game is connected", "One more thing is different from the tested setup."];
+
+function EmuStepStatus({step, acknowledging, emu, installing, onInstall, gated}) {
   const [title, , acknowledgment] = STAGE_COPY[stageOf(step)];
-  return html`<${SetupStatus} done=${acknowledging || step === "ready"}
-      title=${acknowledging ? acknowledgment : step === "ready" ? "Setup checked" : title}
-      detail=${acknowledging ? null : stageDetail(step, emu)}>
+  const ready = step === "ready" && !acknowledging;
+  const [readyTitle, readyDetail] = gated ? GATED_READY : ["Setup checked", stageDetail(step, emu)];
+  return html`<${SetupStatus} done=${acknowledging || (step === "ready" && !gated)}
+      title=${acknowledging ? acknowledgment : ready ? readyTitle : title}
+      detail=${acknowledging ? null : ready ? readyDetail : stageDetail(step, emu)}>
     ${step === "install" && !acknowledging && html`<div class="setup-install-action">
-      <p>Adds the trainer's graphics plugin to Project64. You can remove it later in Settings.</p>
+      <p>Adds the trainer's graphics plugin and the PJ64 Fixups to Project64. You can remove the plugin later in Settings.</p>
       <button class="primary-button" type="button" disabled=${installing}
           onclick=${onInstall}>${installing ? "Installing…" : "Install Practice Replay"}</button>
     </div>`}

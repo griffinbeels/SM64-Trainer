@@ -11,6 +11,7 @@ paths:
   - "src/sm64_events/core/setup_runtime.py"
   - "src/sm64_events/core/setup_gpu.py"
   - "src/sm64_events/core/setup_profile.py"
+  - "src/sm64_events/core/fixups.py"
   - "src/sm64_events/core/onboarding.py"
   - "src/sm64_events/server/setup_api.py"
   - "src/sm64_events/ui/setupflow.js"
@@ -53,7 +54,18 @@ paths:
   emulator's configuration with the tested setup in `data/setup_baseline.json`
   (also the one importance table). It reads the same registry and VirtualStore
   policy, never writes, and says "unknown" without evidence. It never gates
-  readiness or completion: the wizard shows its differences as notes.
+  readiness or completion on the server: the wizard shows its differences as notes.
+- **The setup gate:** the check's `gate_differs` lists the baseline's `gate`
+  items (Wermi's build v7, the PJ64 Fixups) that are PROVEN different.
+  `setupflow.js` `canAdvance` holds a page with an open gate item; the footer's
+  Continue anyway opens the warning, and accepting it writes
+  `onboarding.baseline_risk` (`POST /api/setup/baseline-risk`). The header
+  notes an unaccepted difference to every user. `core/fixups.py` is the one
+  fix the trainer performs: Install (and `POST /api/setup/fixups`) downloads
+  the baseline's pinned release, checks the archive and DLL hashes, keeps the
+  old `RSP.dll` once as `RSP.before-fixups` and never elevates; its failure
+  never fails the plugin install (`emu.fixups.error`). The fixups have no
+  stated license, so they are never bundled.
 - **One reader per process:** `setup_runtime.py` attaches one `Pj64Memory` by the
   target's pid and keeps it while that process runs (`alive()`); an observation is
   one header read. A fresh reader per poll re-walked Project64's memory every
@@ -105,6 +117,13 @@ incorrect transformation. For motion, sample computed positions during a real
 click; a declared transition or a settled screenshot alone cannot prove movement.
 
 ## Failure catalogue
+
+- 2026-11-09, hop 5: "we spent weeks working with Apeduden, only to figure
+  out that the *real* root cause was him not using the right build of Pj64.
+  So, I want to prevent that FOREVER". The setup check already read the build
+  and the fixups, but as recommended notes on the completion page. They are
+  now required gate items. `test_another_build_stops_the_wizard_until_the_warning_is_accepted`
+  walks both stops; `test_fixups.py` covers the download.
 
 - 2026-11-07, hop 1: Defender flagged the renderer as
   Trojan:Win32/Bearfoos.A!ml (2026-11-06), and the install looked the part: a

@@ -13,8 +13,9 @@ themselves, and this page is where a behavior gets its full description.
    `%LOCALAPPDATA%\Programs\SM64Trainer`, puts an **SM64 Trainer** shortcut on
    your Desktop, and launches. **That shortcut is your launcher from now on** —
    it keeps working no matter how many updates land.
-3. **Follow the setup wizard.** Select Emulator, open Project64 1.6 so the
-   trainer can find it, close it to install Practice Replay, then reopen it
+3. **Follow the setup wizard.** Select Emulator, download Wermi's Build v7
+   of Project64 1.6 from the wizard's button and open it so the trainer can
+   find it, close it to install Practice Replay and the PJ64 Fixups, then reopen it
    and load Usamune v1.93u (US), **windowed**. Setup checks the game, replay
    pictures and inputs before **Ready to practice!** takes you to Practice.
 
@@ -72,6 +73,15 @@ this build and checks Project64's selected graphics plugin. A matching installat
 skips automatic onboarding, including in a fresh worktree. A stale or incomplete
 installation opens its repair step directly. Only Project64 installation metadata
 is shared across checkouts; your practice data stays in its existing location.
+
+**The tested setup.** The trainer is built and tested with Wermi's Build v7
+of Project64 1.6 and the PJ64 Fixups 2.0, the standard setup for SM64
+speedrunning. The wizard checks both. With another build or without the
+fixups, it stops and shows how to fix it; **Continue anyway** opens a warning
+first, because ghosts and replays may not work on a setup we never tested.
+Install downloads the fixups (`RSP.dll`) from their author's GitHub page and
+keeps your old file beside it as `RSP.before-fixups`. If you continued
+anyway, **Fix my setup** stays available in Settings → Setup.
 
 Installing Practice Replay adds one file to Project64's plugin folder,
 `sm64_trainer_gfx.dll`, and selects it as the `Graphics Dll` (`SM64 Trainer

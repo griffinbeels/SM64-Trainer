@@ -2280,6 +2280,21 @@ stop the trainer working), *recommended* (differs from what we test with) or
   plugin sees the game; the tested setup describes the emulator
   settings around it.
 
+### Setup gate
+
+The two [[setup check]] items a user must match or knowingly skip: Wermi's
+Build v7 of Project64 and the PJ64 Fixups. The setup wizard never leaves a
+page by itself while one of them is proven different. Its Continue button
+becomes a warning that asks first, and the server records the items the user
+accepted (`onboarding.baseline_risk`). The header shows a note to every user
+with a difference they have not accepted. An item that reads *can't tell*
+never stops anyone. Setup's Install adds the PJ64 Fixups by itself: it
+downloads the one tested release and checks its hash.
+
+- **Lives** -- `src/sm64_events/data/setup_baseline.json` (the list);
+  `src/sm64_events/core/setup_profile.py`; `src/sm64_events/core/fixups.py`;
+  `src/sm64_events/ui/setupflow.js`
+
 ### Setup check
 
 Your Project64 setup compared item by item with the [[tested setup]]: each item

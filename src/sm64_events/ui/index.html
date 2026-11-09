@@ -5512,6 +5512,22 @@
   .setup-help-content code { overflow-wrap: anywhere; white-space: normal; font-size: .88rem; }
   .setup-warning, .setup-error { border-left: 3px solid #e6b852; border-radius: 4px; background: #292b25; color: #f0d597; padding: .85rem 1rem; line-height: 1.55; font-size: .94rem; margin: .8rem 0; }
   .setup-error { color: #ffb6b6; background: #38252b; border-color: #e88383; }
+  /* The gate: Wermi's build v7 and the PJ64 Fixups (setuppages.js GateWarning). */
+  .setup-gate { margin: .8rem 0; }
+  .setup-gate .setup-warning svg, .setup-untested-note svg { display: inline-block; vertical-align: -3px; margin-right: .3rem; }
+  .setup-get-build { margin: .6rem 0 1rem 68px; color: #c6d4e4; font-size: .95rem; line-height: 1.6; }
+  .setup-gate .setup-get-build { margin-left: 0; }
+  .setup-get-build ol { margin: 0 0 .8rem; padding-left: 1.4rem; }
+  .setup-get-build li { display: list-item; list-style: decimal; }
+  .setup-gate .setup-get-build { margin-bottom: 1.2rem; }
+  .setup-download { display: inline-flex; align-items: center; min-height: 46px; padding: .8rem 1.3rem; text-decoration: none; }
+  .setup-risk-continue, .setup-risk-confirm {
+    gap: .45rem; min-height: 44px; border: 1px solid #e6b852; border-radius: 6px;
+    background: #3a3220; color: #ffdf8e; padding: .5rem .9rem; cursor: pointer;
+  }
+  .setup-risk-continue:hover, .setup-risk-confirm:hover { background: #4a3f24; color: #fff; }
+  .setup-risk-text { margin: 0; color: #dbe5f0; font-size: 1rem; line-height: 1.6; }
+  .setup-untested-note button { margin-left: .5rem; }
   /* The setup check (components/setupcheck.js): one card per item, the
      server's order. A difference wears the warning gold, can't-tell a quiet
      blue, the same a quiet green; a noted item never looks like a problem. */

@@ -146,6 +146,12 @@ export function Header({ t, settingsOpen, closeSettings, setTab, onOpenPlayer })
   const [setupManual, setSetupManual] = useState(false);
   const [checkOpen, setCheckOpen] = useState(false);
   const [setupWarning, setSetupWarning] = useState(null);
+  // Not Wermi's build v7 or no PJ64 Fixups, and the warning not yet accepted.
+  const [untested, setUntested] = useState(false);
+  const readUntested = (setup) => {
+    const taken = setup.onboarding?.baseline_risk?.items || [];
+    setUntested(setup.platform !== N64 && (setup.emu?.setup_check?.gate_differs || []).some(id => !taken.includes(id)));
+  };
   const [overlayOpen, setOverlayOpen] = useState(false);
   const community = useCommunityAccount();
   const updateFirst = t.updateVisible;
@@ -161,6 +167,7 @@ export function Header({ t, settingsOpen, closeSettings, setTab, onOpenPlayer })
     send("GET", "/api/setup").then((setup) => {
       setSetupWarning(setup.emu?.rom?.warning || (setup.onboarding?.limited
         && setup.onboarding.platform === EMU ? "JP tracking isn't supported yet; support is planned for a later patch." : null));
+      readUntested(setup);
       if (!seenSetupPrompt() && shouldOfferSetup(setup)) setSetupOffer(true);
     }).catch(() => {});
   }, []);
@@ -172,6 +179,7 @@ export function Header({ t, settingsOpen, closeSettings, setTab, onOpenPlayer })
   const closeSetup = () => {
     setSetupOpen(false);
     rememberSetupPrompt();
+    send("GET", "/api/setup").then(readUntested).catch(() => {});
   };
   const completeSetup = (setup) => {
     setSetupWarning(setup.platform === EMU && setup.emu?.verification?.limited ? setup.emu.rom.warning : null);
@@ -339,6 +347,9 @@ export function Header({ t, settingsOpen, closeSettings, setTab, onOpenPlayer })
     </div>
 
     ${setupWarning && html`<p class="setup-capability-note" role="status">${setupWarning}</p>`}
+    ${untested && !setupOpen && html`<p class="setup-capability-note setup-untested-note" role="status" data-testid="setup-untested">
+      <${Icon} name="warning" size=${16}/>${" "}Your Project64 is not the setup the trainer is tested with. Ghosts and replays may not work.${" "}
+      <button type="button" onclick=${() => { closeSettings(); setSetupManual(true); setSetupOpen(true); }}>Fix my setup</button></p>`}
     ${settingsOpen && html`<div class="settings-backdrop" onclick=${closeSettings}>
       <aside class="settings-drawer" role="dialog" aria-modal="true"
           aria-label="Settings"

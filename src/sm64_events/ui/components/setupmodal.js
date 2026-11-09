@@ -8,7 +8,7 @@ import { Icon } from "./icons.js";
 import { EMU, N64 } from "../platform.js";
 import { SetupSwap, useSetupAttention, useShownStep } from "./setupmotion.js";
 import { ConnectPage, EmuSetupPane, N64SetupPane, CompletionPage } from "./setuppages.js";
-import { SETUP_TITLES, ACKNOWLEDGE_MS, canAdvance, canReviewForward,
+import { SETUP_TITLES, ACKNOWLEDGE_MS, canAdvance, canReviewForward, gateOpen, pageDone,
          pagesFor, readResume, saveResume, setupStep } from "../setupflow.js";
 
 const html = htm.bind(h);
@@ -73,7 +73,36 @@ function useSetupConnection(onFailure) {
   return {setup, busy, error, offline, alive, refresh, mutate, setError};
 }
 
-function SetupContent({page, platform, setup, shown, choose, finish, busy, refresh, install, remove, resume, manual}) {
+// The warning a user reads before continuing on a setup we never tested.
+function RiskDialog({ onBack, onContinue, busy }) {
+  return html`<${Modal} title="Continue at your own risk?" icon="warning" onClose=${onBack}
+      footer=${html`<button type="button" class="primary-button" autofocus onclick=${onBack}>Go back and fix it</button>
+        <button type="button" class="setup-risk-confirm" disabled=${busy} onclick=${onContinue}>Continue anyway</button>`}>
+    <p class="setup-risk-text" data-testid="setup-risk">The trainer is only tested with Wermi's Build v7 and the
+      PJ64 Fixups. On your setup, ghosts and replays may not work.</p>
+  </${Modal}>`;
+}
+
+// Gate items the user chose to continue without, here or in an earlier
+// visit (the server's record), and the warning that asks first.
+function useBaselineRisk(setup, mutate, alive) {
+  const [now, setNow] = useState([]);
+  const [open, setOpen] = useState(false);
+  const accepted = [...(setup?.onboarding?.baseline_risk?.items || []), ...now];
+  async function accept(risky, then) {
+    const items = [...new Set([...accepted, ...risky])];
+    const value = await mutate("POST", "/api/setup/baseline-risk", {items});
+    if (!alive.current) return;
+    setOpen(false);
+    if (!value) return;
+    setNow(items);
+    then();
+  }
+  return {accepted, open, setOpen, accept};
+}
+
+function SetupContent({page, platform, setup, shown, choose, finish, busy, refresh, install, remove, resume, manual,
+                       accepted, fixups}) {
   const Pane = SETUP_PANES[platform];
   return page === "platform" ? html`<div class="setup-platform-picks">
       ${[[EMU, "Emulator", "Only Project64 v1.6 supported", "compare"],
@@ -85,11 +114,12 @@ function SetupContent({page, platform, setup, shown, choose, finish, busy, refre
           <${Icon} name="arrowRight" size=${22}/></span>
       </button>`)}
     </div>`
-    : page === "connect" ? html`<${ConnectPage} setup=${setup}/>`
+    : page === "connect" ? html`<${ConnectPage} setup=${setup} accepted=${accepted}/>`
     : !setup ? html`<p role="status">Connecting to the trainer…</p>`
     : page === "complete" ? html`<${CompletionPage} setup=${setup} onFinish=${finish} busy=${busy}/>`
     : Pane ? html`<${Pane} setup=${setup} shown=${shown} refresh=${refresh} installing=${busy}
         onInstall=${install} onRemove=${remove} onResume=${resume} manual=${manual}
+        accepted=${accepted} onFixups=${fixups}
         onEmulator=${() => choose(EMU)} onFinish=${finish} busy=${busy}/>` : null;
 }
 
@@ -113,6 +143,8 @@ export function SetupModal({ onClose, onComplete, initialPlatform, initialPane, 
 
 
   const shown = useShownStep(setupStep(setup), page === "install");
+  const risk = useBaselineRisk(setup, mutate, alive);
+  const accepted = risk.accepted;
 
   useEffect(() => {
     if (!setup || initialized.current) return;
@@ -143,7 +175,7 @@ export function SetupModal({ onClose, onComplete, initialPlatform, initialPane, 
     go(next === EMU ? "connect" : "console");
   }
 
-  const advance = !offline && !busy && canAdvance(page, setup, shown.step);
+  const advance = !offline && !busy && canAdvance(page, setup, shown.step, accepted);
   useEffect(() => {
     if (!advance || review || !attentive) return;
     const timer = setTimeout(() => go(page === "connect" ? "install" : "complete"), ACKNOWLEDGE_MS);
@@ -161,6 +193,10 @@ export function SetupModal({ onClose, onComplete, initialPlatform, initialPane, 
 
 
   const install = () => mutate("POST", "/api/setup/capture-layer", {consent: true});
+  const fixups = () => mutate("POST", "/api/setup/fixups");
+  // The page did its part, but the gate is open: Continue is a warning.
+  const risky = !offline && pageDone(page, setup, shown.step) ? gateOpen(page, setup, accepted) : [];
+  const acceptRisk = () => risk.accept(risky, () => go(page === "connect" ? "install" : "complete"));
   const remove = () => mutate("DELETE", "/api/setup/capture-layer");
   const resume = () => mutate("POST", "/api/pause", {paused: false}, true);
   async function finish() {
@@ -172,25 +208,28 @@ export function SetupModal({ onClose, onComplete, initialPlatform, initialPane, 
   }
 
   const pages = pagesFor(platform);
-  const forward = review && canReviewForward(page, {platform, pages: reached}, setup, shown.step) && !offline;
-  const stepComplete = canAdvance(page, setup, shown.step) || forward;
+  const forward = review && canReviewForward(page, {platform, pages: reached}, setup, shown.step, accepted) && !offline;
+  const stepComplete = canAdvance(page, setup, shown.step, accepted) || forward;
   const title = setupTitle(page, setup);
   if (!decided && !offline) return null;
 
 
   return html`<${Modal} title=${title} icon=${page === "complete" ? "check" : "practice"} size="large"
       footer=${html`<${SetupFooter} pages=${pages} page=${page} busy=${busy} forward=${forward}
-        stepComplete=${stepComplete} go=${go} onClose=${onClose}/>`}>
+        stepComplete=${stepComplete} go=${go} onClose=${onClose} risky=${risky.length > 0}
+        onRisk=${() => risk.setOpen(true)}/>`}>
     <div class="setup-modal" ref=${root} data-page=${page} aria-busy=${busy}>
       <${SetupSwap} identity=${page} direction=${direction}><${SetupContent} page=${page} platform=${platform} setup=${setup} shown=${shown} choose=${choose}
-        finish=${finish} busy=${busy} refresh=${refresh} install=${install} remove=${remove} resume=${resume} manual=${manual}/></${SetupSwap}>
+        finish=${finish} busy=${busy} refresh=${refresh} install=${install} remove=${remove} resume=${resume} manual=${manual}
+        accepted=${accepted} fixups=${fixups}/></${SetupSwap}>
+      ${risk.open && html`<${RiskDialog} busy=${busy} onBack=${() => risk.setOpen(false)} onContinue=${acceptRisk}/>`}
       ${offline && html`<p class="setup-error" role="alert">Connection interrupted. Retrying automatically…</p>`}
       ${error && html`<p class="setup-error" role="alert">${error}</p>`}
     </div>
   </${Modal}>`;
 }
 
-function SetupFooter({pages, page, busy, forward, stepComplete, go, onClose}) {
+function SetupFooter({pages, page, busy, forward, stepComplete, go, onClose, risky, onRisk}) {
   const index = pages.indexOf(page);
   return html`<div class="setup-footer">
     <div class="setup-navigation">
@@ -204,6 +243,8 @@ function SetupFooter({pages, page, busy, forward, stepComplete, go, onClose}) {
       </div>
       <span>${forward && html`<button type="button" class="setup-arrow setup-arrow-ready" aria-label="Forward" disabled=${busy}
         onclick=${() => go(pages[index + 1], false, true)}><${Icon} name="arrowRight" size=${22}/></button>`}
+        ${risky && html`<button type="button" class="setup-risk-continue" data-testid="setup-risk-continue"
+          disabled=${busy} onclick=${onRisk}><${Icon} name="warning" size=${18}/>Continue anyway</button>`}
         ${!stepComplete && !["complete", "console"].includes(page) && html`<button type="button" class="setup-not-now"
           disabled=${busy} onclick=${onClose}>Not now</button>`}</span>
     </div>
