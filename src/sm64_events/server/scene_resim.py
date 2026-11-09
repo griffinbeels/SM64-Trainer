@@ -144,6 +144,7 @@ class SceneResim:
         self.child_lock = threading.Lock()
         self.stopped = threading.Event()
         self.building: Build | None = None            # the newest progressive build (one runs at a time)
+        self._recipe: tuple | None = None             # ((rom path, size, mtime), stage_sim.recipe): the cache's names
         self.warmer = StageWarmer(self._spawn_warm, pace=pace, route=self._route_stars)
 
     # ---------------------------------------------------------------- where things live
@@ -157,9 +158,15 @@ class SceneResim:
         return self.lab._lab_root() / "resim"
 
     def _config(self):
-        from sm64_events.server.scene_lab_api import LabConfig
-        config = LabConfig.load(self.lab.config_path)
+        """The lab's config with the ROM and the map a simulation needs, else ResimRefused with the sentence why (the
+        installed app's config says it in the player's words: core/lab_inputs.py)."""
+        config = self.lab.config()
+        if config.rom is None:                        # the installed app before its ROM store found one
+            raise ResimRefused(config.rom_problem)
         if config.map is None:
+            if config.in_app:
+                from sm64_events.core.lab_inputs import NO_MAP
+                raise ResimRefused(NO_MAP)
             raise ResimRefused("The lab config does not name the symbol map, which the simulation needs.")
         return config
 
@@ -426,16 +433,33 @@ class SceneResim:
         from sm64_events.server import scene_warm
         self.warmer.ask(scene_warm.stage_of(course, star), scene_warm.CURRENT if tier is None else tier)
 
-    def _spawn_warm(self, level: int, area: int, act: int) -> subprocess.Popen:
+    def _spawn_warm(self, level: int, area: int, act: int) -> subprocess.Popen | None:
+        """The warm child for that stage, or None when the stage cache already holds what it would make: each stage
+        is asked once per server run, and before 2026-11-09 every one of the 102 started a child (an app start, in
+        the installed app) only to find its files made."""
         config = self._config()
         with Path(config.rom).open("rb") as handle:
             header = handle.read(0x40)
         from sm64_events.memory.version_probe import version_from_header
         if version_from_header(header) is None:
             raise ResimRefused("The lab's ROM is not a cartridge a stage can be made from.")
+        if self._stage_made(Path(config.rom), level, area, act):
+            return None
         args = ["warm", *self._common(config), "--level", str(level), "--area", str(area), "--act", str(act),
                 *self._scene_args()]
         return self._spawn(args, background=True)             # the warmer owns it: it ends it at shutdown
+
+    def _stage_made(self, rom: Path, level: int, area: int, act: int) -> bool:
+        """Whether the stage cache holds that stage's boot and reset already (tools/scene_lab/stage_sim.py `made`, the
+        names a warm writes). The ROM's recipe is read once per file version: it hashes the whole cartridge."""
+        from sm64_events.server.scene_lab_api import _lab_module
+        stage_sim = _lab_module("stage_sim")
+        stat = rom.stat()
+        key = (str(rom), stat.st_size, stat.st_mtime_ns)
+        if self._recipe is None or self._recipe[0] != key:
+            self._recipe = (key, stage_sim.recipe(rom.read_bytes()))
+        recipe = self._recipe[1]
+        return recipe is not None and stage_sim.made(self.cache() / "stages", recipe, level, area, act)
 
     def _route_stars(self) -> list[str]:
         """His practice route's "course:star" keys (the tracker's active route), for the warmer's route tier."""

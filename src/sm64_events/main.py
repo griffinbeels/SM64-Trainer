@@ -679,17 +679,40 @@ def build(*, recorder_lock=None):
         multiplayer=_build_multiplayer(replay, community_account, appearance=ghost.live_appearance),
         protect_local_api=True, local_port=server_port()), tracker=service, live_audio=_scene_lab_live_audio(),
         ghost_sources={"tracker": service, "replay": replay, "ghost": ghost, "community": community_sync},
-        game_timer=lambda: poller.latest.global_timer if poller.latest is not None else None)
+        game_timer=lambda: poller.latest.global_timer if poller.latest is not None else None,
+        plugin_dir=_plugin_dir_of(capture_layer))
 
 
 _LIVE_SOUND: list = []          # the one LiveAudio of this process, once asked for
 
 
+def _scene_lab_on() -> bool:
+    """The Ghost Lab's one switch: SM64_SCENE_LAB names a developer's lab config, or this is the installed app with
+    the Ghost Lab on (core/lab_inputs.py IN_APP, Griffin's D2). A source checkout without the variable has none."""
+    from sm64_events.core.lab_inputs import app_lab_on
+    return bool(os.environ.get("SM64_SCENE_LAB")) or app_lab_on()
+
+
+def _plugin_dir_of(capture_layer, keep_seconds: float = 10.0):
+    """The Ghost Lab's view of Project64's Plugin folder: the setup screen's own answer (the capture layer's status,
+    which also reads a custom Plugin Directory), kept `keep_seconds` so the lab's status polls never rescan it."""
+    import time
+    kept = {"at": None, "folder": None}
+
+    def plugin_dir():
+        now = time.monotonic()
+        if kept["at"] is None or now - kept["at"] > keep_seconds:
+            kept["at"] = now
+            kept["folder"] = getattr(capture_layer.status(), "plugin_dir", None) if capture_layer is not None else None
+        return kept["folder"]
+    return plugin_dir
+
+
 def _scene_lab_live_audio():
     """The scene lab's copy of the recorder's game sound (live_audio.LiveAudio, the last 300 s),
-    or None: the lab is off, or this app is frozen (the scene lab runs from a source checkout).
-    One per process: the recorder's factories and the lab share it."""
-    if not os.environ.get("SM64_SCENE_LAB"):
+    or None: the lab is off, or its code did not load. One per process: the recorder's factories
+    and the lab share it."""
+    if not _scene_lab_on():
         return None
     if not _LIVE_SOUND:
         from sm64_events.server.scene_lab_api import ConfigError, _lab_module
@@ -700,11 +723,15 @@ def _scene_lab_live_audio():
     return _LIVE_SOUND[0]
 
 
-def _mount_scene_lab(app, tracker=None, live_audio=None, ghost_sources=None, game_timer=None):
-    """M4's scene viewer is a lab-only surface (server/scene_lab_api.py). This is the one
-    reader of its switch: unless SM64_SCENE_LAB names a lab config, nothing is imported and
-    the shell never shows its entry. The shell's one probe (GET /api/scene-lab) then answers
-    {"lab": null}: a 404 there put an HTTP error on every page load of every install.
+def _mount_scene_lab(app, tracker=None, live_audio=None, ghost_sources=None, game_timer=None, plugin_dir=None):
+    """M4's scene viewer, the Ghost Lab (server/scene_lab_api.py). This is the one reader of its
+    switch (_scene_lab_on): SM64_SCENE_LAB names a developer's lab config, read exactly as before;
+    the installed app (frozen) mounts it with no lab config at all, from its own inputs
+    (core/lab_inputs.py: the ROM store, the bundled maps, and `plugin_dir()`, Project64's Plugin
+    folder as setup found it), and says in the page why nothing can open yet when one is missing.
+    Otherwise nothing is imported and the shell never shows its entry. The shell's one probe
+    (GET /api/scene-lab) then answers {"lab": null}: a 404 there put an HTTP error on every page
+    load of every install.
     Mounting twice (a lab script that wraps an app the UI fixture already mounted) is a no-op.
     With the switch on, the server's own `tracker` also feeds the lab's attempt scenes (the
     live recording's lease, a cut per completed attempt); a caller without one (the UI fixture)
@@ -716,12 +743,19 @@ def _mount_scene_lab(app, tracker=None, live_audio=None, ghost_sources=None, gam
     if any(getattr(route, "path", None) == "/api/scene-lab" for route in app.routes):
         return app
     config = os.environ.get("SM64_SCENE_LAB")
-    if config:
+    if _scene_lab_on():
         from sm64_events.server.scene_lab_api import mount_scene_lab
         from sm64_events.server.scene_warm import GamePace
-        lab = mount_scene_lab(app, config, live=tracker is not None, live_audio=live_audio,
+        from_app = {}
+        if not config:                                 # the installed app: its own inputs, no lab.json
+            from functools import partial
+
+            from sm64_events.core.lab_inputs import app_inputs
+            from_app = {"app_inputs": partial(app_inputs, plugin=plugin_dir)}
+        lab = mount_scene_lab(app, config or None, live=tracker is not None, live_audio=live_audio,
                               ghost_sources=ghost_sources,
-                              resim_options={"pace": GamePace(game_timer)} if game_timer is not None else {})
+                              resim_options={"pace": GamePace(game_timer)} if game_timer is not None else {},
+                              **from_app)
         if tracker is not None:
             lab.follow_attempts(tracker)
             lab.follow_spawns(tracker)
