@@ -1,0 +1,48 @@
+{
+  "_comment": "The trainer's ghost-start spans (src/sm64_events/ghost/start_frame.py allowed_spans and boot_spans, physical begin and bytes). tests/test_ghost_start_frame.py keeps this file equal to them.",
+  "_versions": [
+    2,
+    3
+  ],
+  "_max_boot_runs": 4096,
+  "_max_meta_bytes": 8192,
+  "us": {
+    "regions": [
+      [
+        2127616,
+        512
+      ],
+      [
+        3331424,
+        15760
+      ],
+      [
+        3352048,
+        16
+      ],
+      [
+        3387280,
+        156384
+      ],
+      [
+        3543664,
+        544
+      ],
+      [
+        3718304,
+        12864
+      ],
+      [
+        3731168,
+        4
+      ],
+      [
+        4291404,
+        308
+      ]
+    ],
+    "boot": [
+      3331424
+    ]
+  }
+}

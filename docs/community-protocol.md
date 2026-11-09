@@ -203,8 +203,20 @@ after acceptance; they do not save a run finished while the step is open. This
 trainer saves that run too (status `consent_required` counts as waiting in
 `community/sync.py`), and sends nothing until the account is active again.
 
-The service never reads inside a start. It checks the declared size and SHA-256
-before any write, then stores the start in the ghost's own R2 object, right after
+The service never unpacks a start's game state. Before any write it checks the
+declared size and SHA-256, then the start's header (`src/start-header.js`;
+Griffin, 2026-11-09: "Sure"): the magic `SM64STRT`, format version 2 or 3, a
+header of bounded size with exactly the trainer's fields, regions equal to the
+trainer's spans for that game version (`src/start-spans.json`, which
+`tests/test_ghost_start_frame.py` keeps equal to `ghost/start_frame.py`), no
+main-pool changes, game-data differences only over the boot spans, and the start
+named for the ghost it rides with (`clip_sha256` equals the grant's `raw_sha256`).
+Anything else is `422 start_invalid`, with the reservation refunded. A new game
+version's spans need this file updated and the Worker deployed before its starts
+are taken. Format version 3 sends the game's .data as its change from the ROM's
+boot image: on his five Whomp's Fortress starts 99.5% of it equals the boot
+image, and a start as it travels fell from 23.7 KB to 16.9 KB on average. The
+receiver rebuilds it from its own ROM. It then stores the start in the ghost's own R2 object, right after
 the ghost's bytes, in the same multipart write. Downloads read each part by range.
 So every deletion path deletes a start with its ghost: withdrawal, account and
 identity deletion, retraction, a faster replacement, a catalog retirement and a
