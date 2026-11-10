@@ -414,10 +414,11 @@ def read_letting_go(path: Path) -> bytes:
 
 
 def open_letting_go(path: Path):
-    """A file's bytes, read without stopping its writer from replacing or deleting it meanwhile. Python's open
-    shares only reading and writing on Windows, so while the server read a growing scene's sidecar the cutter's
-    next publication (os.replace onto it) or its final delete failed with WinError 32 (the full runs of 2026-11-09;
-    pb-fin saw it too). This opens it (binary, for reading) with FILE_SHARE_DELETE as well; elsewhere a plain open."""
+    """A file opened for reading without stopping its writer from deleting it meanwhile. Python's open shares only
+    reading and writing on Windows, so while the server read a growing scene's sidecar its delete (the take is
+    whole) failed with WinError 32 (the full runs of 2026-11-09; pb-fin saw it too). This opens it (binary) with
+    FILE_SHARE_DELETE as well; elsewhere a plain open. A replace onto it is still refused while it is open: the
+    cutter skips that publication and the next one lands (attempt_cutter.Take._publish)."""
     if os.name != "nt":
         return open(path, "rb")  # noqa: SIM115 - the caller closes it
     import ctypes
