@@ -238,6 +238,44 @@ def _pick(page, course: str, star: str) -> None:
     page.locator("[role=dialog]").wait_for(state="detached")
 
 
+def test_a_session_view_that_comes_after_the_lab_still_opens_the_practice_targets_stage(tmp_path, monkeypatch):
+    """The Ghost Lab opened before the page's session view came (a loaded machine, or a click right after
+    launch: full runs 42749039740 and 42766359821): it says "choose a star" until the view comes, then opens the
+    Practice log's target's stage, as arriving with the view does."""
+    import ui_fixture
+    with attempt_scene._served(tmp_path, monkeypatch, lab_on=True, extra=_stubs) as (base, seen), \
+            sync_playwright() as play:
+        _answer_ghosts(monkeypatch, seen)
+        browser = play.chromium.launch(headless=True, args=["--disable-gpu"])
+        page = browser.new_page(viewport={"width": 1280, "height": 1000})
+        held, released = [], []
+
+        def hold(route):                                                 # the view waits until the lab has asked
+            if released:
+                route.continue_()
+            else:
+                held.append(route)
+        page.route("**/api/session?*", hold)
+        errors = []
+        page.on("pageerror", lambda error: errors.append(str(error)))
+        try:
+            page.goto(base)
+            page.locator('.nav-item[title="Ghost Lab"]:visible').click()
+            page.wait_for_function("document.querySelector('.ghost-lab-top-note')?.textContent"
+                                   ".startsWith('Choose a course and star')", timeout=20000)
+            assert held and seen["stage"] == [] and seen["opened"] == []
+            released.append(True)
+            for route in held:
+                route.continue_()
+            page.wait_for_function(DRAWN, timeout=20000)
+            assert seen["stage"] == [{"course": ui_fixture.FIXTURE_COURSE, "star": ui_fixture.FIXTURE_STAR,
+                                      "segment": None, "strat": ui_fixture.FIXTURE_STRAT}]
+            assert seen["opened"] == [{"attempt": STAGE_ATTEMPT}]
+            assert errors == []
+        finally:
+            browser.close()
+
+
 def test_arriving_opens_the_practice_targets_stage_and_a_pick_opens_another_or_says_why(tmp_path, monkeypatch):
     import ui_fixture
     with attempt_scene._served(tmp_path, monkeypatch, lab_on=True, extra=_stubs) as (base, seen), \

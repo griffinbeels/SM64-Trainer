@@ -136,7 +136,7 @@ def _stem(nodeid: str) -> str:
 
 def _keep_failure_screenshots() -> None:
     try:
-        from playwright.sync_api import Browser, BrowserContext, Locator
+        from playwright.sync_api import Browser, BrowserContext, Locator, Page
         from playwright.sync_api import TimeoutError as PlaywrightTimeout
     except ImportError:
         return
@@ -155,15 +155,25 @@ def _keep_failure_screenshots() -> None:
     # said. Full runs 35684991413, 35686423614 and 35687167501 each had a
     # page that stayed blank for 60 s -- no nav, no cards, only the
     # background -- with its document complete and no request unanswered.
-    def wait_for(self, *args, _original=Locator.wait_for, **kwargs):
+    # Page.wait_for_function too: a page-level wait (full run 42766359821's
+    # Ghost Lab growing test) times out with its browser closed by the test's
+    # own `finally`, so it must record the page before raising as well.
+    def recorded(page, *args, _original, **kwargs):
         try:
-            return _original(self, *args, **kwargs)
+            return _original(*args, **kwargs)
         except PlaywrightTimeout:
             stem = _stem(os.environ.get("PYTEST_CURRENT_TEST", "unknown").rsplit(" ", 1)[0])
-            _photograph(self.page, f"{stem}-wait-timeout")
-            _write_page_log(self.page, f"{stem}-wait-timeout")
+            _photograph(page, f"{stem}-wait-timeout")
+            _write_page_log(page, f"{stem}-wait-timeout")
             raise
+
+    def wait_for(self, *args, _original=Locator.wait_for, **kwargs):
+        return recorded(self.page, self, *args, _original=_original, **kwargs)
+
+    def wait_for_function(self, *args, _original=Page.wait_for_function, **kwargs):
+        return recorded(self, self, *args, _original=_original, **kwargs)
     Locator.wait_for = wait_for
+    Page.wait_for_function = wait_for_function
 
 
 def _keep_a_page_log(page) -> None:
@@ -213,6 +223,8 @@ def _write_page_log(page, name: str) -> None:
     try:
         lines.append(f"document.readyState: {page.evaluate('document.readyState')}")
         lines.append(f"body: {page.evaluate('document.body.innerHTML.slice(0, 600)')}")
+        # The markup's first 600 characters are the sidebar; the words on screen say which pane drew what.
+        lines.append(f"text: {page.evaluate('document.body.innerText.slice(0, 3000)')}")
     except Exception as error:  # noqa: BLE001 -- a wedged page is the evidence, not a failure
         lines.append(f"document unreadable: {error}")
     (folder / f"{name}.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
