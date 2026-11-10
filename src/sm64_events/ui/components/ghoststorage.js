@@ -53,7 +53,7 @@ const inUse = (count) => (count === 1
 export const PURGES = [
   { keepPbs: true, scope: "except_pbs", label: "Delete ghosts, keep PBs",
     ask: ({ ghosts: n, bytes }) => `Delete ${ghosts(n)} and free ${ghostMegabytes(bytes)}?`,
-    detail: "Your PB, saved and imported ghosts stay." },
+    detail: "All your PB, saved and imported ghosts stay." },
   { keepPbs: false, scope: "all", label: "Delete all ghosts",
     ask: ({ ghosts: n, bytes }) => `Delete ${n === 1 ? "1 ghost" : `all ${n} ghosts`} and free ${ghostMegabytes(bytes)}?`,
     detail: "This deletes your PB ghosts too." },

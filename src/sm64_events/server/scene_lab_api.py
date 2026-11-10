@@ -644,6 +644,39 @@ class SceneLab:
         if self.refitter is not None:
             self.refitter.start()
 
+    def attempt_states(self, ids) -> dict:
+        """Each attempt's answer for the Practice log's Ghost button (GET /attempt-scenes): its recorded take
+        (ready, cutting, unavailable: attempt_scenes.AttemptScenes.states), else {"state": "ghost"} when the race
+        could play it as a ghost and the lab can re-simulate one (scene_ghosts.ghost_attempts): the viewer then
+        watches it made from that ghost (scene_resim's fast load). His PB ghosts among them get their scenes made
+        ahead (_prebuild_pbs), so the Practice log opening is what readies them. Blocking (stats, a clip's first
+        check): a threadpool route. His ask, 2026-11-09: "I should be able to see all of my PB ghosts.\""""
+        found = self.scenes.states(ids) if self.scenes is not None else {}
+        rest = [attempt_id for attempt_id in ids if found.get(str(attempt_id), {}).get("state") not in ("ready", "cutting")]
+        if not rest or self.ghosts is None or self.resim is None:
+            return found
+        ghosts = self.ghosts.ghost_attempts(rest)
+        for attempt_id in ghosts:
+            found[str(attempt_id)] = {"state": "ghost"}
+        self._prebuild_pbs(ghosts)
+        return found
+
+    def _prebuild_pbs(self, ghosts: dict) -> None:
+        """His PB ghosts among them (every saved PB, current or beaten) get their scenes made ahead, each after its
+        stage, at the warmer's idle pace (scene_resim.prebuild): a click then plays at once."""
+        db = getattr(self.ghosts, "db", None)
+        pbs = db.pb_attempt_ids() if db is not None and hasattr(db, "pb_attempt_ids") else set()
+        for attempt_id, attempt in ghosts.items():
+            if attempt_id not in pbs:
+                continue
+            found = self.ghosts.run_clip(attempt)
+            if isinstance(found, str):
+                continue
+            target = {"kind": "segment" if attempt.segment_id is not None else "star",
+                      "entity_key": (str(attempt.segment_id) if attempt.segment_id is not None
+                                     else f"{attempt.course_id}-{attempt.star_id}")}
+            self.resim.prebuild(found[0], found[1].get("sha256"), target)
+
     def live(self) -> dict:
         """{recording, on, switch, reason} for the probe; no I/O (the cutter reports the recording's
         state). `on`: the Trainer asks for the recording (the Scene viewer's switch); `recording`: the
@@ -1469,10 +1502,16 @@ def _mount_ghost_routes(router: APIRouter, lab: SceneLab) -> None:
         except TargetError as error:
             raise HTTPException(422, str(error)) from None
 
-    # The Library's ghost button: one recording by its id, as a row of this target's list.
+    # The Library's ghost button: one recording by its id, as a row of this target's list. The Practice log's
+    # Ghost button on a run with no recorded take: that attempt of his, as a row of its own target's list.
     @router.get("/ghost")
-    async def ghost(recording: str = Query(min_length=1, max_length=128), course: int | None = None,
+    async def ghost(recording: str | None = Query(default=None, min_length=1, max_length=128),
+                    attempt: int | None = None, course: int | None = None,
                     star: int | None = None, segment: int | None = None):
+        if (recording is None) == (attempt is None):
+            raise HTTPException(422, "Name a recording or an attempt.")
+        if attempt is not None:
+            return await asyncio.to_thread(lab.ghosts.attempt_item, attempt)
         target = await asyncio.to_thread(target_of, course, star, segment)
         _warm_target(lab, course, star, "list")
         await lab.ghosts.fill_recording(recording)
@@ -1760,7 +1799,7 @@ def mount_scene_lab(app, config_path, **options) -> SceneLab:
     @router.get("/attempt-scenes")
     def attempt_scenes(ids: str = ""):
         wanted = _attempt_ids(ids)
-        return {"scenes": lab.scenes.states(wanted) if lab.scenes is not None else {}}
+        return {"scenes": lab.attempt_states(wanted)}
 
     @router.post("/open")
     async def open_scene(body: OpenBody):

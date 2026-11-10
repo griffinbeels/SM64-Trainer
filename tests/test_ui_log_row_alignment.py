@@ -139,7 +139,10 @@ def _render(play, base, width, save_newest=False, zoom=1, clear_one=False):
     browser = play.chromium.launch(headless=True, args=["--disable-gpu"])
     try:
         page = browser.new_page(viewport={"width": width, "height": 1100})
-        page.add_init_script("localStorage.setItem('scope', 'lifetime')")
+        # The reset row is measured beside the times: show it (the log hides
+        # resets by default since 2026-11-09).
+        page.add_init_script("localStorage.setItem('scope', 'lifetime');"
+                             "localStorage.setItem('sm64.hideResets', '0')")
         page.route("**/api/replay/status", lambda route: route.fulfill(
             status=200, content_type="application/json", body=json.dumps(STATUS)))
         page.goto(base)

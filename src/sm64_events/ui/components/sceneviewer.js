@@ -2100,18 +2100,19 @@ function useStageChoice(link, open, close) {
 // while the rest is built). `building` says how far, `stop` ends it (the scene keeps what it has). A newer
 // watch, or any other open, takes over from an older one (the lab cancels the older build). The opened
 // scene carries the run it shows (`watching`) and, made from a ghost, that ghost's ref, which its save
-// states are made from.
+// states are made from. `play`: it plays from its first frame once that picture is drawn (the Practice
+// log's Ghost button).
 function useWatch(link, open) {
   const [pending, setPending] = useState(null);           // {ref, name, serial}: its /open has not answered
   const progress = useBuildProgress(!!pending), stopped = useRef(0), serial = useRef(0);
-  async function watch(item, target) {
+  async function watch(item, target, { play = false } = {}) {
     const mine = ++serial.current, hush = () => stopped.current === mine;
     setPending({ ref: item.ref, name: item.player, serial: mine });
     const watching = sceneGhost(item);
     let scene = item.attempt != null
-      ? await open({ attempt: item.attempt }, { quiet: true, adopt: { watching, ghost: null } }) : null;
+      ? await open({ attempt: item.attempt }, { play, quiet: true, adopt: { watching, ghost: null } }) : null;
     const made = !scene && !hush() && mine === serial.current;
-    if (made) scene = await open({ ghost: item.ref }, { quiet: hush, adopt: { watching, ghost: item.ref } });
+    if (made) scene = await open({ ghost: item.ref }, { play, quiet: hush, adopt: { watching, ghost: item.ref } });
     if (scene) keep(scene, { target, watching: scene.watching, ghost: scene.ghost });
     setPending((now) => (now?.serial === mine ? null : now));
     return scene;
@@ -2158,8 +2159,34 @@ function shareWithParts(link, target, t) {
   link.feed = t?.feed;
 }
 
+// The Practice log's Ghost button: the attempt's recorded take, else the scene made from its ghost
+// recording (GET /ghost?attempt=: the lab's ghost row for it), watched the way a ghost row is; both play
+// from the first frame. With neither, the lab's reason shows as a refused open's does: the ghost row's
+// reason, or (a lab with no ghost rows) the take's own refusal, asked again aloud. `current()` is false
+// once a newer choice of stage or ghost has replaced this one.
+async function showAttempt(attempt, named, { link, open, watch, setTarget, current }) {
+  const take = async (quiet) => {
+    const scene = await open({ attempt }, { play: true, quiet });
+    if (scene) {
+      setTarget(scene.target || named);
+      keep(scene, { target: scene.target || named });
+    }
+    return scene;
+  };
+  if ((await take(true)) || !current()) return null;
+  let answer = null;
+  try {
+    answer = await getJSON(`${ROOT}/ghost?attempt=${encodeURIComponent(attempt)}`);
+  } catch { /* a lab with no ghost rows: the take's refusal below says why */ }
+  if (!current()) return null;
+  if (answer?.item) return watch(answer.item, named, { play: true });
+  if (answer?.reason) return link.fail(answer.reason);
+  return take(false);
+}
+
 // `t.sceneLab.intent` (app.js): the Practice log's Ghost button names an attempt; the Ghost Lab opens
-// that attempt's scene and plays it, once per click. A Library row's Ghost button names a ghost
+// that attempt's scene and plays it, once per click (with no recorded take, the scene made from its
+// ghost recording, watched like a ghost row). A Library row's Ghost button names a ghost
 // ({recording, entity, strat}): the Ghost Lab turns to that star or segment and watches that ghost (it
 // becomes the scene, made from the ghost when he has no scene of it). The stage picker (scenestage.js)
 // starts on the target of the scene on screen, else, with none open, on what the Practice log has
@@ -2207,11 +2234,8 @@ export function SceneViewer({ t }) {
     setStageNote(null);
     const named = stageDefault({ attempt: intent.attempt }, t?.view);
     setTarget(named);
-    open({ attempt: intent.attempt }, { play: true }).then((scene) => {
-      if (!scene) return;
-      setTarget(scene.target || named);
-      keep(scene, { target: scene.target || named });
-    });
+    const mine = asked.current;
+    showAttempt(intent.attempt, named, { link, open, watch, setTarget, current: () => mine === asked.current });
   }, [intent]);
   // A Library row's Ghost button: its star or segment in the picker, then that ghost watched.
   async function showGhost(ghost) {

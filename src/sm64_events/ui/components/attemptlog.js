@@ -56,7 +56,10 @@ export function attemptHiddenByDefault(a) {
 export function attemptMatchesLogFilters(a, ui) {
   const savestated = a.save_state; // the server's verdict (caveats.save_state_run)
   return !(ui.hideSavestates !== false && savestated)
-    && !(ui.hideResets && ["reset", "hard_reset", "death"].includes(a.outcome));
+    && !(ui.hideResets && ["reset", "hard_reset", "death"].includes(a.outcome))
+    // PBs only: the runs that set a personal best when they ran, the current
+    // one and every one it later beat (`set_pb`, tracking/views.py).
+    && !(ui.onlyPbs && !a.set_pb);
 }
 
 // Row time on the current clock: completion time for successes, how-far-in

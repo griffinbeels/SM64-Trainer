@@ -3723,6 +3723,15 @@
   .attempts-tools { display: flex; align-items: center; gap: .7rem; }
   .log-settings { display: inline-flex; }
   .log-settings-trigger[aria-expanded="true"] { color: var(--text); background: #20364e; }
+  /* "PBs only" (practicelog.js::OnlyPbsToggle): the Target chip's pill, and
+     while it is on, the gold fill the page's other pressed switches wear
+     (.version-switch-seg) -- a filled pill, not a hue alone, says "on". */
+  .log-only-pbs[aria-pressed="true"],
+  .log-only-pbs[aria-pressed="true"]:hover {
+    background: var(--gold); border-color: var(--gold-soft); color: #1b1607;
+  }
+  .log-only-pbs:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+  .log-settings-sort-note { display: block; margin-top: .2rem; color: var(--muted); font-size: .74rem; }
   .log-settings-panel {
     position: fixed; z-index: 35; width: 340px; max-width: calc(100vw - 24px);
     max-height: calc(100dvh - 24px); overflow: auto; padding: .9rem;

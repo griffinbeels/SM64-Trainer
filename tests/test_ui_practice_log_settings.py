@@ -87,21 +87,25 @@ def _open_every_bucket(cards):
         expect(fold).to_be_visible()
         if fold.get_attribute("aria-expanded") == "false":
             fold.click()
-        expect(card.locator(".attempt-table > tr")).to_have_count(4)
+        # Both switches start on (resets and deaths since 2026-11-09: "By
+        # default "Hide resets & deaths" should be enabled"): the clean run only.
+        expect(card.locator(".attempt-table > tr")).to_have_count(1)
 
 
 def _choose_every_preference(page, dialog, resets, saved, cards):
-    expect(resets).not_to_be_checked()
+    expect(resets).to_be_checked()
     expect(saved).to_be_checked()
     expect(resets).to_be_focused()
     # Keyboard uses the native switch input, not a click-only handler.
     resets.press("Space")
-    _expect_rows(cards, 1)
+    _expect_rows(cards, 4)
     saved.click()
-    _expect_rows(cards, 5)
-    resets.click()
     _expect_rows(cards, 8)
+    resets.click()
+    _expect_rows(cards, 5)
     saved.click()
+    _expect_rows(cards, 1)
+    resets.click()
     _expect_rows(cards, 4)
     dialog.get_by_role("combobox").select_option("oldest")
     expect(dialog.get_by_role("combobox")).to_have_value("oldest")
@@ -185,6 +189,7 @@ def test_preferences_drive_every_log_bucket_and_remember_choices():
             browser = playwright.chromium.launch(headless=True)
             try:
                 page = browser.new_page(viewport={"width": 1500, "height": 1000})
+                page.add_init_script("Element.prototype.requestPointerLock = () => Promise.resolve();")
                 errors, failed_api = _watch_failures(page)
                 page.route("**/api/session?*", _decorate_session)
                 page.goto(base)

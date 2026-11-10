@@ -137,9 +137,26 @@ test("clicking a ready Ghost button hands its attempt to the viewer's door; a wa
   expect(openScene).toHaveBeenCalledWith(11);
 });
 
+// His words (2026-11-09): "I should be able to see all of my PB ghosts." A run with no recorded take but a
+// ghost recording ("ghost": the Ghost Lab makes its scene from the ghost) opens like a ready one.
+test("a row whose run has only a ghost draws an enabled Ghost button that hands its attempt over", async () => {
+  answer = (id) => ({ 15: { state: "ghost" }, 13: { state: "unavailable", reason: NO_CAPTURE } })[id];
+  const openScene = vi.fn();
+  const page = render(table([15, 13, 14], openScene));
+  await until(() => expect(ghostOf(page, 15)).toBeTruthy());
+  expect([ghostOf(page, 15).disabled, ghostOf(page, 15).title]).toEqual([false, OPEN_IN_VIEWER]);
+  expect(ghostOf(page, 15).nextElementSibling.getAttribute("aria-label")).toBe("View replay");
+  expect(ghostOf(page, 13).disabled).toBe(true);
+  fireEvent.click(ghostOf(page, 15));
+  expect(openScene).toHaveBeenCalledWith(15);
+  await wait(SCENE_POLL.ms * 4);
+  expect(asks).toEqual([[13, 14, 15]]);                                       // nothing cutting: asked once
+});
+
 test("an answer the page does not know is a disabled button that says why", () => {
   expect(sceneButton(undefined)).toBeNull();
   expect(sceneButton({ state: "ready" })).toEqual({ disabled: false, title: OPEN_IN_VIEWER });
+  expect(sceneButton({ state: "ghost" })).toEqual({ disabled: false, title: OPEN_IN_VIEWER });
   expect(sceneButton({ state: "cutting" })).toEqual({ disabled: true, title: SCENE_FINISHING });
   expect(sceneButton({ state: "gone", reason: NO_CAPTURE })).toEqual({ disabled: true, title: NO_CAPTURE });
   expect(sceneButton({ state: "unavailable" }).disabled).toBe(true);

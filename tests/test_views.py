@@ -441,6 +441,24 @@ def test_a_save_state_success_is_absent_from_progress_even_with_a_saved_pb(tmp_p
     assert all(not p["is_pb_igt"] for p in points)
 
 
+def test_every_row_that_set_a_pb_says_so_on_the_views_clock(tmp_path):
+    """The practice log's PBs filter (his ask, 2026-11-09: "see my PB progression directly in the practice
+    log"): a row that saved a PB says `set_pb`, the current PB and the one it beat alike; a row with no saved
+    PB, or a PB on the other clock only, does not."""
+    db, svc = make(tmp_path)
+    seed(svc)
+    asyncio.run(svc.set_strat(2, 2, "Standard", save_adopted=False))
+    a343 = next(a.id for a in db.attempts() if a.igt_frames == 343)
+    a350 = next(a.id for a in db.attempts() if a.igt_frames == 350)
+    save_pb(svc, db, a350, "igt")
+    save_pb(svc, db, a343, "igt")     # supersedes a350 as current PB
+    [sec] = build_session_view(db, svc, clock="igt")["stars"]
+    flags = {row["id"]: row["set_pb"] for row in sec["attempts"]}
+    assert flags[a343] is True and flags[a350] is True and sum(flags.values()) == 2
+    [rta] = build_session_view(db, svc, clock="rta")["stars"]
+    assert not any(row["set_pb"] for row in rta["attempts"])     # those were IGT PBs
+
+
 @pytest.mark.parametrize("proof", [
     {"anchor_type": "state_loaded"}, {"state_loads": 1},
     {"invalid_reason": "save_state", "valid": False}, {"outcome": "loaded"},

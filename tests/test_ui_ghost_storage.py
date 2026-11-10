@@ -196,7 +196,7 @@ def test_the_section_says_the_space_and_each_dialog_counts_what_it_frees(browser
     assert fits == [True, True]
 
     page.click(KEEP)
-    assert dialog_text(page) == "Delete 37 ghosts and free 152 MB? Your PB, saved and imported ghosts stay."
+    assert dialog_text(page) == "Delete 37 ghosts and free 152 MB? All your PB, saved and imported ghosts stay."
     assert page.inner_text(f"{DIALOG} .modal-heading h2").strip() == "Delete ghosts, keep PBs"
     assert page.locator(f"{DIALOG} .modal-heading p").count() == 0          # no subtitle
     # The question reads in the title's ink, the detail line muted; a dialog mounted inside the
@@ -226,7 +226,7 @@ def test_delete_sends_keep_pbs_and_says_what_it_freed(browser, base):
     open_settings(page)
     wait_text(page, USAGE, "Ghost files use 241 MB on this computer.")
     page.click(KEEP)
-    assert dialog_text(page) == ("Delete 37 ghosts and free 152 MB? Your PB, saved and imported ghosts stay. "
+    assert dialog_text(page) == ("Delete 37 ghosts and free 152 MB? All your PB, saved and imported ghosts stay. "
                                  "1 ghost is in use right now, so it stays.")
     gets = STATE["gets"]
     page.click(f"{DIALOG} .ghost-storage-delete")

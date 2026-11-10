@@ -4,8 +4,10 @@
 //
 // The lab cuts each finished attempt into a scene (server/scene_lab_api.py).
 // GET /api/scene-lab/attempt-scenes?ids= answers, per attempt id, whether its
-// scene is "ready", still "cutting", or "unavailable" with the reason, and
-// leaves out ids the lab knows nothing about: those rows draw no button. A
+// scene is "ready", still "cutting", or "unavailable" with the reason, or
+// "ghost": no recorded take, but a ghost recording the Ghost Lab makes the
+// scene from (sceneviewer.js), so every PB with a ghost opens. It leaves out
+// ids the lab knows nothing about: those rows draw no button. A
 // table asks once for the rows it shows whenever that set of ids changes, and
 // again every SCENE_POLL.ms only while one of them is still cutting, so a row
 // whose cut lands turns its button on by itself. It also asks again when the
@@ -28,7 +30,7 @@ export const SCENE_FINISHING = "Scene finishing…";
 // What a row's button shows for its scene: null (no button) when the lab knows nothing of it.
 export function sceneButton(scene) {
   if (!scene) return null;
-  if (scene.state === "ready") return { disabled: false, title: OPEN_IN_VIEWER };
+  if (scene.state === "ready" || scene.state === "ghost") return { disabled: false, title: OPEN_IN_VIEWER };
   if (scene.state === "cutting") return { disabled: true, title: SCENE_FINISHING };
   return { disabled: true, title: scene.reason || "This attempt has no scene." };
 }
