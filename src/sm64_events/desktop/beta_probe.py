@@ -28,6 +28,8 @@ _ASSETS = (
     # under the package path (round 38: beta.1 died without the policy).
     "sm64_events/data/ranking_policy.json", "sm64_events/data/pad_glyphs_us.npz",
     "sm64_events/data/pad_icons_us.npz", "sm64_events/data/oracle_glyphs_us.npz",
+    # The setup check's baseline: the setup screen and the elevated install helper read it (the Fixups' hash).
+    "sm64_events/data/setup_baseline.json",
     *(_UI + name for name in (
         "index.html", "app.js", "api.js", "community.js", "components/header.js",
         "components/communityaccount.js", "components/communityprofile.js",
@@ -56,7 +58,10 @@ _IMPORTS = (
     ("sm64_events.library.background", ("worker_main",)),
     ("sm64_events.replay.gpuprocess.process_worker", ("main",)),
     ("sm64_events.ghost.sound_player", ("main",)),
-    ("sm64_events.core.plugin_elevation_worker", ("main",)),
+    ("sm64_events.core.plugin_elevation_worker", ("main", "fixups_source")),
+    # Setup's PJ64 Fixups download and the baseline it checks against; the elevated helper imports both.
+    ("sm64_events.core.fixups", ("Fixups", "tested_sha256")),
+    ("sm64_events.core.setup_profile", ("load_baseline", "SetupProfile")),
     ("sentry_sdk", ("init", "capture_exception", "capture_message", "get_client", "new_scope")),
     ("sm64_events.core.error_reporting", ("configure", "capture_exception", "capture_problem", "status", "shutdown")),
     ("sm64_events.core.error_reporting_transport", ("Delivery", "PersistentTransport")),
@@ -175,6 +180,14 @@ def _bundled_media_reads():
                 and mediaprobe.video_start_of(clip) == times[0])
 
 
+def _shipped_setup_baseline():
+    """The setup gate and the elevated install helper check the downloaded PJ64 Fixups against this pin."""
+    from sm64_events.core.fixups import tested_sha256
+    from sm64_events.core.setup_profile import load_baseline
+    pin = tested_sha256(load_baseline())
+    return isinstance(pin, str) and len(pin) == 64
+
+
 def _ghost_lab(report, check, fixture):
     """The Ghost Lab's rows: its modules import here, Unicorn stays out of this program, and the simulation
     program beside it passes its own check (scenelab/probe.py); its receipt rides along whole. Unit fixtures
@@ -258,6 +271,7 @@ def collect_report(*, fixture: ProbeRuntime | None = None, importer=None):
         from sm64_events.ranks.policy import RankingPolicy, _POLICY_PATH
         return _POLICY_PATH.is_file() and bool(RankingPolicy().revision)
     check("ranking_policy_loads", shipped_ranking_policy)
+    check("setup_baseline_loads", _shipped_setup_baseline)
     # Import availability only; no service construction or helper invocation.
     load = importer or importlib.import_module
     for name, members in _IMPORTS:
