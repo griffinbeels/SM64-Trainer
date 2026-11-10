@@ -49,8 +49,11 @@ COLLECT = ["av", "proctap", "pyaudiowpatch", "pycaw",
            "comtypes", "webview", "pystray", "numpy", "yt_dlp", "sentry_sdk"]
 # The simulation program's own (sim_args): unicorn is the Ghost Lab's MIPS
 # emulator, and its engine is a DLL inside the package (unicorn/lib/unicorn.dll)
-# that the binding loads by path. Never collected into the Trainer.
-SIM_COLLECT = ["unicorn", "numpy"]
+# that the binding loads by path. Never collected into the Trainer. numpy is not
+# collected whole: PyInstaller's own numpy hook brings its code and DLLs, and a
+# whole collection also carries numpy's test data, whose hidden .f2py_f2cmap
+# files the release's bundle check refuses (beta.38 candidate, 2026-11-09).
+SIM_COLLECT = ["unicorn"]
 # Left out of the simulation program by name. PyInstaller follows imports
 # inside functions too, so the lab modules' lazy paths that no simulation
 # process runs (audio_layer's FLAC encode -> PyAV, the recorder's capture
@@ -407,6 +410,28 @@ def our_files(app_dir: Path, exe_name: str) -> list[Path]:
             *(app_dir / LAB_FOLDER / name for name in LAB_NATIVES), *sim]
 
 
+def check_built_paths(app_dir: Path) -> None:
+    """Every path of the built app, both programs' folders included, through the same bundle check the release's
+    candidate step runs (build_beta.validate_artifact -> bundle_policy.check_bundle_path), so a scratch build
+    refuses what a candidate would: the beta.38 candidate was the first to see the simulation program's
+    numpy test files (2026-11-09). ValueError naming the first path refused and why."""
+    import hashlib
+
+    from bundle_policy import VENDOR_HIDDEN, check_bundle_path, tracked_ui_paths
+    from sm64_events.core.update_plan import NATIVE_FOLDER, RETIRED_NATIVES
+    retired = {f"{NATIVE_FOLDER}/{name}" for name in RETIRED_NATIVES}
+    ui_paths = tracked_ui_paths(REPO)
+    for path in sorted(app_dir.rglob("*")):
+        relative = path.relative_to(app_dir).as_posix()
+        small = path.is_file() and path.stat().st_size <= 4096
+        digest = (hashlib.sha256(path.read_bytes()).hexdigest()
+                  if (relative in VENDOR_HIDDEN or relative in retired) and small else None)
+        try:
+            check_bundle_path(relative, ui_paths=ui_paths, is_dir=path.is_dir(), digest=digest)
+        except ValueError as error:
+            raise ValueError(f"{relative}: {error}") from None
+
+
 def scan_built(app_dir: Path, exe_name: str) -> None:
     """Refuse the build if Microsoft Defender flags one of our own files in the
     built app or cannot scan it (tools/defender_scan.py). Runs before the zip
@@ -495,6 +520,11 @@ def build_app(pyi, args) -> int:
         print(f"Build refused: {failure}", file=sys.stderr)
         return 2
     if (app_dir := stage_notices(args.distpath, Path(ffmpeg))) is None:
+        return 2
+    try:
+        check_built_paths(app_dir)
+    except ValueError as failure:
+        print(f"Build refused: {failure}", file=sys.stderr)
         return 2
     try:
         scan_built(app_dir, "SM64Trainer")
