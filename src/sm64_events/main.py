@@ -890,8 +890,9 @@ def run(*, recorder_lock=None) -> None:
         wait_lock_free(instance_lock_path())
     import uvicorn
     app = build(recorder_lock=recorder_lock) if recorder_lock is not None else get_app()
+    from sm64_events.core.logging_setup import server_log_config
     uvicorn.run(app, host="127.0.0.1", port=server_port(),
-                timeout_graceful_shutdown=3)
+                timeout_graceful_shutdown=3, log_config=server_log_config(console=True))
 
 
 if __name__ == "__main__":

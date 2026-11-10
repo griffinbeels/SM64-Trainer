@@ -65,6 +65,43 @@ def isolated_python_child(script: Path, frozen_flag: str, args=()) -> list[str]:
     return [str(windowless), "-I", "-S", str(script), *args]
 
 
+#: The most lines one child's error output may put in the log; past it one line says the rest was not logged.
+CHILD_LOG_LINES = 200
+
+
+def log_child_stderr(process, name: str, *, limit: int = CHILD_LOG_LINES):
+    """Copies a child's error output (its stderr, opened as a pipe) into this process's log, one WARNING per line
+    under the logger `sm64.child.<name>`, on a daemon thread that also keeps the pipe drained so the child never
+    blocks on it. A Ghost Lab child's traceback (a crashed cutter, resolver or evaluator) used to go to DEVNULL or
+    a console window; the installed app has neither, so the app's own log is the one place it can be read. A
+    chatty child is capped at `limit` lines. Returns the thread, or None when the child has no stderr pipe."""
+    import logging
+    import threading
+    stream = getattr(process, "stderr", None)
+    if stream is None:
+        return None
+    log = logging.getLogger(f"sm64.child.{name}")
+
+    def drain() -> None:
+        written = 0
+        try:
+            while raw := stream.readline():                # bytes or text; empty at the pipe's end
+                line = (raw.decode("utf-8", "replace") if isinstance(raw, bytes) else raw).rstrip()
+                if not line:
+                    continue
+                if written < limit:
+                    log.warning("%s", line)
+                elif written == limit:
+                    log.warning("(more output from this child is not logged)")
+                written += 1
+        except (OSError, ValueError):
+            pass
+
+    thread = threading.Thread(target=drain, name=f"stderr-{name}", daemon=True)
+    thread.start()
+    return thread
+
+
 def other_program_env(env: dict) -> dict:
     """`env` for another PyInstaller program than this one (the simulation program beside the Trainer): without
     this process's PyInstaller variables (`_MEI*`, `_PYI_*`), which name THIS program's contents folder and would

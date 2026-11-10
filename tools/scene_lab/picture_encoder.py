@@ -99,12 +99,13 @@ class PictureEncoder:
     """The child process. jpeg() is called from one thread at a time (the delivery thread)."""
 
     def __init__(self, quality: int = 90):
-        from sm64_events.core.childproc import python_child, quiet_spawn_kwargs
+        from sm64_events.core.childproc import log_child_stderr, python_child, quiet_spawn_kwargs
         argv, env = python_child("picture_encoder", "--scene-lab-encoder", site_packages=True)
         env["PYTHONPATH"] = os.pathsep.join(filter(None, (str(HERE), env.get("PYTHONPATH"))))
         self.quality = quality
         self.process = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                        stderr=subprocess.DEVNULL, env=env, **quiet_spawn_kwargs())
+                                        stderr=subprocess.PIPE, env=env, **quiet_spawn_kwargs())
+        log_child_stderr(self.process, "encoder")   # its errors reach the app's log
         self.lock = threading.Lock()
         self.ready = threading.Event()
         threading.Thread(target=self._await_ready, name="picture-encoder-ready", daemon=True).start()

@@ -4,12 +4,14 @@ deterministic start/stop. uvicorn skips signal-handler install off the main
 thread, which is exactly what we want — the GUI drives shutdown via
 ``should_exit`` (window close / tray quit / admin endpoint), never CTRL+C.
 ``timeout_graceful_shutdown=3`` is preserved (the load-bearing CTRL+C fix)."""
+import sys
 import threading
 import time
 import urllib.request
 
 import uvicorn
 
+from sm64_events.core.logging_setup import server_log_config
 from sm64_events.core.paths import server_port
 
 
@@ -18,7 +20,7 @@ class ServerRunner:
         self.host = host
         self.port = server_port() if port is None else port
         self._server = uvicorn.Server(uvicorn.Config(
-            app, host=host, port=self.port, log_config=None,
+            app, host=host, port=self.port, log_config=server_log_config(console=sys.stderr is not None),
             timeout_graceful_shutdown=3))
         self._thread: threading.Thread | None = None
         # Default: the admin shutdown endpoint stops the server. The desktop

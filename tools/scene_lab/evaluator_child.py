@@ -140,7 +140,7 @@ class EvaluatorClient:
         (RuntimeError: why not); without, returns at once and the first call waits for that, so the
         start (~0.4 s: the interpreter, Unicorn, the package and the ROM's code images) overlaps
         whatever the caller does meanwhile (scene_session opens the renderer)."""
-        from sm64_events.core.childproc import python_child, quiet_spawn_kwargs
+        from sm64_events.core.childproc import log_child_stderr, python_child, quiet_spawn_kwargs
         self.memory = shared_memory.SharedMemory(create=True, size=SLOT_BYTES)
         args = ["--rom", str(rom_path), "--map", str(map_path), "--source", str(source or "package"),
                 "--memory", self.memory.name]
@@ -158,7 +158,8 @@ class EvaluatorClient:
         self._buffers, self._turn = [bytearray(), bytearray()], 0     # the views' RDRAM, in turn (display_list)
         try:
             self.process = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                            stderr=subprocess.DEVNULL, env=env, **quiet_spawn_kwargs())
+                                            stderr=subprocess.PIPE, env=env, **quiet_spawn_kwargs())
+            log_child_stderr(self.process, "evaluator")   # its errors reach the app's log
         except OSError:
             self._release()
             raise

@@ -59,7 +59,8 @@ class Journal:
         self.writes.append(key)
         self.state[key] = value
 
-    def input_templates(self):
+    @property
+    def input_templates(self):                     # storage/db.py: a property, as the real Database has it
         return SimpleNamespace(all=lambda: list(self.templates))
 
     def segment_defs(self):
@@ -466,3 +467,20 @@ def test_a_made_scene_open_in_the_ghost_lab_is_skipped_and_an_orphan_is_only_byt
     world.storage.purge(keep_pbs=False)
     assert opened.is_file() and not orphan.exists()
     assert usage["all"]["ghosts"] == 7                             # the orphan adds bytes, never a ghost
+
+
+def test_keep_pbs_keeps_a_template_run_over_the_real_database(tmp_path):
+    """Database.input_templates is a property returning the TemplateStore. GET /api/ghost/storage called it as a
+    function and answered 500 on his test server (2026-11-09) while the Journal double above, a method then,
+    agreed with the bug. Over the real Database: a saved template's run is kept, and nothing else is."""
+    from sm64_events.inputs.service import entity_key_of
+    from sm64_events.storage.db import Database
+    from tests.ghost_fixture import a_document
+    db = Database(tmp_path / "t.db")
+    kind, key = entity_key_of(SimpleNamespace(segment_id=None, course_id=24, star_id=1))
+    db.input_templates.save(kind=kind, entity_key=key, strat_tag="10 coin", name="the good one",
+                            origin="attempt:41", document=a_document())
+    db.input_templates.save(kind=kind, entity_key=key, strat_tag="10 coin", name="typed in",
+                            origin="authored", document=a_document(), active=False)
+    assert 41 in kept_attempts(db)
+    assert kept_attempts(db) == {41} | set(db.pb_attempt_ids())

@@ -100,7 +100,7 @@ class CutterProcess:
 
     def __init__(self, rom: Path, folder: Path, on_event, *, lab_root: Path | None = None,
                  spool_factory: str | None = None, extra_path: tuple = (), symbol_map: Path | None = None):
-        from sm64_events.core.childproc import python_child, quiet_spawn_kwargs
+        from sm64_events.core.childproc import log_child_stderr, python_child, quiet_spawn_kwargs
         args = ["--rom", str(rom), "--folder", str(folder)]
         if lab_root is not None:
             args += ["--lab-root", str(lab_root)]
@@ -113,7 +113,8 @@ class CutterProcess:
         spawn = quiet_spawn_kwargs()
         spawn["creationflags"] = spawn.get("creationflags", 0) | _BELOW_NORMAL
         self.process = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                        stderr=subprocess.DEVNULL, env=env, **spawn)
+                                        stderr=subprocess.PIPE, env=env, **spawn)
+        log_child_stderr(self.process, "cutter")   # its errors reach the app's log
         self.on_event = on_event
         self.outgoing: queue.SimpleQueue = queue.SimpleQueue()
         threading.Thread(target=self._write, name="scene-cutter-notes", daemon=True).start()

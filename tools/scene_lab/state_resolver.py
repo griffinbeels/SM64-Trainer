@@ -73,7 +73,7 @@ class Resolvers:
 
     def __init__(self, package: bytes, rom: Path, symbol_map: Path, deliver, *, count: int = COUNT,
                  evaluator: str | None = None, extra_path: tuple = (), warm: int | None = None):
-        from sm64_events.core.childproc import python_child, quiet_spawn_kwargs
+        from sm64_events.core.childproc import log_child_stderr, python_child, quiet_spawn_kwargs
         self.deliver = deliver
         self.slots_at = -(-len(package) // 4096) * 4096    # the package's bytes first, then one slot a child
         self.lock = threading.Lock()
@@ -101,7 +101,8 @@ class Resolvers:
         try:
             for number in range(count):
                 process = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                           stderr=subprocess.DEVNULL, env=env, **spawn)
+                                           stderr=subprocess.PIPE, env=env, **spawn)
+                log_child_stderr(process, "resolver")   # its errors reach the app's log
                 self.children.append(_Child(process, self.slots_at + number * SLOT_BYTES))
         except OSError:
             self.close()

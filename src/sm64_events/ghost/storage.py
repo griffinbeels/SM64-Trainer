@@ -100,9 +100,9 @@ def kept_attempts(database) -> set[int]:
     if database is None:
         return set()
     kept = set(database.pb_attempt_ids()) | set(saved_ids(database))
-    templates = getattr(database, "input_templates", None)
+    templates = getattr(database, "input_templates", None)        # Database.input_templates: a property
     if templates is not None:
-        for template in templates().all():
+        for template in templates.all():
             number = attempt_id_of(template.origin)
             if number is not None:
                 kept.add(number)

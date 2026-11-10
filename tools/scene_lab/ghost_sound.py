@@ -129,9 +129,10 @@ class EngineHost:
     """One ghost_sound_host.exe (hidden) and its pipes: render() runs one ghost's ticks."""
 
     def __init__(self, rom: bytes, command: list[str] | None = None):
-        from sm64_events.core.childproc import quiet_spawn_kwargs
+        from sm64_events.core.childproc import log_child_stderr, quiet_spawn_kwargs
         self.process = subprocess.Popen(command or [str(build())], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                        stderr=subprocess.DEVNULL, **quiet_spawn_kwargs())
+                                        stderr=subprocess.PIPE, **quiet_spawn_kwargs())
+        log_child_stderr(self.process, "ghost-sound-host")   # its errors reach the app's log
         self.lock = threading.Lock()
         self.process.stdin.write(b"ROM1" + struct.pack("<I", len(rom)) + bytes(rom))
         self.process.stdin.flush()
@@ -388,14 +389,15 @@ class TrackMaker:
     Python lock with the pictures. One request at a time (SceneGhostSounds.lock); the ROM goes once."""
 
     def __init__(self, engine: str | None = None, extra_path: tuple = ()):
-        from sm64_events.core.childproc import python_child, quiet_spawn_kwargs
+        from sm64_events.core.childproc import log_child_stderr, python_child, quiet_spawn_kwargs
         argv, env = python_child("ghost_sound", "--scene-lab-ghost-sound",
                                  ["--serve", *(["--engine", engine] if engine else [])], site_packages=True)
         env["PYTHONPATH"] = os.pathsep.join(filter(None, (*map(str, extra_path), str(HERE), env.get("PYTHONPATH"))))
         spawn = quiet_spawn_kwargs()
         spawn["creationflags"] = spawn.get("creationflags", 0) | _BELOW_NORMAL
         self.process = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                        stderr=subprocess.DEVNULL, env=env, **spawn)
+                                        stderr=subprocess.PIPE, env=env, **spawn)
+        log_child_stderr(self.process, "ghost-sound")   # its errors reach the app's log
         self.rom = None                                # the ROM the child holds
 
     @property

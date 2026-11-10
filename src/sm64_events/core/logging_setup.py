@@ -35,3 +35,27 @@ def configure_logging(log_dir: Path | None = None) -> None:
                     logging.StreamHandler()):
         handler.setFormatter(formatter)
         root.addHandler(handler)
+
+
+def server_log_config(*, console: bool) -> dict:
+    """uvicorn's logging (its `log_config`), the same for a source server and the installed app.
+
+    Its own default sends `uvicorn.error` to a console handler that never reaches the root, so an "Exception in
+    ASGI application" traceback (a route's unhandled error) lived only in a console window and never in
+    logs/sm64_events.log: his test server's 500 on GET /api/ghost/storage left no trace there (2026-11-09).
+    Here `uvicorn` and `uvicorn.error` keep no handler of their own and propagate to the root's handlers
+    (configure_logging: the rotating log file and the console), tracebacks included. The access log stays off
+    the file (one INFO line per request): `console` keeps it on the console a developer reads; without one (the
+    installed app's window has none) only an access WARNING or worse is logged at all."""
+    access = ({"handlers": ["access"], "level": "INFO", "propagate": False} if console
+              else {"handlers": [], "level": "WARNING", "propagate": False})
+    config: dict = {"version": 1, "disable_existing_loggers": False,
+                    "loggers": {"uvicorn": {"handlers": [], "level": "INFO", "propagate": True},
+                                "uvicorn.error": {"handlers": [], "level": "INFO", "propagate": True},
+                                "uvicorn.access": access}}
+    if console:
+        config["formatters"] = {"access": {"()": "uvicorn.logging.AccessFormatter",
+                                           "fmt": '%(levelprefix)s %(client_addr)s - "%(request_line)s" %(status_code)s'}}
+        config["handlers"] = {"access": {"class": "logging.StreamHandler", "formatter": "access",
+                                         "stream": "ext://sys.stderr"}}
+    return config

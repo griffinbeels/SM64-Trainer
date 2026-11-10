@@ -307,6 +307,9 @@ class StageWarmer:
         except ValueError:
             answer = {"error": line[0]}
         log.info("%s made ahead: %s", _named(key), answer)
+        if (errors or "").strip() and ("error" in answer or child.returncode not in (0, None)):
+            # The child's own traceback or warning, in the app's log beside the refusal it explains.
+            log.warning("%s: the warm child said:\n%s", _named(key), (errors or "").strip()[-4000:])
         if not ended and self.answered is not None and key[0] != "ghost":     # a stage's own result
             try:
                 self.answered(key, answer)
