@@ -12,7 +12,8 @@ from sm64_events.core.childproc import quiet_spawn_kwargs
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_native_playback_ownership_and_selection(tmp_path):
+@pytest.mark.parametrize("restore_mailbox_retirement", [False, True])
+def test_native_playback_ownership_and_selection(tmp_path, restore_mailbox_retirement):
     if sys.platform != "win32":
         pytest.skip("Win32 renderer component")
     spec = importlib.util.spec_from_file_location("build_plugin", ROOT / "tools/build_plugin.py")
@@ -21,9 +22,16 @@ def test_native_playback_ownership_and_selection(tmp_path):
     vcvars = compiler.find_vcvars32()
     assert vcvars, "x86 MSVC toolchain is required for the native playback witness"
     target = tmp_path / "ghost_playback_host.exe"
-    compiler._cl(vcvars, ["/nologo", "/O2", "/W4", "/MT", "/EHsc", "/std:c++17", "/Gy",
+    playback = ROOT / "plugin/gfxwrap/ghost_playback.cpp"
+    if restore_mailbox_retirement:
+        text = playback.read_text(encoding="utf-8")
+        anchor = "else if(have_retained_request) {published=retained_request;received=true;}"
+        assert text.count(anchor) == 1
+        playback = tmp_path / "ghost_playback.cpp"
+        playback.write_text(text.replace(anchor, ""), encoding="utf-8")
+    compiler._cl(vcvars, ["/nologo", "/O2", "/W4", "/MT", "/EHsc", "/std:c++17", "/Gy", "/DSM64_GHOST_TEST_HOOKS",
         f"/I{ROOT / 'renderer/model'}", f"/I{ROOT / 'plugin/gfxwrap'}",
-        str(ROOT / "plugin/gfxwrap/ghost_playback.cpp"), str(ROOT / "plugin/gfxwrap/ghost_origin.cpp"),
+        str(playback), str(ROOT / "plugin/gfxwrap/ghost_origin.cpp"),
         str(ROOT / "plugin/gfxwrap/ghost_annotation_assets.cpp"),
         str(ROOT / "tests/native/ghost_playback_host.cpp"),
         f"/Fe:{target}", f"/Fo{tmp_path}\\", "/link", "/OPT:REF",
@@ -31,6 +39,9 @@ def test_native_playback_ownership_and_selection(tmp_path):
     result = subprocess.run([str(target)], cwd=tmp_path, capture_output=True, text=True,
                             timeout=30, check=False, **quiet_spawn_kwargs())
     (tmp_path / "playback-witness.txt").write_text(result.stdout + result.stderr, encoding="utf-8")
+    if restore_mailbox_retirement:
+        assert result.returncode != 0 and "selection result" in result.stderr
+        return
     assert result.returncode == 0, result.stdout + result.stderr
     report = json.loads(result.stdout)
     assert report["ok"] and report["checks"] > 50 and report["models"] >= 3

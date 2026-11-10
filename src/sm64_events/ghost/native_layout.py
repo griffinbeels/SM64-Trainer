@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Runs in the simulation program (SM64TrainerSim.exe); licenses/README.md lists its GPL-2.0-or-later code.
 """Byte layout, limits and status codes of the native ghost formats, in one place.
 
 The C headers own these values (plugin/gfxwrap/ghost_capture.h, ghost_clip.h,
@@ -88,7 +90,7 @@ DRAW_LIST_GATES = (
     "other_thread", "no_clean_consumer", "no_identity", "no_dispatch", "create_scope", "no_compositor",
     "faulted", "no_model", "no_extent", "prepare_scope", "prepare", "no_sample", "no_plan", "no_seal",
     "seal_world", "seal_buffer", "no_pose", "seal_scope", "batch", "target_changed", "world_lost",
-    "hud", "stale", "close_dirty", "finalize")
+    "hud", "stale", "close_dirty", "finalize", "ineligible")
 DRAW_PRESENT_GATES = (
     "unknown", "shown", "no_clean_consumer", "no_presentation", "no_provider", "identity", "split",
     "overscan", "multisampling", "fxaa", "blit_workaround", "source", "source_extent", "no_image",

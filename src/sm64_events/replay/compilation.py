@@ -21,9 +21,10 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Callable
 
 from sm64_events.core.childproc import quiet_spawn_kwargs
-from sm64_events.core.paths import bundled_ffmpeg
+from sm64_events.core.paths import ffmpeg_program
 from sm64_events.core.timefmt import format_igt_short
 from sm64_events.memory.addresses import course_name, star_name
 from sm64_events.replay.config import CLIP_MAXRATE, video_quality_args
@@ -47,11 +48,11 @@ class CompilationBuilder:
     """extract each spec -> concat/normalize into one mp4. ffmpeg-bound; the
     extractor + codec/fps are injected so tests can drive it without video."""
 
-    def __init__(self, extractor, codec: str, fps: int, ffmpeg: str | None = None):
+    def __init__(self, extractor, codec: str | Callable[[], str], fps: int, ffmpeg: str | None = None):
         self._extractor = extractor
         self._codec = codec
         self._fps = fps
-        self._ffmpeg = ffmpeg or bundled_ffmpeg() or shutil.which("ffmpeg")
+        self._ffmpeg = ffmpeg or ffmpeg_program()
 
     def build(self, specs, ring, tmp_dir: Path, out_path: Path,
               resolve_saved, progress_cb) -> CompilationResult:
@@ -107,6 +108,7 @@ class CompilationBuilder:
         return (int(m.group(1)), int(m.group(2))) if m else None
 
     def _concat_normalize(self, clips, canvas, out_path: Path) -> None:
+        codec = self._codec() if callable(self._codec) else self._codec
         w, h = canvas
         inputs: list[str] = []
         for p in clips:
@@ -123,8 +125,8 @@ class CompilationBuilder:
         args = [self._ffmpeg, "-hide_banner", "-loglevel", "error", *inputs,
                 "-filter_complex", ";".join(parts),
                 "-map", "[v]", "-map", "[a]",
-                "-c:v", self._codec,
-                *video_quality_args(self._codec, "offline", CLIP_MAXRATE),
+                "-c:v", codec,
+                *video_quality_args(codec, "offline", CLIP_MAXRATE),
                 "-c:a", "aac", "-ar", "48000",
                 "-movflags", "+faststart", "-y", str(out_path)]
         try:

@@ -4,7 +4,10 @@
 Strategy: enumerate committed memory regions in the (32-bit) PJ64 process;
 any region >= 4 MB whose start matches the libultra osBootConfig signature
 is the RDRAM. The cartridge image sits 0x10000000 past it (`rom_header`).
-Read-only access; never writes to the emulator.
+
+The reader's handle is read-only: `winprocess.READ_RIGHTS`, no debug
+privilege. Ghost Handoff's slot write (`write_rdram`) opens its own handle
+with only WriteProcessMemory's rights, for that one write.
 """
 import ctypes
 import logging
@@ -14,20 +17,14 @@ from collections.abc import Callable, Iterator
 from ctypes import wintypes
 from dataclasses import dataclass
 
-import pymem
-import pymem.exception
-
 from sm64_events.memory import addresses as A
+from sm64_events.memory import winprocess
 from sm64_events.memory.base import MemoryReadError, RdramReader
+from sm64_events.memory.winprocess import ProcessAccessError, ProcessHandle
 
 log = logging.getLogger("sm64.pj64")
-# pymem sets its own logger to DEBUG at import and logs "Process N is being
-# debugged" on every open: 38 lines in one minute of the setup screen
-# (2026-09-28). Its warnings still reach the log.
-logging.getLogger("pymem").setLevel(logging.INFO)
 
 PROCESS_NAME = "Project64.exe"
-_WAIT_TIMEOUT = 0x102
 MEM_COMMIT = 0x1000
 PAGE_NOACCESS = 0x01
 PAGE_GUARD = 0x100
@@ -49,12 +46,10 @@ class _MBI64(ctypes.Structure):
 
 def iter_committed_regions(handle: int) -> Iterator[tuple[int, int]]:
     """Yield (base, size) of readable committed regions, low to high."""
-    kernel32 = ctypes.windll.kernel32
-    kernel32.VirtualQueryEx.restype = ctypes.c_size_t
+    kernel32 = winprocess.kernel32()
     mbi = _MBI64()
     addr = 0
-    while kernel32.VirtualQueryEx(handle, ctypes.c_void_p(addr),
-                                  ctypes.byref(mbi), ctypes.sizeof(mbi)):
+    while kernel32.VirtualQueryEx(handle, addr, ctypes.byref(mbi), ctypes.sizeof(mbi)):
         readable = (mbi.State == MEM_COMMIT
                     and not (mbi.Protect & PAGE_GUARD)
                     and mbi.Protect != PAGE_NOACCESS)
@@ -105,29 +100,37 @@ class Pj64Memory(RdramReader):
     _announced: dict[tuple[int, int], None] = {}
 
     def __init__(self):
-        self._pm: pymem.Pymem | None = None
+        self._process: ProcessHandle | None = None
         self._rdram_base: int | None = None
 
     @property
     def attached(self) -> bool:
-        return self._pm is not None and self._rdram_base is not None
+        return self._process is not None and self._rdram_base is not None
+
+    @property
+    def pid(self) -> int | None:
+        return self._process.pid if self._process is not None else None
 
     def attach(self, pid: int | None = None) -> bool:
         """Open Project64 -- the process `pid`, else the first one named
-        Project64.exe -- and find its RDRAM. A known pid skips the process-list
-        snapshot, about 15 ms of the attach (2026-09-25)."""
+        Project64.exe -- read-only, and find its RDRAM. A known pid skips the
+        process snapshot (about 9 ms, 2026-09-27)."""
         self._close()
+        if pid is None:
+            found = winprocess.pids_named(PROCESS_NAME)
+            if not found:
+                return False
+            pid = found[0]
         try:
-            self._pm = pymem.Pymem(PROCESS_NAME if pid is None else pid)
-        except pymem.exception.PymemError:
-            self._pm = None
+            self._process = ProcessHandle(pid, winprocess.READ_RIGHTS)
+        except ProcessAccessError:
             return False
-        for base, size in iter_committed_regions(self._pm.process_handle):
+        for base, size in iter_committed_regions(self._process.handle):
             if size < A.RDRAM_MIN_SIZE:
                 continue
             if self._check_signature_at(base):
                 self._rdram_base = base
-                self._announce(self._pm.process_id, base)
+                self._announce(self._process.pid, base)
                 return True
         self._close()  # process found, ROM not loaded yet
         return False
@@ -135,11 +138,17 @@ class Pj64Memory(RdramReader):
     def alive(self) -> bool:
         """Attached, and the process has not exited since: a handle keeps an
         exited process's pid from naming anything, so a reused pid is caught."""
+        return self.attached and self._process.alive()
+
+    def write_rdram(self, offset: int, data: bytes) -> None:
+        """Ghost Handoff's slot write, until the plugin applies writes itself:
+        `data` at RDRAM `offset`, in Project64's byte order. It opens a second
+        handle with only WriteProcessMemory's rights and closes it after this
+        one write, so the reader's own handle never holds a write right."""
         if not self.attached:
-            return False
-        kernel32 = ctypes.windll.kernel32
-        return kernel32.WaitForSingleObject(
-            ctypes.c_void_p(self._pm.process_handle), 0) == _WAIT_TIMEOUT
+            raise MemoryReadError("not attached to Project64")
+        with ProcessHandle(self._process.pid, winprocess.WRITE_RIGHTS) as writer:
+            writer.write(self._rdram_base + offset, data)
 
     @classmethod
     def _announce(cls, pid: int, base: int) -> None:
@@ -171,12 +180,12 @@ class Pj64Memory(RdramReader):
         1.6 releases the old image BEFORE it allocates the next (Memory.cpp
         Allocate_ROM), so only one image ever exists: a remembered address
         that no longer holds a header was released, and the search starts
-        again from step 2. Read-only like everything else here.
+        again from step 2. Every read goes through the read-only handle.
         """
-        if self._pm is None:
+        if self._process is None:
             return None
         from sm64_events.memory.version_probe import HEADER_SIZE
-        pid = self._pm.process_id
+        pid = self._process.pid
         with self._roms_lock:
             sighting = self._roms.setdefault(pid, _RomSighting())
             self._forget_old_processes()
@@ -208,11 +217,39 @@ class Pj64Memory(RdramReader):
         self._remember(pid, address, how)
         return head
 
+    def cartridge_image(self, size: int) -> bytes | None:
+        """The first `size` bytes of the cartridge image, in Project64's own byte
+        order (1.6 stores it word-swapped, like RDRAM), or None.
+
+        The image is found where `rom_header` finds it and read in one call
+        through the read-only handle. The header is read again afterward: an
+        image released mid-read (a ROM swap) returns None, never half of two
+        cartridges. The Ghost Lab's ROM store copies the image this way.
+        """
+        from sm64_events.memory.version_probe import HEADER_SIZE
+        if self._process is None or size < HEADER_SIZE:
+            return None
+        head = self.rom_header()
+        if head is None:
+            return None
+        with self._roms_lock:
+            sighting = self._roms.get(self._process.pid)
+            address = sighting.address if sighting is not None else None
+        if address is None:
+            return None
+        try:
+            image = self._process.read(address, size)
+        except ProcessAccessError:
+            return None
+        if len(image) != size or image[:HEADER_SIZE] != head or self._header_at(address, HEADER_SIZE) != head:
+            return None
+        return image
+
     def _header_at(self, address: int, size: int) -> bytes | None:
         from sm64_events.memory.version_probe import plausible_header
         try:
-            head = self._pm.read_bytes(address, size)
-        except pymem.exception.PymemError:
+            head = self._process.read(address, size)
+        except ProcessAccessError:
             return None
         return head if plausible_header(head) is not None else None
 
@@ -235,7 +272,7 @@ class Pj64Memory(RdramReader):
                                                       ROM_MAGIC_BE,
                                                       ROM_MAGIC_WORD_SWAPPED,
                                                       plausible_header)
-        regions = [(base, size) for base, size in iter_committed_regions(self._pm.process_handle)
+        regions = [(base, size) for base, size in iter_committed_regions(self._process.handle)
                    if size >= A.RDRAM_FULL_SIZE]      # an SM64 ROM is 8 MB
         for base, _size in regions:
             head = self._header_at(base, HEADER_SIZE)
@@ -247,9 +284,9 @@ class Pj64Memory(RdramReader):
         for base, size in regions:
             for offset in range(0, size, chunk):
                 try:
-                    block = self._pm.read_bytes(base + offset,
-                                                min(chunk + HEADER_SIZE, size - offset))
-                except pymem.exception.PymemError:
+                    block = self._process.read(base + offset,
+                                               min(chunk + HEADER_SIZE, size - offset))
+                except ProcessAccessError:
                     break                      # released mid-read: the next region
                 for magic in (ROM_MAGIC_BE, ROM_MAGIC_WORD_SWAPPED):
                     at = block.find(magic)
@@ -264,27 +301,24 @@ class Pj64Memory(RdramReader):
         self._close()
 
     def _close(self) -> None:
-        if self._pm is not None:
-            try:
-                self._pm.close_process()
-            except pymem.exception.PymemError:
-                pass
-        self._pm = None
+        if self._process is not None:
+            self._process.close()
+        self._process = None
         self._rdram_base = None
 
     def _check_signature_at(self, base: int) -> bool:
         def u32(n64_addr: int) -> int:
-            data = self._pm.read_bytes(base + (n64_addr - A.KSEG0_BASE), 4)
+            data = self._process.read(base + (n64_addr - A.KSEG0_BASE), 4)
             return int.from_bytes(data, "little")
         try:
             return looks_like_rdram(u32)
-        except pymem.exception.PymemError:
+        except ProcessAccessError:
             return False
 
     def _read_raw(self, offset: int, size: int) -> bytes:
         if not self.attached:
             raise MemoryReadError("not attached to Project64")
         try:
-            return self._pm.read_bytes(self._rdram_base + offset, size)
-        except pymem.exception.PymemError as exc:
+            return self._process.read(self._rdram_base + offset, size)
+        except ProcessAccessError as exc:
             raise MemoryReadError(str(exc)) from exc

@@ -166,6 +166,16 @@ class NativeChannel:
             raise OverflowError("native ghost command identity exhausted")
         self._request.revision += 1
 
+    def live_endpoint(self, status):
+        """Private receiver capability; never included in status/HTTP/logs."""
+        if self._request is None or not status.configuration or not status.rom_generation:
+            return None
+        from sm64_events.ghost.live_channel import LiveEndpoint
+        r = self._request
+        return LiveEndpoint(self.pid, *self._birth, r.generation, r.owner_pid,
+            r.owner_created_lo, r.owner_created_hi, r.token, status.rom_generation,
+            status.configuration, status.qpc_frequency)
+
     def _set_playback(self, value: dict):
         # Construct first: rejected controls cannot partly mutate a live command.
         request = P.Request.from_buffer_copy(bytes(self._request))

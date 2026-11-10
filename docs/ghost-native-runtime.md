@@ -128,14 +128,17 @@ death, extrapolated dance and post-recording holds have no invented inputs.
 The font is the thin white SM64 US dialogue font. The trainer never ships
 it: each player's own US cartridge lends it. Whenever the atlas is built from a
 verified US cartridge, [ghost_font_cache.cpp](../plugin/gfxwrap/ghost_font_cache.cpp)
-keeps its font tiles in a per-user file,
+keeps its font tiles and the cartridge's own advances (`gDialogCharWidths`,
+256 bytes at ROM 0xEC370; never compiled in since 2026-11-09) in a per-user file,
 `%LOCALAPPDATA%\SM64Trainer\plugin-cache\us-dialogue-font.bin`: per user, as
 the cartridge was his; writable wherever Project64 is installed; kept across
 Project64 restarts and plugin reinstalls. It is written whole (a temporary
 file, then one replace) and read only when its magic, version, size and
-SHA-256 hold and the digest is the known US font (`us_font_sha256`, the same
-on stock SM64 US and Usamune US), so a short, altered or foreign file is
-refused. On a JP cartridge the atlas fills its glyph cells from that file:
+SHA-256 hold and the digests are the known US font and widths
+(`us_font_sha256`, `us_widths_sha256`, the same on stock SM64 US and Usamune
+US), so a short, altered or foreign file is refused. A version 1 file (tiles
+only) is refused too: a JP cartridge writes in its own capitals until the
+player's US cartridge next loads and writes version 2. On a JP cartridge the atlas fills its glyph cells from that file:
 US glyphs, US widths, lowercase and US punctuation. Without it, a JP name is
 drawn in JP's own font, an 8x16 one-bit font with digits, capitals and kana
 but no lowercase Latin: in JP's capitals (lowercase takes the capital),
@@ -2239,6 +2242,96 @@ its picture does. The [sound fade witness](../tests/test_ghost_sound_fade_native
 compares `point_fade` with the witnesses' own statement of the rule at 47916
 points (every mode, three overlaps, eleven depths); the GPU pixels are
 checked against that same statement.
+
+### Ghosts in the scene viewer
+
+The [scene viewer](glossary.md#ghost-lab) (M4 lab) draws
+[stage ghosts](glossary.md#stage-ghost) into a recorded scene with the code
+the game's ghost uses: `ghost_viewer.cpp` is a third contributor to
+`ghost_draw.cpp`'s seal beside saved playback and the live race, and each row
+is drawn by `ghost_figure.h`, which saved playback now calls too (body, held
+object, shadow, particles, tint, fades, and the [name box](glossary.md#name-box)
+riding on the body). The viewer's host (`tools/scene_lab/viewer_host.c
+--ghosts 1`) negotiates the clean consumer as the capture wrapper does, binds
+the renderer's `SM64ViewerGhostsV1` table, builds the model once (`setup`:
+the capture layout and the 8 MiB cartridge), loads each clip once per add
+(`load`: a `.ghost` file's bytes, read by `ghost_assets::clip` and refused by
+`ghost_playback::clip_valid` exactly as playback would), and before every
+picture publishes that picture's ghosts and each one's frame (`picture`).
+
+- **Stateless pictures.** Nothing carries between pictures: a picture with
+  ghosts reconfigures the capture, so its stage sample opens a new epoch and a
+  frame drawn after a later one is never a clock that ran backward (the
+  multi-runner probe's live channel dropped every ghost on the first picture
+  after a step back). A seek or a step back draws byte for byte what playing to
+  it drew (measured on the GPU, 2026-10-27).
+- **The stage's camera is the game's.** The renderer reads the stage's camera,
+  level and area from RAM as it does live: a free-camera picture already sends
+  the whole rebuilt RAM; a recorded picture with ghosts sends its frame's scene
+  state beside the closure (`scene_session._stage_frame`, about 1.7 MB). A free
+  camera of the recorded camera's own focus, position, roll and field of view
+  draws the recorded picture with its ghosts byte for byte.
+- **Rows.** Ghost frame k is k game frames after the stage's first frame (the
+  tap's `global_timer`), so lag frames and held pictures stay in step. Each
+  ghost's row is chosen as playback chooses one at a fixed coordinate: before
+  its start its first pose; a frame its recording lacks hides it; a refused
+  row shows the pose it bridges from, or hides; another level or area hides it.
+  Past its last row a clip with a dance tail holds its last pose and fades out
+  over `GP_STAR_FADE_FRAMES`, as a race ends; any other clip is gone. A dance
+  the recording cut short is not played on by animation here.
+- **The look.** Opacity, tint (each ghost's hue by its place in the set:
+  `native_session.ghost_hue`), shadow, names, the name box and its opacity, and
+  inputs over the name follow the ghost settings (`gv_look`). The live race's
+  own effects are off: the overlap and player-first fades (the stage's runner
+  is not live Mario), the corner inputs and the path.
+- **Its sound** (round 5, 2026-10-27; `tools/scene_lab/ghost_sound.py`). Each
+  ghost plays its own [sound events](#sound-events), never music, through the
+  in-game engine (`tools/scene_lab/ghost_sound_host.cpp` links
+  `ghost_audio.cpp`'s ROM check and the model library's `sa_*`), one engine
+  per ghost so ghosts never cut each other off. One tick per ghost frame: its
+  cues, its root under the stage's recorded camera (`gLakituState`, the
+  `cameraToObject` space), `min(1, GP_SOUND_NEAR / d)` from the stage's Mario,
+  the ghost volume setting; hidden rows are silent and a dance tail fades as
+  its picture does. The track lies on the stage recording's own samples
+  (scene frame k's picture sample is ghost frame g(k)'s tick start), so the
+  page's worklet mixes it on the stage's clock with a gain per ghost (Mute).
+  It is made once, on the first block asked, in a below-normal child process
+  (`ghost_sound.TrackMaker`, one per open scene), so making it never takes
+  Python's lock from the scene's pictures: on his 830-frame HMC take about
+  0.8 s a ghost (the stage's camera reads, a few bytes of each state, 0.5 s;
+  the engine 10-60 ms; laying it on the samples 0.2 s). The stage's
+  own sound plays on its pictures too where its stems fit measured
+  Project64's audio delay (`scene_audio.measured_delay`): a coin and its own
+  run's ghost's coin land 10 ms apart on a split scene (SM64's coin on both
+  sides, the coin's sound made a VI before its picture). Without that fit it
+  plays as heard: that take, which has none, lands its sound 148 ms after its
+  picture.
+- **Threads.** The host calls the table between lists; GLideN64 runs each list
+  on its own thread while the host's call waits. An SRW lock hands each
+  picture's ghosts and the status across, a loaded clip is immutable (a list
+  keeps its own reference), and the model passes once: `setup` opens and
+  detaches it, the renderer's first call adopts it. In Project64 `setup` never
+  runs, so every renderer call answers "nothing" and the game's ghosts draw as
+  before.
+- **A ghost's view** (round 5): the stage's world from a ghost's own
+  recorded camera (`Frame.camera`: the area graph camera's position and focus,
+  its screen roll, the perspective's field of view) at the row its figure
+  shows, found in Python (`stage_ghosts.GhostCameras`, the same coordinate
+  rule as `choose`) and drawn through the free camera. Measured 2026-10-27 on
+  his HMC runs 505 (stage), 524 and 553: each view's camera equals that run's
+  own scene's recorded camera to the last bit at ghost frames 0, 260 and 520;
+  run 505 added as a ghost of its own scene draws its recorded camera exactly
+  (0 pixels apart from the free camera of the recorded pose). The look-at roll
+  (0 in play) is not carried.
+- **Cost** (his WF attempt scene, two of his own runs, recorded camera,
+  RTX 5090, 2026-10-27): the renderer's time per picture p50 0.39 ms with no
+  ghost, 2.0 ms with one, 2.2 ms with two, 2.6 ms with five; the scene state a
+  recorded picture with ghosts sends adds about 8 ms on the session's worker.
+- **Witness.** [The viewer ghost witness](../tests/test_ghost_viewer_native.py)
+  runs `ghost_viewer.cpp` with playback's validation and figure against a stub
+  model, its renderer calls on their own thread: every row rule above, the
+  refusals, and the same picture however it is reached; a viewer that draws the
+  nearest row across a gap fails it.
 
 ## Verification boundaries
 

@@ -1,13 +1,17 @@
-/* Fake renderer surface + real boundary ownership; no window or GL call. */
-#include "zilmar.h"
+/* Fake renderer surface + real boundary ownership; no window or GL call.
+ * The renderer half of a test plugin (renderer_entries.h): linked with the
+ * capture layer by tools/build_plugin.py build_test_plugin. */
+#include "renderer_entries.h"
 #include "link_source_api.h"
 #include "context_lifetime.h"
 #include "practice_rom.h"
 #include <stdlib.h>
+EXTERN_C IMAGE_DOS_HEADER __ImageBase;
 namespace {
 GFX_INFO info{};unsigned lists=0,updates=0,opens=0,closes=0,delta=1;
+// The capture layer's test exports live in this same plugin.
 unsigned wrapper_value(const char*name){auto p=reinterpret_cast<unsigned(__cdecl*)()>(
- GetProcAddress(GetModuleHandleW(L"sm64_trainer_gfx.dll"),name));return p?p():0;}
+ GetProcAddress(reinterpret_cast<HMODULE>(&__ImageBase),name));return p?p():0;}
 unsigned swaps=0; // the fake renderer's swap count: advances exactly when the origin moves
 bool clean_enabled=false;
 int __cdecl surface(rb_surface*s){*s={};s->width=8;s->height=6;s->context=123;s->read_drawable=456;
@@ -72,34 +76,38 @@ extern "C" const rs_api* __cdecl SM64ReplaySourceV2(uint32_t v,uint32_t n){
 #endif
 }
 extern "C" const rcl_api* __cdecl SM64ReplayContextV1(uint32_t v,uint32_t n){return v==RCL_ABI_V1&&n==sizeof(rcl_api)?&contexts:nullptr;}
-extern "C" void __cdecl GetDllInfo(PLUGIN_INFO*p){*p={};p->Version=0x103;p->Type=PLUGIN_TYPE_GFX;
+namespace {
+void __cdecl info_fixture(PLUGIN_INFO*p){*p={};p->Version=0x103;p->Type=PLUGIN_TYPE_GFX;
  p->MemoryBswaped=TRUE;strcpy_s(p->Name,"CPU source fixture");}
-extern "C" BOOL __cdecl InitiateGFX(GFX_INFO i){info=i;return GetEnvironmentVariableA("WR_FAIL_INIT",nullptr,0)==0;}
-extern "C" void __cdecl ProcessDList(){lists++;
+BOOL __cdecl initiate(GFX_INFO i){info=i;return GetEnvironmentVariableA("WR_FAIL_INIT",nullptr,0)==0;}
+void __cdecl process_list(){lists++;
 #ifdef WR_UNSUPPORTED
  info.RDRAM[0]+=10;
 #else
  info.RDRAM[0]++;
 #endif
 }
-extern "C" void __cdecl UpdateScreen(){update_original();}
-extern "C" void __cdecl RomOpen(){
+void __cdecl update_screen(){update_original();}
+void __cdecl rom_open(){
 #ifndef WR_UNSUPPORTED
  if(practice_rom(info.HEADER)!=clean_enabled)ExitProcess(93);
 #endif
  opens++;rb_rom_open();}
-extern "C" void __cdecl RomClosed(){if(wrapper_value("TestGate")||clean_enabled)ExitProcess(91);closes++;rb_rom_closed();}
-extern "C" void __cdecl CloseDLL(){if(wrapper_value("TestGate")||clean_enabled)ExitProcess(92);rb_close();}
+void __cdecl rom_closed(){if(wrapper_value("TestGate")||clean_enabled)ExitProcess(91);closes++;rb_rom_closed();}
+void __cdecl close_dll(){if(wrapper_value("TestGate")||clean_enabled)ExitProcess(92);rb_close();}
+void __cdecl nothing(){}
+void __cdecl move_screen(int,int){}
+void __cdecl capture_screen(char*){}
+}
 extern "C" void __cdecl TestCounts(unsigned*p){p[0]=lists;p[1]=updates;p[2]=opens;p[3]=closes;}
 extern "C" void __cdecl TestDelta(unsigned n){delta=n;}
-#define EMPTY(name) extern "C" void __cdecl name(){}
-EMPTY(ChangeWindow) EMPTY(DrawScreen) EMPTY(ViStatusChanged) EMPTY(ViWidthChanged)
-EMPTY(ProcessRDPList) EMPTY(ShowCFB)
-extern "C" void __cdecl MoveScreen(int,int){}
-extern "C" void __cdecl CaptureScreen(char*){}
+extern "C" const gfx_api_t* __cdecl renderer_entries(){
+ static gfx_api_t api{};
+ api.GetDllInfo=info_fixture;api.InitiateGFX=initiate;api.CloseDLL=close_dll;api.ProcessDList=process_list;
+ api.UpdateScreen=update_screen;api.RomOpen=rom_open;api.RomClosed=rom_closed;api.ChangeWindow=nothing;
+ api.DrawScreen=nothing;api.ViStatusChanged=nothing;api.ViWidthChanged=nothing;api.ProcessRDPList=nothing;
+ api.ShowCFB=nothing;api.MoveScreen=move_screen;api.CaptureScreen=capture_screen;return &api;}
+extern "C" BOOL WINAPI renderer_dll_main(HINSTANCE,DWORD,LPVOID){return TRUE;}
 #define EXPORT(name) __pragma(comment(linker,"/EXPORT:" #name "=_" #name))
-EXPORT(GetDllInfo) EXPORT(InitiateGFX) EXPORT(CloseDLL) EXPORT(ChangeWindow) EXPORT(DrawScreen)
-EXPORT(ProcessDList) EXPORT(UpdateScreen) EXPORT(RomOpen) EXPORT(RomClosed) EXPORT(ViStatusChanged)
-EXPORT(ViWidthChanged) EXPORT(ProcessRDPList) EXPORT(ShowCFB) EXPORT(MoveScreen) EXPORT(CaptureScreen)
 EXPORT(TestCounts) EXPORT(TestDelta) EXPORT(SM64ReplaySourceV2) EXPORT(SM64ReplayContextV1)
 EXPORT(SM64ReplaySourceV3) EXPORT(SM64ReplaySourceV4)

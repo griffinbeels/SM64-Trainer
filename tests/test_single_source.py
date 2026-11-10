@@ -133,14 +133,21 @@ def entity_breakdown_zone() -> tuple[Path, ...]:
 INVARIANTS = (
     SingleSource(
         concept="a RAM address",
-        owners=frozenset({"layout.py"}),
+        # The Ghost Handoff simulator (and handoff_relocate.py, its evidence harness) also holds addresses: it runs the US Usamune game in
+        # Unicorn on a private copy of a recording and never reads the live game, so it
+        # cannot misread JP; anything live goes through layout.py and slotlibrary.
+        owners=frozenset({"layout.py", "frame_sim.py", "handoff_slot.py", "moment_slot.py", "handoff_relocate.py",
+                          "cold_boot.py"}),
         # The 16-bit prefixes every global the tracker reads sits under --
         # 0x8031 (play_sound)/0x8032/0x8033/0x8036 on both builds, JP's
         # gMarioObject under 0x8035, the behaviour segment 0x800E, Usamune's
-        # expansion RAM 0x8041. Uppercase, as layout.py spells them (a token
+        # expansion RAM 0x8041, the engine .bss 0x8038, the main pool's
+        # bounds 0x8005/0x801C and gSaveBuffer 0x8020 (scene spans), the audio
+        # heap's end 0x801F and the audio globals 0x8022 (stems spans). Uppercase, as layout.py spells them (a token
         # must appear in its owner -- see test_every_ingredient_can_actually_
         # match_code); a new build's rows add their prefixes here.
-        tokens=("0x8031", "0x8032", "0x8033", "0x8035", "0x8036", "0x8041", "0x800E"),
+        tokens=("0x8031", "0x8032", "0x8033", "0x8035", "0x8036", "0x8041", "0x800E",
+                "0x8038", "0x8005", "0x801C", "0x8020", "0x801F", "0x8022"),
         files=python_sources(),
         why="memory/layout.py holds every RAM address per ROM version "
             "(2026-08-15); a literal anywhere else is a US address baked "
@@ -252,7 +259,7 @@ INVARIANTS = (
     SingleSource(
         concept="star/segment icon art",
         owners=frozenset({"entities.js", "entityicons.js"}),
-        tokens=("/ui/assets/star_", "/ui/assets/course_icons/", "/api/icons/file/",
+        tokens=("/ui/assets/star_", "/api/icons/course/", "/api/icons/file/",
                 "COURSE_ICON_PREFIXES", "LEVEL_ICONS", "SPECIAL_COURSE_ICONS",
                 "COURSE_SUBSTITUTE_ICONS"),
         files=ui_js(),

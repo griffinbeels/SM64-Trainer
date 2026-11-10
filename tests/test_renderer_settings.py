@@ -13,7 +13,7 @@ import pytest
 
 from sm64_events.core import plugin_elevation, renderer_settings
 from sm64_events.core.capturelayer import (
-    GRAPHICS_DLL_VALUE, NEEDS_RESTART, REGISTRY_DLL_SUBKEY, WRAPPER_DLL,
+    GRAPHICS_DLL_VALUE, NEEDS_RESTART, REGISTRY_DLL_SUBKEY, PLUGIN_DLL,
 )
 from sm64_events.core.renderer_settings import (
     MINIMAL, RENDERER_INI, disable, frame_buffer_emulation_off, previous_value, restore,
@@ -257,10 +257,10 @@ def test_a_denied_write_is_reported_plainly_and_install_can_elevate(
 
     elevated = []
 
-    def helper(pj64, plugin, source, renderer):
+    def helper(pj64, plugin, source):
         elevated.append(plugin)
         monkeypatch.setattr(renderer_settings, "write_atomic", real)   # administrator may write
-        return layer._install_plugin_files(pj64, source, renderer, elevated=False)
+        return layer._install_plugin_files(pj64, source, elevated=False)
 
     monkeypatch.setattr(plugin_elevation, "elevated_install", helper)
     assert layer.install(True).installation_verified
@@ -278,7 +278,7 @@ def test_a_failed_install_restores_every_settings_file(
 
     def failed_select(key, name, value):
         real_set(key, name, value)
-        if value == WRAPPER_DLL:
+        if value == PLUGIN_DLL:
             raise PermissionError("registry selection failed")
 
     monkeypatch.setattr(registry, "set", failed_select)

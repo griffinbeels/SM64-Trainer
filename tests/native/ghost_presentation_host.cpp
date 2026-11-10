@@ -297,6 +297,9 @@ static void run(uint32_t generation) {
 int main() {
     const auto foreground=GetForegroundWindow();require(!gp::clean_consumer() && !gp::display_consumer(),"inactive by default");
     gp::clean_consumer(true);require(gp::clean_consumer(),"negotiated");gp::clean_consumer(false);
+    gp::live_consumer(true);require(gp::clean_consumer(),"live display independent of recorder negotiation");
+    gp::clean_consumer(true);gp::live_consumer(false);require(gp::clean_consumer(),"recording retains its demand");
+    gp::clean_consumer(false);require(!gp::clean_consumer(),"last demand released");
     run(1);run(2);require(GetForegroundWindow()==foreground,"focus unchanged");
     std::puts("presentation passed: hidden=yes contexts=2 clean=exact gamma=yes osd=samecolor,partial swap=qualified revoke=clean resize=invalidates state=restored known=asks_nothing recorded=clean ghost_copy=displayed consumer_off=no_copy plain_front=exact,no_copy");return 0;
 }

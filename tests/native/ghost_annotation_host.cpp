@@ -24,6 +24,9 @@ int main(int argc,char** argv) {
         check(glyph('/')==glyph('?'),"US dialogue's slash spacing control cannot silently hide author text");
         check(supported('_') && glyph('_')!=glyph('?'),"underscore is a readable glyph, never a question mark");
         check(!supported('/') && !supported(0x30ac) && supported('?'),"unsupported credit is distinguishable from a literal question mark");
+        // US advances come from the cartridge (Assets::load); until a real one
+        // loads below, synthetic ones that differ code to code.
+        for(unsigned c=0;c<256;++c)us_advances[c].store(uint8_t(3+c%6));
         // The underscore reuses the ROM hyphen's exact texels and advance. Its
         // lowered baseline works at both stack and world label scales.
         for(float scale:{0.5f,0.75f})for(bool shadow:{false,true}) {
@@ -40,6 +43,8 @@ int main(int argc,char** argv) {
         // Use the actual stack column: the stick box leaves 92 HUD pixels;
         // numbers reserve three digits and leave 83. Full 20-character
         // names fit by pixels, or visibly end in an ellipsis when wider.
+        // Measured with a real US cartridge's advances (below, given a ROM).
+        const auto corner_widths=[&] {
         for(unsigned digits:{2u,3u}) {
             const float left=stack::buttons_left(digits==3);
             const float limit=stack::column_width-(left-usamune::letter_x)-2;
@@ -62,6 +67,7 @@ int main(int argc,char** argv) {
             check(Layout::fitted("RIVAL 4",stack::scale,limit,chars,width)==7 && width*stack::scale<=limit,
                   "the slot fallback is fully readable at both corner widths");
         }
+        };
         label[0]=char(0xc0);label[1]=char(0xaf);label[2]=0;label[3]=0;
         check(!valid_label(label),"overlong UTF-8 refused");
         std::memset(label,0,64);label[0]='\n';check(!valid_label(label),"control injection refused");
@@ -82,12 +88,16 @@ int main(int argc,char** argv) {
             std::vector<uint8_t> rom(8*1024*1024);rom[0x3e]=uint8_t(country);std::memcpy(rom.data()+base,"MIO0",4);
             const unsigned flags_end=16+(size+7)/8;put(rom,base+4,size);put(rom,base+8,flags_end);put(rom,base+12,flags_end);
             std::memset(rom.data()+base+16,255,flags_end-16);std::memcpy(rom.data()+base+flags_end,decoded.data(),size);
+            // A US cartridge's advances (gDialogCharWidths): the synthetic ones above.
+            if(country=='E')for(unsigned c=0;c<256;++c)rom[0xec370+c]=uint8_t(3+c%6);
             return rom;
         };
         // Asymmetric texel: tile S=2,T=1 appears at screen X=6,Y=13.
         auto rom=segment2('E',0x108a40,100878,0x77e8,0x02005900,0x7700,{{0x5900+(1*16+2)/2,0xf0}});
         Assets assets;check(assets.load(rom.data(),unsigned(rom.size())),"bounded literal MIO0 font fixture decoded");
         check(assets.font==font::us,"a US cartridge fills the cells from the US font");
+        check(advance(0x24)==3+0x24%6 && assets.lent.widths[0x24]==3+0x24%6,
+              "a US cartridge's own advances space its names");
         check(assets.rgba[(13*atlas_width+6)*4+3]==255 && assets.rgba[(2*atlas_width+1)*4+3]==0,
               "font quad uses canonical rotation rather than an invented font orientation");
         rom[0x3e]='P';check(!assets.load(rom.data(),unsigned(rom.size())),"a cartridge with no known places draws no atlas");
@@ -340,6 +350,7 @@ int main(int argc,char** argv) {
             if(!std::memcmp(real.data()+0x20,"SM64 USAMUNE",12))check(assets.usamune,"actual Usamune table resolves every canonical icon");
             check(assets.chevron,"the cartridge's own chevron texture loads");
             check(assets.font==(real[0x3e]=='J'?font::jp:font::us),"the cartridge's own dialogue font fills the cells");
+            if(real[0x3e]=='E')corner_widths();
             if(argc>=3) {std::ofstream out(argv[2],std::ios::binary);out.write(reinterpret_cast<const char*>(assets.rgba.data()),assets.rgba.size());}
             if(argc>=4) {
                 std::ofstream out(argv[3],std::ios::binary);

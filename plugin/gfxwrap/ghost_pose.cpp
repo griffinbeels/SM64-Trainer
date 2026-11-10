@@ -354,6 +354,9 @@ Result evaluate(sg_model *model, const gs_record &record, const gc_sample &live,
         v.material = ghost_compositor::with_tile(static_cast<ghost_compositor::Material>(material), tile);
     }
     live_view_projection(view,world,built.view_projection);
+    const float *root=(pose.fields&SG_POSE_THROW_MATRIX)?pose.throw_matrix+12:pose.position;
+    built.sort_depth=-(view[2]*root[0]+view[6]*root[1]+view[10]*root[2]+view[14]);
+    if(!std::isfinite(built.sort_depth))return Result::invalid_camera;
     built.flip_y = 1;
     // The game never draws the back of a triangle its list left G_CULL_BACK
     // on (all of Mario but his cap's wings). From outside that hides nothing

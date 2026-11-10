@@ -158,9 +158,7 @@ def _fixture_capture_layer_status(**overrides) -> LayerStatus:
     # test that wants the first-run state asks for `state="not_installed"`.
     fields = dict(pj64_dir="C:/Project64", pj64_running=True,
                  registry_graphics_dll="sm64_trainer_gfx.dll", wrapper_present=True,
-                 wrapper_current=True, wrapper_selected=True,
-                 wrapped_name="sm64_trainer_gfx.renderer", layer_alive=True,
-                 renderer_present=True, renderer_current=True,
+                 wrapper_current=True, wrapper_selected=True, layer_alive=True,
                  previous_graphics_dll="GLideN64_LINK_4.2.dll",
                  consented_at="2026-09-05T00:00:00+00:00", problems=[], state="active")
     fields.update(overrides)
@@ -1400,7 +1398,7 @@ def serve_ui(*args, **kwargs):
 
 
 def _fixture_runtime(database, scratch_path, capture_layer_status, capture_layer_refuse,
-                     bundled_library, setup_observer, capture_layer_install=None):
+                     bundled_library, setup_observer, capture_layer_install=None, course_art=None):
     # Today's Daily Star announcement starts dismissed, so it never covers a
     # page a test is driving (its backdrop intercepted clicks in the
     # frame-readout tests, 2026-09-24). tests/test_ui_daily_star.py clears it
@@ -1492,6 +1490,7 @@ def _fixture_runtime(database, scratch_path, capture_layer_status, capture_layer
     with reusing_calibrations():
         app = create_app(poller, broadcaster, service=service, compare=compare,
                          inputs=inputs, capture_layer=capture_layer, setup_observer=setup_observer,
+                         course_art=course_art,
                          adoptions_path=scratch_path
                          / "library_adoptions.json",
                          mode_path=scratch_path / "tracker_mode.json",
@@ -1505,6 +1504,9 @@ def _fixture_runtime(database, scratch_path, capture_layer_status, capture_layer
                          library_bundled_path=(None if bundled_library else
                                                scratch_path
                                                / "no-library.json.gz"))
+    # The same lab switch the real app passes through: off, its one probe answers 204.
+    from sm64_events.main import _mount_scene_lab
+    _mount_scene_lab(app, ghost_sources={"tracker": service})
 
     return app, service
 
@@ -1728,8 +1730,13 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
               capture_layer_refuse: str | None = None,
               capture_layer_install: dict | None = None,
               setup_observer=None,
-              bundled_library: bool = True):
+              bundled_library: bool = True,
+              course_art=None):
     """Yield the base URL of an offline instance; stop it on the way out.
+
+    `course_art` is a `sm64_events.course_art.CourseArt` over a SCRATCH cache;
+    None (every gate) serves the plain stand-in portraits and never looks for
+    a ROM, so no fixture reads the player's ROM or writes the real data dir.
 
     `bundled_library=False` gives the app an EMPTY library (round 33): every
     fitted star row in the bundled library becomes a sheet-fitted rank
@@ -1877,7 +1884,7 @@ def serve_ui_live(db_path: Path | None = None, timeout: float = 30,
             _pad_journal(db_path, pad_journal)
         app, service = _fixture_runtime(database, Path(compare_cache_scratch.name),
                                         capture_layer_status, capture_layer_refuse, bundled_library, setup_observer,
-                                        capture_layer_install)
+                                        capture_layer_install, course_art)
         _fixture_replay_routes(app, database)
         listener = _bound_socket()
         port = listener.getsockname()[1]

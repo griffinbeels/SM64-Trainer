@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Runs in the simulation program (SM64TrainerSim.exe); licenses/README.md lists its GPL-2.0-or-later code.
 # src/sm64_events/core/paths.py
 """THE single source of truth for where runtime state lives.
 
@@ -20,6 +22,7 @@ import sys
 from pathlib import Path
 
 from sm64_events.core import build_channel
+from sm64_events.core.update_plan import BUNDLED_NATIVES, LAB_NATIVES
 
 log = logging.getLogger("sm64.paths")
 
@@ -150,16 +153,31 @@ def ghost_population_root() -> Path:
     return _absolute_override("SM64_GHOST_POPULATION") or data_root() / "data" / "ghost_population"
 
 
+def local_app_data() -> Path:
+    """The Windows user's LocalAppData. Every per-user root here joins its own folder to this one door, so the
+    test suite can fence all of them off his real data at once (tests/conftest.py, `_fence_user_data`)."""
+    return Path(os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local"))
+
+
 def user_data_root() -> Path:
     """Windows-user practice state for this build channel."""
-    base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
-    return Path(base) / build_channel.current_build().app_dir_name
+    return local_app_data() / build_channel.current_build().app_dir_name
+
+
+def slot_library_dir() -> Path:
+    """Every kept Usamune save state. Shared across checkouts, so it survives a deleted worktree;
+    an isolated practice profile keeps its own."""
+    return (practice_root() or user_data_root()) / "slot-library"
+
+
+def scene_lab_root() -> Path:
+    """The scene lab's recordings, attempt scenes, slot backups and lab.json (lab only; tools/scene_lab)."""
+    return user_data_root() / "scene-lab"
 
 
 def shared_installation_root() -> Path:
     """The unchanged machine installation record, shared across build channels."""
-    base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
-    return Path(base) / build_channel.STABLE_APP_DIR
+    return local_app_data() / build_channel.STABLE_APP_DIR
 
 
 def migrate_legacy_data_dir() -> None:
@@ -171,8 +189,7 @@ def migrate_legacy_data_dir() -> None:
     if (build_channel.current_build().legacy_beta
             or not is_frozen() or practice_root() is not None):
         return
-    base = Path(os.environ.get("LOCALAPPDATA") or str(
-        Path.home() / "AppData" / "Local"))
+    base = local_app_data()
     new = base / APP_DIR_NAME
     legacy = base / LEGACY_APP_DIR_NAME
     if legacy == new or not legacy.exists():
@@ -218,6 +235,13 @@ def user_icons_dir() -> Path:
     return data_root() / "data" / "icons"
 
 
+def course_art_dir() -> Path:
+    # Course portraits cut from the player's own ROM (sm64_events/course_art.py),
+    # one folder per ROM. In the DATA dir for user_icons_dir's reason: the
+    # install's ui/assets is read-only when frozen, and ships no Nintendo art.
+    return data_root() / "data" / "course_art"
+
+
 def compilations_dir() -> Path:
     # Generated failure compilations. Lives UNDER replays_root() (== the
     # ReplayService save_root) on purpose: the existing /api/replay/reveal
@@ -225,6 +249,13 @@ def compilations_dir() -> Path:
     # with no new endpoint. Filenames start with "compilation_" so the saved-
     # clip glob (attempt_*.mp4) never mistakes one for a saved attempt clip.
     return replays_root() / "compilations"
+
+
+def scene_clips_dir() -> Path:
+    # The Scene viewer's exported videos (server/scene_exports.py). UNDER
+    # replays_root() for compilations_dir()'s reason: /api/replay/reveal opens
+    # only files inside save_root, so "Show in folder" needs no new endpoint.
+    return replays_root() / "scene clips"
 
 
 def overlays_dir() -> Path:
@@ -276,38 +307,75 @@ def migrate_capture_layer_settings() -> None:
         pass  # Another checkout's newer record is authoritative.
 
 
-WRAPPER_DLL_NAME = "sm64_trainer_gfx.dll"
-RENDERER_DLL_NAME = "GLideN64_SM64Trainer.dll"
-ENCODER_DLL_NAME = "SM64GpuEncoderV1.dll"
+WRAPPER_DLL_NAME, ENCODER_DLL_NAME = BUNDLED_NATIVES
+
+
+def _bundled(relative: Path) -> Path | None:
+    """A file the installed app carries, by its path inside a program's
+    contents folder. The app is two programs in one folder (sm64_events/
+    scenelab_code.py): the Trainer's `_internal` holds the data, and the
+    simulation program's own contents folder (`_sim`, its ``sys._MEIPASS``)
+    holds only its code, so a lookup from the simulation program falls back
+    to the Trainer's `_internal` beside it."""
+    roots = [Path(getattr(sys, "_MEIPASS", "")), Path(sys.executable).resolve().parent / "_internal"]
+    for root in dict.fromkeys(roots):
+        cand = root / relative
+        if cand.is_file():
+            return cand
+    return None
 
 
 def bundled_plugin_file(name: str) -> Path | None:
     """A native file shipped with this build under ``sm64_events/data/plugin``:
-    beside a frozen exe under ``sys._MEIPASS``, else the package's own data
-    folder; None when this build carries none (a clone that never built it),
-    which the setup screen reports rather than installing nothing."""
+    beside a frozen exe under ``sys._MEIPASS`` (from the simulation program, the
+    Trainer's, `_bundled`), else the package's own data folder; None when this
+    build carries none (a clone that never built it), which the setup screen
+    reports rather than installing nothing."""
     if is_frozen():
-        cand = Path(getattr(sys, "_MEIPASS", "")) / "sm64_events" / "data" / "plugin" / name
-        return cand if cand.exists() else None
+        return _bundled(Path("sm64_events") / "data" / "plugin" / name)
     cand = Path(__file__).resolve().parents[1] / "data" / "plugin" / name
     return cand if cand.exists() else None
 
 
 def bundled_plugin_dll() -> Path | None:
-    """THE CAPTURE LAYER's wrapper (`sm64_trainer_gfx.dll`), the plugin
-    Project64 selects."""
+    """THE GRAPHICS PLUGIN (`sm64_trainer_gfx.dll`): the renderer and the
+    capture layer in one file, which the setup screen installs into Project64
+    under the same name and the scene lab's helpers load where it is."""
     return bundled_plugin_file(WRAPPER_DLL_NAME)
-
-
-def bundled_renderer_dll() -> Path | None:
-    """THE RENDERER the wrapper wraps (LINK's GLideN64 v4.2 with the capture
-    overlay, built by tools/build_renderer.py). Installed beside the wrapper."""
-    return bundled_plugin_file(RENDERER_DLL_NAME)
 
 
 def bundled_encoder_dll() -> Path | None:
     """The 64-bit NVENC helper the server's isolated encoder process loads."""
     return bundled_plugin_file(ENCODER_DLL_NAME)
+
+
+#: STROOP's symbol maps for the two Usamune builds (the Ghost Lab's evaluator,
+#: cold boot and stage simulation read them): committed package data under
+#: ``sm64_events/data/maps``, pinned by sha256 (LAB_MAP_SHA256).
+#: Each map's reviewed bytes (STROOP 6771197a): the build refuses another file
+#: (tools/bundle_policy.py) and the installed app's self-check reads them back.
+LAB_MAP_SHA256 = {
+    "MappingUS.map": "d942ba9781aafb500c5bd7a599d15a41a191c6e9fe65b95e6c384429bec2d3b1",
+    "MappingJP.map": "5e51852905862c90173e90cd6b58c591a82d735d63575cf5ffab04c148eec9f2",
+}
+LAB_MAPS = tuple(LAB_MAP_SHA256)
+
+
+def bundled_lab_file(name: str) -> Path | None:
+    """A Ghost Lab file the installed app carries: one of update_plan's
+    LAB_NATIVES under ``sm64_events/data/lab``, or one of LAB_MAPS under
+    ``sm64_events/data/maps``. None from a source checkout, where the lab
+    builds its natives into its build cache and reads the maps its own config
+    names, and None when this build lacks the file."""
+    if name in LAB_NATIVES:
+        relative = Path("sm64_events") / "data" / "lab" / name
+    elif name in LAB_MAPS:
+        relative = Path("sm64_events") / "data" / "maps" / name
+    else:
+        raise ValueError(f"{name} is not a Ghost Lab file this build carries")
+    if not is_frozen():
+        return None
+    return _bundled(relative)
 
 
 def update_state_path() -> Path:
@@ -396,7 +464,8 @@ def bundled_symbol_map(name: str) -> Path:
     a missing map is a packaging bug the first read should name loudly, not a
     None that quietly empties the catalogue."""
     if is_frozen():
-        return Path(getattr(sys, "_MEIPASS", "")) / name
+        # The simulation program reads it from the Trainer's folder (_bundled).
+        return _bundled(Path(name)) or Path(getattr(sys, "_MEIPASS", "")) / name
     return Path(__file__).resolve().parent.parent / "data" / name
 
 
@@ -435,11 +504,25 @@ def install_root() -> Path:
     return Path(sys.executable).resolve().parent
 
 
+#: The pinned ffmpeg.exe in a checkout: tools/build_ffmpeg.py places its build
+#: here (git ignores it), the way tools/build_natives.py places the natives.
+SOURCE_FFMPEG = Path(__file__).resolve().parent.parent / "data" / "ffmpeg" / "ffmpeg.exe"
+
+
 def bundled_ffmpeg() -> str | None:
-    """Absolute path to the ffmpeg.exe bundled beside a frozen exe, else None.
-    PyInstaller unpacks --add-binary files into ``sys._MEIPASS``."""
+    """Absolute path to the ffmpeg.exe that ships with the trainer, else None.
+
+    Frozen: the one beside the exe (PyInstaller unpacks --add-binary files
+    into ``sys._MEIPASS``). From a checkout: the pinned build in
+    `SOURCE_FFMPEG`, so a source run (run-test-server.bat) runs the very
+    binary a release bundles, not whichever ffmpeg is on PATH."""
     if is_frozen():
         cand = Path(getattr(sys, "_MEIPASS", "")) / "ffmpeg.exe"
-        if cand.exists():
-            return str(cand)
-    return None
+        return str(cand) if cand.exists() else None
+    return str(SOURCE_FFMPEG) if SOURCE_FFMPEG.is_file() else None
+
+
+def ffmpeg_program() -> str | None:
+    """THE answer to which ffmpeg runs: the bundled one (`bundled_ffmpeg`),
+    else the one on PATH, else None."""
+    return bundled_ffmpeg() or shutil.which("ffmpeg")

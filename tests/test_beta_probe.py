@@ -40,10 +40,14 @@ def runtime(tmp_path, monkeypatch):
     ca.parent.mkdir()
     ca.write_bytes(Path(certifi.where()).read_bytes())
     monkeypatch.setattr(certifi, "where", lambda: str(ca))
-    for name, machine in probe._NATIVES:
+    for name, (machine, _resolver) in probe._NATIVES:
         path = bundle / "sm64_events/data/plugin" / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(pe(machine, dll=True))
+    for name, (machine, dll) in probe._LAB_NATIVES:
+        path = bundle / "sm64_events/data/lab" / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(pe(machine, dll=dll))
     (bundle / "ffmpeg.exe").write_bytes(pe(0x8664, dll=False))
     local = tmp_path / "local"
     paths = SimpleNamespace(
@@ -53,8 +57,8 @@ def runtime(tmp_path, monkeypatch):
         capture_layer_settings_path=lambda: local / "SM64Trainer/data/capture_layer.json",
         bundled_ffmpeg=lambda: str(bundle / "ffmpeg.exe"),
         bundled_plugin_dll=lambda: bundle / "sm64_events/data/plugin/sm64_trainer_gfx.dll",
-        bundled_renderer_dll=lambda: bundle / "sm64_events/data/plugin/GLideN64_SM64Trainer.dll",
         bundled_encoder_dll=lambda: bundle / "sm64_events/data/plugin/SM64GpuEncoderV1.dll",
+        bundled_lab_file=lambda name: bundle / "sm64_events/data/lab" / name,
     )
     return probe.ProbeRuntime(build, bundle, tmp_path / (BETA_APP_DIR + ".exe"),
                               local, paths, lambda: {"state": "disabled"})
@@ -308,3 +312,36 @@ def test_gui_dispatches_probe_before_desktop_and_worker_imports(monkeypatch, tmp
     assert gui_entry.main() == 0
     assert seen == [[str(tmp_path / "receipt.json")]]
     assert "sm64_events.desktop.beta_probe" in imported
+
+
+def _row(report, name):
+    return next(item for item in report["checks"] if item["name"] == name)
+
+
+def test_every_lab_native_has_a_row_with_its_machine_and_kind(runtime):
+    """The Ghost Lab's natives (core/update_plan.py LAB_NATIVES): the three hosts are x86
+    programs, the CPU hooks and the cxd4 runner x64 DLLs; each must sit where
+    core/paths.py bundled_lab_file finds it."""
+    from sm64_events.core.update_plan import LAB_NATIVES
+    report = probe.collect_report(fixture=runtime, importer=importer)
+    assert [name for name, _ in probe._LAB_NATIVES] == list(LAB_NATIVES)
+    assert all(_row(report, "lab_native:" + name)["ok"] for name in LAB_NATIVES)
+    machines = dict(probe._LAB_NATIVES)
+    assert machines["viewer_host.exe"] == machines["tap_offline_host.exe"] == machines["ghost_sound_host.exe"] \
+        == (0x14C, False)
+    assert machines["scene_cpu_hooks.dll"] == machines["scene_cxd4.dll"] == (0x8664, True)
+
+
+@pytest.mark.parametrize("fault", ["missing", "wrong_machine", "a_dll", "elsewhere"])
+def test_a_lab_native_row_fails_on_each_fault(runtime, fault):
+    path = runtime.bundle / "sm64_events/data/lab/viewer_host.exe"
+    if fault == "missing":
+        path.unlink()
+    elif fault == "wrong_machine":
+        path.write_bytes(pe(0x8664, dll=False))
+    elif fault == "a_dll":
+        path.write_bytes(pe(0x14C, dll=True))
+    else:
+        runtime.paths.bundled_lab_file = lambda name: runtime.bundle / "elsewhere" / name
+    report = probe.collect_report(fixture=runtime, importer=importer)
+    assert not _row(report, "lab_native:viewer_host.exe")["ok"] and not report["ok"]

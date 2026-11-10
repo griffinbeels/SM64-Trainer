@@ -269,8 +269,8 @@ def test_codec_selection_targets_the_backend_that_will_actually_run(monkeypatch,
     main_mod = _stubbed_main(monkeypatch)
     binary = "C:/specific/build/ffmpeg.exe"
     selected = "h264_amf" if ffmpeg_works else "libx264"
-    calls, captured = [], {}
-    monkeypatch.setattr(main_mod, "bundled_ffmpeg", lambda: binary)
+    calls, captured, instances = [], {}, {}
+    monkeypatch.setattr(main_mod, "ffmpeg_program", lambda: binary)
 
     def version(args, **kwargs):
         assert args == [binary, "-version"]
@@ -292,15 +292,36 @@ def test_codec_selection_targets_the_backend_that_will_actually_run(monkeypatch,
 
         def spy(*args, _name=name, _real=real, **kwargs):
             captured[_name] = kwargs
-            return _real(*args, **kwargs)
+            instances[_name] = _real(*args, **kwargs)
+            return instances[_name]
 
         monkeypatch.setattr(main_mod, name, spy)
     main_mod.build()
-    assert calls == ["version", "pick"]
-    for name in ("ReplayRecorder", "ClipExtractor", "CompilationBuilder"):
-        assert captured[name]["codec"] == selected
-    sink_factory = captured["ReplayRecorder"]["video_sink_factory"]
-    assert (sink_factory is not None) == ffmpeg_works
+    assert calls == [], "composition must not probe an encoder for live-only practice"
+    supplier = captured["ReplayRecorder"]["codec_factory"]
+    assert captured["ClipExtractor"]["codec"] is supplier
+    assert captured["CompilationBuilder"]["codec"] is supplier
+    assert supplier() == selected
+    assert supplier() == selected
+    assert calls == ["version", "pick"]  # all consumers share one resolved answer
+    assert (instances["ReplayRecorder"]._video_sink_factory is not None) == ffmpeg_works
+
+
+def test_live_factory_uses_the_native_owner_without_a_sound_process(monkeypatch):
+    from types import SimpleNamespace
+    from sm64_events import main
+    calls = []
+    monkeypatch.setattr(main, "ghost_supported", lambda version: version == "us")
+    monkeypatch.setattr("sm64_events.ghost.capture.NativeCapture",
+                        lambda layout, **kw: calls.append((layout, kw)) or object())
+    monkeypatch.setattr("sm64_events.ghost.sound_player.SoundPlayerProcess",
+                        lambda: pytest.fail("live-only capture started a sound player"))
+    layout = SimpleNamespace(version="us")
+    factory = main._live_capture_factory(layout)
+    source, incoming = object(), object()
+    factory(on_batch=None, live_source=source, live_input=incoming)
+    assert calls == [(layout, {"on_batch": None, "live_source": source, "live_input": incoming})]
+    assert main._live_capture_factory(SimpleNamespace(version="unknown")) is None
 
 
 def _stubbed_main(monkeypatch):
@@ -410,12 +431,16 @@ def test_a_cartridge_swap_regrades_through_the_real_build(monkeypatch):
     import asyncio
     from sm64_events.tracking.service import TrackerService
     main_mod = _stubbed_main(monkeypatch)
-    captured, noted = {}, []
+    captured, noted, factories = {}, [], []
 
     async def note(self, version):
         noted.append(version)
 
     monkeypatch.setattr(TrackerService, "note_running_version", note)
+    monkeypatch.setattr(main_mod.ReplayRecorder, "set_ghost_capture_factory",
+                        lambda self, factory: factories.append(("recording", factory)))
+    monkeypatch.setattr(main_mod.ReplayRecorder, "set_live_capture_factory",
+                        lambda self, factory: factories.append(("live", factory)))
     real_poller = main_mod.Poller
 
     def spy(memory, detectors, sink, **kw):
@@ -431,6 +456,8 @@ def test_a_cartridge_swap_regrades_through_the_real_build(monkeypatch):
 
     asyncio.run(swap())
     assert noted == ["jp"]
+    assert [kind for kind, _ in factories] == ["recording", "live"]
+    assert all(callable(factory) for _, factory in factories)
 
 
 def test_build_hands_every_snapshot_to_native_ghost_ownership(monkeypatch):
@@ -477,6 +504,10 @@ def test_build_mounts_every_ghost_door(monkeypatch):
     app = main_mod.build()
     paths = {r.path for r in app.routes}
     assert "/api/ghost" in paths
+    assert "/api/multiplayer" in paths
+    from sm64_events.multiplayer.room import RoomService
+    assert isinstance(app.state.multiplayer, RoomService)
+    assert app.state.multiplayer._thread is None
     assert not ({"/api/ghost/source", "/ws/ghost-clock"} & paths)
 
 
@@ -493,6 +524,7 @@ def test_build_gives_the_app_the_native_ghost_session(monkeypatch):
     monkeypatch.setattr(main_mod, "create_app", spy)
     main_mod.build()
     assert isinstance(captured.get("ghost"), GhostSession)
+    assert captured["multiplayer"]._appearance.__self__ is captured["ghost"]
 
 
 def test_the_frozen_entry_point_runs_the_ghost_sound_player(monkeypatch):
@@ -536,7 +568,7 @@ def test_dbless_boot_still_mounts_compare_and_compilation(monkeypatch):
     monkeypatch.setattr(main_mod, "acquire_instance_lock", lambda path: None)
     # ffmpeg must "exist" for the importer; a fake path is fine — the replay
     # sink's -version probe fails closed to the in-process encoder.
-    monkeypatch.setattr(main_mod, "bundled_ffmpeg",
+    monkeypatch.setattr(main_mod, "ffmpeg_program",
                         lambda: "C:/nonexistent/ffmpeg.exe")
     app = main_mod.build()
     paths = {r.path for r in app.routes}

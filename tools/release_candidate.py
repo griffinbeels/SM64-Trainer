@@ -13,12 +13,26 @@ sys.path.insert(0, str(REPO / "src"))
 from sm64_events.bootstrap.beta_payload import checked_members  # noqa: E402
 from sm64_events.core.build_channel import CONFIG_FILENAME, STABLE_PORT, parse_metadata  # noqa: E402
 from sm64_events.core.release_contract import version_key  # noqa: E402
-from sm64_events.core.update_plan import parse_manifest, validate_release_manifest  # noqa: E402
+from sm64_events.core.update_plan import (BUNDLED_NATIVES, LAB_NATIVES, NATIVE_FOLDER,  # noqa: E402
+                                          RETIRED_NATIVE_TEXT, RETIRED_NATIVES, parse_manifest,
+                                          validate_release_manifest)
+from bundle_policy import (check_bundle_path, tracked_ui_paths, COLLECTION_NAME,
+                           SEED_DESCRIPTOR)  # noqa: E402
 
 RECORD = "candidate.json"
 VERIFICATION = "candidate-verification.json"
 PUBLIC_FIELDS = ("community_url", "supabase_url", "supabase_publishable_key", "oauth_client_id")
-NATIVES = ("sm64_trainer_gfx.dll", "GLideN64_SM64Trainer.dll", "SM64GpuEncoderV1.dll")
+#: The natives a candidate records by hash. The retired names' placeholder
+#: (core/update_plan.py RETIRED_NATIVES) is no native: _verify_identity checks
+#: that it is exactly RETIRED_NATIVE_TEXT.
+NATIVES = BUNDLED_NATIVES
+#: The Ghost Lab's natives (core/update_plan.py LAB_NATIVES), recorded the
+#: same way under lab_native_sha256: the installed app runs them, never
+#: compiles them, so their bytes are as much the candidate as the plugin's.
+LAB_FOLDER = "_internal/sm64_events/data/lab"
+#: The Ghost Lab's simulation program (sm64_events/scenelab_code.py SIM_PROGRAM), recorded as sim_program_sha256:
+#: it is the only program that runs Unicorn, so its bytes are recorded like the natives'.
+SIM_PROGRAM = "SM64TrainerSim.exe"
 
 
 def digest(path: Path) -> str:
@@ -75,6 +89,8 @@ def record_candidate(directory: Path, *, version: str, build, artifacts: list[Pa
              "public_config_sha256": public_fingerprint(build), "service": provenance,
              "native_sha256": {name: digest(app / "_internal" / "sm64_events" / "data" / "plugin" / name)
                                for name in NATIVES},
+             "lab_native_sha256": {name: digest(app / LAB_FOLDER / name) for name in LAB_NATIVES},
+             "sim_program_sha256": digest(app / SIM_PROGRAM),
              "artifacts": {p.name: {"sha256": digest(p), "size": p.stat().st_size} for p in artifacts}}
     if promoted_from:
         if len(promoted_from) != 64 or any(c not in "0123456789abcdef" for c in promoted_from):
@@ -114,6 +130,64 @@ def _verify_identity(archive, record):
         with archive.open("_internal/sm64_events/data/plugin/" + name) as stream:
             if hashlib.file_digest(stream, "sha256").hexdigest() != record["native_sha256"][name]:
                 raise ValueError("candidate native provenance disagrees")
+    recorded = record.get("lab_native_sha256")
+    if not isinstance(recorded, dict) or set(recorded) != set(LAB_NATIVES):
+        raise ValueError("candidate lab native provenance is incomplete")
+    for name in LAB_NATIVES:
+        try:
+            with archive.open(f"{LAB_FOLDER}/{name}") as stream:
+                found = hashlib.file_digest(stream, "sha256").hexdigest()
+        except KeyError:
+            found = None
+        if found != recorded[name]:
+            raise ValueError("candidate lab native provenance disagrees")
+    try:
+        with archive.open(SIM_PROGRAM) as stream:
+            program = hashlib.file_digest(stream, "sha256").hexdigest()
+    except KeyError:
+        program = None
+    if program is None or program != record.get("sim_program_sha256"):
+        raise ValueError("candidate simulation program provenance disagrees")
+    for name in RETIRED_NATIVES:
+        try:
+            placeholder = archive.read(f"{NATIVE_FOLDER}/{name}")
+        except KeyError:
+            placeholder = None
+        if placeholder != RETIRED_NATIVE_TEXT:
+            raise ValueError("candidate retired-name placeholder is not its plain text")
+
+
+def _reviewed_collection(archive) -> bool:
+    """Only the exact curated file with a bounded, hash-bound descriptor is exempt."""
+    from sm64_events.ghost.bundled_beta import AUTHOR, MAX_COLLECTION_BYTES, checked_author_identity
+    from sm64_events.ghost.portable import MAX_ENTRIES, checked_hash
+    descriptor_name = "_internal/" + SEED_DESCRIPTOR
+    names = set(archive.namelist())
+    if not names & {descriptor_name, COLLECTION_NAME}:
+        return False
+    if not {descriptor_name, COLLECTION_NAME} <= names:
+        raise ValueError("candidate curated ghost inputs are incomplete")
+    descriptor = archive.getinfo(descriptor_name)
+    collection = archive.getinfo(COLLECTION_NAME)
+    if not 0 < descriptor.file_size <= 4096 or not 0 < collection.file_size <= MAX_COLLECTION_BYTES:
+        raise ValueError("candidate curated ghost inputs exceed their limits")
+    try:
+        value = json.loads(archive.read(descriptor))
+        fields = {"schema", "file", "author", "sha256", "count"}
+        if (not isinstance(value, dict) or type(value.get("schema")) is not int or value["schema"] not in (1, 2)
+                or set(value) != fields | ({"author_identity"} if value["schema"] == 2 else set())
+                or value["file"] != COLLECTION_NAME or value["author"] != AUTHOR
+                or type(value["count"]) is not int or not 1 <= value["count"] <= MAX_ENTRIES):
+            raise ValueError()
+        expected = checked_hash(value["sha256"])
+        if value["schema"] == 2:
+            checked_author_identity(value["author_identity"])
+    except (ValueError, TypeError, KeyError):
+        raise ValueError("candidate curated ghost descriptor is invalid") from None
+    with archive.open(collection) as stream:
+        if hashlib.file_digest(stream, "sha256").hexdigest() != expected:
+            raise ValueError("candidate curated ghost collection disagrees with its descriptor")
+    return True
 
 
 def _verify_archive(directory, manifest, record):
@@ -121,6 +195,13 @@ def _verify_archive(directory, manifest, record):
         members = checked_members(archive)
         if {m.filename for m in members if not m.is_dir()} != {e.path for e in manifest.files}:
             raise ValueError("candidate archive and manifest disagree")
+        ui_paths = tracked_ui_paths(REPO)
+        curated = _reviewed_collection(archive)
+        entries = {entry.path: entry for entry in manifest.files}
+        for member in members:
+            entry = entries.get(member.filename)
+            check_bundle_path(member.filename.rstrip("/"), ui_paths=ui_paths, is_dir=member.is_dir(),
+                              digest=entry.sha256 if entry else None, reviewed_collection=curated)
         for entry in manifest.files:
             with archive.open(entry.path) as stream:
                 if hashlib.file_digest(stream, "sha256").hexdigest() != entry.sha256:

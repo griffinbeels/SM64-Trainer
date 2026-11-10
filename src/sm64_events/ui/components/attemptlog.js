@@ -26,6 +26,8 @@ import { Icon } from "./icons.js";
 import { EmptyState } from "./emptystate.js";
 import { caveatOf, cardBadge } from "./marks.js";
 import { PbAction, PbReplayNotice, usePbReplay } from "./pbreplay.js";
+import { AttemptScenes, SceneButton, useAttemptScenes } from "./attemptscene.js";
+import { newestGhostFilesChange } from "./ghoststorage.js";
 
 const html = htm.bind(h);
 
@@ -52,10 +54,12 @@ export function attemptHiddenByDefault(a) {
 // Shared by star/segment cards, the unassigned bucket and graph-pick membership.
 // Missing preferences retain the default: saved-state entries are hidden.
 export function attemptMatchesLogFilters(a, ui) {
-  const savestated = a.outcome === "loaded" || a.state_loads > 0
-    || a.anchor_type === "state_loaded" || a.invalid_reason === "save_state";
+  const savestated = a.save_state; // the server's verdict (caveats.save_state_run)
   return !(ui.hideSavestates !== false && savestated)
-    && !(ui.hideResets && ["reset", "hard_reset", "death"].includes(a.outcome));
+    && !(ui.hideResets && ["reset", "hard_reset", "death"].includes(a.outcome))
+    // PBs only: the runs that set a personal best when they ran, the current
+    // one and every one it later beat (`set_pb`, tracking/views.py).
+    && !(ui.onlyPbs && !a.set_pb);
 }
 
 // Row time on the current clock: completion time for successes, how-far-in
@@ -382,6 +386,11 @@ export function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, s
         : html`<span>${a.strat_tag || "— no strategy —"}</span>`}
     </td>
     <td class="attempt-actions"><div class="attempt-action-slots">
+      ${/* The Ghost button (lab only, attemptscene.js) sits left of ▷ and only
+           on a row the lab knows a scene for (AttemptTable's answers, empty
+           with the lab off); the slots stay right-aligned, so a row without
+           one moves no other button. */""}
+      <${SceneButton} attempt=${a.id} open=${() => t.sceneLab.open(a.id)} />
       <button class="icon-button" onclick=${() => setShowReplay(!showReplay)}
             aria-expanded=${showReplay}
             title="View replay" aria-label="View replay">
@@ -420,7 +429,8 @@ export function AttemptRow({ a, t, idx, focus, clearFocus, isNew, openCompare, s
 // rows: the filtered/sorted subset to actually render.
 export function AttemptTable({ attempts, rows, t, focus, clearFocus, freshIds, openCompare, sec,
                               rankKind = "strategy" }) {
-  return html`<${RowRankKind.Provider} value=${rankKind}><table class="attempt-table">
+  const scenes = useAttemptScenes(rows.map((a) => a.id), Boolean(t.sceneLab), newestGhostFilesChange(t.feed));
+  return html`<${RowRankKind.Provider} value=${rankKind}><table class="attempt-table"><${AttemptScenes.Provider} value=${scenes}>
     ${rows.map((a) => {
       const idx = attempts.indexOf(a);
       return html`<${AttemptRow} key=${a.id} a=${a} t=${t} idx=${idx}
@@ -428,7 +438,7 @@ export function AttemptTable({ attempts, rows, t, focus, clearFocus, freshIds, o
         isNew=${freshIds ? freshIds.has(a.id) : false}
         openCompare=${openCompare} sec=${sec} />`;
     })}
-  </table></${RowRankKind.Provider}>`;
+  <//></table></${RowRankKind.Provider}>`;
 }
 
 export function HideToggle({ hidden, showHidden, setShowHidden }) {

@@ -171,7 +171,7 @@ def test_a_pb_on_a_hidden_attempt_does_not_count(tmp_path):
 
 @pytest.mark.parametrize("proof", [
     {"anchor_type": "state_loaded"}, {"state_loads": 1},
-    {"invalid_reason": "save_state"}, {},
+    {"invalid_reason": "save_state"}, {"outcome": "loaded"}, {},
     {"valid": False, "invalid_reason": "subarea_reset"},
 ])
 def test_pb_queries_match_save_state_policy_and_preserve_saved_history(tmp_path, proof):

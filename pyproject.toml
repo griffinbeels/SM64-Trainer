@@ -8,7 +8,6 @@ requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.36",
-    "pymem>=1.13",
     "av>=17.1",
     "numpy>=1.26",
     "proc-tap>=1.0.0",
@@ -21,6 +20,9 @@ dependencies = [
     "httpx>=0.27",
     "Authlib>=1.6.5",
     "sentry-sdk>=2.60,<3",
+    # The Ghost Lab's MIPS emulator. Pinned exactly: the free camera's CPU
+    # hooks (tools/scene_lab/cpu_hooks.c) are built against 2.1.4's internals.
+    "unicorn==2.1.4",
 ]
 
 [dependency-groups]
@@ -92,6 +94,7 @@ packages = ["src/sm64_events"]
 addopts = ["--ignore=data", "--ignore=replays", "--ignore=logs"]
 markers = [
     "spread: each case of this test is its own worker group under pytest-xdist loadgroup instead of staying with its file (tests/conftest.py::pytest_collection_modifyitems)",
+    "real_user_data(reason): this test reaches his real %LOCALAPPDATA% user data on purpose, so the per-test fence steps aside (tests/conftest.py::_fence_user_data)",
 ]
 
 [tool.ruff]

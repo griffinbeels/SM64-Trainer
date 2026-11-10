@@ -26,7 +26,7 @@ class OfflineMemory:
 def _status(state="not_installed", **overrides) -> LayerStatus:
     fields = dict(pj64_dir=None, pj64_running=False, registry_graphics_dll=None,
                  wrapper_present=False, wrapper_current=False,
-                 wrapper_selected=False, wrapped_name=None, layer_alive=False,
+                 wrapper_selected=False, layer_alive=False,
                  consented_at=None, problems=[], state=state)
     fields.update(overrides)
     return LayerStatus(**fields)
@@ -60,9 +60,25 @@ class FakeCaptureLayer:
         return self._status
 
 
+class FakeFixups:
+    def __init__(self, error=None):
+        self.error, self.reason, self.folders = error, None, []
+
+    def status(self):
+        return {"version": "9.9", "error": self.error, "reason": self.reason}
+
+    def install(self, plugin_dir):
+        from sm64_events.core.fixups import FixupError
+        self.folders.append(str(plugin_dir))
+        if self.error:
+            raise FixupError(self.error)
+
+
 @pytest.fixture
 def layer():
-    return FakeCaptureLayer()
+    layer = FakeCaptureLayer()
+    layer.fixups = FakeFixups()   # main.py hangs the real one on the layer the same way
+    return layer
 
 
 @pytest.fixture
@@ -115,6 +131,60 @@ def test_install_reports_the_new_status(client, layer):
                           json={"consent": True}).json()
     assert payload["emu"]["state"] == "needs_restart"
     assert layer.installs == [True]
+
+
+def _installed(running=False):
+    return _status(state="needs_restart", pj64_dir="C:/Games/PJ64", plugin_dir="C:/Games/PJ64/Plugin",
+                   pj64_running=running, wrapper_present=True, wrapper_current=True, wrapper_selected=True)
+
+
+def test_install_also_adds_the_fixups_and_their_failure_never_fails_it(client, layer):
+    layer.fixups.error = "We could not download the PJ64 Fixups."
+    layer.install = lambda consent: _installed()
+    response = client.post("/api/setup/capture-layer", json={"consent": True})
+    assert response.status_code == 200 and len(layer.fixups.folders) == 1
+    assert response.json()["emu"]["fixups"]["error"] == "We could not download the PJ64 Fixups."
+
+
+def test_the_fixups_route_waits_for_a_closed_project64_and_reports_a_failure(client, layer):
+    layer._status = _installed(running=True)
+    refused = client.post("/api/setup/fixups")
+    assert refused.status_code == 409 and "Close Project64" in refused.json()["detail"]
+    assert layer.fixups.folders == []
+    layer._status = _installed()
+    assert client.post("/api/setup/fixups").status_code == 200 and len(layer.fixups.folders) == 1
+    layer.fixups.error = "Windows blocked the change."
+    failed = client.post("/api/setup/fixups")
+    assert failed.status_code == 409 and failed.json()["detail"] == "Windows blocked the change."
+
+
+def test_a_protected_folder_gets_the_fixups_through_installs_permission_prompt(client, layer):
+    """Windows refuses the plain copy, so the route runs Install: its one
+    administrator prompt covers the plugin and the fixups."""
+    from sm64_events.core.fixups import FixupError
+    layer._status = _installed()
+    calls = []
+
+    def install(plugin_dir):
+        calls.append("fixups")
+        if "install" not in calls:
+            layer.fixups.error, layer.fixups.reason = "Windows blocked the change.", "access_denied"
+            raise FixupError("Windows blocked the change.", reason="access_denied")
+        layer.fixups.error = layer.fixups.reason = None
+
+    layer.fixups.install = install
+    layer.fixups.status = lambda: {"version": "9.9", "error": layer.fixups.error, "reason": layer.fixups.reason}
+    layer.install = lambda consent: calls.append("install") or _installed()
+    assert client.post("/api/setup/fixups").status_code == 200
+    assert calls == ["fixups", "install", "fixups"]
+
+
+def test_accepting_the_warning_records_only_gate_items(client):
+    payload = client.post("/api/setup/baseline-risk",
+                          json={"items": ["rsp_plugin", "audio_plugin", "emulator_build"]}).json()
+    risk = payload["onboarding"]["baseline_risk"]
+    assert risk["items"] == ["emulator_build", "rsp_plugin"] and risk["accepted_at"]
+    assert client.get("/api/setup").json()["onboarding"]["baseline_risk"] == risk
 
 
 def test_install_without_consent_is_refused(client):

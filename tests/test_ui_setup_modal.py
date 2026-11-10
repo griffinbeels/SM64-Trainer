@@ -31,6 +31,21 @@ def scenario():
     return layer, observed
 
 
+def no_setup_check(monkeypatch, layer=None):
+    """For a fixture that models the plugin over an empty Project64 folder:
+    serve no setup check, so the build-and-fixups gate (which a real check of
+    that folder would open) stays out of a test about something else.
+    `layer` also becomes the fixture's capture layer."""
+    import ui_fixture
+    from types import SimpleNamespace
+    if layer is not None:
+        monkeypatch.setattr(ui_fixture, "_FixtureCaptureLayer", lambda *a, **kw: layer)
+    real = ui_fixture.create_app
+    stub = SimpleNamespace(compare=lambda *_: None, diagnostic_status=lambda *_: None)
+    monkeypatch.setattr(ui_fixture, "create_app",
+                        lambda *args, **kwargs: real(*args, **{**kwargs, "setup_profile": stub}))
+
+
 def wait_page(page, name):
     page.wait_for(f'.setup-modal[data-page="{name}"]')
     page.wait_ms(360)  # settle the outgoing view before strict selector clicks
@@ -692,26 +707,22 @@ def test_restored_bundle_recovers_the_open_setup_modal(tmp_path, monkeypatch):
     """Exercise source rediscovery through the real installer and API, offline."""
     import ui_fixture
     from types import SimpleNamespace
-    from sm64_events.core.capturelayer import CaptureLayer, RENDERER_FILE, WRAPPER_DLL, WRAPPER_INI
+    from sm64_events.core.capturelayer import CaptureLayer, PLUGIN_DLL
     from sm64_events.core.renderer_settings import MINIMAL, RENDERER_INI
 
     folder = tmp_path / "PJ64"
     plugin = folder / "Plugin"
     plugin.mkdir(parents=True)
-    source = tmp_path / WRAPPER_DLL
-    expected = b"matching offline wrapper"
-    (plugin / WRAPPER_DLL).write_bytes(expected)
-    renderer = tmp_path / RENDERER_FILE
-    renderer.write_bytes(b"matching offline renderer")
-    (plugin / RENDERER_FILE).write_bytes(renderer.read_bytes())
-    (plugin / WRAPPER_INI).write_text(f"wrapped={RENDERER_FILE}")
+    source = tmp_path / PLUGIN_DLL
+    expected = b"matching offline plugin"
+    (plugin / PLUGIN_DLL).write_bytes(expected)
     (plugin / RENDERER_INI).write_bytes(MINIMAL)
-    registry = SimpleNamespace(get=lambda key, name: WRAPPER_DLL if name == "Graphics Dll" else None)
+    registry = SimpleNamespace(get=lambda key, name: PLUGIN_DLL if name == "Graphics Dll" else None)
     processes = SimpleNamespace(pj64_image_path=lambda: str(folder / "Project64.exe"))
     layer = CaptureLayer(registry, processes, tmp_path / "capture.json",
-                         lambda: source if source.is_file() else None,
-                         renderer_source=renderer)
+                         lambda: source if source.is_file() else None)
     monkeypatch.setattr(ui_fixture, "_FixtureCaptureLayer", lambda *a, **kw: layer)
+    no_setup_check(monkeypatch)
     observed = dict(target=dict(state="ready", pid=123),
                     rom=dict(state="supported", region="us", name="SM64 USAMUNE v1.93u"),
                     checks=dict(plugin=True, pictures=True, inputs=True, game=True))
@@ -730,44 +741,32 @@ def test_restored_bundle_recovers_the_open_setup_modal(tmp_path, monkeypatch):
         assert page.problems() == []
 
 
-def _installed_renderer(tmp_path, plugin):
-    """The bundled renderer, installed beside the wrapper with the ini naming it."""
-    from sm64_events.core.capturelayer import RENDERER_FILE, WRAPPER_INI
-    renderer = tmp_path / RENDERER_FILE
-    renderer.write_bytes(b"this checkout's bundled renderer")
-    (plugin / RENDERER_FILE).write_bytes(renderer.read_bytes())
-    (plugin / WRAPPER_INI).write_text(f"wrapped={RENDERER_FILE}")
-    return renderer
-
-
 @pytest.mark.parametrize("auto_refresh", [False, True])
 def test_source_build_mismatch_waits_for_explicit_install_in_setup(tmp_path, monkeypatch, auto_refresh):
     """Source and packaged servers preserve external copies until explicit Install."""
-    import ui_fixture
     from test_capturelayer import FakeProcesses, FakeRegistry, write_overlay
     from sm64_events.core.capturelayer import (
-        CaptureLayer, GRAPHICS_DLL_VALUE, REGISTRY_DLL_SUBKEY, RENDERER_FILE, WRAPPER_DLL, WRAPPER_INI,
+        CaptureLayer, GRAPHICS_DLL_VALUE, PLUGIN_DLL, REGISTRY_DLL_SUBKEY,
     )
+    from sm64_events.core.renderer_settings import RENDERER_INI
 
     folder = tmp_path / "Project64 with a manually staged capture layer"
     plugin = folder / "Plugin"
     plugin.mkdir(parents=True)
-    source = tmp_path / WRAPPER_DLL
-    bundled, staged = b"this checkout's bundled wrapper", b"manually staged candidate wrapper"
+    source = tmp_path / PLUGIN_DLL
+    bundled, staged = b"this checkout's bundled plugin", b"manually staged candidate plugin"
     source.write_bytes(bundled)
-    installed_dll = plugin / WRAPPER_DLL
+    installed_dll = plugin / PLUGIN_DLL
     installed_dll.write_bytes(staged)
-    renderer = _installed_renderer(tmp_path, plugin)
-    registry = FakeRegistry({(REGISTRY_DLL_SUBKEY, GRAPHICS_DLL_VALUE): WRAPPER_DLL})
+    registry = FakeRegistry({(REGISTRY_DLL_SUBKEY, GRAPHICS_DLL_VALUE): PLUGIN_DLL})
     processes = FakeProcesses(str(folder / "Project64.exe"))
     settings = tmp_path / "capture.json"
     # Prior installation consent must not authorize a source checkout to replace
     # a different candidate automatically when the emulator closes.
     write_overlay(settings, consented_at="2026-09-01T00:00:00Z",
-                  pj64_dir=str(folder), wrapped=RENDERER_FILE, installed_sha256="0" * 64)
-    layer = CaptureLayer(registry, processes, settings, source, renderer_source=renderer,
-                         auto_refresh=auto_refresh)
-    monkeypatch.setattr(ui_fixture, "_FixtureCaptureLayer", lambda *a, **kw: layer)
+                  pj64_dir=str(folder), installed_sha256="0" * 64)
+    layer = CaptureLayer(registry, processes, settings, source, auto_refresh=auto_refresh)
+    no_setup_check(monkeypatch, layer)
     observed = dict(target=dict(state="ready", pid=123),
                     rom=dict(MISSING_ROM), checks={})
 
@@ -797,7 +796,7 @@ def test_source_build_mismatch_waits_for_explicit_install_in_setup(tmp_path, mon
         page.click(button)
         wait_step(page, "reopen")
         assert installed_dll.read_bytes() == bundled
-        assert (plugin / WRAPPER_INI).read_text().strip() == f"wrapped={RENDERER_FILE}"
+        assert sorted(path.name for path in plugin.iterdir()) == sorted([PLUGIN_DLL, RENDERER_INI])
         state = page.evaluate("fetch('/api/setup').then(r=>r.json())")["emu"]
         assert state["installation_verified"] and state["wrapper_current"]
         assert state["verification"]["step"] == "reopen"
@@ -809,15 +808,14 @@ def test_denied_packaged_refresh_reveals_a_reachable_install_action(tmp_path, mo
     """A protected upgrade cannot remain hidden behind automatic-update copy."""
     import shutil
     import ui_fixture
-    from test_capturelayer import build, make_layer, renderer_for
+    from test_capturelayer import build, make_layer
     from test_capturelayer_refresh_recovery import TwoTicks, deny_wrapper
-    from sm64_events.core.capturelayer import WRAPPER_DLL
+    from sm64_events.core.capturelayer import PLUGIN_DLL
 
     folder = tmp_path / "PJ64"
     (folder / "Plugin").mkdir(parents=True)
-    bundled = tmp_path / WRAPPER_DLL
-    bundled.write_bytes(build(b"previous wrapper"))
-    renderer_for(bundled).write_bytes(build(b"renderer"))
+    bundled = tmp_path / PLUGIN_DLL
+    bundled.write_bytes(build(b"previous plugin"))
     layer, _, _ = make_layer(folder, bundled, tmp_path / "capture.json")
     layer.install(True)
     bundled.write_bytes(build(b"updated wrapper with portable GPU support"))
@@ -825,6 +823,7 @@ def test_denied_packaged_refresh_reveals_a_reachable_install_action(tmp_path, mo
     layer.refresh_loop(TwoTicks())
     assert len(attempts) == 1
     monkeypatch.setattr(ui_fixture, "_FixtureCaptureLayer", lambda *a, **kw: layer)
+    no_setup_check(monkeypatch)
     observed = dict(target=dict(state="ready", pid=None), rom=dict(MISSING_ROM), checks={})
     with serve_ui(setup_observer=lambda _: observed) as url, get_driver().launch(viewport=(850, 600)) as page:
         page.goto(url + "/ui/index.html")
@@ -840,4 +839,102 @@ def test_denied_packaged_refresh_reveals_a_reachable_install_action(tmp_path, mo
         wait_step(page, "reopen")
         state = page.evaluate("fetch('/api/setup').then(r=>r.json())")["emu"]
         assert state["installation_verified"] and state["automatic_update"]
+        assert page.problems() == []
+
+
+@pytest.mark.parametrize("packaged", [True, False])
+def test_an_older_install_moves_without_reopening_setup_or_offers_install(tmp_path, monkeypatch, packaged):
+    """An install from before the one-plugin file (its wrapper, renderer and
+    ini). The packaged app owns the move: the setup screen stays shut while
+    Project64 runs and after the refresh lands (his rule, 2026-09-16: "No
+    additional onboarding past the original onboarding"). A source checkout
+    that cannot move it by itself offers Install, which keeps the player's
+    Graphics Dll choice."""
+    import ui_fixture
+    from test_capturelayer_one_plugin import older_install
+    from test_capturelayer import build
+    from sm64_events.core.capturelayer import GRAPHICS_DLL_VALUE, PLUGIN_DLL, REGISTRY_DLL_SUBKEY
+    from sm64_events.core.renderer_settings import RENDERER_INI
+
+    folder = tmp_path / "PJ64"
+    (folder / "Plugin").mkdir(parents=True)
+    bundled = tmp_path / "bundle" / PLUGIN_DLL
+    bundled.parent.mkdir()
+    bundled.write_bytes(build(b"the one graphics plugin " + b"f" * 64 + b"-gpu-runtime\0"))
+    layer, registry, processes, plugin = older_install(folder, bundled, tmp_path / "capture.json")
+    layer.auto_refresh = packaged
+    processes.image_path = str(folder / "Project64.exe")
+    monkeypatch.setattr(ui_fixture, "_FixtureCaptureLayer", lambda *a, **kw: layer)
+    no_setup_check(monkeypatch)
+    observed = dict(target=dict(state="ready", pid=123), rom=dict(US_ROM), checks=dict(ALL_CHECKS))
+    with serve_ui(setup_observer=lambda _: observed) as url, get_driver().launch(viewport=(850, 600)) as page:
+        page.goto(url + "/ui/index.html")
+        page.wait_for(SETTINGS_CONTROL)
+        state = page.evaluate("fetch('/api/setup').then(r=>r.json())")["emu"]
+        assert state["wrapper_selected"] and not state["wrapper_current"] and state["leftovers"]
+        assert state["automatic_update"] is packaged
+        if packaged:
+            page.wait_ms(1500)
+            assert page.count(".setup-modal") == 0
+            processes.image_path = None
+            observed["target"] = dict(state="ready", pid=None)
+            assert layer.refresh_if_stale() is True
+        else:
+            wait_page(page, "install")
+            wait_step(page, "close")
+            processes.image_path = None
+            observed["target"] = dict(state="ready", pid=None)
+            wait_step(page, "install")
+            button = f"{CURRENT} .setup-install-action button"
+            page.wait_for(button)
+            (tmp_path / "older-install-explicit-install.png").write_bytes(page.screenshot())
+            page.click(button)
+            wait_step(page, "reopen")
+        wait_until(page, "fetch('/api/setup').then(r=>r.json()).then(s=>s.emu.installation_verified)",
+                   "the moved install reads verified")
+        if packaged:
+            assert page.count(".setup-modal") == 0
+        assert registry.get(REGISTRY_DLL_SUBKEY, GRAPHICS_DLL_VALUE) == PLUGIN_DLL
+        assert sorted(path.name for path in plugin.iterdir()) == sorted([PLUGIN_DLL, RENDERER_INI])
+        (tmp_path / f"older-install-{'packaged' if packaged else 'checkout'}.png").write_bytes(page.screenshot())
+        assert page.problems() == []
+
+
+@pytest.mark.parametrize("app", ["stable", "beta"])
+def test_what_v191_left_in_an_update_window_opens_on_install_and_one_click_cleans_it(tmp_path, monkeypatch, app):
+    """The stable app v1.9.1 can leave the new plugin, the placeholder text
+    under the old renderer name and an ini naming it, with a record no rule
+    adopts. The new app's setup screen opens by itself on the Install step,
+    never as a broken install, and one click leaves the plugin and its
+    settings with Project64's Graphics Dll choice kept."""
+    import ui_fixture
+    from test_capturelayer import build
+    from test_capturelayer_one_plugin import BETA_APP, STABLE_APP, v191_window
+    from sm64_events.core.capturelayer import GRAPHICS_DLL_VALUE, PLUGIN_DLL, REGISTRY_DLL_SUBKEY
+    from sm64_events.core.renderer_settings import RENDERER_INI
+
+    folder = tmp_path / "PJ64"
+    (folder / "Plugin").mkdir(parents=True)
+    bundled = tmp_path / "bundle" / PLUGIN_DLL
+    bundled.parent.mkdir()
+    bundled.write_bytes(build(b"the one graphics plugin"))
+    layer, registry, plugin = v191_window(folder, bundled, tmp_path / "capture.json", auto_refresh=app == "stable",
+                                          installer=STABLE_APP if app == "stable" else BETA_APP)
+    monkeypatch.setattr(ui_fixture, "_FixtureCaptureLayer", lambda *a, **kw: layer)
+    no_setup_check(monkeypatch)
+    observed = dict(target=dict(state="ready", pid=None), rom=dict(MISSING_ROM), checks={})
+    with serve_ui(setup_observer=lambda _: observed) as url, get_driver().launch(viewport=(850, 600)) as page:
+        page.goto(url + "/ui/index.html")
+        wait_page(page, "install")
+        wait_step(page, "install")
+        assert "unavailable" not in body(page).lower()
+        button = f"{CURRENT} .setup-install-action button"
+        page.wait_for(button)
+        (tmp_path / f"v191-window-{app}.png").write_bytes(page.screenshot())
+        page.click(button)
+        wait_step(page, "reopen")
+        state = page.evaluate("fetch('/api/setup').then(r=>r.json())")["emu"]
+        assert state["installation_verified"] and state["leftovers"] == []
+        assert sorted(path.name for path in plugin.iterdir()) == sorted([PLUGIN_DLL, RENDERER_INI])
+        assert registry.get(REGISTRY_DLL_SUBKEY, GRAPHICS_DLL_VALUE) == PLUGIN_DLL
         assert page.problems() == []

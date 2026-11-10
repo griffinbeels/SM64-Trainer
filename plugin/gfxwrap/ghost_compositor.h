@@ -157,10 +157,10 @@ struct Shadow {
  * the shade; cutout 1 keeps texels with alpha >= .5, 2 is opaque (alpha
  * ignored), 0 blends; mix 1 mixes
  * rgba toward the texel by its alpha (the cap's logo) instead of modulating. */
-/* Ghosts in one batch: every displayed ghost (GP_GHOSTS, ghost_tuning.h).
- * Sizes each per-ghost GPU range (particles 16 x 768 x 60 B = 737 KB) in
+/* Draw capacity alone adds three live peers; saved GP/GIPC ABI stays sixteen.
+ * Sizes each per-ghost GPU range (particles 19 x 768 x 60 B) in
  * PJ64's 2 GiB, 32-bit address space; a larger batch is refused. */
-constexpr uint32_t max_poses=GP_GHOSTS;
+constexpr uint32_t max_poses=GP_GHOSTS+3u;
 constexpr uint32_t particle_vertices=768; // 16 particles: a knocked-off cap (156) and 15 stars (24)
 struct ParticleVertex { float position[3], uv[2], rect[4], rgba[4], cutout, mix; };
 struct Particles {
@@ -191,7 +191,16 @@ struct Pose {
     bool noise_alpha = false;
     float noise_scale = 1.0f; // framebuffer pixels per N64 pixel, not aspect correction
     ghost_annotation::Payload annotation{}; // carried with this body through sorting
+    float sort_depth=0; // positive distance ahead of the live camera at this body's world root
 };
+inline void sort_back_to_front(Pose *poses,uint32_t count) noexcept {
+    // Stable, allocation-free ordering shared by saved and mixed live batches.
+    for(uint32_t i=1;i<count;++i) {
+        const auto value=poses[i];uint32_t j=i;
+        for(;j && poses[j-1].sort_depth<value.sort_depth;--j)poses[j]=poses[j-1];
+        poses[j]=value;
+    }
+}
 struct Display { uint64_t occurrence, generation; uint32_t framebuffer, texture, width, height; };
 struct Instance;
 

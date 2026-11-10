@@ -26,7 +26,7 @@ def setup_check_now(capture_layer, setup_observer, profile, poller=None):
 
 
 def make_snapshot(*, poller, service, monitor, replay, capture_layer, ghost, setup_observer, polling_state,
-                  setup_profile=None):
+                  multiplayer=None, setup_profile=None):
     recorder = getattr(replay, "recorder", None)
     def setup():
         read = getattr(capture_layer, "diagnostic_status", None)
@@ -62,7 +62,9 @@ def make_snapshot(*, poller, service, monitor, replay, capture_layer, ghost, set
         layer = read() if read else {}
         read = getattr(setup_observer, "silent_failure_status", None)
         setup_progress = read(layer or {}) if read else {}
+        read = getattr(multiplayer, 'silent_failure_status', None)
         return {"capture": capture, "ghost": ghost_progress, "setup": setup_progress,
+                'multiplayer': read() if read else {},
                 "game": {"attached": bool(getattr(poller.memory, "attached", False)),
                     "paused": bool(getattr(poller, "paused", False)),
                     "held": bool(getattr(poller, "hold_reason", None)),
@@ -70,7 +72,8 @@ def make_snapshot(*, poller, service, monitor, replay, capture_layer, ghost, set
                     "scope": getattr(latest, "session_id", None)}}
     return DiagnosticSnapshot(capture=getattr(recorder, "diagnostic_status", None),
         setup=setup, ghost=ghost_status, pipeline=pipeline, resources=lambda: monitor.latest,
-        progress=progress if recorder is not None else None)
+        progress=progress if recorder is not None else None,
+        multiplayer=getattr(multiplayer, 'diagnostic_status', None))
 
 
 def with_diagnostics(lifespan, snapshot, *, report=None):

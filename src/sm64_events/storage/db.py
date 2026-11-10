@@ -829,6 +829,9 @@ class Database:
     # accidentally commit that caller's unfinished work on this connection.
     def __init__(self, path: str | Path):
         Path(path).parent.mkdir(parents=True, exist_ok=True)
+        # The file this journal lives in: what keys data kept beside it per
+        # journal (the scene lab's attempt scenes, tools/scene_lab/attempt_scenes.py).
+        self.path = Path(path)
         self._conn = sqlite3.connect(str(path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._lock = threading.Lock()
@@ -1222,6 +1225,19 @@ class Database:
             out = [_attempt_from_row(r) for r in rows]
         return sorted(out, key=lambda a: journal_id(a.id))
 
+    def target_attempts(self, *, course_id=None, star_id=None, segment_id=None) -> list[Attempt]:
+        """One star's (segment_id None) or one segment's attempts, in `attempts()`'s order --
+        filtered in SQL, so the Scene viewer's ghost catalog never loads the whole history
+        to list one target's ghosts (server/scene_ghosts.py)."""
+        if segment_id is not None:
+            where, values = "segment_id = ?", (segment_id,)
+        else:
+            where, values = "segment_id IS NULL AND course_id = ? AND star_id = ?", (course_id, star_id)
+        with self._lock:
+            rows = self._conn.execute(f"SELECT * FROM attempts WHERE {where}", values).fetchall()
+            out = [_attempt_from_row(r) for r in rows]
+        return sorted(out, key=lambda a: journal_id(a.id))
+
     def session_attempts(self, session_id: int) -> list[Attempt]:
         """One session's attempts, in `attempts()`'s chronological order --
         filtered in SQL, so a caller that runs after every attempt (the
@@ -1542,7 +1558,8 @@ class Database:
                    " WHERE attempts.id = pbs.attempt_id AND (attempts.cleared=1"
                    " OR attempts.anchor_type='state_loaded'"
                    " OR attempts.state_loads>0"
-                   " OR attempts.invalid_reason='save_state'))")
+                   " OR attempts.invalid_reason='save_state'"
+                   " OR attempts.outcome='loaded'))")
 
     def insert_pb(self, course_id: int | None, star_id: int | None,
                   strat_tag: str | None, timer_mode: str, frames: int,

@@ -62,10 +62,78 @@ CLIENT_FIELDS = ("surface", "client_utc", "title", "note", "cells", "cards",
 # error anywhere. `tests/test_ui_log_records_the_real_page.py` is what catches
 # that, because it asserts the records LAND rather than that they were sent.
 SURFACES = ("selector", "target", "log", "recorder", "ghost_library", "community_library",
-            "player_page", "progress_publication")
+            "player_page", "progress_publication", "friends", "scene_viewer")
 
 MAX_TEXT = 200
 MAX_CELLS = 40
+
+# The Scene viewer's summary of a window while its camera moved (sceneviewer.js, movingSummary):
+# counts and milliseconds only, each a number in range, every spread a {p50, p95} pair.
+SCENE_VIEWER_COUNTS = ("pictures", "seconds", "pictures_per_second", "width", "height", "in_flight", "skipped")
+SCENE_VIEWER_SPREADS = ("input_to_drawn_ms", "decode_ms", "trip_ms", "server_ms", "evaluate_ms", "host_ms",
+                        "encode_ms")
+SCENE_VIEWER_LIMIT = 1e6
+
+
+def _scene_number(value):
+    if type(value) not in (int, float) or not 0 <= value <= SCENE_VIEWER_LIMIT:
+        return None
+    return value
+
+
+# The Scene viewer's pointer lock, one record per step (sceneviewer.js noteLock). On Windows a lock
+# no look is using walls the cursor in (his report, 2026-10-26), so each request, grant, end of a
+# look and exit lands here with why, the request's number, and whether a look, the window's focus
+# and a visible page were there; `dropped` counts the records the page's throttle held back.
+SCENE_LOCK_EVENTS = ("requested", "granted", "ended", "exited", "error")
+SCENE_LOCK_WHY = 40
+
+
+def _scene_lock(body: dict) -> dict:
+    def flag(key):
+        return body.get(key) if isinstance(body.get(key), bool) else None
+    why, sent = body.get("why"), body.get("client_utc")
+    return {"surface": "scene_viewer", "kind": "pointer_lock",
+            "event": body.get("event") if body.get("event") in SCENE_LOCK_EVENTS else None,
+            "why": why[:SCENE_LOCK_WHY] if isinstance(why, str) else None,
+            "request": _scene_number(body.get("request")), "look": flag("look"), "focused": flag("focused"),
+            "hidden": flag("hidden"), "dropped": _scene_number(body.get("dropped")),
+            "client_utc": sent[:MAX_TEXT] if isinstance(sent, str) else None}
+
+
+# A scene whose music and sound effects could not be separated (sceneaudio.js load): the sound row
+# says one plain sentence, and this record keeps why, in the stems layer's own words and numbers
+# (round 5, item 4: "i have no idea what this sound error means").
+SCENE_SPLIT_STATS = ("g1_checked", "g1_differs", "g1_max_abs", "g1_snr_db", "snr_db_median", "windows",
+                     "tasks", "missed", "lost_vis", "split_failed")
+
+
+def _scene_split(body: dict) -> dict:
+    def text(key):
+        value = body.get(key)
+        return value[:MAX_TEXT] if isinstance(value, str) else None
+    stats = body.get("stats") if isinstance(body.get("stats"), dict) else {}
+    numbers = {key: stats[key] for key in SCENE_SPLIT_STATS
+               if type(stats.get(key)) in (int, float) and abs(stats[key]) <= SCENE_VIEWER_LIMIT}
+    return {"surface": "scene_viewer", "kind": "sound_not_split", "scene": text("scene"),
+            "reason": text("reason"), "detail": text("detail"), "stats": numbers}
+
+
+def _scene_viewer(body: dict) -> dict:
+    """A scene_viewer record keeps only its own numbers: anything else, or out of range, is null."""
+    if body.get("kind") == "pointer_lock":
+        return _scene_lock(body)
+    if body.get("kind") == "sound_not_split":
+        return _scene_split(body)
+    entry = {"surface": "scene_viewer",
+             "encoding": body.get("encoding") if body.get("encoding") in ("jpeg", "raw", "shared") else None}
+    for key in SCENE_VIEWER_COUNTS:
+        entry[key] = _scene_number(body.get(key))
+    for key in SCENE_VIEWER_SPREADS:
+        value = body.get(key)
+        entry[key] = ({"p50": _scene_number(value.get("p50")), "p95": _scene_number(value.get("p95"))}
+                      if isinstance(value, dict) else None)
+    return entry
 
 
 def log_path() -> Path:
@@ -96,6 +164,20 @@ def sanitize(body: dict) -> dict | None:
         return None
     if body.get("surface") not in SURFACES:
         return None
+    if body["surface"] == "friends":
+        # Room diagnostics are counts and a fixed phase only. Never accept
+        # free text, player labels, identity codes, provider refs or payloads.
+        phase = body.get("phase")
+        if phase not in ("loading", "idle", "starting", "hosting", "joining", "connected",
+                          "reconnecting", "leaving", "error"):
+            return None
+        counts = {key: body.get(key) for key in ("members", "invitations")}
+        if any(type(value) is not int or not 0 <= value <= (4 if key == "members" else 16)
+               for key, value in counts.items()):
+            return None
+        return {"surface": "friends", "phase": phase, **counts}
+    if body["surface"] == "scene_viewer":
+        return _scene_viewer(body)
     return {key: _clip(body[key]) for key in CLIENT_FIELDS if key in body}
 
 
@@ -195,6 +277,23 @@ def render(entry: dict) -> str:
             " ".join(part for part in (row.get("label"), row.get("igt")) if part)
             for row in rows)
         return f"recorder({entry.get('total')}) -> {drawn or '(NO ROWS)'}"
+    if entry.get("surface") == "scene_viewer" and entry.get("kind") == "pointer_lock":
+        why = f" ({entry.get('why')})" if entry.get("why") else ""
+        dropped = f", {entry.get('dropped')} lock records not logged before it" if entry.get("dropped") else ""
+        return (f"scene viewer pointer lock {entry.get('event')}{why}: request {entry.get('request')}, look "
+                f"{entry.get('look')}, focused {entry.get('focused')}, hidden {entry.get('hidden')}{dropped}")
+    if entry.get("surface") == "scene_viewer" and entry.get("kind") == "sound_not_split":
+        numbers = ", ".join(f"{key} {value}" for key, value in (entry.get("stats") or {}).items())
+        return f"scene viewer sound not split ({entry.get('scene')}): {entry.get('detail')} [{numbers}]"
+    if entry.get("surface") == "scene_viewer":
+        def pair(key):
+            value = entry.get(key) or {}
+            return f"{value.get('p50')}/{value.get('p95')} ms"
+        return (f"scene viewer moving: {entry.get('pictures_per_second')} pictures/s ({entry.get('pictures')} in "
+                f"{entry.get('seconds')} s, {entry.get('skipped')} not drawn), input to drawn {pair('input_to_drawn_ms')},"
+                f" decode {pair('decode_ms')}, trip {pair('trip_ms')}, server {pair('server_ms')} (game code "
+                f"{pair('evaluate_ms')}, renderer {pair('host_ms')}, encode {pair('encode_ms')}), "
+                f"{entry.get('width')}x{entry.get('height')} {entry.get('encoding')}")
     cards = [card for card in (entry.get("cards") or []) if isinstance(card, dict)]
     if not cards:
         return "(NO CARDS)"

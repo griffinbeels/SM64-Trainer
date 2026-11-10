@@ -54,7 +54,10 @@ struct sg_model {
 };
 
 extern struct sg_model *sg_active;
-int sg_assets_load(struct sg_model *, const uint8_t *, size_t);
+int sg_assets_load(struct sg_model *, const uint8_t *, size_t, int write);
+int sg_mio0(const uint8_t *rom, uint32_t base, uint32_t span, uint8_t **out, uint32_t *out_size);
+int sg_rom_block(const uint8_t *rom, size_t bytes, uint32_t us, const uint8_t **data, uint8_t **owned,
+                 uint32_t *size, int32_t *shift);
 void sg_assets_free(struct sg_model *);
 int sg_particles_load(struct sg_particles *, const uint8_t *segment, uint32_t size);
 /* Appends the common1 (segment 3) flame frames; a refusal leaves the loaded set. */

@@ -4,11 +4,14 @@
  * that font when the file holds it, else in JP's own capitals. The trainer
  * never ships the font: it exists only where his own US cartridge lent it.
  *
- * The file (version 1, little endian): magic "SM64UFNT", u32 version, u32
+ * The file (version 2, little endian): magic "SM64UFNT", u32 version, u32
  * payload bytes, the payload's SHA-256, then the payload (UsFont: present,
- * then tiles). It is read only when every field holds and the payload's
- * digest is the cache's expected font (the US font, us_font_sha256), and
- * written whole to a temporary file that then replaces it. */
+ * tiles, then the 256 widths). It is read only when every field holds, the
+ * font's digest (present || tiles) is the cache's expected font (the US font,
+ * us_font_sha256) and the widths' is us_widths_sha256, and written whole to a
+ * temporary file that then replaces it. Version 1 (2026-10-17, no widths:
+ * they were compiled in until 2026-11-09) is refused, so a JP cartridge
+ * writes in its own capitals until a US cartridge lends the font again. */
 #pragma once
 #include "ghost_annotation_assets.h"
 #include <string>
@@ -17,6 +20,7 @@ namespace ghost_font_cache {
 struct Cache {
     std::wstring file;   // absolute path; empty: no cache
     const char *digest;  // SHA-256 (hex) of the only font it may hold
+    const char *widths=ghost_annotation::us_widths_sha256;  // ... and of its widths
 };
 /* %LOCALAPPDATA%\SM64Trainer\plugin-cache\us-dialogue-font.bin, for the US
  * font: per user, writable wherever Project64 is installed, and kept across

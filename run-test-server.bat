@@ -22,6 +22,15 @@ REM --- pick the port (first arg, else 8066) ---
 set "SM64_PORT=%~1"
 if "%SM64_PORT%"=="" set "SM64_PORT=8066"
 
+REM --- the lab Scene viewer turns on by itself where this machine has a lab config ---
+REM  Its ghost button on each Practice log row, the Scene viewer and its recording
+REM  switch exist only when SM64_SCENE_LAB names a lab config. Linked to this file
+REM  instead of run-scene-lab.bat, his test server came up without them, more than
+REM  once ("this build doesn't have any ghosts and such set up so i can't test that.
+REM  this has happened a few times", 2026-11-07). A machine without the config is
+REM  unchanged.
+if not defined SM64_SCENE_LAB if exist "%LOCALAPPDATA%\SM64Trainer\scene-lab\lab.json" set "SM64_SCENE_LAB=%LOCALAPPDATA%\SM64Trainer\scene-lab\lab.json"
+
 REM --- uv is required ---
 where uv >nul 2>nul
 if errorlevel 1 (
@@ -81,13 +90,19 @@ echo   Tuning: http://127.0.0.1:%SM64_PORT%/ui/tunemarelo.html   (overall rank-u
 echo   Tuning: http://127.0.0.1:%SM64_PORT%/ui/tunelog.html   (practice log card layout)
 echo   Tuning: http://127.0.0.1:%SM64_PORT%/ui/tuneselector.html   (selector card exchange)
 echo   Tuning: http://127.0.0.1:%SM64_PORT%/ui/tunefeed.html   (feed arrival + every dropdown)
+if defined SM64_SCENE_LAB echo   Lab:    Ghost Lab in the sidebar, under Lab   (%SM64_SCENE_LAB%)
 echo   The real trainer exe keeps its own port (8064) untouched.
 echo   Press CTRL+C in this window to stop the test server.
 echo ============================================================
 echo.
 
+REM --- the lab Scene viewer (run-scene-lab.bat) runs the game's code in Unicorn;
+REM     tools/scene_lab/cpu_hooks.c reads Unicorn 2.1.4's internals, so pin it ---
+set "SM64_UV_WITH="
+if defined SM64_SCENE_LAB set "SM64_UV_WITH=--with unicorn==2.1.4"
+
 REM canonical launch (binds the CTRL+C graceful-shutdown deadline)
-uv run python -m sm64_events.main
+uv run %SM64_UV_WITH% python -m sm64_events.main
 
 echo.
 echo Test server stopped.

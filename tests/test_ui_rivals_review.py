@@ -437,6 +437,29 @@ def test_a_fresh_profile_opens_the_rank_range_without_a_personal_best(browser):
         clean(seen)
 
 
+@pytest.mark.parametrize("width", (1280, 850))
+def test_an_unranked_pb_races_with_its_time_and_no_rank_badge(browser, tmp_path, width):
+    """A PB nothing ranks yet (a new strategy, a reds->pipe Overall tab) races as your
+    seat with its time; neither the seat nor the settings show a rank it lacks."""
+    you_cap = f"{CARD} .lineup-seat.is-you .lineup-cap"
+    with practice(browser, lineup_session(rows=[], reason="nobody"), width=width) as (page, _state, seen):
+        assert page.locator(f"{you_cap} .rank-icon-slot").count() == 1, "control: a ranked PB wears its badge"
+        clean(seen)
+    with practice(browser, lineup_session(rows=[], reason="nobody", pb_ranked=False), width=width) as (page, state, seen):
+        you = next(s for s in seats(page) if s["you"])
+        assert you["time"] not in (None, "—") and not you["noGhost"], you
+        assert page.locator(f"{you_cap} .rank-icon-slot").count() == 0
+        artifact(page, tmp_path, f"unranked-pb-lineup-{width}.png")
+        sheet = ghost_settings(page)
+        context = sheet.locator(".rival-pb-context")
+        assert context.inner_text().strip() == "Above your PB"
+        assert context.locator(".rank-icon-slot").count() == 0
+        artifact(page, tmp_path, f"unranked-pb-settings-{width}.png")
+        sheet.get_by_role("button", name="Cancel", exact=True).click()
+        assert state["writes"] == []
+        clean(seen)
+
+
 def test_rank_change_uses_canonical_animation_and_reduced_motion_snaps(browser):
     with practice(browser, lineup_session()) as (page, state, seen):
         sheet = ghost_settings(page)

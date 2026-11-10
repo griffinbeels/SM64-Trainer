@@ -21,6 +21,7 @@ import { Icon } from "./components/icons.js";
 import { RankPage } from "./components/rankpage.js";
 import { RunnerPage } from "./components/runnerpage.js";
 import { PlayerPage } from "./components/playerpage.js";
+import { FriendsEntry, useFriends } from "./components/friends.js";
 import { RankUpCelebration } from "./components/marelocelebrate.js";
 import { ResourcesPage } from "./components/resourcespage.js";
 import { AboutPage } from "./components/aboutpage.js";
@@ -87,6 +88,45 @@ const PLAIN_TABS = {
   "Resources": ResourcesPage, "About": AboutPage,
 };
 
+// The Ghost Lab (the Scene viewer until round 9). This one probe names the lab
+// in the installed app (on by default, Griffin's D2) and in a developer's lab
+// (SM64_SCENE_LAB); a source checkout without one answers {lab: null} and the
+// shell stays exactly as it was. The viewer's code loads only after the
+// server names the lab. Also the attempt the Practice log's Ghost button
+// handed over, until the viewer takes it.
+function useSceneLab() {
+  const [viewer, setViewer] = useState(null);
+  const [intent, setIntent] = useState(null);
+  useEffect(() => {
+    let mounted = true;
+    fetch("/api/scene-lab", { cache: "no-store" })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((probe) => (probe?.lab ? import("./components/sceneviewer.js") : null))
+      .then((module) => { if (mounted && module) setViewer(() => module.SceneViewer); })
+      .catch(() => {});
+    return () => { mounted = false; };
+  }, []);
+  return [viewer, intent, setIntent];
+}
+// The Ghost Lab is a destination of its own in the Play group, after the
+// Library (D2: "its own sidebar entry"), not a one-item "Lab" group.
+const LAB_ITEM = ["Ghost Lab", "ghost"];
+const withLab = (groups) => groups.map(([label, items]) => (label === "Play" ? [label, [...items, LAB_ITEM]] : [label, items]));
+
+// The lab's door on `t`, the way the Daily Star rides on it: every practice-log
+// row reads one copy with no prop threaded through the log. `open(attempt)` is
+// the Ghost button: the Ghost Lab opens that attempt's scene and plays it
+// (`intent`, the libraryIntent shape: go to that tab and open that thing).
+// `openGhost(ghost)` is a Library row's Ghost button: the Ghost Lab turns to that
+// ghost's star or segment and watches the ghost ({recording, entity, strat}).
+// Null with the lab off, and then no row draws the button.
+function sceneDoor(viewer, intent, setIntent, setTab) {
+  if (!viewer) return null;
+  return { intent, clearIntent: () => setIntent(null),
+    open: (attempt) => { setIntent({ attempt }); setTab("Ghost Lab"); },
+    openGhost: (ghost) => { setIntent({ ghost }); setTab("Ghost Lab"); } };
+}
+
 function NavItem({ name, icon, tab, setTab, onSessions, compact = false }) {
   // FINAL REVIEW FIX (minor: Compare is an orphan destination). Compare's own
   // nav entry is gone since Task 6 folded it into the Library (see NAV_GROUPS
@@ -124,14 +164,18 @@ function ConnectionStatus({ t, mobile = false }) {
   </div>`;
 }
 
-function Sidebar({ t, tab, setTab, openSettings }) {
+function FriendsSlot({ narrow, mobile = false, state }) {
+  return narrow === mobile ? html`<${FriendsEntry} state=${state} className=${mobile ? "icon-button" : "nav-item"} />` : null;
+}
+
+function Sidebar({ t, tab, setTab, openSettings, friends, groups = NAV_GROUPS }) {
   return html`<aside class="app-sidebar" aria-label="Primary navigation">
     <div class="app-brand">
       <img src="/ui/assets/sm64_tracker.png" alt="" />
       <span>SM64 Trainer</span>
     </div>
     <div class="sidebar-nav">
-      ${NAV_GROUPS.map(([label, items]) => html`<div class="nav-group">
+      ${groups.map(([label, items]) => html`<div class="nav-group">
         <div class="nav-group-label">${label}</div>
         ${items.map(([name, icon]) => html`<${NavItem}
           name=${name} icon=${icon} tab=${tab} setTab=${setTab}
@@ -139,6 +183,7 @@ function Sidebar({ t, tab, setTab, openSettings }) {
       </div>`)}
     </div>
     <div class="sidebar-footer">
+      ${friends}
       <button type="button" class="nav-item settings-link" aria-label="Settings" onclick=${openSettings}>
         <${Icon} name="settings" size=${21} /><span>Settings</span>
       </button>
@@ -147,13 +192,14 @@ function Sidebar({ t, tab, setTab, openSettings }) {
   </aside>`;
 }
 
-function MobileTop({ t, openSettings }) {
+function MobileTop({ t, openSettings, friends }) {
   return html`<header class="mobile-appbar">
     <div class="mobile-brand">
       <img src="/ui/assets/sm64_tracker.png" alt="" />
       <span>SM64 Trainer</span>
     </div>
     <${ConnectionStatus} t=${t} mobile=${true} />
+    ${friends}
     <button type="button" class="icon-button" aria-label="Open settings"
         onclick=${openSettings}><${Icon} name="settings" size=${20} /></button>
   </header>`;
@@ -171,7 +217,7 @@ function MobileNav({ tab, setTab, openMore }) {
   </nav>`;
 }
 
-function MobileMore({ open, close, tab, setTab, openSettings }) {
+function MobileMore({ open, close, tab, setTab, openSettings, lab = [] }) {
   if (!open) return null;
   const pick = (name) => { setTab(name); close(); };
   return html`<div class="mobile-more-backdrop" onclick=${close}>
@@ -187,7 +233,7 @@ function MobileMore({ open, close, tab, setTab, openSettings }) {
         ${/* The complement of the bottom bar, computed — never a second list.
              Sessions opens the settings drawer rather than a tab, the same
              special case the sidebar makes. */""}
-        ${NAV_ITEMS.filter((item) => !inBar(item)).map(([name, icon]) => html`
+        ${NAV_ITEMS.filter((item) => !inBar(item)).concat(lab).map(([name, icon]) => html`
           <button type="button" class=${tab === name ? "on" : ""}
               onclick=${() => (name === "Sessions"
                 ? (close(), openSettings()) : pick(name))}>
@@ -202,7 +248,18 @@ function MobileMore({ open, close, tab, setTab, openSettings }) {
 }
 
 function App() {
+  const friends = useFriends();
+  const [narrowShell, setNarrowShell] = useState(() => window.matchMedia("(max-width: 760px)").matches);
+  useEffect(() => {
+    const media = window.matchMedia("(max-width: 760px)");
+    const changed = () => setNarrowShell(media.matches);
+    media.addEventListener("change", changed);
+    return () => media.removeEventListener("change", changed);
+  }, []);
   const tracker = useTracker();
+  const [SceneViewer, sceneIntent, setSceneIntent] = useSceneLab();
+  const navGroups = SceneViewer ? withLab(NAV_GROUPS) : NAV_GROUPS;
+  const plainTabs = SceneViewer ? { ...PLAIN_TABS, "Ghost Lab": SceneViewer } : PLAIN_TABS;
   // The Daily Star rides on `t` so every surface reads one copy; it lives
   // outside the store because only this layer knows the local date.
   const { daily, markSeen } = useDailyStar(tracker.standingRev);
@@ -285,11 +342,14 @@ function App() {
   // `openCompare`, unrenamed, with the same {attemptId, entity, strat} shape
   // it always has -- change the ONE function, never the prop chain.
   const openCompare = (intent) => openLibrary({ kind: "compare", ...intent });
+  t.sceneLab = sceneDoor(SceneViewer, sceneIntent, setSceneIntent, setTab);
 
   return html`<div class="app-shell">
-    <${Sidebar} t=${t} tab=${tab} setTab=${setTab}
+    <${Sidebar} t=${t} tab=${tab} setTab=${setTab} groups=${navGroups}
+      friends=${html`<${FriendsSlot} narrow=${narrowShell} state=${friends} />`}
       openSettings=${() => setSettingsOpen(true)} />
-    <${MobileTop} t=${t} openSettings=${() => setSettingsOpen(true)} />
+    <${MobileTop} t=${t} openSettings=${() => setSettingsOpen(true)}
+      friends=${html`<${FriendsSlot} narrow=${narrowShell} mobile=${true} state=${friends} />`} />
     <main class="app-main">
       <${Header} t=${t} settingsOpen=${settingsOpen}
         closeSettings=${() => setSettingsOpen(false)} setTab=${setTab} onOpenPlayer=${openPlayer} />
@@ -321,14 +381,14 @@ function App() {
               : html`<${RankPage} t=${t} onOpenRunner=${openRunner} onOpenPlayer=${openPlayer}
                   onScopeChange=${setComparisonScope}
                   openLibrary=${openLibrary} />`}</div>`
-          : PLAIN_TABS[tab] ? html`<div class="view-pane"><${PLAIN_TABS[tab]} t=${t} /></div>`
+          : plainTabs[tab] ? html`<div class="view-pane"><${plainTabs[tab]} t=${t} /></div>`
           : null}
       </div>
     </main>
     ${t.notice && html`<div class="app-notice" role="status">${t.notice}</div>`}
     <${MobileNav} tab=${tab} setTab=${setTab}
       openMore=${() => setMoreOpen(true)} />
-    <${MobileMore} open=${moreOpen} close=${() => setMoreOpen(false)}
+    <${MobileMore} open=${moreOpen} close=${() => setMoreOpen(false)} lab=${SceneViewer ? [LAB_ITEM] : []}
       tab=${tab} setTab=${setTab} openSettings=${() => setSettingsOpen(true)} />
     <${UpdatePopup} t=${t} />
     ${/* Root-mounted like the update popup: the desktop shell can ask to close

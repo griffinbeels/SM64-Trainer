@@ -8,6 +8,7 @@
 #include "ghost_assets.h"
 #include "ghost_stream.h"
 #include "ghost_playback.h"
+#include "ghost_live_session.h"
 #include <atomic>
 #include <cstdio>
 #include <cstring>
@@ -17,6 +18,18 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+
+// This legacy worker witness isolates playback/model custody. Live session
+// behavior has its separate compiled witness; the receiver page is real here.
+namespace ghost_live_session {
+int worker_update(const Update &,uint64_t) noexcept {return GP_OK;}
+PresentationStatus presentation_status(uint64_t) noexcept {return {};}
+uint64_t worker_refusals() noexcept {return 0;}
+void worker_revoke() noexcept {}
+void worker_suspend() noexcept {}
+int worker_release() noexcept {return ghost_playback::api()->release_worker();}
+}
+namespace ghost_presentation {void live_consumer(bool) {}}
 
 namespace {
 struct Handle {

@@ -12,6 +12,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import build_beta
 from sm64_events.core.build_channel import parse_metadata
+from sm64_events.core.update_plan import BUNDLED_NATIVES, RETIRED_NATIVE_TEXT, RETIRED_NATIVES
 from test_beta_channel import metadata
 from beta_ghosts import COLLECTION_NAME, review_collection
 
@@ -21,8 +22,7 @@ def artifact(tmp_path):
     build = parse_metadata(metadata())
     folder = tmp_path / "SM64TrainerBeta"
     names = ["SM64TrainerBeta.exe", "_internal/ffmpeg.exe", "_internal/sm64_events/ui/index.html",
-             *["_internal/sm64_events/data/plugin/" + name for name in
-               ("sm64_trainer_gfx.dll", "GLideN64_SM64Trainer.dll", "SM64GpuEncoderV1.dll")],
+             *["_internal/sm64_events/data/plugin/" + name for name in BUNDLED_NATIVES],
              *["_internal/" + name for name in
                ("ukiki.ico", "behaviours_us.tsv", "behaviours_jp.tsv", "symbols_us.tsv", "symbols_jp.tsv",
                 "rank_standards.seed.json", "defaults.seed.json", "sheet_ladders.seed.json",
@@ -31,6 +31,8 @@ def artifact(tmp_path):
         path = folder / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(b"disposable-artifact-fixture")
+    for name in RETIRED_NATIVES:   # what tools/build_exe.py write_retired_natives puts there
+        (folder / "_internal/sm64_events/data/plugin" / name).write_bytes(RETIRED_NATIVE_TEXT)
     (folder / "_internal" / "build-channel.json").write_text(json.dumps(build.metadata()))
     (folder / "_internal" / "error-reporting.json").write_text(json.dumps({"schema": 1, "dsn": ""}))
     return folder, build
@@ -47,8 +49,34 @@ def test_beta_args_share_app_assets_but_isolate_every_build_output(tmp_path):
                         ("--specpath", tmp_path / "work" / "spec")):
         assert args[args.index(flag) + 1] == str(value)
     assert any(str(config) in arg for arg in args)
-    for expected in ("ffmpeg.exe", "sm64_trainer_gfx.dll", "GLideN64_SM64Trainer.dll", "SM64GpuEncoderV1.dll"):
+    for expected in ("ffmpeg.exe", *BUNDLED_NATIVES):
         assert any(expected in arg for arg in args)
+    # The placeholder is no PyInstaller input: it is written into the built app.
+    assert not any(name in arg for name in RETIRED_NATIVES for arg in args)
+
+
+def test_the_built_app_carries_the_placeholder_as_text_and_the_policy_accepts_only_it(
+        artifact, monkeypatch):
+    """Older apps refuse an update without a file at each retired name; the
+    build writes the placeholder text there, never a program, and the artifact
+    check accepts that file only with exactly those bytes."""
+    import build_exe
+    import bundle_policy
+    folder, build = artifact
+    plugin = folder / "_internal" / "sm64_events" / "data" / "plugin"
+    for name in RETIRED_NATIVES:
+        (plugin / name).unlink()
+    with pytest.raises(RuntimeError, match="missing"):
+        build_beta.validate_artifact(folder, build)
+    build_exe.write_retired_natives(folder)
+    for name in RETIRED_NATIVES:
+        assert (plugin / name).read_bytes() == RETIRED_NATIVE_TEXT and not RETIRED_NATIVE_TEXT.startswith(b"MZ")
+    # The bundle policy lists the shipped natives only; the placeholder passes as data.
+    monkeypatch.setattr(bundle_policy, "NATIVE_FILES", BUNDLED_NATIVES)
+    build_beta.validate_artifact(folder, build)
+    (plugin / RETIRED_NATIVES[0]).write_bytes(b"MZ a program under the retired name")
+    with pytest.raises(RuntimeError, match="unexpected"):
+        build_beta.validate_artifact(folder, build)
 
 
 def test_friend_zip_contains_complete_folder_and_matches_sha_receipt(artifact, tmp_path):
@@ -72,7 +100,10 @@ def test_friend_zip_contains_complete_folder_and_matches_sha_receipt(artifact, t
                                  "library_adoptions.json", "tracker_mode.json",
                                  "climb-profile.json", "developer-simulation.json",
                                  "ghost_population/manifest.json", "community_cache/index.json",
-                                 "compare_cache/private.json"])
+                                 "compare_cache/private.json", "_internal/local-service.json",
+                                 "_internal/sm64_events/data/local-service.json",
+                                 "_internal/sm64_events/ui/local-settings.js",
+                                 "_internal/eos-private/client.json", "_internal/eos-sdk/header.h"])
 def test_artifact_refuses_private_data_hidden_files_and_public_executables(artifact, path):
     folder, build = artifact
     extra = folder / path
@@ -214,7 +245,10 @@ def test_builder_reexec_relays_failure_diagnostics(monkeypatch, tmp_path, capsys
 
 
 def test_builder_requires_ffmpeg_instead_of_silent_replay_fallback(monkeypatch):
-    monkeypatch.setattr(build_beta.shutil, "which", lambda name: None)
+    def not_built(*, build_missing):
+        assert build_missing is False, "the prerequisite check must never compile ffmpeg"
+        raise RuntimeError("ffmpeg.exe for these inputs is not built yet")
+    monkeypatch.setattr(build_beta, "pinned_ffmpeg", not_built)
     with pytest.raises(RuntimeError, match="FFmpeg is required"):
         build_beta.check_prerequisites(None)
 
@@ -230,7 +264,7 @@ def test_builder_rejects_stale_natives_without_attempting_compilation(monkeypatc
     monkeypatch.setitem(sys.modules, "build_natives", SimpleNamespace(ensure=ensure))
     with pytest.raises(RuntimeError, match="stale"):
         build_beta.check_prerequisites(str(ffmpeg))
-    assert calls == [{"build": False, "strict": True}]
+    assert calls == [{"build": False, "strict": True, "lab": True}]      # the Ghost Lab's natives too
 
 
 def test_check_only_never_builds_writes_or_reexecutes(monkeypatch, tmp_path):

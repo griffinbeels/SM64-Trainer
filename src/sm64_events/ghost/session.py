@@ -38,6 +38,9 @@ state_log = logging.getLogger(GHOST_STATE_LOGGER)
 #: Broadcaster, never through `TrackerService.publish`, so there is no journal
 #: behind it at all -- this is live UI state, like the segment notices.
 EVENT_TYPE = "ghost_changed"
+#: Broadcast the same way after a Settings ghost-file purge (`purge_files`), {deleted, bytes,
+#: skipped}: pages re-read the Practice log's ghost buttons and the sizes Settings shows.
+FILES_EVENT = "ghost_files_changed"
 
 #: How often the watch re-reads the world. Slow on purpose: everything it
 #: catches is human-paced; the renderer independently owns each game frame.
@@ -178,6 +181,21 @@ class GhostSession:
         self._closing = False
 
     # -- what anyone reads ---------------------------------------------------
+
+    def live_appearance(self):
+        """Cached display preferences for friends; no selection or storage IO.
+
+        Hiding the overlay affects incoming presentation only. The room's
+        outgoing pose sharing has its own explicit pause/leave lifetime.
+        """
+        from dataclasses import fields
+        from sm64_events.multiplayer.native_protocol import Appearance
+        values = dict(self._values)
+        controls = settings.native_controls(values)
+        defaults = Appearance()
+        appearance = Appearance(**{row.name: controls.get(row.name, getattr(defaults, row.name))
+                                   for row in fields(Appearance)})
+        return appearance, not values["enabled"]
 
     def diagnostic_status(self) -> dict:
         """Cached logical state only: no labels, roster paths or playback commands."""
@@ -488,6 +506,12 @@ class GhostSession:
         return {**NO_TARGET, **self._native_answer}
 
 
+    @property
+    def rivals(self):
+        """The rival race (`ghost/rivals.py`), or None in a window without a population: the
+        Scene viewer's ghost catalog lists its population and judges ownership through it."""
+        return self._rivals
+
     def library(self) -> GhostLibrary:
         """The current PB, saved runs, template attempts and imported ghosts."""
         return GhostLibrary(template_store(self._inputs), self._db(),
@@ -599,6 +623,30 @@ class GhostSession:
         await asyncio.to_thread(forget)
         body = await self.refresh(resolve=True)
         return {"attempt_id": attempt_id, "saved": False, "session": body}
+
+    def storage(self, scenes=lambda: None, made=lambda: None):
+        """Settings' ghost files over this session's owners (`ghost/storage.py`); `scenes` the
+        lab's attempt scenes and `made` its made ghost scenes (scene_resim), when the lab runs."""
+        from sm64_events.ghost.storage import GhostStorage
+        native = self._native
+        return GhostStorage(database=self._db, replay=self._replay, population=self._population,
+                            sharing=self._sharing, scenes=scenes, community=self._community, made=made,
+                            in_use=lambda: native.asset_paths() if hasattr(native, "asset_paths") else ())
+
+    async def purge_files(self, storage, *, keep_pbs: bool) -> dict:
+        """One Settings purge, off the loop, then every surface that showed a deleted ghost
+        re-reads: the lineup forgets what it prepared and the card's session is published."""
+        result = await asyncio.to_thread(storage.purge, keep_pbs=keep_pbs)
+        if result["deleted"]:
+            with self._lifecycle_lock:
+                if self._rivals is not None:
+                    self._rivals.files_changed()
+            await self.refresh(resolve=True)
+        # Broadcast only, like ghost_changed: every open page re-reads its ghost buttons and sizes.
+        await self._broadcaster.publish(Event(
+            type=FILES_EVENT, frame=0, timestamp_utc=datetime.now(timezone.utc),
+            payload={key: result[key] for key in ("deleted", "bytes", "skipped")}))
+        return result
 
     async def pb_changed(self, attempt, saved: bool) -> None:
         """A PB was just saved or undone: the ghost follows it NOW, not on

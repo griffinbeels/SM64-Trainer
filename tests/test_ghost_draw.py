@@ -70,6 +70,7 @@ def test_ghost_glue_gateway_reads_and_error_owners(tmp_path):
         print(json.dumps({"before": {key: before[key] for key in ("finished", "drawn", "shapes")},
                           "after": {key: report[key] for key in ("finished", "drawn", "shapes")}}))
     assert report["ok"] and not report["baseline"] and report["driver_queries"] == 0
+    assert report["union"] == {"saved": 16, "live": 3, "sorted": True, "contributor_and": True}
     assert report["transitions"] == {
         "initial_prewarm": True, "drawable_rebuilds": 0, "extent_prepares": 1,
         "generation_rebuilds": 1, "foreign_deletes": 0,
@@ -125,9 +126,9 @@ def test_a_silent_batch_refusal_negative_control(tmp_path):
     if sys.platform != "win32":
         pytest.skip("Win32 renderer component")
     source = (NATIVE / "ghost_draw.cpp").read_text(encoding="utf-8")
-    anchor = "    } else { ghost_facts::refuse(GDF_LIST_BATCH); cancel(); }\n"
+    anchor = "        ghost_facts::refuse(GDF_LIST_BATCH);\n"
     assert source.count(anchor) == 1
-    (tmp_path / "ghost_draw.cpp").write_text(source.replace(anchor, "    } else cancel();\n"), encoding="utf-8")
+    (tmp_path / "ghost_draw.cpp").write_text(source.replace(anchor, ""), encoding="utf-8")
     build(tmp_path, tmp_path, failure="a refused batch names itself and why")
 
 

@@ -28,7 +28,7 @@ struct Instance {
     explicit Instance(const Dispatch& d,uint32_t generation):dispatch(d),context_generation(generation) {}
 };
 namespace {
-std::atomic<bool> negotiated{false},display_wanted{false};
+std::atomic<bool> negotiated{false},display_wanted{false},live_wanted{false};
 ImageProvider provider=nullptr;
 PresentationNotice notice=nullptr;
 ImageValidity validity=nullptr;
@@ -155,8 +155,8 @@ Instance* create(const Dispatch& d,uint32_t generation) {
     int32_t major=0,minor=0;d.gl.GetIntegerv(gl::MAJOR_VERSION,&major);d.gl.GetIntegerv(gl::MINOR_VERSION,&minor);
     if(major<4 || (major==4 && minor<3))return nullptr;
     int32_t buffers=0;d.gl.GetIntegerv(0x8824,&buffers); // GL_MAX_DRAW_BUFFERS
-    if(buffers<1 || buffers>16)return nullptr;
-    auto* p=new(std::nothrow) Instance(d,generation);if(p)p->draw_buffers=buffers;return p;
+    if(buffers<1)return nullptr;
+    auto* p=new(std::nothrow) Instance(d,generation);if(p)p->draw_buffers=buffers>16?16:buffers;return p;
 }
 bool prepare(Instance* p,uint32_t drawable,uint32_t width,uint32_t height,uint32_t sw,uint32_t sh) {
     if(!p)return false;
@@ -215,7 +215,10 @@ bool replace_vi(Instance* p,const GhostViImage& image,uint32_t origin,bool gamma
     p->image=image;p->replaced=true;return true;
 }
 bool before_swap(Instance* p,uint32_t origin,const Raster& raster) {
-    if(!p || !p->ready || !p->update || p->osd_window || !raster_valid(raster))return false;
+    if(!p || !p->update || p->osd_window || !raster_valid(raster))return false;
+    // An unprepared instance cannot replace_vi. Its untouched BACK can still
+    // qualify a clean recording; a saved/replaced image still needs resources.
+    if(!p->ready && (p->saved || p->replaced))return false;
     p->raster=raster;p->vi_origin=origin;
     // The original BACK is already clean when no ghost replaced the VI.
     // Qualify its successful swap without another full-drawable copy or OSD
@@ -275,7 +278,7 @@ void withdraw_image(Instance* p) {
 }
 void swap_completed(Instance* p,bool success) {
     if(!p)return;
-    if(success && p->ready && p->qualified && !p->osd && !p->osd_window && p->serial<UINT64_MAX) {
+    if(success && (p->ready || (!p->saved && !p->replaced)) && p->qualified && !p->osd && !p->osd_window && p->serial<UINT64_MAX) {
         p->published={p->saved?p->fbos[0]:0,p->saved?p->textures[0]:0,p->width,p->height,p->context_generation,
             p->drawable_generation,p->saved?p->resource_generation:0,p->vi_origin,++p->serial,p->update};
         // The display copy shares the clean picture's serial and update.
@@ -295,7 +298,8 @@ void destroy(Instance* p) {
 void abandon(Instance* p){delete p;}
 void set_provider(ImageProvider value,PresentationNotice completed,ImageValidity current){provider=value;notice=completed;validity=current;}
 void clean_consumer(bool value){negotiated.store(value,std::memory_order_release);}
-bool clean_consumer(){return negotiated.load(std::memory_order_acquire);}
+bool clean_consumer(){return negotiated.load(std::memory_order_acquire) || live_wanted.load(std::memory_order_acquire);}
+void live_consumer(bool value){live_wanted.store(value,std::memory_order_release);}
 void display_consumer(bool value){display_wanted.store(value,std::memory_order_release);}
 bool display_consumer(){return display_wanted.load(std::memory_order_acquire);}
 }
@@ -303,6 +307,7 @@ bool display_consumer(){return display_wanted.load(std::memory_order_acquire);}
 #if defined(SM64_GHOST_RENDERER)
 #include "GLFunctions.h"
 #include "ghost_dispatch.h"
+#include "ghost_live_session.h"
 #include "link_dispatch.h"
 #include "FrameBuffer.h"
 #include "DisplayWindow.h"
@@ -420,57 +425,76 @@ void drawable_changing() {
         reset(current);current->update=0;current->published=current->display_published={};
     }
 }
-void context_ready() {
+bool context_ready() {
     // How each attempt ends is the presentation's fact (ghost_draw_facts.h).
-    if(!clean_consumer()){ghost_facts::ready(GDF_READY_NO_CLEAN_CONSUMER);context_stopping();return;}
+    if(!clean_consumer()){ghost_facts::ready(GDF_READY_NO_CLEAN_CONSUMER);context_stopping();return false;}
     renderer::Identity now{};
     snapshot::RestoreBindings ignored{};
-    if(!replay_gl::CandidateBindings(&now,&ignored)){ghost_facts::ready(GDF_READY_NO_IDENTITY);context_stopping();return;}
-    if(replay_gl::SourceFormat()==RB_SOURCE_UNKNOWN){ghost_facts::ready(GDF_READY_SOURCE_FORMAT);context_stopping();return;}
+    if(!replay_gl::CandidateBindings(&now,&ignored)){ghost_facts::ready(GDF_READY_NO_IDENTITY);return false;}
+    if(replay_gl::SourceFormat()==RB_SOURCE_UNKNOWN){ghost_facts::ready(GDF_READY_SOURCE_FORMAT);return false;}
     if(current && gamma_program && owns_context(now)) {
         drawable_changing();owner=now;source_width=source_height=0;
         // The pinned shader captures these uniforms in its constructor. A
         // settings-driven drawer restart must apply the new gamma too.
         if(gamma_force!=config.gammaCorrection.force || gamma_level!=config.gammaCorrection.level) {
-            if(!replay_gl::BeginCapture()){current->ready=false;ghost_facts::ready(GDF_READY_SCOPE);return;}
+            if(!replay_gl::BeginCapture()){current->ready=false;ghost_facts::ready(GDF_READY_SCOPE);return false;}
             gamma_program.reset(gfxContext.createGammaCorrectionShader());
             gamma_force=config.gammaCorrection.force;gamma_level=config.gammaCorrection.level;
             const bool clean=replay_gl::EndCapture();
             if(!gamma_program || !clean) {
-                ghost_facts::ready(!gamma_program?GDF_READY_GAMMA:GDF_READY_DIRTY);context_stopping();return;
+                ghost_facts::ready(!gamma_program?GDF_READY_GAMMA:GDF_READY_DIRTY);
+                current->ready=false;gamma_force=UINT32_MAX;return false;
             }
         }
         if(!prepare_extent(0,0)){current->ready=false;ghost_facts::ready(GDF_READY_EXTENT);}
         else ghost_facts::ready(GDF_READY_READY);
-        return;
+        return current->ready;
     }
     context_stopping();owner=now;
     Dispatch dispatch{};
-    if(!ghost_dispatch::load(dispatch.gl)){ghost_facts::ready(GDF_READY_DISPATCH);return;}
+    if(!ghost_dispatch::load(dispatch.gl)){ghost_facts::ready(GDF_READY_DISPATCH);return false;}
     dispatch.CopyTexSubImage2D=reinterpret_cast<decltype(dispatch.CopyTexSubImage2D)>(glCopyTexSubImage2D);
     dispatch.DrawBuffers=reinterpret_cast<decltype(dispatch.DrawBuffers)>(g_glDrawBuffers);
-    if(!replay_gl::BeginCapture()){ghost_facts::ready(GDF_READY_SCOPE);return;}
+    if(!replay_gl::BeginCapture()){ghost_facts::ready(GDF_READY_SCOPE);return false;}
     current=create(dispatch,owner.context_generation);
     if(current) {
         gamma_program.reset(gfxContext.createGammaCorrectionShader());
         gamma_force=config.gammaCorrection.force;gamma_level=config.gammaCorrection.level;
     }
     const bool clean=replay_gl::EndCapture();
-    // In the original order: the extent is prepared only for a clean setup.
-    const uint32_t step=!current?GDF_READY_CREATE:!gamma_program?GDF_READY_GAMMA:!clean?GDF_READY_DIRTY:
-        !prepare_extent(0,0)?GDF_READY_EXTENT:GDF_READY_READY;
-    ghost_facts::ready(step);
-    if(step!=GDF_READY_READY){context_stopping();return;}
+    if(!current){ghost_facts::ready(GDF_READY_CREATE);return false;}
+    // Keep ownership across a refused gateway; a later proven scope retries.
+    // Even without the optional gamma program, prepare the clean extent so an
+    // untouched BACK can qualify its successful swap. !ready forbids replace_vi.
+    if(!clean) {
+        ghost_facts::ready(!gamma_program?GDF_READY_GAMMA:GDF_READY_DIRTY);
+        current->ready=false;gamma_force=UINT32_MAX;return false;
+    }
+    const bool extent=prepare_extent(0,0);
+    if(!gamma_program || !extent) {
+        ghost_facts::ready(!gamma_program?GDF_READY_GAMMA:GDF_READY_EXTENT);
+        current->ready=false;return false;
+    }
+    ghost_facts::ready(GDF_READY_READY);
+    return true;
+}
+bool eligible() {
+    return ineligible_reasons()==0;
+}
+uint32_t ineligible_reasons() {
+    return (config.video.multisampling?1u:0u)|(config.video.fxaa?2u:0u)
+        |(config.generalEmulation.enableBlitScreenWorkaround?4u:0u)|(config.frameBufferEmulation.enableOverscan?8u:0u);
 }
 void begin_update(uint64_t occurrence) {
-    if(current)begin_update(current,occurrence);
+    if(current && identity_matches())begin_update(current,occurrence);
 }
 static void draw_vi_image(const FrameBuffer& source,const GraphicsDrawer::CopyRectParams& params,
                           uint32_t origin,bool split,const GraphicsDrawer::BlitOrCopyRectParams* screen) {
     // This picture's first refusal, published however it returns (ghost_draw_facts.h).
     ghost_facts::Present present;
+    if(split) {ghost_live_session::presentation_ineligible(16);return present.refuse(GDF_PRESENT_SPLIT);}
     const uint32_t refused=!clean_consumer()?GDF_PRESENT_NO_CLEAN_CONSUMER:!current?GDF_PRESENT_NO_PRESENTATION:
-       !provider || !validity?GDF_PRESENT_NO_PROVIDER:!identity_matches()?GDF_PRESENT_IDENTITY:split?GDF_PRESENT_SPLIT:
+       !provider || !validity?GDF_PRESENT_NO_PROVIDER:!identity_matches()?GDF_PRESENT_IDENTITY:
        config.frameBufferEmulation.enableOverscan?GDF_PRESENT_OVERSCAN:
        config.video.multisampling?GDF_PRESENT_MULTISAMPLING:config.video.fxaa?GDF_PRESENT_FXAA:
        config.generalEmulation.enableBlitScreenWorkaround?GDF_PRESENT_BLIT_WORKAROUND:
@@ -479,9 +503,12 @@ static void draw_vi_image(const FrameBuffer& source,const GraphicsDrawer::CopyRe
     // Upstream's postprocessor caches its result by width alone. A stale
     // height/scale must not map the ghost through a differently sized image.
     if(!params.tex[0] || params.tex[0]->realWidth!=source.m_pTexture->realWidth ||
-       params.tex[0]->realHeight!=source.m_pTexture->realHeight)return present.refuse(GDF_PRESENT_SOURCE_EXTENT);
-    if(!screen && (params.srcWidth!=source.m_pTexture->realWidth || params.srcHeight!=source.m_pTexture->realHeight))
-        return present.refuse(GDF_PRESENT_SOURCE_EXTENT);
+       params.tex[0]->realHeight!=source.m_pTexture->realHeight) {
+        ghost_live_session::presentation_ineligible(32);return present.refuse(GDF_PRESENT_SOURCE_EXTENT);
+    }
+    if(!screen && (params.srcWidth!=source.m_pTexture->realWidth || params.srcHeight!=source.m_pTexture->realHeight)) {
+        ghost_live_session::presentation_ineligible(32);return present.refuse(GDF_PRESENT_SOURCE_EXTENT);
+    }
     ViSource input{uint32_t(source.m_FBO),uint32_t(source.m_pTexture->name),source.m_pTexture->realWidth,
         source.m_pTexture->realHeight,origin,owner.context_generation,owner.drawable_generation};
     GhostViImage image{};
@@ -503,14 +530,16 @@ void draw_screen_vi(const FrameBuffer& source,const GraphicsDrawer::BlitOrCopyRe
 }
 void before_swap() {
     if(!current)return;
-    if(!clean_consumer() || !identity_matches()){cancel_overlay(current);return;}
+    if(!identity_matches()){current->published=current->display_published={};osd_phase=false;return;}
+    if(!clean_consumer()){cancel_overlay(current);return;}
     revalidate_image();
     osd_phase=before_swap(current,REG.VI_ORIGIN?*REG.VI_ORIGIN:0,fallback_raster());
 }
-bool begin_osd_raster(){return osd_phase && begin_osd(current);}
-void end_osd_raster(){end_osd(current);}
+bool begin_osd_raster(){return osd_phase && identity_matches() && begin_osd(current);}
+void end_osd_raster(){if(identity_matches())end_osd(current);}
 void after_osd() {
     if(!current)return;
+    if(!identity_matches()){current->published=current->display_published={};osd_phase=false;return;}
     after_osd(current);osd_phase=false;
     if(!clean_consumer())cancel_overlay(current);
     else {revalidate_image();record_display(current);}
@@ -519,7 +548,12 @@ void swap_completed(bool success) {
     // Once a swap: whether the presentation can carry a ghost at all.
     ghost_facts::presentation(current && current->ready,current && current->ghost_faulted);
     const auto image=pending_image(current);
-    swap_completed(current,current && success && clean_consumer() && identity_matches());
+    const bool owned=identity_matches();
+    if(current && !owned) {
+        current->published=current->display_published={};osd_phase=false;
+        if(notice)notice(image,0,false);return;
+    }
+    swap_completed(current,current && success && clean_consumer() && owned);
     const auto clean=surface(current);
     // A clean-only or refused presentation retires a previously visible ghost.
     // Report every swap, including when the presentation context is unavailable.

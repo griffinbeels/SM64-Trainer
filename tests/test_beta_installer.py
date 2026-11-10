@@ -10,6 +10,7 @@ import pytest
 
 from sm64_events.bootstrap import beta_installer as installer
 from sm64_events.bootstrap import beta_payload as payload
+from sm64_events.core.update_plan import BUNDLED_NATIVES
 from test_beta_channel import metadata
 
 
@@ -39,8 +40,7 @@ def make_installer(tmp_path, *, app=b"application", extra=()):
         zipped.writestr(installer.APP_EXE, app)
         zipped.writestr("_internal/build-channel.json", json.dumps(metadata()))
         for path in ("ffmpeg.exe", "sm64_events/ui/index.html", *(
-                "sm64_events/data/plugin/" + name for name in
-                ("sm64_trainer_gfx.dll", "GLideN64_SM64Trainer.dll", "SM64GpuEncoderV1.dll"))):
+                "sm64_events/data/plugin/" + name for name in BUNDLED_NATIVES)):
             zipped.writestr("_internal/" + path, b"fixture")
         for path, value in extra:
             info = zipfile.ZipInfo(path)

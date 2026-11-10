@@ -160,7 +160,7 @@ def test_cpu_actual_presentation_and_pinned_window_transitions(tmp_path, restore
     functions = [_function(glue, signature) for signature in
                  ("bool identity_matches()", "bool owns_context(const renderer::Identity& now)",
                   "bool prepare_extent(uint32_t width,uint32_t height)", "void context_stopping()",
-                  "void drawable_changing()", "void context_ready()")]
+                  "void drawable_changing()", "bool context_ready()")]
     (tmp_path / "actual_presentation_lifetime.inc").write_text("\n".join(functions), encoding="utf-8")
     build = module("presentation_transition_build", "tools/build_plugin.py")
     vc = build.find_vcvars32()

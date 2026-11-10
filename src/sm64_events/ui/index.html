@@ -491,6 +491,8 @@
   .community-library-time { font-variant-numeric: tabular-nums; font-size: 1.15rem; color: var(--green); }
   .community-library-actions { display: grid; gap: .3rem; margin-left: auto; }
   .community-library-actions button { justify-content: center; gap: .4rem; }
+  /* The Scene viewer's Ghost button (lab only) sits left of Add ghost, on its line. */
+  .community-library-buttons { display: flex; align-items: center; justify-content: flex-end; gap: .4rem; }
   .community-library-unavailable { flex-basis: 100%; grid-column: 1 / -1; margin: 0; }
   .community-library-target, .community-library-method, .community-library-player strong,
   .community-library-unavailable, .community-library-success, .community-library-seat-title {
@@ -1694,6 +1696,17 @@
     border-color: #344b64; background: #0d1928; color: var(--text);
     min-height: 34px; padding: .32rem .5rem;
   }
+  /* EVERY SLIDER REACHES ITS ENDS. Chromium paints a native range's track
+     across its padding and border, but the thumb travels only the content
+     box, so the input padding above left 8.5px of track past the thumb at
+     max and fill before it at min -- it read as a bug stopping short of the
+     true end (his report, 2026-10-26: "there should be NOTHING remaining").
+     No range carries horizontal padding or border; this rule is their one
+     owner and outranks a bare class. Gold is only the default, at zero
+     specificity, so a slider's own rule states its width and, if different,
+     its colour. Guard: tests/test_ui_sliders.py. */
+  input[type=range] { padding-inline: 0; border-inline-width: 0; }
+  :where(input[type=range]) { accent-color: var(--gold); }
   /* A <select>'s own dropdown arrow is drawn INSIDE its padding box, so with
      symmetric padding a long option runs underneath it — "Bowser in the Dark
      Worl⌄", clipped mid-word with the caret on top (live audit 2026-07-25).
@@ -1725,6 +1738,18 @@
     position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
     overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0;
   }
+  /* SteadyText (components/steadytext.js): the box is as big as its biggest listed size, never the
+     words shown, so a label or readout that changes never moves what is around it (his round 9
+     report, 2026-11-08: "the play bar is getting longer and shorter"). The sizes share the shown
+     text's grid cell, invisible, their words drawn from data-text. */
+  .steady-text { display: inline-grid; }
+  .steady-text.is-block { display: grid; }
+  .steady-text > * { grid-area: 1 / 1; }
+  .steady-text-size { visibility: hidden; white-space: nowrap; }
+  .steady-text-size::before { content: attr(data-text); }
+  .steady-text-shown { min-width: 0; contain: inline-size; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .steady-text.is-block > * { white-space: normal; }
+  .steady-text.is-block > .steady-text-shown { contain: none; overflow: visible; }
   .eyebrow, .field-label, .context-label {
     color: var(--muted); font-size: .69rem; font-weight: 650;
     letter-spacing: .075em; text-transform: uppercase;
@@ -3698,6 +3723,15 @@
   .attempts-tools { display: flex; align-items: center; gap: .7rem; }
   .log-settings { display: inline-flex; }
   .log-settings-trigger[aria-expanded="true"] { color: var(--text); background: #20364e; }
+  /* "PBs only" (practicelog.js::OnlyPbsToggle): the Target chip's pill, and
+     while it is on, the gold fill the page's other pressed switches wear
+     (.version-switch-seg) -- a filled pill, not a hue alone, says "on". */
+  .log-only-pbs[aria-pressed="true"],
+  .log-only-pbs[aria-pressed="true"]:hover {
+    background: var(--gold); border-color: var(--gold-soft); color: #1b1607;
+  }
+  .log-only-pbs:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+  .log-settings-sort-note { display: block; margin-top: .2rem; color: var(--muted); font-size: .74rem; }
   .log-settings-panel {
     position: fixed; z-index: 35; width: 340px; max-width: calc(100vw - 24px);
     max-height: calc(100dvh - 24px); overflow: auto; padding: .9rem;
@@ -3926,6 +3960,10 @@
      a hole between ▷ and ×. */
   .attempt-actions button.pb-unavailable { opacity: 1; cursor: default; }
   .attempt-actions button.pb-unavailable > * { opacity: .35; }
+  /* The Ghost button (lab only) waiting for its scene, or without one,
+     wears the same frame the same way; its title says which. */
+  .attempt-actions button.attempt-scene:disabled { opacity: 1; cursor: default; }
+  .attempt-actions button.attempt-scene:disabled > * { opacity: .35; }
   /* `vertical-align: middle`, because the cell lays its buttons out INLINE
      and inline-blocks sit on the text baseline by default -- the replay
      button's SVG, "Save as PB"'s text and the ×'s glyph each put that
@@ -4373,7 +4411,7 @@
     color: var(--gold-soft); text-align: center;
   }
   .hiw-slider { display: grid; gap: .3rem; font-size: .82rem; color: var(--muted); }
-  .hiw-slider input { width: 100%; accent-color: var(--gold); }
+  .hiw-slider input { width: 100%; }
   .hiw-frames-demo p { margin: 0; color: var(--muted); font-size: .84rem; line-height: 1.45; }
   .hiw-caption { display: block; margin-bottom: .45rem; color: var(--muted); font-size: .8rem; }
   .hiw-message pre {
@@ -5483,6 +5521,24 @@
   .setup-help-content code { overflow-wrap: anywhere; white-space: normal; font-size: .88rem; }
   .setup-warning, .setup-error { border-left: 3px solid #e6b852; border-radius: 4px; background: #292b25; color: #f0d597; padding: .85rem 1rem; line-height: 1.55; font-size: .94rem; margin: .8rem 0; }
   .setup-error { color: #ffb6b6; background: #38252b; border-color: #e88383; }
+  /* The gate: Wermi's build v7 and the PJ64 Fixups (setuppages.js GateWarning). */
+  .setup-gate { margin: .8rem 0; }
+  .setup-gate .setup-warning svg, .setup-untested-note svg { display: inline-block; vertical-align: -3px; margin-right: .3rem; }
+  /* Finished sub-steps: one-line checks above the step to do now. */
+  .setup-done-steps { list-style: none; margin: 0 0 .9rem; padding: 0 0 0 14px; display: grid; gap: .35rem; }
+  .setup-done-steps li { display: flex; align-items: center; gap: .7rem; color: #9fd8b8; font-size: .93rem; line-height: 1.4; }
+  .setup-done-steps svg { flex: 0 0 auto; color: #83ecb0; border: 1px solid #3f8f66; border-radius: 50%; padding: 2px; box-sizing: content-box; background: #14392c; }
+  .setup-step-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem 1rem; margin-top: .4rem; }
+  .setup-step-link { min-height: 44px; border: 0; background: transparent; color: #8fc8ff; padding: .3rem .2rem; text-decoration: underline; cursor: pointer; }
+  .setup-step-link:hover { color: #fff; }
+  .setup-download { display: inline-flex; align-items: center; min-height: 46px; padding: .8rem 1.3rem; text-decoration: none; }
+  .setup-risk-continue, .setup-risk-confirm {
+    gap: .45rem; min-height: 44px; border: 1px solid #e6b852; border-radius: 6px;
+    background: #3a3220; color: #ffdf8e; padding: .5rem .9rem; cursor: pointer;
+  }
+  .setup-risk-continue:hover, .setup-risk-confirm:hover { background: #4a3f24; color: #fff; }
+  .setup-risk-text { margin: 0; color: #dbe5f0; font-size: 1rem; line-height: 1.6; }
+  .setup-untested-note button { margin-left: .5rem; }
   /* The setup check (components/setupcheck.js): one card per item, the
      server's order. A difference wears the warning gold, can't-tell a quiet
      blue, the same a quiet green; a noted item never looks like a problem. */
@@ -5754,7 +5810,7 @@
   }
   .replay-controls { max-width: 760px; padding: .55rem 0; container-type: inline-size; }
   .replay-seek-row { display: flex; align-items: center; gap: .7rem; }
-  .replay-seek-row input { flex: 1; min-width: 40px; padding: 0; margin: 0; border: 0; accent-color: var(--gold); }
+  .replay-seek-row input { flex: 1; min-width: 40px; padding: 0; margin: 0; border: 0; }
   .replay-media-time { font-variant-numeric: tabular-nums; font-size: .72rem; color: var(--muted); white-space: nowrap; }
   .replay-control-row, .replay-playback-options, .replay-loop-row {
     display: flex; flex-wrap: wrap; gap: .35rem; align-items: center;
@@ -5772,7 +5828,7 @@
   .replay-volume-popover { display: none; position: absolute; z-index: 6; right: 0; bottom: 100%;
     padding: 14px 12px; background: #101e2f; border: 1px solid var(--border); border-radius: 6px; }
   .replay-sound:hover .replay-volume-popover, .replay-sound:focus-within .replay-volume-popover { display: flex; }
-  .replay-volume { width: 80px; min-width: 0; padding: 0; margin: 0; border: 0; accent-color: var(--gold); }
+  .replay-volume { width: 80px; min-width: 0; padding: 0; margin: 0; border: 0; }
   .replay-loop-row { padding-top: .45rem; border-top: 1px solid var(--border-soft); }
   .replay-loop-row .is-active, .replay-playback-options .is-active { color: var(--gold); border-color: var(--gold); }
   .replay-control-error { font-size: .75rem; color: var(--coral); }
@@ -6470,6 +6526,14 @@
   .session-pick span:last-child { color: var(--muted); font-size: .72rem; }
   .danger-icon, .danger-button { color: var(--coral); border-color: #65404a; }
   .danger-zone { margin-top: .35rem; }
+  /* Settings -> Ghost files (ghoststorage.js). One button per row: side by
+     side, "Delete ghosts, keep PBs" wrapped onto two lines in the 480px drawer. */
+  .ghost-storage .settings-actions { grid-template-columns: 1fr; }
+  .ghost-storage .settings-actions + .settings-note { margin-top: .5rem; }
+  .ghost-storage-ask { display: grid; gap: .4rem; }
+  .ghost-storage-ask p { margin: 0; }
+  .ghost-storage-question { color: var(--text); font-size: 1rem; font-weight: 650; }
+  .ghost-storage-detail { color: var(--muted); font-size: .85rem; line-height: 1.45; }
   .mobile-more-backdrop {
     position: fixed; inset: 0; z-index: 70; align-items: flex-end;
     background: rgba(0,5,12,.65);
@@ -6901,6 +6965,21 @@
     .routepick > button { grid-column: 1 / -1; justify-self: end; }
     .compare-stage-card { min-height: 520px; }
     .cf-row { grid-template-columns: 85px 110px minmax(0,1fr) auto 18px; }
+  }
+
+  /* The scene lab's Ghost button (attemptscene.js) adds a fourth 30px frame to
+     the action column. On a pane this narrow a row with a long result (a
+     death's detail and a 1' time) then pushed the x past the card by 21px at
+     850 (measured on the table layout, 2026-10-26), so a table wearing one
+     takes the narrow layout's own compact Save and strategy widths below:
+     together they give back more than the button takes. At 700px and under
+     the narrow layout below already does exactly this. Lab only: without the
+     button nothing here matches. */
+  @container (min-width: 701px) and (max-width: 800px) {
+    .attempt-table:has(.attempt-scene) .save-pb-wide { display: none; }
+    .attempt-table:has(.attempt-scene) .save-pb-narrow { display: inline; }
+    .attempt-table:has(.attempt-scene) .attempt-pb-slot { min-width: 5.5rem; }
+    .attempt-table:has(.attempt-scene) .attempt-strategy select { max-width: 104px; }
   }
 
   /* Was @media (max-width: 760px). Viewport 760 gives the pane 725px and viewport 761 gives it 642px -- the mobile block was styling the WIDER pane. 700px splits them the right way round. */
@@ -9619,9 +9698,9 @@
     align-items: center; gap: .5rem 1rem;
   }
   .ghost-proximity-body .ghost-field { flex-wrap: wrap; }
-  .ghost-path-range { width: 100px; min-width: 0; accent-color: var(--gold); }
+  .ghost-path-range { width: 100px; min-width: 0; }
   .ghost-proximity-help { margin: 0; flex-basis: 100%; max-width: 45rem; line-height: 1.5; }
-  .ghost-distance { width: 120px; min-width: 0; accent-color: var(--gold); }
+  .ghost-distance { width: 120px; min-width: 0; }
   .ghost-field { display: flex; align-items: center; gap: .35rem; }
   /* The one fallback this row keeps instead of a breakpoint: if a longer
      readout ever arrives, the timing group wraps within itself rather than
@@ -9637,7 +9716,7 @@
   .ghost-path-options {
     margin-left: 1rem; display: flex; flex-wrap: wrap; align-items: center; gap: .4rem 1rem;
   }
-  .ghost-name-box-range { width: 70px; min-width: 0; accent-color: var(--gold); }
+  .ghost-name-box-range { width: 70px; min-width: 0; }
   .ghost-name-box select, .ghost-path-source select {
     background: #101f31; color: var(--text); border: 1px solid var(--border-soft);
     border-radius: 5px; font: inherit; font-size: .68rem; padding: 1px .3rem;
@@ -9736,7 +9815,7 @@
     .ghost-library-task { padding: 16px; }
     .ghost-library-review-meta { grid-template-columns: minmax(0,1fr); }
   }
-  .ghost-volume-range { width: 90px; min-width: 0; accent-color: var(--gold); }
+  .ghost-volume-range { width: 90px; min-width: 0; }
   .ghost-recording-row {
     display: flex; align-items: center; flex-wrap: wrap; gap: .3rem .75rem;
     min-width: 0;
@@ -9788,32 +9867,40 @@
   /* A fixed lane, so stepping the timing does not shuffle the two buttons
      sideways under the pointer that is pressing one of them. */
   .ghost-nudge-value { min-width: 6.5rem; text-align: center; }
-  .ghost-opacity {
-    width: 120px; min-width: 0; margin: 0; padding: 0; border: 0;
-    accent-color: var(--gold);
-  }
+  .ghost-opacity { width: 120px; min-width: 0; margin: 0; padding: 0; border: 0; }
   /* THE COLOUR WHEEL IS THE TRACK. The control answers "how far round the
      wheel", which is a number nobody can picture, so the slider wears the
      wheel itself and the position IS the answer -- no swatch to keep in sync
      and nothing to decode. Drawn with `appearance: none` because a themed
      range paints its own track over any background; the thumb is then ours
-     too, and it is the row's own text colour rather than a second accent. */
+     too, and it is the row's own text colour rather than a second accent.
+     The wheel is the TRACK, 12px, not the input's own background: the input
+     keeps the shared 34px hit height, and the 14px thumb covers the wheel's
+     round end at 0 and at 359, so nothing shows past it at either end. */
   .ghost-hue {
     appearance: none; -webkit-appearance: none;
-    width: 108px; min-width: 0; height: 12px; margin: 0; padding: 0;
-    border: 1px solid var(--border-soft); border-radius: 999px;
-    cursor: pointer;
+    width: 108px; min-width: 0; margin: 0; padding: 0; border: 0;
+    background: transparent; cursor: pointer;
+  }
+  .ghost-hue::-webkit-slider-runnable-track {
+    height: 12px; border-radius: 999px; box-shadow: inset 0 0 0 1px var(--border-soft);
+    background: linear-gradient(to right,
+      hsl(0 72% 55%), hsl(60 72% 55%), hsl(120 72% 55%), hsl(180 72% 55%),
+      hsl(240 72% 55%), hsl(300 72% 55%), hsl(360 72% 55%));
+  }
+  .ghost-hue::-moz-range-track {
+    height: 12px; border-radius: 999px; box-shadow: inset 0 0 0 1px var(--border-soft);
     background: linear-gradient(to right,
       hsl(0 72% 55%), hsl(60 72% 55%), hsl(120 72% 55%), hsl(180 72% 55%),
       hsl(240 72% 55%), hsl(300 72% 55%), hsl(360 72% 55%));
   }
   .ghost-hue::-webkit-slider-thumb {
-    appearance: none; -webkit-appearance: none;
-    width: 12px; height: 12px; border-radius: 50%;
+    appearance: none; -webkit-appearance: none; box-sizing: border-box;
+    width: 14px; height: 14px; margin-top: -1px; border-radius: 50%;
     background: var(--text); border: 1px solid rgba(3,10,18,.9);
   }
   .ghost-hue::-moz-range-thumb {
-    width: 12px; height: 12px; border-radius: 50%;
+    box-sizing: border-box; width: 14px; height: 14px; border-radius: 50%;
     background: var(--text); border: 1px solid rgba(3,10,18,.9);
   }
   .ghost-hue:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
@@ -9921,7 +10008,7 @@
     display: flex; align-items: center; justify-content: space-between; gap: 10px;
     font-size: .82rem; color: var(--text);
   }
-  .sov-field input[type="range"] { flex: 1 1 auto; min-height: 0; padding: 0; accent-color: var(--gold); }
+  .sov-field input[type="range"] { flex: 1 1 auto; min-height: 0; padding: 0; }
   .sov-field output { width: 3.2em; text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
   .sov-swatches { display: flex; align-items: center; gap: 6px; }
   .sov-swatch {
@@ -10137,7 +10224,9 @@
 .community-identity {margin:0;font-size:16px;}
 .community-privacy {border-top:1px solid var(--border);padding-top:18px;margin-top:18px;}
 .community-privacy .community-actions {justify-content:flex-start;}
-</style></head>
+</style>
+<link rel="stylesheet" href="/ui/friends.css">
+</head>
 <body>
 <div id="app"></div>
 <script type="module" src="/ui/boot.js"></script>

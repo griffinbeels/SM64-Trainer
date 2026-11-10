@@ -33,7 +33,7 @@ def test_a_built_app_carries_its_own_the_interpreters_and_each_packages_license(
     assert f"python/pystray-{metadata.version('pystray')}/COPYING.LGPL" in shipped
     assert "SM64-Trainer/LICENSE" in shipped and "README.md" in shipped
     assert any(p.startswith("python/CPython-") and p.endswith("LICENSE.txt") for p in shipped)
-    assert "renderer/Qt/LICENSE.LGPL3" in shipped and "ffmpeg/LICENSE" in shipped
+    assert "renderer/Qt/LICENSE.LGPL3" in shipped and "ffmpeg/FFmpeg/COPYING.GPLv3" in shipped
     # The standard library maps to no distribution: the interpreter's license covers it.
     assert not any(p.startswith("python/json") for p in shipped)
 
@@ -51,12 +51,38 @@ def test_a_bundled_package_with_no_license_file_refuses_the_build(tmp_path):
     assert (out / "python" / "proxy-tools" / "LICENSE.txt").is_file()
 
 
+def test_the_simulation_programs_unicorn_ships_its_tracked_texts(tmp_path):
+    """The unicorn wheel installs no license file, so SM64TrainerSim.exe's
+    Unicorn ships only because licenses/python/unicorn/ (L0) stands in; the
+    install's one licenses folder carries all nine of its texts."""
+    assert not notices.license_files(metadata.distribution("unicorn"))
+    without = tmp_path / "licenses"
+    shutil.copytree(ROOT / "licenses", without)
+    shutil.rmtree(without / "python" / "unicorn")
+    with pytest.raises(RuntimeError, match="unicorn 2.1.4"):
+        notices.stage(tmp_path / "bare", {"unicorn"}, ffmpeg=None, licenses=without)
+    out = notices.stage(tmp_path / "tracked", {"unicorn", "numpy"}, ffmpeg=None)
+    texts = _texts(out / "python" / "unicorn")
+    assert len(texts) == 9 and {"COPYING", "README.md", "THIRD-PARTY-NOTICES.txt"} <= set(texts), texts
+
+
 def test_an_ffmpeg_the_notices_do_not_describe_refuses_the_build(tmp_path, monkeypatch):
     described = notices.recorded_version(ROOT / "licenses" / "ffmpeg", "BUILD-README.txt")
     monkeypatch.setattr(notices, "ffmpeg_version", lambda _exe: described)
+    monkeypatch.setattr(notices, "ffmpeg_sha256", lambda _exe: notices.pinned_ffmpeg())
     notices.check_recorded_builds(Path("ffmpeg.exe"))
     monkeypatch.setattr(notices, "ffmpeg_version", lambda _exe: "2026-01-01-git-0000000000-full_build-www.gyan.dev")
     with pytest.raises(RuntimeError, match="licenses/ffmpeg describes"):
+        notices.check_recorded_builds(Path("ffmpeg.exe"))
+
+
+def test_an_ffmpeg_of_the_same_version_but_other_bytes_refuses_the_build(monkeypatch):
+    """The attached source archive is the source of the pinned build only: a
+    look-alike (a local rebuild with other inputs, another 8.1.1) must not ship."""
+    described = notices.recorded_version(ROOT / "licenses" / "ffmpeg", "BUILD-README.txt")
+    monkeypatch.setattr(notices, "ffmpeg_version", lambda _exe: described)
+    monkeypatch.setattr(notices, "ffmpeg_sha256", lambda _exe: "0" * 64)
+    with pytest.raises(RuntimeError, match="not the pinned build"):
         notices.check_recorded_builds(Path("ffmpeg.exe"))
 
 

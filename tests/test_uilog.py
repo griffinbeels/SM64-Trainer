@@ -54,6 +54,64 @@ def test_an_unknown_surface_is_dropped_rather_than_stored_or_raised(log):
     assert uilog.read(log) == []
 
 
+def test_a_scene_viewer_record_keeps_only_its_own_numbers(log):
+    """The Scene viewer posts its timings while the camera moves (sceneviewer.js movingSummary):
+    counts and milliseconds in range, spreads as p50/p95, nothing else, and it reads back as one
+    line beside the journal."""
+    stored = uilog.record({"surface": "scene_viewer", "pictures": 121, "seconds": 1.97, "pictures_per_second": 60.9,
+                           "width": 1600, "height": 1200, "in_flight": 2, "skipped": 1, "encoding": "jpeg",
+                           "input_to_drawn_ms": {"p50": 22.4, "p95": 31.0, "p99": 50}, "decode_ms": {"p50": 3, "p95": 4},
+                           "server_ms": "fast", "evaluate_ms": {"p50": -1, "p95": True}, "note": "x" * 50,
+                           "trip_ms": {"p50": 1e9, "p95": 17}, "host_ms": None})
+    (read,) = uilog.read(log)
+    assert read == stored
+    assert stored["input_to_drawn_ms"] == {"p50": 22.4, "p95": 31.0} and stored["decode_ms"] == {"p50": 3, "p95": 4}
+    assert stored["server_ms"] is None and stored["host_ms"] is None and "note" not in stored
+    assert stored["evaluate_ms"] == {"p50": None, "p95": None} and stored["trip_ms"] == {"p50": None, "p95": 17}
+    assert (stored["pictures"], stored["in_flight"], stored["encoding"]) == (121, 2, "jpeg")
+    assert uilog.record({"surface": "scene_viewer", "encoding": "png", "pictures": True})["encoding"] is None
+    line = uilog.render(stored)
+    assert "60.9 pictures/s" in line and "input to drawn 22.4/31.0 ms" in line and "1600x1200 jpeg" in line
+
+
+def test_a_scene_viewer_pointer_lock_record_keeps_its_step_and_why(log):
+    """The Scene viewer's pointer lock posts each step (sceneviewer.js noteLock) on the same surface:
+    a known step, a short reason, its request number and three flags, nothing else; it reads back
+    as one line, and the moving summary still sanitises as before."""
+    stored = uilog.record({"surface": "scene_viewer", "kind": "pointer_lock", "event": "exited", "why": "no look",
+                           "request": 7, "look": False, "focused": True, "hidden": "no", "dropped": 3,
+                           "client_utc": "2026-10-26T17:40:00.000Z", "pictures": 12, "note": "x"})
+    (read,) = uilog.read(log)
+    assert read == stored
+    assert {key: stored[key] for key in ("event", "why", "request", "look", "focused", "hidden", "dropped")} == {
+        "event": "exited", "why": "no look", "request": 7, "look": False, "focused": True, "hidden": None,
+        "dropped": 3}
+    assert "pictures" not in stored and "note" not in stored and stored["client_utc"].startswith("2026-10-26")
+    odd = uilog.record({"surface": "scene_viewer", "kind": "pointer_lock", "event": "stolen", "why": "w" * 500,
+                        "request": -1, "look": 1})
+    assert odd["event"] is None and len(odd["why"]) == uilog.SCENE_LOCK_WHY and odd["request"] is None
+    assert odd["look"] is None
+    line = uilog.render(stored)
+    assert "pointer lock exited (no look): request 7" in line and "3 lock records not logged" in line
+    assert uilog.record({"surface": "scene_viewer", "pictures": 5})["pictures"] == 5
+
+
+def test_a_scene_viewer_sound_not_split_record_keeps_why_and_its_numbers(log):
+    """The sound row says one plain sentence (sceneaudio.js load); the record keeps the stems
+    layer's own reason and its G1 numbers, nothing else, and reads back as one line."""
+    stored = uilog.record({"surface": "scene_viewer", "kind": "sound_not_split", "scene": "take-1659-5",
+                           "reason": "This scene's music and sound effects can't be separated.",
+                           "detail": "The stem renderer's sound differs from what Project64 played by more than rounding (G1).",
+                           "stats": {"g1_checked": 28, "g1_differs": 22, "g1_snr_db": 4.25, "rows": "x",
+                                     "evil": 1, "g1_max_abs": 1e12},
+                           "pictures": 4})
+    (read,) = uilog.read(log)
+    assert read == stored and "pictures" not in stored
+    assert stored["stats"] == {"g1_checked": 28, "g1_differs": 22, "g1_snr_db": 4.25}
+    line = uilog.render(stored)
+    assert "sound not split (take-1659-5)" in line and "more than rounding" in line and "g1_snr_db 4.25" in line
+
+
 def test_unknown_fields_never_reach_disk(log):
     uilog.record({**SELECTOR, "evil": "x" * 5000, "nested": {"deep": [1] * 900}})
     (stored,) = uilog.read(log)

@@ -162,8 +162,13 @@ def saved_pb_basis(db, ranks, identity) -> dict | None:
     population certificates are a separate contract. The rank survives expired
     pose files and incompatible ROMs. Playback needs a compatible local owner,
     and the native provider decides whether its pose files can be prepared.
+
+    His rule, 2026-09-22: *"Any new PB should become a ghost immediately."* A
+    PB nothing on this scope grades (a strategy with no ladder yet, a time off
+    its ladder, a reds->pipe segment's Overall tab) still races: its rank
+    fields are None (`adaptive.UNRANKED`) and it anchors no rival range.
     """
-    from sm64_events.ghost.adaptive import rank_frames, region_serves
+    from sm64_events.ghost.adaptive import UNRANKED, rank_entity_key, rank_frames, region_serves
     from sm64_events.inputs.service import entity_key_of
     from sm64_events.tracking.views import current_pbs_by_strat, pb_rom
 
@@ -183,7 +188,10 @@ def saved_pb_basis(db, ranks, identity) -> dict | None:
         return None
     progress = rank_frames(ranks, identity, row["frames"], version=pb_rom(row))
     if progress is None:
-        return None
+        # A target its standards time on another clock is not this practice.
+        if ranks.clock_for(rank_entity_key(identity)) != identity.clock:
+            return None
+        progress = UNRANKED
     number = row.get("attempt_id")
     attempt = db.attempt(number) if type(number) is int and number > 0 else None
     source, ghost = local_attempt_source(attempt), None

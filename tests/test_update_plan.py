@@ -204,3 +204,64 @@ def test_build_plan_rejects_empty_remote_manifest(tmp_path):
     installed = Manifest("1", (_mk("a.txt", "aa" * 32),))
     with pytest.raises(ValueError):
         build_plan(Manifest("2", ()), installed, tmp_path)
+
+
+# -- the move from three natives to one graphics plugin (2026-11-07) ----------
+
+#: The rule every app from 1.10.0-beta.22 to the one-plugin release runs on an
+#: offered release before it plans anything (update_plan.validate_release_manifest
+#: at commit d014991a): those apps cannot change, so this copy is the contract.
+SHIPPED_APPS_REQUIRE = {"SM64Trainer.exe", "_internal/ffmpeg.exe", "_internal/sm64_events/ui/index.html",
+                        *(f"_internal/sm64_events/data/plugin/{name}" for name in
+                          ("sm64_trainer_gfx.dll", "GLideN64_SM64Trainer.dll", "SM64GpuEncoderV1.dll"))}
+
+
+def _app(tmp_path, files, version="x"):
+    """An app folder and its manifest, every entry hashed from its bytes."""
+    import hashlib
+    _tree(tmp_path, files)
+    return Manifest(version, tuple(_mk(path, hashlib.sha256(data).hexdigest(), size=len(data))
+                                   for path, data in files.items()))
+
+
+def _one_plugin_release():
+    from sm64_events.core.update_plan import (BUNDLED_NATIVES, NATIVE_FOLDER, RETIRED_NATIVE_TEXT,
+                                              RETIRED_NATIVES)
+    return {"SM64Trainer.exe": b"EXE-NEW", "_internal/python314.dll": b"PY", "_internal/ffmpeg.exe": b"FF",
+            "_internal/sm64_events/ui/index.html": b"UI",
+            **{f"{NATIVE_FOLDER}/{name}": b"MZ new " + name.encode() for name in BUNDLED_NATIVES},
+            **{f"{NATIVE_FOLDER}/{name}": RETIRED_NATIVE_TEXT for name in RETIRED_NATIVES}}
+
+
+def test_an_app_with_three_natives_accepts_and_plans_the_one_plugin_release(tmp_path):
+    import re
+    from sm64_events.core.update_plan import NATIVE_FOLDER, RETIRED_NATIVE_TEXT, validate_release_manifest
+    old = {"SM64Trainer.exe": b"EXE-OLD", "_internal/python314.dll": b"PY", "_internal/ffmpeg.exe": b"FF",
+           "_internal/sm64_events/ui/index.html": b"UI",
+           **{f"{NATIVE_FOLDER}/{name}": b"MZ old " + name.encode()
+              for name in ("sm64_trainer_gfx.dll", "GLideN64_SM64Trainer.dll", "SM64GpuEncoderV1.dll")}}
+    installed = _app(tmp_path / "installed", old)
+    remote = _app(tmp_path / "release", _one_plugin_release(), version="2.0.0")
+    shipped = {entry.path for entry in remote.files if entry.size > 0}
+    # What an installed older app checks, and what this build's own tooling checks.
+    assert SHIPPED_APPS_REQUIRE <= shipped
+    assert any(re.fullmatch(r"_internal/python[0-9]+[.]dll", path) for path in shipped)
+    validate_release_manifest(remote, "2.0.0")
+    plan = build_plan(remote, installed, tmp_path / "installed")
+    fetched = {entry.path for entry in plan.fetch}
+    # The real renderer DLL is replaced by the short placeholder: no program
+    # stays under that name in the app folder, and nothing else is deleted.
+    renderer = f"{NATIVE_FOLDER}/GLideN64_SM64Trainer.dll"
+    assert {renderer, f"{NATIVE_FOLDER}/sm64_trainer_gfx.dll", "SM64Trainer.exe"} <= fetched
+    assert next(entry for entry in remote.files if entry.path == renderer).size == len(RETIRED_NATIVE_TEXT)
+    assert not RETIRED_NATIVE_TEXT.startswith(b"MZ")
+    assert plan.delete == ()
+
+
+def test_a_release_without_the_retired_placeholder_is_refused(tmp_path):
+    from sm64_events.core.update_plan import RETIRED_NATIVES, validate_release_manifest
+    files = {path: data for path, data in _one_plugin_release().items()
+             if not path.endswith(RETIRED_NATIVES)}
+    remote = _app(tmp_path, files, version="2.0.0")
+    with pytest.raises(ValueError, match="essential"):
+        validate_release_manifest(remote, "2.0.0")

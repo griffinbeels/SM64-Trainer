@@ -63,22 +63,12 @@ def selection_session(pb=PB):
     return initial
 
 
-# The page's timed GET polls (`pollJSON` in ui/store.js and ui/components/replay.js).
-POLLS = ("/api/pause", "/api/replay/status")
-
-
 def problems_but_own_navigation(page):
-    """Page problems, less the polls this test's own `goto` cancels.
-
-    Each width reloads the page, and a timed poll still in flight from the
-    previous load comes back net::ERR_ABORTED -- under a loaded full run that
-    is often (/api/pause in the merge checks of 2026-09-28 and 09-29,
-    /api/replay/status twice on 2026-10-13). The poll simply runs again on
-    the new page, so the abort is the test's doing; any other failed request
-    still counts."""
-    return [problem for problem in page.problems()
-            if not (problem.startswith("requestfailed: ")
-                    and any(problem.endswith(f"{poll} (net::ERR_ABORTED)") for poll in POLLS))]
+    """Page problems. Each width reloads the page, and a timed poll still in flight from the previous load comes
+    back net::ERR_ABORTED (/api/pause in the merge checks of 2026-09-28 and 09-29, /api/replay/status twice on
+    2026-10-13); every uilab page now retires a GET its own `goto` cancels (tools/browser_guard.py
+    retire_own_navigation_aborts), so any failed request here counts."""
+    return page.problems()
 
 
 def flip_off(page, state, owner, setting, writes):

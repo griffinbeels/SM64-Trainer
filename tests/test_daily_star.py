@@ -101,6 +101,20 @@ def test_todays_best_is_the_fastest_finish_inside_the_local_day():
     assert best == {"frames": 331, "strat": "Standard", "attempts": 4}
 
 
+def test_a_save_stated_finish_is_played_today_but_never_todays_best():
+    """Day 1 is Wild Blue, the star of his 2026-11-09 report: a loaded state's
+    10"00 played GOAL!. Save-state practice is counted as played and is never
+    a best (caveats.save_state_run)."""
+    day = date(2026, 9, 23)
+    attempts = [_attempt(_utc_at(day, 12), 331),
+                _attempt(_utc_at(day, 13), 300, anchor_type="state_loaded",
+                         state_loads=0, invalid_reason=None),
+                _attempt(_utc_at(day, 14), 290, anchor_type="practice_reset",
+                         state_loads=3, invalid_reason=None)]
+    best = todays_best(attempts, "star:2:2", "igt", day)
+    assert best == {"frames": 331, "strat": "Standard", "attempts": 3}
+
+
 WILD_BLUE = "star:2:2"
 
 

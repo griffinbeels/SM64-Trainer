@@ -1,0 +1,21 @@
+name: source security
+
+on:
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  secrets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Install the pinned, hash-verified detector
+        run: python3 tools/secret_scan.py --install
+      - name: Check public source without exposing findings
+        run: python3 tools/secret_scan.py

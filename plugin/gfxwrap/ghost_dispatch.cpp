@@ -1,6 +1,7 @@
 #include "ghost_dispatch.h"
 #include "GLFunctions.h"
 #include "link_dispatch.h"
+#include <cstring>
 
 namespace ghost_dispatch {
 namespace {
@@ -8,6 +9,24 @@ PROC extension(const char* name) {
     const PROC proc=wglGetProcAddress(name);
     return !proc || proc==reinterpret_cast<PROC>(1) || proc==reinterpret_cast<PROC>(2) ||
         proc==reinterpret_cast<PROC>(3) || proc==reinterpret_cast<PROC>(-1) ? nullptr : proc;
+}
+bool multibind(const renderer::Identity &identity) {
+    static renderer::Identity checked{};static bool supported=false;
+    if(checked.context==identity.context && checked.context_generation==identity.context_generation
+            && checked.owner_thread==identity.owner_thread)return supported;
+    checked=identity;supported=false;
+    GLint major=0,minor=0;glGetIntegerv(0x821B,&major);glGetIntegerv(0x821C,&minor);
+    if(major>4 || (major==4 && minor>=4))return supported=true;
+    if(major<3)return false;
+    using GetStringi=const GLubyte* (APIENTRY *)(GLenum,GLuint);
+    const auto get=reinterpret_cast<GetStringi>(extension("glGetStringi"));if(!get)return false;
+    GLint count=0;glGetIntegerv(0x821D,&count);
+    if(count<0 || count>4096)return false;
+    for(GLint i=0;i<count;++i) {
+        const auto name=get(GL_EXTENSIONS,GLuint(i));
+        if(name && !std::strcmp(reinterpret_cast<const char*>(name),"GL_ARB_multi_bind"))return supported=true;
+    }
+    return false;
 }
 }
 bool load(ghost_compositor::Dispatch& out) {
@@ -101,8 +120,10 @@ bool load(ghost_compositor::Dispatch& out) {
     d.DrawArrays=reinterpret_cast<decltype(d.DrawArrays)>(::glDrawArrays);
     d.MemoryBarrier=reinterpret_cast<decltype(d.MemoryBarrier)>(g_glMemoryBarrier);
     // Optional (GL 4.4 multi-bind): without them a frame asks the active unit.
-    d.BindTextures=reinterpret_cast<decltype(d.BindTextures)>(extension("glBindTextures"));
-    d.BindSamplers=reinterpret_cast<decltype(d.BindSamplers)>(extension("glBindSamplers"));
+    if(multibind(identity)) {
+        d.BindTextures=reinterpret_cast<decltype(d.BindTextures)>(extension("glBindTextures"));
+        d.BindSamplers=reinterpret_cast<decltype(d.BindSamplers)>(extension("glBindSamplers"));
+    }
 #define GD_REQUIRE(result,name,args) if(!d.name)return false;
     GC_GL_FUNCTIONS(GD_REQUIRE)
 #undef GD_REQUIRE

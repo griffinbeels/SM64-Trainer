@@ -1,11 +1,14 @@
 """Privileged two-phase plugin install. Never imports desktop or user settings.
 
 The helper accepts one authenticated parent connection, installs only the active
-bundle's two named DLLs and fixed INI into a verified Project64/Plugin directory,
-turns off one fixed setting (frame buffer emulation) in the renderer's
-GLideN64.ini there, removes an older install's renderer DLL of its own after the
-commit, and rolls everything back on failure. It cannot copy arbitrary files or
-run commands.
+bundle's graphics plugin into a verified Project64/Plugin directory under its
+fixed name, turns off one fixed setting (frame buffer emulation) in the
+renderer's GLideN64.ini there, deletes an older install's leftovers of its own
+(fixed names, ours by identity) after the commit, and rolls everything back on
+failure. When asked, it also copies the PJ64 Fixups to the fixed name RSP.dll,
+only from a file whose bytes match the hash in this build's bundled baseline
+(data/setup_baseline.json), keeping the file it replaces once. It cannot copy
+arbitrary files or run commands.
 """
 from __future__ import annotations
 
@@ -19,8 +22,8 @@ if __name__ == "__main__" and not getattr(sys, "frozen", False):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from sm64_events.core.plugin_installation import (  # noqa: E402
-    _BUILD, LEGACY_RENDERER_DLL as LEGACY_RENDERER, RENDERER_FILE as RENDERER, WRAPPER_DLL as WRAPPER,
-    WRAPPER_INI as INI, file_operation, in_use, sha256, verified_copy,
+    _BUILD, LEFTOVERS, PLUGIN_DLL as PLUGIN, file_operation, in_use, our_leftovers, remove_files, sha256,
+    verified_copy,
 )
 from sm64_events.core.plugin_elevation import receive_packet, send_packet  # noqa: E402
 from sm64_events.core.renderer_settings import (  # noqa: E402
@@ -46,86 +49,110 @@ def _safe_path(value) -> Path:
     return path
 
 
+#: the role the graphics plugin's build id carries (tools/build_natives.py)
+PLUGIN_ROLE = b"-gpu-runtime"
+
+
 def validate_request(request):
     from sm64_events.core.capturelayer_win import WinProcesses
-    from sm64_events.core.paths import bundled_plugin_dll, bundled_renderer_dll
-    if set(request) != {"pj64_dir", "plugin_dir", "wrapper_sha256", "renderer_sha256"}:
+    from sm64_events.core.paths import bundled_plugin_dll
+    if set(request) - {"fixups_dll"} != {"pj64_dir", "plugin_dir", "plugin_sha256"}:
         raise ValueError("Invalid administrator installer request")
     pj64, plugin = _safe_path(request["pj64_dir"]), _safe_path(request["plugin_dir"])
     if plugin != pj64 / "Plugin":
         raise ValueError("Administrator install requires Project64's own Plugin folder")
     if WinProcesses.check_folder(str(pj64))["state"] != "ready":
         raise ValueError("Project64.exe could not be verified as a supported version 1.6 build")
-    wrapper, renderer = bundled_plugin_dll(), bundled_renderer_dll()
-    for source, role, digest in ((wrapper, b"-gpu-runtime", request["wrapper_sha256"]),
-                                 (renderer, b"-renderer", request["renderer_sha256"])):
-        if source is None:
-            raise ValueError("This build does not contain the required plugin")
-        _safe_path(str(source.absolute()))
-        data = source.read_bytes()
-        if (data[:2] != b"MZ" or sha256(source) != digest
-                or not any(label.endswith(role + b"\0") for label in _BUILD.findall(data))):
-            raise ValueError("Bundled plugin identity changed or has the wrong role")
-    return pj64, plugin, wrapper, renderer
+    source = bundled_plugin_dll()
+    if source is None:
+        raise ValueError("This build does not contain the required plugin")
+    _safe_path(str(source.absolute()))
+    data = source.read_bytes()
+    if (data[:2] != b"MZ" or sha256(source) != request["plugin_sha256"]
+            or not any(label.endswith(PLUGIN_ROLE + b"\0") for label in _BUILD.findall(data))):
+        raise ValueError("Bundled plugin identity changed or has the wrong role")
+    return pj64, plugin, source
+
+
+def fixups_source(request) -> Path | None:
+    """The requested PJ64 Fixups file, only when it IS the tested DLL: the
+    request names where the download is kept, the bundled baseline says what
+    its bytes must be."""
+    if "fixups_dll" not in request:
+        return None
+    from sm64_events.core.fixups import tested_sha256
+    from sm64_events.core.setup_profile import load_baseline
+    path = _safe_path(request["fixups_dll"])
+    if path.read_bytes()[:2] != b"MZ" or sha256(path) != tested_sha256(load_baseline()):
+        raise ValueError("The PJ64 Fixups file is not the tested release")
+    return path
+
+
+def _fixups_plan(plugin: Path, fixups: Path | None):
+    """(destination, backup or None) when RSP.dll must change, else None."""
+    from sm64_events.core.fixups import BACKUP, RSP_DLL
+    if fixups is None:
+        return None
+    rsp, backup = plugin / RSP_DLL, plugin / BACKUP
+    if rsp.is_file() and sha256(rsp) == sha256(fixups):
+        return None
+    return rsp, (backup if rsp.is_file() and not backup.exists() else None)
+
+
+def _install_fixups(fixups: Path, rsp: Path, backup: Path | None) -> None:
+    with file_operation("install the PJ64 Fixups", rsp):
+        if backup is not None:
+            backup.write_bytes(rsp.read_bytes())
+        rsp.write_bytes(fixups.read_bytes())
+        if sha256(rsp) != sha256(fixups):
+            raise OSError("PJ64 Fixups copy verification failed")
 
 
 @contextmanager
 def privileged_files(request):
     from sm64_events.core.capturelayer_win import WinProcesses
     from sm64_events.core.plugin_elevation_win import locked_paths
-    pj64, plugin, wrapper, renderer = validate_request(request)
-    parents = {path for item in (pj64, wrapper.parent, renderer.parent)
-               for path in (*item.parents, item)}
+    pj64, plugin, source = validate_request(request)
+    fixups = fixups_source(request)
+    folders = [pj64, source.parent] + ([fixups.parent] if fixups else [])
+    parents = {path for item in folders for path in (*item.parents, item)}
     directories = sorted(parents, key=lambda path: (len(path.parts), str(path)))
-    with locked_paths(directories, [pj64 / "Project64.exe", wrapper, renderer], []):
+    with locked_paths(directories, [pj64 / "Project64.exe", source] + ([fixups] if fixups else []), []):
         # Lock handles now prevent source replacement or directory redirection.
         validate_request(request)
+        fixups_source(request)
         if WinProcesses().pj64_image_path() is not None:
             raise OSError("Close Project64 before installing Practice Replay")
         with file_operation("create plugin folder", plugin):
             plugin.mkdir(exist_ok=True)
         settings = plugin / SETTINGS
-        destinations = [plugin / name for name in (WRAPPER, RENDERER, INI, SETTINGS)]
-        for destination in [*destinations, plugin / LEGACY_RENDERER]:
+        destinations = [plugin / PLUGIN, settings]
+        fixups_plan = _fixups_plan(plugin, fixups)
+        fixups_files = [path for path in (fixups_plan or ()) if path is not None]
+        destinations += fixups_files
+        for destination in [*destinations, *(plugin / name for name in LEFTOVERS)]:
             if in_use(destination):
                 raise OSError(f"Plugin is in use by another process: {destination}")
         # Pinning creates a missing destination empty, so note which existed first.
         settings_existed = settings.is_file()
         with locked_paths([plugin], [], destinations):
             settings_before = read_settings(settings) if settings_existed else None
-            with verified_copy(renderer, plugin / RENDERER, reason="elevated_install",
-                               rollback=(plugin / WRAPPER, plugin / INI, settings)) as renderer_receipt:
-                with verified_copy(wrapper, plugin / WRAPPER, reason="elevated_install",
-                                   rollback=(plugin / INI, settings)) as wrapper_receipt:
-                    with file_operation("write plugin configuration", plugin / INI):
-                        (plugin / INI).write_text(f"wrapped={RENDERER}\n")
-                        if (plugin / INI).read_text() != f"wrapped={RENDERER}\n":
-                            raise OSError("Plugin configuration verification failed")
-                    with file_operation("turn off frame buffer emulation", settings):
-                        turn_off_in_place(settings, settings_before)
-                    try:
-                        yield {"renderer_receipt": renderer_receipt,
-                               "installation_receipt": wrapper_receipt}
-                        # The commit means the original user selected the wrapper.
-                        _remove_legacy_renderer(plugin / LEGACY_RENDERER)
-                    except (ValueError, TypeError) as exc:
-                        # restore_on_failure handles OSError. Invalid/tampered
-                        # protocol input must roll the same files back too.
-                        raise OSError("Administrator transaction was not committed") from exc
-
-
-def _remove_legacy_renderer(legacy: Path) -> None:
-    """Delete an older install's renderer DLL, which Project64 listed as a
-    second plugin: only one this trainer built, never a link."""
-    try:
-        stat = legacy.lstat()
-    except FileNotFoundError:
-        return
-    if getattr(stat, "st_file_attributes", 0) & 0x400 or stat.st_nlink != 1 or not legacy.is_file():
-        return
-    if any(label.endswith(b"-renderer\0") for label in _BUILD.findall(legacy.read_bytes())):
-        with file_operation("remove the older renderer", legacy):
-            legacy.unlink()
+            with verified_copy(source, plugin / PLUGIN, reason="elevated_install",
+                               rollback=(settings, *fixups_files)) as receipt:
+                with file_operation("turn off frame buffer emulation", settings):
+                    turn_off_in_place(settings, settings_before)
+                if fixups_plan is not None:
+                    _install_fixups(fixups, *fixups_plan)
+                try:
+                    yield {"installation_receipt": receipt}
+                    # The commit means the original user selected the plugin,
+                    # so no leftover is Project64's choice any more. A refused
+                    # delete puts back what it removed and rolls back the copy.
+                    remove_files(our_leftovers(plugin))
+                except (ValueError, TypeError) as exc:
+                    # restore_on_failure handles OSError. Invalid/tampered
+                    # protocol input must roll the same files back too.
+                    raise OSError("Administrator transaction was not committed") from exc
 
 
 class _Rollback(OSError):

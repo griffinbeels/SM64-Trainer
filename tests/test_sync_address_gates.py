@@ -697,3 +697,218 @@ def test_usamune_stop_that_never_moves_or_leaves_the_four_settings_fails():
                          AG._check_usamune_stop).status == "failed"
     assert _usamune_flip("usamune_stop", lambda t: 1 if t < 1.0 else 7,
                          AG._check_usamune_stop).status == "failed"
+
+
+# --- Usamune's save-state slots (Ghost Handoff) -------------------------------
+
+_SLOT_FIELDS = ("usamune_slot_save", "usamune_slot_load", "usamune_slots_start", "segment_table", "second_camera_focus")
+
+
+def _put_word(memory, address: int, word: int) -> None:
+    for offset, value in enumerate(word.to_bytes(4, "big")):
+        memory.write_u8(address + offset, value)
+
+
+def test_every_slot_address_has_an_optional_gate_and_a_verify_row():
+    from sm64_events.memory.layout import LAYOUT_ROWS
+    for field in _SLOT_FIELDS:
+        gate = next(g for g in GATES if g.id == f"address.{field}")
+        assert gate.optional and gate.auto and gate.kind == "address"
+        row = next(r for r in LAYOUT_ROWS if r.field == field)
+        assert row.optional and row.note.startswith("VERIFY")
+
+
+def test_a_slot_routine_must_be_code_inside_usamunes_code():
+    memory = BufferMemory()
+    check = AG._check_slot_routine("usamune_slot_load")
+    limits = {"usamune_state_start": US.usamune_state_start}
+    assert check(FakeContext(memory, limits)).status == "missing"
+    good = limits | {"usamune_slot_load": US.usamune_slot_load}
+    assert check(FakeContext(memory, good)).status == "failed"
+    _put_word(memory, US.usamune_slot_load, 0x27BDFFE8)
+    assert check(FakeContext(memory, good)).status == "verified"
+    assert check(FakeContext(memory, good | {"usamune_slot_load": US.usamune_state_start})).status == "failed"
+
+
+def test_each_slot_must_be_empty_or_name_an_object():
+    memory = BufferMemory()
+    candidates = {"usamune_slots_start": US.usamune_slots_start, "object_pool": US.object_pool}
+    occupied = US.usamune_slots_start + 2 * AG.SLOT_STRIDE + AG.SLOT_TRAILER
+    assert AG._check_slots_start(FakeContext(memory, candidates)).status == "verified"
+    _put_word(memory, occupied, US.mario_object - 0x100)
+    _put_word(memory, occupied, US.object_pool + 0x260)
+    assert AG._check_slots_start(FakeContext(memory, candidates)).measured == {"occupied": 1}
+    _put_word(memory, occupied, 0x12345678)
+    assert AG._check_slots_start(FakeContext(memory, candidates)).status == "failed"
+    assert AG._check_slots_start(FakeContext(memory, candidates | {"usamune_slots_start": 0x807F0000})).status == "failed"
+
+
+def test_the_second_camera_focus_must_be_empty_or_name_an_object():
+    memory = BufferMemory()
+    candidates = {"second_camera_focus": US.second_camera_focus, "object_pool": US.object_pool}
+    assert AG._check_second_camera_focus(FakeContext(memory, candidates)).status == "verified"
+    _put_word(memory, US.second_camera_focus, US.object_pool + 3 * 0x260)
+    assert AG._check_second_camera_focus(FakeContext(memory, candidates)).status == "verified"
+    _put_word(memory, US.second_camera_focus, US.object_pool + 3 * 0x260 + 8)
+    assert AG._check_second_camera_focus(FakeContext(memory, candidates)).status == "failed"
+    _put_word(memory, US.second_camera_focus, 0x3F800000)
+    assert AG._check_second_camera_focus(FakeContext(memory, candidates)).status == "failed"
+
+
+def test_the_segment_table_must_agree_with_the_behaviour_base():
+    memory = BufferMemory()
+    base = 0x80200000
+    candidates = {"segment_table": US.segment_table, "behaviour_base": base}
+    assert AG._check_segment_table(FakeContext(memory, candidates)).status == "failed"
+    _put_word(memory, US.segment_table + AG.SEGMENT_OF_BEHAVIOURS * 4, base & 0x7FFFFFFF)
+    assert AG._check_segment_table(FakeContext(memory, candidates)).status == "verified"
+
+
+# --- the act selector's spans (M4 E2-live) ------------------------------------
+
+_ACT_SPANS = ("save_buffer_start", "save_buffer_end", "usamune_state_start", "usamune_state_end")
+
+
+def _save_buffer(memory, *, signed=(True, True)) -> None:
+    """gSaveBuffer as the game leaves it after boot: two menu data copies, each
+    ending with the decomp's {u16 magic "HI", u16 checksum} signature."""
+    for copy, sign in enumerate(signed):
+        block = bytearray(range(copy, copy + AG.MENU_DATA_BYTES))
+        if sign:
+            block[-4:-2] = AG.MENU_DATA_MAGIC.to_bytes(2, "big")
+            block[-2:] = (sum(block[:-2]) & 0xFFFF).to_bytes(2, "big")
+        at = US.save_buffer_start + AG.MENU_DATA_OFF + copy * AG.MENU_DATA_BYTES
+        for offset, value in enumerate(block):
+            memory.write_u8(at + offset, value)
+
+
+def test_every_act_select_span_has_an_optional_address_gate_and_a_verify_row():
+    from sm64_events.memory.layout import LAYOUT_ROWS
+    for field in _ACT_SPANS:
+        gate = next(g for g in GATES if g.id == f"address.{field}")
+        assert gate.optional and gate.auto and gate.kind == "address"
+        row = next(r for r in LAYOUT_ROWS if r.field == field)
+        assert row.optional and row.note.startswith("VERIFY") and row.symbol is None
+
+
+def test_save_buffer_is_verified_by_the_signed_menu_data_that_ends_it():
+    memory = BufferMemory()
+    _save_buffer(memory)
+    candidates = {field: getattr(US, field) for field in ("save_buffer_start", "save_buffer_end")}
+    verdict = AG._check_save_buffer("save_buffer_end")(FakeContext(memory, candidates))
+    assert verdict.status == "verified" and verdict.value == US.save_buffer_end
+
+
+def test_save_buffer_without_its_signatures_or_of_the_wrong_size_fails():
+    candidates = {field: getattr(US, field) for field in ("save_buffer_start", "save_buffer_end")}
+    for signed in ((True, False), (False, True)):
+        memory = BufferMemory()
+        _save_buffer(memory, signed=signed)
+        verdict = AG._check_save_buffer("save_buffer_start")(FakeContext(memory, candidates))
+        assert verdict.status == "failed" and verdict.measured["menu_copies_signed"] == 1
+    memory = BufferMemory()
+    _save_buffer(memory)
+    shifted = dict(candidates, save_buffer_end=US.save_buffer_end + 4)
+    assert AG._check_save_buffer("save_buffer_start")(FakeContext(memory, shifted)).status == "failed"
+    assert AG._check_save_buffer("save_buffer_start")(FakeContext(memory, {})).status == "missing"
+
+
+def test_usamune_state_span_holds_every_verified_usamune_global():
+    names = ("usamune_state_start", "usamune_state_end", *AG._USAMUNE_INSIDE)
+    candidates = {field: getattr(US, field) for field in names}
+    check = AG._scene_span_gate("usamune_state_start", "usamune_state_start", "usamune_state_end",
+                                AG._USAMUNE_INSIDE, "every verified Usamune setting and counter")
+    verdict = check(FakeContext(BufferMemory(), candidates))
+    assert verdict.status == "verified" and verdict.value == US.usamune_state_start
+    short = dict(candidates, usamune_state_end=US.usamune_star_result)    # cuts the result off
+    verdict = check(FakeContext(BufferMemory(), short))
+    assert verdict.status == "failed" and "usamune_star_result" in verdict.evidence
+
+
+# --- the stems capture's audio spans (M4 stems) ------------------------------
+
+_STEMS_SPANS = ("audio_heap_start", "audio_heap_end", "audio_globals_start", "audio_globals_end",
+                "sp_task_queue_start", "sp_task_queue_end", "sp_task_messages_start", "sp_task_messages_end",
+                "sp_task_pointers_start", "sp_task_pointers_end")
+
+
+def _stems_candidates(**changes) -> dict:
+    return {field: getattr(US, field) for field in _STEMS_SPANS} | changes
+
+
+def test_every_stems_span_has_an_optional_address_gate_and_a_verify_row():
+    from sm64_events.memory.layout import LAYOUT_ROWS
+    for field in _STEMS_SPANS:
+        gate = next(g for g in GATES if g.id == f"address.{field}")
+        assert gate.optional and gate.auto and gate.kind == "address"
+        row = next(r for r in LAYOUT_ROWS if r.field == field)
+        assert row.optional and row.note.startswith("VERIFY") and row.symbol is None
+
+
+def _audio_globals(memory, pointers: int) -> None:
+    for i in range(pointers):
+        memory.write_u32(US.audio_globals_start + 8 * i, US.audio_heap_start + 0x100 * i)
+
+
+def test_audio_spans_are_verified_by_the_globals_pointers_into_the_heap():
+    memory = BufferMemory()
+    _audio_globals(memory, AG.AUDIO_HEAP_POINTERS)
+    verdict = AG._check_audio_spans("audio_heap_end")(FakeContext(memory, _stems_candidates()))
+    assert verdict.status == "verified" and verdict.value == US.audio_heap_end
+    assert verdict.measured == {"heap_pointers": AG.AUDIO_HEAP_POINTERS}
+
+
+def test_audio_spans_with_too_few_pointers_overlapping_or_missing_fail():
+    memory = BufferMemory()
+    _audio_globals(memory, AG.AUDIO_HEAP_POINTERS - 1)
+    assert AG._check_audio_spans("audio_heap_start")(FakeContext(memory, _stems_candidates())).status == "failed"
+    _audio_globals(memory, AG.AUDIO_HEAP_POINTERS)
+    overlapping = _stems_candidates(audio_globals_start=US.audio_heap_end - 0x100)
+    assert AG._check_audio_spans("audio_heap_start")(FakeContext(memory, overlapping)).status == "failed"
+    absent = _stems_candidates(audio_heap_end=None)
+    assert AG._check_audio_spans("audio_heap_start")(FakeContext(memory, absent)).status == "missing"
+
+
+def _task_queue(memory, *, buffer=None, slots=16, pending=1, first=3) -> None:
+    for offset, value in ((8, pending), (12, first), (16, slots),
+                          (20, US.sp_task_messages_start if buffer is None else buffer)):
+        memory.write_u32(US.sp_task_queue_start + offset, value)
+
+
+def test_sp_task_queue_is_verified_by_its_own_buffer_pointer_and_slot_count():
+    memory = BufferMemory()
+    _task_queue(memory)
+    verdict = AG._check_sp_task_queue("sp_task_messages_end")(FakeContext(memory, _stems_candidates()))
+    assert verdict.status == "verified" and verdict.value == US.sp_task_messages_end
+    assert verdict.measured["slots"] == 16 and verdict.measured["pending"] == 1
+
+
+def test_sp_task_queue_pointing_elsewhere_with_other_slots_or_another_size_fails():
+    check = AG._check_sp_task_queue("sp_task_queue_start")
+    for shape in ({"buffer": US.sp_task_messages_start + 0x40}, {"slots": 8}, {"pending": 17}):
+        memory = BufferMemory()
+        _task_queue(memory, **shape)
+        assert check(FakeContext(memory, _stems_candidates())).status == "failed", shape
+    memory = BufferMemory()
+    _task_queue(memory)
+    wider = _stems_candidates(sp_task_queue_end=US.sp_task_queue_end + 4)
+    assert check(FakeContext(memory, wider)).status == "failed"
+    assert check(FakeContext(memory, _stems_candidates(sp_task_queue_end=None))).status == "missing"
+
+
+def _task_pointers(script) -> object:
+    clock = ScriptedClock()
+    memory = ScriptedMemory(clock)
+    memory.script("u32", US.sp_task_pointers_start + 8, script)      # sCurrentDisplaySPTask
+    return AG._check_sp_task_pointers("sp_task_pointers_start")(
+        FakeContext(memory, _stems_candidates(), clock=clock))
+
+
+def test_sp_task_pointers_are_verified_when_tasks_come_and_go():
+    verdict = _task_pointers(lambda t: US.audio_globals_start if int(t * 10) % 2 else 0)
+    assert verdict.status == "verified" and verdict.measured["reads_with_a_task"] > 0
+
+
+def test_sp_task_pointers_never_set_or_outside_rdram_fail():
+    assert _task_pointers(lambda t: 0).status == "failed"
+    assert _task_pointers(lambda t: 0x0040_0000).status == "failed"     # a host address, not a task

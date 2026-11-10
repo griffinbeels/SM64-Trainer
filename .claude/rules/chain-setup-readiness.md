@@ -11,6 +11,7 @@ paths:
   - "src/sm64_events/core/setup_runtime.py"
   - "src/sm64_events/core/setup_gpu.py"
   - "src/sm64_events/core/setup_profile.py"
+  - "src/sm64_events/core/fixups.py"
   - "src/sm64_events/core/onboarding.py"
   - "src/sm64_events/server/setup_api.py"
   - "src/sm64_events/ui/setupflow.js"
@@ -24,18 +25,22 @@ paths:
 - **Source truth:** verified Project64 target, loaded cartridge header, plugin PID
   and moving picture/input/game counters. A grading preference is not detection.
 - **Sink:** Settings → Setup and the first-run wizard's completion page.
-- **Installation reuse:** the physical wrapper hash and INI/registry configuration
-  qualify an existing installation, independently of a consent timestamp. Its
+- **Installation reuse:** the physical plugin's build id and the registry
+  selection qualify an existing installation, independently of a consent timestamp. Its
   folder/installation record is shared per Windows user, while gameplay readiness
   and checkout-local completion are separate. A matching install suppresses first use.
-- **Legacy per-user configuration:** an existing VirtualStore copy of the wrapper
-  INI must agree with the physical file. A legacy x86 Project64 can read that
-  copy first; physical file identity alone does not prove its effective setting.
-  Install and permitted refresh reconcile only this existing owned INI, under the
-  original user even when a helper installs protected files as another account.
-  Both copies and settings roll back on failure. No shadow is created and no
-  repair runs while Project64 is known to be running. The wrapper's configurable
-  loader and undo's previous selection remain unchanged.
+- **One plugin file:** install (the UAC helper included) writes
+  `sm64_trainer_gfx.dll` alone, the renderer and capture layer in one file that
+  Project64 loads itself; nothing is loaded by name and no ini of ours is read.
+  The name never changes, so `Graphics Dll` stays valid through every update. An
+  older install's `sm64_trainer_gfx.ini`, `sm64_trainer_gfx.renderer` and
+  `GLideN64_SM64Trainer.dll` read as `leftovers` (stale, not broken); install
+  and permitted refresh delete them last, all or none, only ours (a `-renderer`
+  build id, an ini of `wrapped=` lines, or the app's retired-name placeholder
+  text, which the stable v1.9.1 can copy there between an update's swap and its
+  restart), never a link and never the file `Graphics Dll` names (that waits
+  for Install). A VirtualStore copy of the old ini decides nothing and is never
+  written.
 - **The renderer's settings:** every `GLideN64.ini` Project64 may read (the
   physical file, created when missing; an existing VirtualStore copy, never
   created) loads frame buffer emulation off (`frame_buffer_emulation_off`).
@@ -49,11 +54,39 @@ paths:
   emulator's configuration with the tested setup in `data/setup_baseline.json`
   (also the one importance table). It reads the same registry and VirtualStore
   policy, never writes, and says "unknown" without evidence. It never gates
-  readiness or completion: the wizard shows its differences as notes.
+  readiness or completion on the server: the wizard shows its differences as notes.
+- **The setup gate:** the check's `gate_differs` lists the baseline's `gate`
+  items (Wermi's build v7, the PJ64 Fixups) that are PROVEN different.
+  `setupflow.js` `canAdvance` holds a page with an open gate item; the footer's
+  Continue anyway opens the warning (`gateStop`), and accepting it writes
+  `onboarding.baseline_risk` (`POST /api/setup/baseline-risk`). Missing
+  fixups are also a server step: `readiness(fixups_needed=)` answers `fixups`
+  (or `close`) after the plugin install and before `reopen`, until they are
+  installed or accepted; the wizard draws it inside the install stage.
+- **The checklist:** every page shows ONE sub-step card; finished sub-steps
+  are one-line checks above it (`setuppages.js` `DoneSteps`) and later ones
+  stay hidden. A checkpoint is evidence where the trainer can read it; the
+  Connect page's download and unpack cannot be read, so the user's click is
+  their checkpoint and finding the right Project64 finishes them regardless. The header
+  notes an unaccepted difference to every user. `core/fixups.py` is the one
+  fix the trainer performs: Install (and `POST /api/setup/fixups`) downloads
+  the baseline's pinned release, checks the archive and DLL hashes, keeps the
+  old `RSP.dll` once as `RSP.before-fixups`; its failure never fails the
+  plugin install (`emu.fixups.error`). In a protected Plugin folder the
+  install's one UAC helper copies the kept download beside the plugin, inside
+  the same rollback, only when its bytes match the bundled baseline's hash
+  (`plugin_elevation_worker.fixups_source`); the fixups-only route reaches
+  that prompt by running Install (`reason: access_denied`). The fixups have no
+  stated license, so they are never bundled.
 - **One reader per process:** `setup_runtime.py` attaches one `Pj64Memory` by the
   target's pid and keeps it while that process runs (`alive()`); an observation is
   one header read. A fresh reader per poll re-walked Project64's memory every
   second (38 attaches in one minute of play, 2026-09-28).
+- **The Ghost Lab's ROM rides setup, never gates it:** with a practice ROM open,
+  `SetupRuntime._lab_roms` copies it through that same reader (once per process
+  and cartridge, `scenelab/roms.py`) and searches Project64's folders for the
+  other version. Readiness never reads it; the setup check shows one `lab_rom`
+  row, with the pick only while the US ROM is missing (2026-11-09: no step).
 - **A proven check holds through a gap:** `onboarding.SteadyChecks` keeps a
   check true until it has been false for 3 s, keyed by Project64 pid, ROM and
   plugin pid; another of any of those proves everything again. A real stall
@@ -83,7 +116,7 @@ paths:
 
 | # | hop | value is true here as | module | probe (reads it) | inject (forces it) | when the hop is broken, the probe shows | when the probe itself is broken, it shows |
 |---|-----|-----------------------|--------|------------------|--------------------|------------------------------------------|--------------------------------------------|
-| 1 | Plugin installation and movement | renderer + wrapper files (compared with the bundle by build id), the ini naming the renderer, selection, consent, producer PID and captured-picture receipts; the control page's `rom_open` is true only for a practice ROM (`rom_baseline` marks another cartridge) | `src/sm64_events/core/capturelayer.py` | GET /api/setup emu installation fields; `tests/test_capturelayer.py` | FakeRegistry, FakeProcesses and a fake GPU observation in that test | Missing/stale renderer or wrapper, an ini wrapping another plugin, wrong selection, or a producer that stops acknowledging | An unchanging fake observation cannot earn active status |
+| 1 | Plugin installation and movement | the plugin file (compared with the bundle by build id), no older install's `leftovers`, selection, consent, producer PID and captured-picture receipts; the control page's `rom_open` is true only for a practice ROM (`rom_baseline` marks another cartridge) | `src/sm64_events/core/capturelayer.py` | GET /api/setup emu installation fields; `tests/test_capturelayer.py`, `tests/test_capturelayer_one_plugin.py` | FakeRegistry, FakeProcesses and a fake GPU observation in those tests | Missing/stale plugin, leftovers of an older install, wrong selection, or a producer that stops acknowledging | An unchanging fake observation cannot earn active status |
 | 2 | Runtime observation | actual ROM identity and fresh counters belonging to the selected process | `src/sm64_events/core/setup_runtime.py` | GET /api/setup emu target, rom and checks; `tests/test_onboarding.py` | Runtime fakes in that test vary PID, ROM, counters and recorder source | PJ64 without ROM, wrong PID, unqualified desktop fallback or stalled counters remain incomplete | A first counter observation or missing observer stays unverified |
 | 3 | Applicable readiness | verification.step, ready and limited | `src/sm64_events/core/onboarding.py` | `tests/test_onboarding.py` readiness cases | Remove one check at a time from observation() | A missing US check prevents completion; JP excludes unsupported tracking only | Making every check false still reports ready, so the probe missed its subject |
 | 4 | API and durable outcome | fresh verdict plus separate onboarding record | `src/sm64_events/server/setup_api.py` | GET /api/setup and completion response; `tests/test_onboarding.py` | Inject the observer; POST completion through TestClient | Premature finish returns 409 with no completion record | A test reads an old localStorage value instead of the server record |
@@ -102,6 +135,31 @@ click; a declared transition or a settled screenshot alone cannot prove movement
 
 ## Failure catalogue
 
+- 2026-11-09, hop 5, on the first draft's three numbered lines: "it should
+  be a CHECKLIST leveraging progressive disclosure. When we overwhelm the user
+  with too many steps in a single page, it's easy for them to ignore it and
+  just skip ahead." The same draft showed the missing-fixups warning beside
+  "Open your game", before its turn. `test_another_build_stops_the_wizard_until_the_warning_is_accepted`
+  now counts one card per sub-step and reads the checks above it.
+
+- 2026-11-09, hop 5: "we spent weeks working with Apeduden, only to figure
+  out that the *real* root cause was him not using the right build of Pj64.
+  So, I want to prevent that FOREVER". The setup check already read the build
+  and the fixups, but as recommended notes on the completion page. They are
+  now required gate items. `test_another_build_stops_the_wizard_until_the_warning_is_accepted`
+  walks both stops; `test_fixups.py` covers the download.
+
+- 2026-11-07, hop 1: Defender flagged the renderer as
+  Trojan:Win32/Bearfoos.A!ml (2026-11-06), and the install looked the part: a
+  wrapper DLL loading a DLL under a non-DLL extension, named by an ini. His
+  decision: "the approach that's easiest for the user and has the least
+  likelihood of being accidentally flagged as malware". One file now holds
+  the renderer and the capture layer under the wrapper's name; the automatic
+  refresh moves an older install under the consent already given.
+  `test_capturelayer_one_plugin.py` covers both older layouts, ownership, a
+  selected leftover, a user's own files, rollback and the UAC helper;
+  `test_ui_setup_modal.py` keeps setup shut while a packaged move is pending.
+
 - 2026-10-30, hop 1: "we need to ship the default
   https://github.com/Luna-Project64/GLideN64/releases settings ... MAKE SURE
   THAT FRAME BUFFER EMULATION IS DISABLED. This is very important." The trainer
@@ -116,21 +174,17 @@ click; a declared transition or a settled screenshot alone cannot prove movement
   sm64 trainer 1.0 and link v4.2(sm64 trainer)". Project64 lists every DLL in
   `Plugin\`, and the renderer sat there as `GLideN64_SM64Trainer.dll`; picking
   it skips capture (the 2026-09-15 entry below). It now installs as
-  `sm64_trainer_gfx.renderer`, which the wrapper loads by full path. Refresh
-  and Install move an older install: copy, rewrite both INIs, then delete
-  the DLL last, only ours by build id and never while `Graphics Dll` names it.
-  `test_capturelayer_one_plugin.py` fails if the renderer is a DLL again or
-  the older DLL survives a move.
+  `sm64_trainer_gfx.renderer`, which the wrapper loaded by full path, until
+  the one plugin file replaced both (2026-11-07 above).
 
 - 2026-10-22, hop 1: disposable-file reproduction of installation with an older
   VirtualStore wrapper INI returned `installation_verified: true`, left the older
   renderer selected in that shadow, and skipped automatic refresh because physical
   files were current. The friend report contained virtualized plugin logs, but
   omitted the INI contents, so this repairs a demonstrated setup class without
-  assigning that machine's ghost failure to it. `test_capturelayer_shadow.py`
-  covers install, configuration-only refresh, mismatch status, original-user UAC
-  commit/rollback, registry failure, missing shadows, unrelated files and live-game
-  protection. Windows' legacy read precedence is documented in
+  assigning that machine's ghost failure to it. Since 2026-11-07 no ini of ours
+  is read; `test_capturelayer_shadow.py` keeps an old shadow inert and uncreated.
+  Windows' legacy read precedence is documented in
   [User Account Control for Game Developers](https://learn.microsoft.com/en-us/windows/win32/dxtecharts/user-account-control-for-game-developers).
 
 - 2026-10-19, hop 1: denied DLL writes were classified as a running emulator
@@ -196,8 +250,8 @@ click; a declared transition or a settled screenshot alone cannot prove movement
   can tell", yet every picture read "Input unavailable". Project64's graphics
   plugin pointed at the renderer DLL directly, so the wrapper never loaded (its
   build wrote no log line) and the recorder photographed the desktop: 1313
-  rows, 0 exact. The setup screen now installs the pair and selects the
-  wrapper, which names the renderer in `sm64_trainer_gfx.ini`.
+  rows, 0 exact. The setup screen then installed the pair and selected the
+  wrapper; since 2026-11-07 one plugin file holds both.
 - 2026-09-15, hop 1: a rebuilt candidate read "differs from this build".
   Setup compared bytes and link timestamps differ between builds; a plain
   64-hex pattern also matched the renderer's decimal tables, and scanning the

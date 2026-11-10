@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Runs in the simulation program (SM64TrainerSim.exe); licenses/README.md lists its GPL-2.0-or-later code.
 # src/sm64_events/memory/addresses.py
 """Single authoritative registry of what is TRUE OF THE GAME whatever ROM runs:
 action ids, level/course/star ids and names, struct OFFSETS, traps, world

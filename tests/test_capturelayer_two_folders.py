@@ -9,8 +9,8 @@ import json
 
 import pytest
 
-from sm64_events.core.capturelayer import WRAPPER_DLL
-from tests.test_capturelayer import build, dll_source, make_layer, renderer_for, settings_path  # noqa: F401 - fixtures
+from sm64_events.core.capturelayer import PLUGIN_DLL
+from tests.test_capturelayer import build, dll_source, make_layer, settings_path  # noqa: F401 - fixtures
 
 
 def folder(tmp_path, name):
@@ -43,7 +43,7 @@ def test_switching_back_keeps_the_first_folders_install_and_its_automatic_refres
     status = layer.status()
     assert status.pj64_dir == str(first)
     assert status.installation_verified and status.automatic_update
-    assert (second / "Plugin" / WRAPPER_DLL).read_bytes() == (first / "Plugin" / WRAPPER_DLL).read_bytes()
+    assert (second / "Plugin" / PLUGIN_DLL).read_bytes() == (first / "Plugin" / PLUGIN_DLL).read_bytes()
 
 
 @pytest.mark.xfail(strict=True, reason=(
@@ -53,8 +53,7 @@ def test_switching_back_keeps_the_first_folders_install_and_its_automatic_refres
 def test_an_update_refreshed_into_one_folder_still_refreshes_the_other(two_installs, dll_source):
     layer, processes, first, second = two_installs
     dll_source.write_bytes(build(b"a newer capture layer"))
-    renderer_for(dll_source).write_bytes(build(b"a newer renderer"))
     assert layer.refresh_if_stale() is True              # updates the remembered folder: the second
-    assert (second / "Plugin" / WRAPPER_DLL).read_bytes() == dll_source.read_bytes()
+    assert (second / "Plugin" / PLUGIN_DLL).read_bytes() == dll_source.read_bytes()
     run_then_close(processes, layer, first)
     assert layer.status().automatic_update is True

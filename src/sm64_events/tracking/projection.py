@@ -684,7 +684,8 @@ class Projector:
                  time_corrections: dict[int, dict] | None = None,
                  warp_destinations: dict[int, int] | None = None,
                  hundred_coin_strat=None,
-                 landmark_names=None):
+                 landmark_names=None,
+                 reds_pipe_by_course: dict[int, int] | None = None):
         # ((course_id, star_id), exit_star, current_strat) -> the 100-coin
         # strategy this run belongs to, or None for "keep what is remembered"
         # (spec 2026-08-03-hundred-coin-exit-variants). Injected rather than
@@ -701,6 +702,14 @@ class Projector:
         # Same "applies backwards" contract as the labels: a replay matches
         # under the names as they are NOW.
         self._landmark_names = landmark_names
+        # course_id -> its Bowser reds->pipe segment
+        # (`activestrat.reds_pipe_segments`, the service reads it from the
+        # definitions' seed keys, which SegmentDef does not carry). A reds->pipe
+        # run contains its reds star grab, so that star attempt is the same run
+        # on the same route (his ask, round 8: "if someone does 'reds -> pipe'
+        # then it should have also contributed to 'reds -> star' ghosts").
+        # None keeps every bare construction byte for byte.
+        self._reds_pipe_by_course = reds_pipe_by_course or {}
         self._cleared = cleared if cleared is not None else {}
         # attempt_id -> reclassified strat (caveat 16); shadows the strat
         # remembered at close time.
@@ -944,6 +953,23 @@ class Projector:
         if self.target and self.target[0] == "segment":
             return self.strat_by_segment.get(self.target[1])
         return None
+
+    def _reds_star_twin(self, grabbed: tuple[int, int]) -> str | None:
+        """The " (Star)" strategy of a reds grab made inside its reds->pipe run.
+
+        While the target is the course's reds->pipe segment practiced as
+        "X (Pipe)", the reds grab is that run's first part, so its star attempt
+        is "X (Star)" whatever the star card last held. Otherwise None: the
+        star keeps its own remembered strategy."""
+        from sm64_events.tracking.activestrat import PIPE_FAMILY_SUFFIX, STAR_FAMILY_SUFFIX
+        course, star = grabbed
+        segment_id = self._reds_pipe_by_course.get(course) if star == 0 else None
+        if segment_id is None or self.target != ("segment", segment_id):
+            return None
+        pipe = self.strat_by_segment.get(segment_id)
+        if not pipe or not pipe.endswith(PIPE_FAMILY_SUFFIX):
+            return None
+        return pipe[:-len(PIPE_FAMILY_SUFFIX)] + STAR_FAMILY_SUFFIX
 
     def _star_target(self) -> tuple[int, int] | None:
         """(course_id, star_id) when the target is a star, else None —
@@ -2531,6 +2557,11 @@ class Projector:
             self._open = None
             return []
         strat = self.strat_by_star.get(grabbed)
+        twin = self._reds_star_twin(grabbed)
+        if twin is not None:
+            # The card follows the run, as the 100-coin variant does: the star
+            # half now reads the route the pipe run is practicing.
+            strat = self.strat_by_star[grabbed] = twin
         attempt = self._build(
             first=first, close=ev, outcome="success", outcome_detail=None,
             course_id=grabbed[0], star_id=grabbed[1],
@@ -3059,8 +3090,8 @@ def wipe_matches(a: Attempt, p: dict) -> bool:
 
 
 def replay(events, segments=None, time_filters=None, origin_overrides=None,
-           on_notices=None, hundred_coin_strat=None, landmark_names=None
-           ) -> tuple[list[Attempt], Projector]:
+           on_notices=None, hundred_coin_strat=None, landmark_names=None,
+           reds_pipe_by_course=None) -> tuple[list[Attempt], Projector]:
     """`on_notices`, default None (spec 2026-07-28-multi-step-segments, the
     backtest arm-count gap): an optional callback invoked with
     `proj.segment_notices` after every fed event, for a caller that needs
@@ -3088,7 +3119,8 @@ def replay(events, segments=None, time_filters=None, origin_overrides=None,
                      time_corrections=time_corrections(events),
                      warp_destinations=warp_destinations(events),
                      hundred_coin_strat=hundred_coin_strat,
-                     landmark_names=landmark_names)
+                     landmark_names=landmark_names,
+                     reds_pipe_by_course=reds_pipe_by_course)
     attempts: list[Attempt] = []
     for ev in events:
         if ev.type == "data_wiped":

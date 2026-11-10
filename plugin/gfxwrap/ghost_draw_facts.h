@@ -24,7 +24,7 @@
     X(OTHER_THREAD) X(NO_CLEAN_CONSUMER) X(NO_IDENTITY) X(NO_DISPATCH) X(CREATE_SCOPE) X(NO_COMPOSITOR) \
     X(FAULTED) X(NO_MODEL) X(NO_EXTENT) X(PREPARE_SCOPE) X(PREPARE) X(NO_SAMPLE) X(NO_PLAN) X(NO_SEAL) \
     X(SEAL_WORLD) X(SEAL_BUFFER) X(NO_POSE) X(SEAL_SCOPE) X(BATCH) X(TARGET_CHANGED) X(WORLD_LOST) \
-    X(HUD) X(STALE) X(CLOSE_DIRTY) X(FINALIZE)
+    X(HUD) X(STALE) X(CLOSE_DIRTY) X(FINALIZE) X(INELIGIBLE)
 /* The first step that refused the most recent picture (gdf_facts.present_gate):
  * ghost_presentation's VI draw, then replace_vi. SHOWN: the ghost image
  * replaced the picture (the swap's receipt is still status.displayed). */

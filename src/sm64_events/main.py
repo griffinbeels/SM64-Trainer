@@ -3,16 +3,18 @@
 import asyncio
 import json
 import logging
-import shutil
+import os
 import sys
+import threading
+from pathlib import Path
 
 from sm64_events.compare.importer import VideoImporter
 from sm64_events.compare.service import CompareService
 from sm64_events.core.logging_setup import configure_logging
 from sm64_events.core.build_channel import current_build
 from sm64_events.core.paths import (
-    bundled_ffmpeg,
     compare_cache_dir,
+    ffmpeg_program,
     compilations_dir,
     db_path,
     data_root,
@@ -314,6 +316,14 @@ def _ghost_capture_factory(layout):
         layout, sound_player=SoundPlayerProcess(), **kwargs)
 
 
+def _live_capture_factory(layout):
+    """The same recorder-owned pose source without replay media or sound."""
+    if not ghost_supported(layout.version):
+        return None
+    from sm64_events.ghost.capture import NativeCapture
+    return lambda **kwargs: NativeCapture(layout, **kwargs)
+
+
 def _build_replay(replay_cfg, layout_of, service, *, recorder_lock=None):
     """`layout_of()` is the running build's layout: the picture stamps and
     the pose capture follow a ROM swap (`build`'s `follow_build`)."""
@@ -330,28 +340,35 @@ def _build_replay(replay_cfg, layout_of, service, *, recorder_lock=None):
     # the audio pump — every remaining replay glitch class traced to
     # that coupling (scattered missed slots, rare 100-200 ms gaps,
     # correlated audio hiccups). Fallback: the in-process writer.
-    import shutil as _shutil
     import subprocess as _sp
     video_sink_factory = None
-    _ffmpeg = bundled_ffmpeg() or _shutil.which("ffmpeg")
+    _ffmpeg = ffmpeg_program()
     if _ffmpeg:
-        try:
-            from sm64_events.core.childproc import quiet_spawn_kwargs
-            _sp.run([_ffmpeg, "-version"], capture_output=True,
-                    timeout=10, check=True, **quiet_spawn_kwargs())
+        def video_sink_factory(cfg, on_seg, codec):
             from sm64_events.replay.ffmpeg_sink import FfmpegAvSink
-            # codec: the recorder passes pick_video_codec()'s answer, so
-            # the sink encodes with what THIS machine has (hardcoded
-            # nvenc flashed a non-NVIDIA user's cursor, 2026-08-07).
-            video_sink_factory = (
-                lambda cfg, on_seg, codec, _f=_ffmpeg: FfmpegAvSink(
-                    cfg, on_seg, ffmpeg=_f, codec=codec))
-            logging.getLogger("sm64.replay").info(
-                "replay backend: single ffmpeg A+V mux (%s)", _ffmpeg)
-        except Exception:
-            logging.getLogger("sm64.replay").exception(
-                "ffmpeg probe failed - using in-process encoder")
-    codec = pick_video_codec(_ffmpeg if video_sink_factory is not None else None)
+            return FfmpegAvSink(cfg, on_seg, ffmpeg=_ffmpeg, codec=codec)
+
+    codec_lock, selected = threading.Lock(), []
+
+    def codec():
+        # One answer is shared by recording and explicit offline encodes.
+        # Merely opening Trainer, or starting live-only ghosts, does no
+        # FFmpeg/PyAV capability probe and starts no media process.
+        with codec_lock:
+            if not selected:
+                backend = _ffmpeg
+                if backend:
+                    try:
+                        from sm64_events.core.childproc import quiet_spawn_kwargs
+                        _sp.run([backend, "-version"], capture_output=True,
+                                timeout=10, check=True, **quiet_spawn_kwargs())
+                    except Exception:
+                        logging.getLogger("sm64.replay").exception(
+                            "ffmpeg probe failed - using in-process encoder")
+                        backend = None
+                        recorder.set_video_sink_factory(None)
+                selected.append(pick_video_codec(backend))
+            return selected[0]
     from sm64_events.replay.sourcefactory import SourceFactory
     sources = SourceFactory(layout_of, replay_cfg, DwmSurfaceVideoSource)
     ghost_capture_factory = _ghost_capture_factory(layout_of())
@@ -365,6 +382,11 @@ def _build_replay(replay_cfg, layout_of, service, *, recorder_lock=None):
             return reservation.pop() if reservation else acquire_recorder_lock()
 
         recorder_options["recorder_lock_factory"] = reserve_capture
+    # With the scene lab on, the recorder's game sound is also copied into a bounded ring the
+    # lab's attempt scenes take their sound from (tools/scene_lab/live_audio.py); off, the
+    # factories are the recorder's own.
+    live_sound = _scene_lab_live_audio()
+    wrap = live_sound.wrap if live_sound is not None else (lambda factory: factory)
     recorder = ReplayRecorder(
         cfg=replay_cfg,
         window_finder=find_window,
@@ -373,43 +395,52 @@ def _build_replay(replay_cfg, layout_of, service, *, recorder_lock=None):
         # The ghost sound player is tapped only while Ghosts in recording is
         # on, for the ghost copy; the clean audio is the game alone
         # (replay/audio.py GhostTimeline). `recorder` binds late.
-        audio_factory=lambda pid: ProcessAudioSource(
+        audio_factory=wrap(lambda pid: ProcessAudioSource(
             pid=pid, rate=replay_cfg.audio_rate,
-            extra_pid=lambda: recorder.ghost_sound_pid()),
-        fallback_audio_factory=lambda pid: SystemAudioSource(
-            rate=replay_cfg.audio_rate, pid=pid),
-        codec=codec,
+            extra_pid=lambda: recorder.ghost_sound_pid())),
+        fallback_audio_factory=wrap(lambda pid: SystemAudioSource(
+            rate=replay_cfg.audio_rate, pid=pid)),
+        codec_factory=codec,
         video_sink_factory=video_sink_factory,
-        ghost_capture_factory=ghost_capture_factory, **recorder_options)
+        ghost_capture_factory=ghost_capture_factory,
+        live_capture_factory=_live_capture_factory(layout_of()), **recorder_options)
     replay = _replay_service(replay_cfg, recorder, codec, service)
     return replay, codec
 
 
 def _build_capture_layer(poller, replay):
     # THE CAPTURE LAYER's installer (item 95): the setup screen's door to
-    # installing the wrapper plugin under consent. Built on the real
+    # installing the graphics plugin under consent. Built on the real
     # registry and process list; its liveness is the GPU route's control page
     # and capture receipt (core/setup_gpu.py), so "active" means the plugin
     # is presenting.
     from sm64_events.core.capturelayer import CaptureLayer, WinProcesses, WinRegistry
     from sm64_events.core.setup_gpu import GpuSetupProbe
-    from sm64_events.core.paths import (bundled_plugin_dll, bundled_renderer_dll, capture_layer_settings_path,
+    from sm64_events.core.paths import (bundled_plugin_dll, capture_layer_settings_path,
                                         installer_identity, migrate_capture_layer_settings)
     migrate_capture_layer_settings()
     capture_layer = CaptureLayer(
         registry=WinRegistry(), processes=WinProcesses(),
         settings_path=capture_layer_settings_path(),
         dll_source=bundled_plugin_dll,
-        renderer_source=bundled_renderer_dll,
         gpu_observation=GpuSetupProbe(lambda: replay.recorder.status() if replay else {}),
         auto_refresh=current_build().channel == 'stable',
         installer=installer_identity())
     from sm64_events.core.setup_runtime import SetupRuntime
-    setup_observer = SetupRuntime(WinProcesses(), Pj64Memory, poller, replay)
+    from sm64_events.scenelab.roms import dev_lab_roms
+    from sm64_events.scenelab.roms import default_store as lab_rom_store   # setup copies the practice ROM too
+    # A developer's lab (SM64_SCENE_LAB) reads its own ROM files and never fills the store.
+    setup_observer = SetupRuntime(WinProcesses(), Pj64Memory, poller, replay,
+                                  rom_store=None if dev_lab_roms() is not None else lab_rom_store())
+    from sm64_events.core.fixups import Fixups
+    from sm64_events.core.paths import mode_settings_path
+    from sm64_events.core.setup_profile import load_baseline
+    # Setup's download of the PJ64 Fixups; the setup routes read it off the layer.
+    capture_layer.fixups = Fixups(load_baseline(), mode_settings_path().parent / "downloads")
     if not capture_layer.auto_refresh:
         return capture_layer, setup_observer
     try:
-        # A build carrying a newer layer refreshes the installed DLL while
+        # A build carrying a newer plugin refreshes the installed one while
         # Project64 is closed, under the consent already given -- but only an
         # install by an installer like this one (the frozen app's, or this
         # checkout's own) and never with an older build (plugin_ownership).
@@ -418,7 +449,7 @@ def _build_capture_layer(poller, replay):
         # which app opens first.
         if capture_layer.refresh_if_stale():
             logging.getLogger("sm64.replay").info(
-                "capture layer refreshed to this build's DLL (Project64 was closed)")
+                "capture layer refreshed to this build's plugin (Project64 was closed)")
         capture_layer.start_refresh(logging.getLogger("sm64.replay"))
     except Exception:
         logging.getLogger("sm64.replay").exception("capture layer refresh failed")
@@ -437,7 +468,7 @@ def _comparison_services(replay, service, broadcaster, codec, replay_cfg):
     # (task 0053). The service reads tracker.db per call, so it answers 503
     # until the db lands, then works with no restart.
     compare = None
-    _ffmpeg_bin = bundled_ffmpeg() or shutil.which("ffmpeg")
+    _ffmpeg_bin = ffmpeg_program()
     if _ffmpeg_bin:
         importer = VideoImporter(compare_cache_dir(), _ffmpeg_bin)
         compare = CompareService(importer, service, broadcaster,
@@ -482,6 +513,36 @@ def _community_population(service):
     return population, account, CommunitySync(account, population)
 
 
+def _build_multiplayer(replay, community_account=None, *, appearance=None):
+    """Compose a dormant room. The source launcher supplies private paths.
+
+    No SDK/config discovery or identity operation occurs on app startup.
+    Packaged support needs its own approved resource/configuration contract.
+    """
+    from sm64_events.multiplayer.eos_process import EOSProcess, Runtime, TransportError
+    from sm64_events.multiplayer.room import RoomService
+
+    helper = os.environ.get("SM64_EOS_HELPER")
+    config = os.environ.get("SM64_EOS_CONFIG")
+    cache = os.environ.get("SM64_EOS_CACHE")
+    paths = [Path(value) for value in (helper, config, cache) if value]
+    runtime = Runtime(*paths) if len(paths) == 3 and all(path.is_absolute() for path in paths) else None
+
+    def transport_factory(on_event):
+        if runtime is None:
+            raise TransportError("transport_unavailable")
+        return EOSProcess(runtime, on_event)
+
+    def player_name():
+        state = community_account.snapshot() if community_account is not None else {}
+        return state.get("name") or "Guest"
+
+    recorder = replay.recorder if replay is not None else None
+    available = recorder is not None and runtime is not None and runtime.available()
+    return RoomService(recorder, transport_factory, player_name=player_name,
+                       available=available, appearance=appearance)
+
+
 _BACKGROUND = set()
 
 
@@ -515,6 +576,7 @@ def _build_follower(running, inputs, replay, service):
         inputs.set_layout(new_layout)
         if replay is not None:
             replay.recorder.set_ghost_capture_factory(_ghost_capture_factory(new_layout))
+            replay.recorder.set_live_capture_factory(_live_capture_factory(new_layout))
             replay.recorder.retarget_capture()
         _in_background(service.note_running_version(new_version))
     return follow_build
@@ -614,14 +676,115 @@ def build(*, recorder_lock=None):
         replay.recorder.set_capture_gate(poller.capture_allowed)
     updater = UpdateService(current_version=__version__)
     capture_layer, setup_observer = _build_capture_layer(poller, replay)
-    return create_app(poller, broadcaster, service=service, replay=replay,
-                      inputs=inputs.get_service, on_db_attached=inputs.attach,
-                      updater=updater, bootstrap_cleanup_path=_bootstrap_cleanup_arg(),
-                      compare=compare, compilation=compilation,
-                      db_retry=db_retry, capture_layer=capture_layer,
-                      setup_observer=setup_observer, ghost=ghost,
-                      refresh_library_on_start=True, community_account=community_account,
-                      community_sync=community_sync, protect_local_api=True, local_port=server_port())
+    return _mount_scene_lab(create_app(
+        poller, broadcaster, service=service, replay=replay,
+        inputs=inputs.get_service, on_db_attached=inputs.attach,
+        updater=updater, bootstrap_cleanup_path=_bootstrap_cleanup_arg(),
+        compare=compare, compilation=compilation,
+        db_retry=db_retry, capture_layer=capture_layer,
+        setup_observer=setup_observer, ghost=ghost,
+        refresh_library_on_start=True, community_account=community_account,
+        community_sync=community_sync,
+        multiplayer=_build_multiplayer(replay, community_account, appearance=ghost.live_appearance),
+        course_art=_course_art(),
+        protect_local_api=True, local_port=server_port()), tracker=service, live_audio=_scene_lab_live_audio(),
+        ghost_sources={"tracker": service, "replay": replay, "ghost": ghost, "community": community_sync},
+        game_timer=lambda: poller.latest.global_timer if poller.latest is not None else None,
+        game_region=lambda: poller.observed_game_version,
+        plugin_dir=_plugin_dir_of(capture_layer), app_background=True)
+
+
+def _course_art():
+    """Course portraits cut from the player's own ROM (interface I3), cached in the data folder."""
+    from sm64_events.core import paths
+    from sm64_events.course_art import CourseArt
+    return CourseArt(paths.course_art_dir())
+
+
+_LIVE_SOUND: list = []          # the one LiveAudio of this process, once asked for
+
+
+def _scene_lab_on() -> bool:
+    """The Ghost Lab's one switch: SM64_SCENE_LAB names a developer's lab config, or this is the installed app with
+    the Ghost Lab on (core/lab_inputs.py IN_APP, Griffin's D2). A source checkout without the variable has none."""
+    from sm64_events.core.lab_inputs import app_lab_on
+    return bool(os.environ.get("SM64_SCENE_LAB")) or app_lab_on()
+
+
+def _plugin_dir_of(capture_layer, keep_seconds: float = 10.0):
+    """The Ghost Lab's view of Project64's Plugin folder: the setup screen's own answer (the capture layer's status,
+    which also reads a custom Plugin Directory), kept `keep_seconds` so the lab's status polls never rescan it."""
+    import time
+    kept = {"at": None, "folder": None}
+
+    def plugin_dir():
+        now = time.monotonic()
+        if kept["at"] is None or now - kept["at"] > keep_seconds:
+            kept["at"] = now
+            kept["folder"] = getattr(capture_layer.status(), "plugin_dir", None) if capture_layer is not None else None
+        return kept["folder"]
+    return plugin_dir
+
+
+def _scene_lab_live_audio():
+    """The scene lab's copy of the recorder's game sound (live_audio.LiveAudio, the last 300 s),
+    or None: the lab is off, or its code did not load. One per process: the recorder's factories
+    and the lab share it."""
+    if not _scene_lab_on():
+        return None
+    if not _LIVE_SOUND:
+        from sm64_events.server.scene_lab_api import ConfigError, _lab_module
+        try:
+            _LIVE_SOUND.append(_lab_module("live_audio").LiveAudio(seconds=300.0))
+        except ConfigError:
+            _LIVE_SOUND.append(None)
+    return _LIVE_SOUND[0]
+
+
+def _mount_scene_lab(app, tracker=None, live_audio=None, ghost_sources=None, game_timer=None, plugin_dir=None,
+                     app_background=False, game_region=None):
+    """M4's scene viewer, the Ghost Lab (server/scene_lab_api.py). This is the one reader of its
+    switch (_scene_lab_on): SM64_SCENE_LAB names a developer's lab config, read exactly as before;
+    the installed app (frozen) mounts it with no lab config at all, from its own inputs
+    (core/lab_inputs.py: the ROM store, the bundled maps, and `plugin_dir()`, Project64's Plugin
+    folder as setup found it), and says in the page why nothing can open yet when one is missing.
+    Otherwise nothing is imported and the shell never shows its entry. The shell's one probe
+    (GET /api/scene-lab) then answers {"lab": null}: a 404 there put an HTTP error on every page
+    load of every install.
+    Mounting twice (a lab script that wraps an app the UI fixture already mounted) is a no-op.
+    With the switch on, the server's own `tracker` also feeds the lab's attempt scenes (the
+    live recording's lease, a cut per completed attempt); a caller without one (the UI fixture)
+    gets the viewer alone and never arms the wrapper's tap. `ghost_sources` is what the viewer's
+    stage and ghost catalog read ({"tracker", "replay", "ghost", "community"}, server/scene_ghosts.py); it
+    never arms anything. The same tracker's spawns refit the Usamune slots (slotlibrary/refit.py).
+    `game_timer` is the poller's newest game clock: the lab's background work pauses while his game runs
+    slow (server/scene_warm.py GamePace). `app_background` (the live server only): the installed app copies the
+    ROM from the running game and starts the stage warmer once a ROM is known (scene_lab_api._AppBackground).
+    `game_region` is the running cartridge's region (the poller's): the installed app cuts attempt scenes with that
+    region's ROM (scene_lab_api.RegionCutter)."""
+    if any(getattr(route, "path", None) == "/api/scene-lab" for route in app.routes):
+        return app
+    config = os.environ.get("SM64_SCENE_LAB")
+    if _scene_lab_on():
+        from sm64_events.server.scene_lab_api import mount_scene_lab
+        from sm64_events.server.scene_warm import GamePace
+        from_app = {}
+        if not config:                                 # the installed app: its own inputs, no lab.json
+            from functools import partial
+
+            from sm64_events.core.lab_inputs import app_inputs
+            from_app = {"app_inputs": partial(app_inputs, plugin=plugin_dir), "app_background": app_background,
+                        "game_region": game_region}
+        lab = mount_scene_lab(app, config or None, live=tracker is not None, live_audio=live_audio,
+                              ghost_sources=ghost_sources,
+                              resim_options={"pace": GamePace(game_timer)} if game_timer is not None else {},
+                              **from_app)
+        if tracker is not None:
+            lab.follow_attempts(tracker)
+            lab.follow_spawns(tracker)
+    else:
+        app.add_api_route("/api/scene-lab", lambda: {"lab": None}, methods=["GET"], include_in_schema=False)
+    return app
 
 
 _app = None
@@ -659,13 +822,35 @@ def _build_stale_natives() -> None:
     spec = importlib.util.spec_from_file_location("build_natives", tool)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    print("Checking the capture layer and renderer against this checkout's sources...")
+    print("Checking the graphics plugin and encoder helper against this checkout's sources...")
     try:
         states = module.ensure()
     except Exception as failure:  # noqa: BLE001 - never stop the server over the bundle
         print(f"  WARNING: the native bundle was not checked: {failure}")
+    else:
+        print("  " + ", ".join(f"{name} {state}" for name, state in states.items()))
+    _place_pinned_ffmpeg(tool.parent / "build_ffmpeg.py")
+
+
+def _place_pinned_ffmpeg(tool) -> None:
+    """The ffmpeg.exe a release bundles, from the build cache into this
+    checkout (core/paths.py SOURCE_FFMPEG), so a source run uses it rather
+    than whichever ffmpeg is on PATH. Never compiles: without a cached build
+    the server says so and falls back to PATH."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("build_ffmpeg", tool)
+    try:
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        state = module.place()
+    except Exception as failure:  # noqa: BLE001 - never stop the server over ffmpeg
+        print(f"  WARNING: the pinned ffmpeg.exe was not checked: {failure}")
         return
-    print("  " + ", ".join(f"{name} {state}" for name, state in states.items()))
+    if state == "not built":
+        print("  ffmpeg.exe: the pinned build is not in the build cache; using the ffmpeg on PATH "
+              "(uv run python tools/build_ffmpeg.py builds it, a few minutes once)")
+    else:
+        print(f"  ffmpeg.exe {state}")
 
 
 def run(*, recorder_lock=None) -> None:
@@ -705,8 +890,9 @@ def run(*, recorder_lock=None) -> None:
         wait_lock_free(instance_lock_path())
     import uvicorn
     app = build(recorder_lock=recorder_lock) if recorder_lock is not None else get_app()
+    from sm64_events.core.logging_setup import server_log_config
     uvicorn.run(app, host="127.0.0.1", port=server_port(),
-                timeout_graceful_shutdown=3)
+                timeout_graceful_shutdown=3, log_config=server_log_config(console=True))
 
 
 if __name__ == "__main__":

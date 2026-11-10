@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Runs in the simulation program (SM64TrainerSim.exe); licenses/README.md lists its GPL-2.0-or-later code.
 """WHERE each version of the ROM keeps the globals the tracker reads.
 
 `addresses.py` holds what is TRUE OF THE GAME whatever ROM is running: action
@@ -113,6 +115,107 @@ LAYOUT_ROWS: tuple[LayoutRow, ...] = (
     LayoutRow("behaviour_base", None, "mario_object_behaviour",
               "RAM address of segment 0x13; = mario_object->behaviour "
               "minus bhvMario's segmented offset for this version"),
+    # The game state SM64's own scene renderer (geo_process_root) reads, as
+    # spans the scene tap copies with each graphics task (M4 E2-live, lab
+    # only: tools/scene_lab/tap.py arm). Bounds are [start, end) and come from
+    # the linker map's section layout, not a symbol; optional, so a version
+    # without them only loses the free-camera capture.
+    LayoutRow("scene_data_start", None, "linker_map_sections",
+              "VERIFY: first byte of the game .data the renderer reads (main.o) "
+              "through moving_texture.o: area, camera, render-mode, skybox globals",
+              optional=True),
+    LayoutRow("scene_data_end", None, "linker_map_sections",
+              "VERIFY: end (exclusive) of that .data span", optional=True),
+    LayoutRow("scene_bss_start", None, "linker_map_sections",
+              "VERIFY: game .bss from game_init.o (display-list head, gfx pool) "
+              "through object_list_processor.o: MarioState, Lakitu, FOV, the object pool",
+              optional=True),
+    LayoutRow("scene_bss_end", None, "linker_map_sections",
+              "VERIFY: end (exclusive) of that .bss span", optional=True),
+    LayoutRow("scene_engine_bss_start", None, "linker_map_sections",
+              "VERIFY: engine .bss from geo_layout.o through surface_load.o: the "
+              "surface partitions and pool pointers shadows read", optional=True),
+    LayoutRow("scene_engine_bss_end", None, "linker_map_sections",
+              "VERIFY: end (exclusive) of that engine .bss span", optional=True),
+    LayoutRow("main_pool_start", None, "main_pool_bounds",
+              "VERIFY: the value sPoolStart holds: the main pool, where a level's "
+              "segments, scene graph, surfaces and Mario's animation buffer live",
+              optional=True),
+    LayoutRow("main_pool_end", None, "main_pool_bounds",
+              "VERIFY: the value sPoolEnd holds (exclusive)", optional=True),
+    # Two more spans the scene tap copies with each task, for the act selector
+    # (star select): it prints the course's coin score out of the save buffer,
+    # and Usamune's hook prints its own counter there under two settings.
+    LayoutRow("save_buffer_start", None, "linker_map_symbols",
+              "VERIFY: gSaveBuffer: four save files in two copies, then two copies of the "
+              "menu data; the act selector reads the course's coin score", optional=True),
+    LayoutRow("save_buffer_end", None, "linker_map_symbols",
+              "VERIFY: end (exclusive) of gSaveBuffer: the next symbol, gGfxSPTaskStack",
+              optional=True),
+    LayoutRow("usamune_state_start", None, "usamune_code_refs",
+              "VERIFY: Usamune's settings array (usamune_stop is base + 1), where its "
+              "boot-copied code ends; its act-select hook reads settings +7 and +8",
+              optional=True),
+    LayoutRow("usamune_state_end", None, "usamune_code_refs",
+              "VERIFY: end (exclusive) past the counters after the settings: the u16 at +0x122 "
+              "the act-select hook prints, usamune_overall, usamune_star_result", optional=True),
+    # Ghost Handoff's Slot Library (slotlibrary/usamune.py). Usamune's nine save-state slots and the
+    # routines that identify the build whose slot format they hold.
+    LayoutRow("usamune_slot_save", None, "usamune_code_refs",
+              "VERIFY: Usamune's save routine, read from its code; only its first 0x400 bytes "
+              "are read, as half of the build's fingerprint", optional=True),
+    LayoutRow("usamune_slot_load", None, "usamune_code_refs",
+              "VERIFY: Usamune's load routine, the fingerprint's other half", optional=True),
+    LayoutRow("usamune_slots_start", None, "usamune_code_refs",
+              "VERIFY: slot 0 of nine, 0x26460 bytes apart; he loaded a slot written here "
+              "(2026-11-05). The only address range the Trainer writes", optional=True),
+    # What a slot copies that the scene spans stop short of, and the seed a frame's random calls start from: with
+    # these the scene tap's copy of frame K-1 is all a slot of frame K needs (tools/scene_lab/moment_slot.py).
+    LayoutRow("slot_tail_start", None, "linker_map_sections",
+              "VERIFY: the first byte of Usamune's slot body past scene_bss_end", optional=True),
+    LayoutRow("slot_tail_end", None, "usamune_code_refs",
+              "VERIFY: end (exclusive) of the slot body: mario_struct + 0x26320", optional=True),
+    LayoutRow("power_meter_hud_start", None, "usamune_code_refs",
+              "VERIFY: the four words Usamune's save copies to trailer +0x10", optional=True),
+    LayoutRow("power_meter_hud_end", None, "usamune_code_refs",
+              "VERIFY: end (exclusive) of those four words", optional=True),
+    LayoutRow("random_seed_start", None, "linker_map_symbols",
+              "VERIFY: the word holding gRandomSeed16; a load does not restore it", optional=True),
+    LayoutRow("random_seed_end", None, "linker_map_symbols",
+              "VERIFY: end (exclusive) of that word", optional=True),
+    LayoutRow("segment_table", "sSegmentTable", None,
+              "VERIFY: where the level's segments loaded; a slot's pointers mean something only "
+              "under the table it was saved with", optional=True),
+    LayoutRow("second_camera_focus", "gSecondCameraFocus", None,
+              "VERIFY: gSecondCameraFocus off STROOP's US map, an object pointer outside the slot; a relocated slot moves its twin here "
+              "(slotlibrary/relocate.py)", optional=True),
+    # Audio spans the scene tap copies at every VI (M4 stems, lab only:
+    # tools/scene_lab/tap.py arm): at UpdateScreen the audio task the game just
+    # dispatched is still unrun, so these hold its whole input, and at the next
+    # VI its output. Bounds off the linker map, [start, end).
+    LayoutRow("audio_heap_start", None, "linker_map_symbols",
+              "VERIFY: gAudioHeap: command lists, notes and their RSP state, sample DMA buffers, "
+              "loaded banks, the reverb ring and the AI buffers", optional=True),
+    LayoutRow("audio_heap_end", None, "linker_map_symbols",
+              "VERIFY: end (exclusive): gAudioHeap plus the value gAudioHeapSize holds", optional=True),
+    LayoutRow("audio_globals_start", None, "linker_map_symbols",
+              "VERIFY: gAudioGlobalsStartMarker: the audio .bss (reverb, pools, the gNotes pointer, "
+              "sequence players, channels and layers, the sample DMA table, the audio tasks)", optional=True),
+    LayoutRow("audio_globals_end", None, "linker_map_symbols",
+              "VERIFY: end (exclusive): gAudioGlobalsEndMarker", optional=True),
+    LayoutRow("sp_task_queue_start", None, "linker_map_symbols",
+              "VERIFY: gSPTaskMesgQueue, the OSMesgQueue each RSP task is posted to", optional=True),
+    LayoutRow("sp_task_queue_end", None, "linker_map_symbols",
+              "VERIFY: end (exclusive): the 0x18-byte queue", optional=True),
+    LayoutRow("sp_task_messages_start", None, "linker_map_symbols",
+              "VERIFY: that queue's 16-message buffer (STROOP names it gUnknownMesgBuf)", optional=True),
+    LayoutRow("sp_task_messages_end", None, "linker_map_symbols",
+              "VERIFY: end (exclusive): the next symbol, gDmaIoMesg", optional=True),
+    LayoutRow("sp_task_pointers_start", None, "linker_map_symbols",
+              "VERIFY: gActiveSPTask, then sCurrentAudioSPTask, sCurrentDisplaySPTask, "
+              "sNextAudioSPTask and sNextDisplaySPTask", optional=True),
+    LayoutRow("sp_task_pointers_end", None, "linker_map_symbols",
+              "VERIFY: end (exclusive): the next symbol, sAudioEnabled", optional=True),
 )
 
 
@@ -148,6 +251,39 @@ class Layout:
 
     usamune_stop: int | None = None
     behaviour_base: int | None = None
+    scene_data_start: int | None = None
+    scene_data_end: int | None = None
+    scene_bss_start: int | None = None
+    scene_bss_end: int | None = None
+    scene_engine_bss_start: int | None = None
+    scene_engine_bss_end: int | None = None
+    main_pool_start: int | None = None
+    main_pool_end: int | None = None
+    save_buffer_start: int | None = None
+    save_buffer_end: int | None = None
+    usamune_state_start: int | None = None
+    usamune_state_end: int | None = None
+    usamune_slot_save: int | None = None
+    usamune_slot_load: int | None = None
+    usamune_slots_start: int | None = None
+    slot_tail_start: int | None = None
+    slot_tail_end: int | None = None
+    power_meter_hud_start: int | None = None
+    power_meter_hud_end: int | None = None
+    random_seed_start: int | None = None
+    random_seed_end: int | None = None
+    segment_table: int | None = None
+    second_camera_focus: int | None = None
+    audio_heap_start: int | None = None
+    audio_heap_end: int | None = None
+    audio_globals_start: int | None = None
+    audio_globals_end: int | None = None
+    sp_task_queue_start: int | None = None
+    sp_task_queue_end: int | None = None
+    sp_task_messages_start: int | None = None
+    sp_task_messages_end: int | None = None
+    sp_task_pointers_start: int | None = None
+    sp_task_pointers_end: int | None = None
 
     def value(self, field: str) -> int | None:
         return getattr(self, field)
@@ -223,6 +359,67 @@ US = Layout(
     usamune_stop=0x80417B4D,        # ROM-derived; live-confirmed 2026-10-17: Grab then
                                     # GrabX (journal 20368/20377; final raw byte 3)
     behaviour_base=0x800EB180,      # anchored on his bob-omb pointer, 8/8 confirmed 2026-08-07
+    # VERIFY until the live E2 proof: STROOP MappingUS.map section layout
+    # (.data main.o 0x...D560 .. moving_texture.o end; .bss game_init.o ..
+    # object_list_processor.o end; engine .bss geo_layout.o .. surface_load.o
+    # end). On savestates u_a (WF) and u_b (castle grounds), 2026-10-24, these
+    # spans plus the main pool and the ROM held every byte geo_process_root
+    # read under the source camera and five orbits: regenerated display lists
+    # matched byte for byte with everything else poisoned. Pool bounds: what
+    # sPoolStart/sPoolEnd held in all three savestates, Usamune and vanilla.
+    scene_data_start=0x8032D560,
+    scene_data_end=0x803312F0,
+    scene_bss_start=0x8033AF90,
+    scene_bss_end=0x80361270,
+    scene_engine_bss_start=0x8038BCA0,
+    scene_engine_bss_end=0x8038EEE0,
+    main_pool_start=0x8005C010,
+    main_pool_end=0x801C0FF0,
+    # VERIFY until the next live E2 proof. On session tap-20261025-184022 the 9
+    # act-select tasks regenerate identically once these bytes come from the
+    # session's own full RDRAM copy (2026-10-25); the hook read gSaveBuffer +0x25
+    # (file A's BoB coin score) and Usamune settings +7, +8 and the u16 at +0x122.
+    # gSaveBuffer: STROOP MappingUS.map, up to the next symbol (gGfxSPTaskStack);
+    # 0x200 = sizeof(struct SaveBuffer), and every file and menu copy in that
+    # copy carried its save block signature and checksum. Usamune: base =
+    # usamune_stop - 1, which its code addresses 251 times and where its
+    # boot-copied ROM image ends (97,100 bytes from 0x80400000); the end is the
+    # first 16-byte address boundary past usamune_star_result (ends 0x80417C76),
+    # below 0x80417C86, the next global its code addresses on its own.
+    save_buffer_start=0x80207700,
+    save_buffer_end=0x80207900,
+    usamune_state_start=0x80417B4C,
+    usamune_state_end=0x80417C80,
+    usamune_slot_save=0x8040392C,
+    usamune_slot_load=0x80411CF0,
+    usamune_slots_start=0x80500000,
+    # VERIFY until a slot from a new recording loads live. Read off the save routine's own loads (0x804039C8,
+    # 0x804039D8) and MappingUS.map; moment_slot's comparison with the closed replay: 73 of 73 slots equal.
+    slot_tail_start=0x80361270,
+    slot_tail_end=0x80361490,
+    power_meter_hud_start=0x803325F0,
+    power_meter_hud_end=0x80332600,
+    random_seed_start=0x8038EEE0,
+    random_seed_end=0x8038EEE4,
+    segment_table=0x8033B400,
+    second_camera_focus=0x8032DF30,  # STROOP MappingUS.map gSecondCameraFocus; VERIFY
+    # VERIFY until the stems live session (G0/G1). STROOP MappingUS.map
+    # symbols, checked on three savestates (two Usamune, one vanilla),
+    # 2026-10-25: each holds exactly one message in gSPTaskMesgQueue, its
+    # buffer pointer reads 0x8033AF08 with 16 slots, the message is
+    # &gAudioTasks[gAudioTaskIndex] and that task's command list, notes,
+    # reverb ring and AI buffers all lie in the heap; gAudioHeapSize reads
+    # 0x31150. Usamune's audio code is byte-identical to vanilla US.
+    audio_heap_start=0x801CE000,
+    audio_heap_end=0x801FF150,
+    audio_globals_start=0x80220DA0,
+    audio_globals_end=0x80226CC0,
+    sp_task_queue_start=0x8033AE20,
+    sp_task_queue_end=0x8033AE38,
+    sp_task_messages_start=0x8033AF08,
+    sp_task_messages_end=0x8033AF48,
+    sp_task_pointers_start=0x8032D568,
+    sp_task_pointers_end=0x8032D57C,
 )
 
 # JP / Usamune v1.93j. Every value passed its address gate on his JP game
@@ -262,6 +459,39 @@ JP = Layout(
     usamune_stop=0x80417C15,        # ROM-derived; read 3 2 1 0 1 2 3 as he stepped STOP
                                     # GrabX -> Grab -> None and back, 2026-10-17
     behaviour_base=0x800E8320,      # from Mario's object, 2026-10-16
+    # Ghost Handoff's slots, verified live 2026-11-08 by the lead's sync run on his JP game
+    # (data/version_sync/jp.json); candidates from rom_candidates_jp.tsv and STROOP's JP map.
+    usamune_state_start=0x80417C14,  # holds every verified Usamune setting and counter
+    usamune_state_end=0x80417D48,    # (both span ends; 308 bytes)
+    usamune_slot_save=0x80403930,    # Usamune's code lies here; the cold-booted JP game saves through it
+    usamune_slot_load=0x80411D84,    # and loads through this one
+    usamune_slots_start=0x80500000,  # every occupied slot word points past the object pool's start
+    segment_table=0x8033A090,        # its behaviour segment equals the verified behaviour base
+    second_camera_focus=0x8032CFD0,  # holds zero or an object's start
+    # The JP re-simulation's spans, verified live 2026-11-10 by the lead's read-only sync run on his JP game: all
+    # sixteen address.* gates (data/version_sync/jp.json). Its scene packages read them (P15). Derived as US's were: STROOP MappingJP.map's
+    # section layout (.data main.o 0x...C620 .. moving_texture.o end; .bss game_init.o .. object_list_processor.o
+    # end; engine .bss geo_layout.o .. surface_load.o end); the pool bounds sPoolStart/sPoolEnd hold in the
+    # cold-booted JP game (the same as US); gSaveBuffer up to the next symbol (gGfxSPTaskStack), 0x200 bytes as on
+    # US. Read off the JP save routine (0x80403930): its body copy starts at gMarioStates for 0x26320 bytes, so the
+    # tail past the .bss span ends at 0x80360120; it loads the power meter HUD words 0x803314E0-EC (US
+    # 0x803325F0-FC) and random_u16 reads gRandomSeed16 at 0x8038EEE0, which the JP map does not name.
+    scene_data_start=0x8032C620,
+    scene_data_end=0x80330390,
+    scene_bss_start=0x80339C20,
+    scene_bss_end=0x8035FF00,
+    scene_engine_bss_start=0x8038BCA0,
+    scene_engine_bss_end=0x8038EEE0,
+    main_pool_start=0x8005C010,
+    main_pool_end=0x801C0FF0,
+    save_buffer_start=0x80207B00,
+    save_buffer_end=0x80207D00,
+    slot_tail_start=0x8035FF00,
+    slot_tail_end=0x80360120,
+    power_meter_hud_start=0x803314E0,
+    power_meter_hud_end=0x803314F0,
+    random_seed_start=0x8038EEE0,
+    random_seed_end=0x8038EEE4,
 )
 
 VERSIONS = ("us", "jp")

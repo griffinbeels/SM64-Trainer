@@ -31,6 +31,9 @@ REPOSITORY = "griffinbeels/SM64-Trainer"
 WITHDRAWN_MARKER = "<!-- sm64-withdrawn -->"
 ASSET_NAMES = tuple(name for base in (ZIP_ASSET, MANIFEST_ASSET, BOOTSTRAP_ASSET)
                     for name in (base, base + ".sha256"))
+# The third-party source archives a release attaches beside the six
+# (tools/corresponding_source.py). The site links none of them; it accepts them.
+SOURCE_ASSET = re.compile(r"SM64Trainer-third-party-source-[a-z0-9-]+\.tar(\.sha256)?")
 PUBLIC_FILES = ("index.html", "styles.css", "release.js", "_headers")
 OPTIONAL_FILES = ("robots.txt", "sitemap.xml")
 ASSET_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg", ".ico",
@@ -96,6 +99,10 @@ def validate_release(release: dict, policy: dict) -> dict:
             or release.get("html_url") != release_url):
         raise ReleaseNotReady("Release identity or URL is invalid.")
     assets = release.get("assets")
+    if isinstance(assets, list):
+        assets = [asset for asset in assets
+                  if not (isinstance(asset, dict) and isinstance(asset.get("name"), str)
+                          and SOURCE_ASSET.fullmatch(asset["name"]))]
     if not isinstance(assets, list) or len(assets) != len(ASSET_NAMES):
         raise ReleaseNotReady("The release needs exactly six public assets.")
     validated = {}

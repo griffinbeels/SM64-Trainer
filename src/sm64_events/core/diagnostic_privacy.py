@@ -12,6 +12,7 @@ import re
 
 from sm64_events.core.error_reporting_privacy import scrub_text
 from sm64_events.core.native_diagnostics import EVENT_NAMES, technical_fields
+from sm64_events.multiplayer.diagnostics import safe_multiplayer
 
 MAX_SNAPSHOT_BYTES = 24 * 1024
 _CAPTURE_STAGES = ("channel", "encoder", "sink_prepare", "first_offer", "media_setup", "tick", "between_ticks",
@@ -163,7 +164,9 @@ def _native(value):
 
 
 SETUP_CHECK_IDS = ("graphics_plugin", "frame_buffer_emulation", "memory_size", "counter_factor", "cpu_core",
-                   "emulator_build", "rsp_plugin", "audio_plugin", "install_location", "controller_plugin")
+                   "emulator_build", "rsp_plugin", "audio_plugin", "install_location", "controller_plugin", "lab_rom")
+#: Rows a report carries as found or not found only: their text names the player's files (the Ghost Lab's ROM).
+SETUP_CHECK_STATUS_ONLY = frozenset({"lab_rom"})
 
 
 def _setup_folder(value):
@@ -202,6 +205,9 @@ def _setup_check(value):
                 or row.get("importance") not in ("required", "recommended", "noted")):
             continue
         clean = {key: row[key] for key in ("id", "status", "importance")}
+        if row["id"] in SETUP_CHECK_STATUS_ONLY:
+            items.append(clean)
+            continue
         if type(row.get("shared")) is bool:
             clean["shared"] = row["shared"]
         clean.update(pick(row, ("yours", "tested")))
@@ -220,7 +226,7 @@ def safe_snapshot(value) -> dict:
     result = {"schema": 1, **pick(value, ("captured_utc", "error_type", "truncated"))}
     sources = value.get("sources", {})
     result["sources"] = {key: pick(sources.get(key), ("available", "error_type", "read_utc", "observed_unix_s"))
-                         for key in ("capture", "ghost", "setup", "pipeline", "resources", "native")
+                         for key in ("capture", "ghost", "setup", "pipeline", "resources", "native", "multiplayer")
                          if isinstance(sources, Mapping) and key in sources}
     capture = mapping(value.get("capture"))
     recorder = mapping(capture.get("recorder"))
@@ -246,10 +252,9 @@ def safe_snapshot(value) -> dict:
         *GHOST_HOOK_FIELDS, *GHOST_DRAW_FIELDS, "observed_unix_s"))
     setup = mapping(value.get("setup"))
     result["setup"] = pick(setup, ("state", "pj64_running", "wrapper_present", "wrapper_current", "wrapper_selected",
-        "renderer_present", "renderer_current", "installation_verified", "layer_alive", "pictures_flowing", "observed_unix_s"))
-    for key in ("configuration_consistent", "frame_buffer_emulation_off"):
-        if type(setup.get(key)) is bool:
-            result["setup"][key] = setup[key]
+        "installation_verified", "layer_alive", "pictures_flowing", "observed_unix_s"))
+    if type(setup.get("frame_buffer_emulation_off")) is bool:
+        result["setup"]["frame_buffer_emulation_off"] = setup["frame_buffer_emulation_off"]
     result["setup"]["check"] = _setup_check(setup.get("check"))
     runtime = mapping(setup.get("runtime"))
     result["setup"]["runtime"] = {"checks": pick(runtime.get("checks"), ("plugin", "pictures", "inputs", "game")),
@@ -265,6 +270,7 @@ def safe_snapshot(value) -> dict:
     resources = mapping(value.get("resources"))
     result["resources"] = pick(resources, ("t_utc", "uptime_s", "rss_mib", "private_mib", "handles", "gdi", "user", "threads", "os_threads"))
     result["native"] = _native(value.get("native"))
+    result['multiplayer'] = safe_multiplayer(value.get('multiplayer'))
     # Shed the least useful evidence first: found-log rows, then the oldest
     # native events one at a time (the latest 32 survive whenever they fit).
     def oversize():

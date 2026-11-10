@@ -21,6 +21,7 @@ import { EMU, N64 } from "../platform.js";
 import { CommunityAccountModal } from "./communityaccount.js";
 import { useCommunityAccount } from "../community.js";
 import { ReportingSettings } from "./reporting.js";
+import { GhostStorageSection } from "./ghoststorage.js";
 
 const html = htm.bind(h);
 
@@ -52,15 +53,16 @@ function shouldOfferSetup(setup) {
 }
 
 // ...and for a layer this build has outgrown that the trainer cannot update
-// by itself (a source checkout, or a wrapper someone else installed): the
+// by itself (a source checkout, or a plugin someone else installed): the
 // steps to update it are the onboarding. A packaged build updates the
-// installed pair on its own once Project64 is closed, and never reopens
+// installed plugin on its own once Project64 is closed, and never reopens
 // onboarding for that (his rule, 2026-09-16: "No additional onboarding
-// past the original onboarding"). Frame buffer emulation turned on in
-// GLideN64.ini is stale the same way: it hides ghosts (his rule, 2026-10-30).
+// past the original onboarding"). An older install's leftover files and
+// frame buffer emulation turned on in GLideN64.ini are stale the same way;
+// that setting hides ghosts (his rule, 2026-10-30).
 function needsManualUpdate(emu) {
   if (!emu.wrapper_present || emu.automatic_update) return false;
-  return emu.wrapper_current === false || emu.renderer_current === false
+  return emu.wrapper_current === false || (emu.leftovers?.length ?? 0) > 0
     || emu.frame_buffer_emulation_off === false;
 }
 
@@ -144,6 +146,12 @@ export function Header({ t, settingsOpen, closeSettings, setTab, onOpenPlayer })
   const [setupManual, setSetupManual] = useState(false);
   const [checkOpen, setCheckOpen] = useState(false);
   const [setupWarning, setSetupWarning] = useState(null);
+  // Not Wermi's build v7 or no PJ64 Fixups, and the warning not yet accepted.
+  const [untested, setUntested] = useState(false);
+  const readUntested = (setup) => {
+    const taken = setup.onboarding?.baseline_risk?.items || [];
+    setUntested(setup.platform !== N64 && (setup.emu?.setup_check?.gate_differs || []).some(id => !taken.includes(id)));
+  };
   const [overlayOpen, setOverlayOpen] = useState(false);
   const community = useCommunityAccount();
   const updateFirst = t.updateVisible;
@@ -159,6 +167,7 @@ export function Header({ t, settingsOpen, closeSettings, setTab, onOpenPlayer })
     send("GET", "/api/setup").then((setup) => {
       setSetupWarning(setup.emu?.rom?.warning || (setup.onboarding?.limited
         && setup.onboarding.platform === EMU ? "JP tracking isn't supported yet; support is planned for a later patch." : null));
+      readUntested(setup);
       if (!seenSetupPrompt() && shouldOfferSetup(setup)) setSetupOffer(true);
     }).catch(() => {});
   }, []);
@@ -170,6 +179,7 @@ export function Header({ t, settingsOpen, closeSettings, setTab, onOpenPlayer })
   const closeSetup = () => {
     setSetupOpen(false);
     rememberSetupPrompt();
+    send("GET", "/api/setup").then(readUntested).catch(() => {});
   };
   const completeSetup = (setup) => {
     setSetupWarning(setup.platform === EMU && setup.emu?.verification?.limited ? setup.emu.rom.warning : null);
@@ -337,6 +347,9 @@ export function Header({ t, settingsOpen, closeSettings, setTab, onOpenPlayer })
     </div>
 
     ${setupWarning && html`<p class="setup-capability-note" role="status">${setupWarning}</p>`}
+    ${untested && !setupOpen && html`<p class="setup-capability-note setup-untested-note" role="status" data-testid="setup-untested">
+      <${Icon} name="warning" size=${16}/>${" "}Your Project64 is not the setup the trainer is tested with. Ghosts and replays may not work.${" "}
+      <button type="button" onclick=${() => { closeSettings(); setSetupManual(true); setSetupOpen(true); }}>Fix my setup</button></p>`}
     ${settingsOpen && html`<div class="settings-backdrop" onclick=${closeSettings}>
       <aside class="settings-drawer" role="dialog" aria-modal="true"
           aria-label="Settings"
@@ -442,6 +455,8 @@ export function Header({ t, settingsOpen, closeSettings, setTab, onOpenPlayer })
             }}><${Icon} name="shield" />${community.account.authenticated ? 'Account' : 'Sign in'}</button>
           </div>
         </section>
+
+        <${GhostStorageSection} feed=${t.feed} />
 
         <section class="settings-section">
           <h3>Display</h3>

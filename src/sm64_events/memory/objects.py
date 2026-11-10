@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Runs in the simulation program (SM64TrainerSim.exe); licenses/README.md lists its GPL-2.0-or-later code.
 # src/sm64_events/memory/objects.py
 """SM64 object-pool helpers (diagnostics and dynamic value location).
 

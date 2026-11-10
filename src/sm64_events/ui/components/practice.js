@@ -14,7 +14,7 @@ import { EntityAnalysis, EntityDrawer } from "./entitydetail.js";
 import { comparator, useGraphPick, SORT_OPTIONS, attemptHiddenByDefault,
          attemptMatchesLogFilters } from "./attemptlog.js";
 import { liveSnapshot, resolveFocus, newestJournalId } from "../focustarget.js";
-import { orderedSections, playedEntityKeys, PracticeLog } from "./practicelog.js";
+import { logSort, orderedSections, playedEntityKeys, PracticeLog } from "./practicelog.js";
 import { practiceSuccessSnapshot, usePracticeScroll } from "../practicescroll.js";
 
 const html = htm.bind(h);
@@ -54,14 +54,20 @@ function useFreshAttemptIds(t) {
   return freshIds;
 }
 
+// The practice log's remembered choices. "Hide resets and deaths" starts ON
+// (his ask, 2026-11-09: "By default "Hide resets & deaths" should be
+// enabled"); only a stored "0", his own choice to show them, keeps them shown.
+// "PBs only" starts off.
 export function usePracticeLogPreferences(initialSort) {
   const [sort, setSortState] = useState(initialSort);
   const [hideResets, setHideResetsState] = useState(
-    () => localStorage.getItem("sm64.hideResets") === "1");
+    () => localStorage.getItem("sm64.hideResets") !== "0");
   const [hideSavestates, setHideSavestatesState] = useState(
     () => localStorage.getItem("sm64.hideSavestates") !== "0");
+  const [onlyPbs, setOnlyPbsState] = useState(
+    () => localStorage.getItem("sm64.onlyPbs") === "1");
   return {
-    sort, hideResets, hideSavestates,
+    sort, hideResets, hideSavestates, onlyPbs,
     setSort: (v) => { localStorage.setItem("sm64.sort", v); setSortState(v); },
     setHideResets: (v) => {
       localStorage.setItem("sm64.hideResets", v ? "1" : "0");
@@ -70,6 +76,10 @@ export function usePracticeLogPreferences(initialSort) {
     setHideSavestates: (v) => {
       localStorage.setItem("sm64.hideSavestates", v ? "1" : "0");
       setHideSavestatesState(v);
+    },
+    setOnlyPbs: (v) => {
+      localStorage.setItem("sm64.onlyPbs", v ? "1" : "0");
+      setOnlyPbsState(v);
     },
   };
 }
@@ -372,7 +382,7 @@ export function Practice({ t, openCompare, openLibrary }) {
         .filter((a) => !attemptHiddenByDefault(a))
         .filter((a) => attemptMatchesLogFilters(a, ui))
         .slice()
-        .sort(comparator(ui.sort, sectionClock(focusedSec, t.clock)))
+        .sort(comparator(logSort(ui), sectionClock(focusedSec, t.clock)))
     : [];
   // `visible`/`setVisible` below are NOT the pagination that ends up on
   // screen -- that lives inside whichever `LogCard` is selected, which is a

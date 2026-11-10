@@ -14,12 +14,12 @@ export const RESUME_KEY = "sm64.setupResume.v1";
 // inside one stage never swaps the card (his report, 2026-10-17: "bouncing
 // visually between so many steps").
 export const STAGE_OF = {
-  close: "close", install: "install", emulator: "game", reopen: "game", rom: "game",
+  close: "close", install: "install", fixups: "install", emulator: "game", reopen: "game", rom: "game",
   verify: "check", ready: "check", unavailable: "unavailable", checking: "checking",
 };
 export const STAGE_ORDER = ["close", "install", "game", "check"];
 // Progress order of the steps; a step without a rank has no place in it.
-const STEP_RANK = {close: 0, install: 1, emulator: 2, reopen: 2, rom: 3, verify: 4, ready: 5};
+const STEP_RANK = {close: 0, install: 1, fixups: 1.5, emulator: 2, reopen: 2, rom: 3, verify: 4, ready: 5};
 // Shown for less than one poll or so, a stage resolved by itself: no acknowledgment.
 export const SEEN_MS = 1500;
 // An earlier step is shown only after it persists this long.
@@ -75,21 +75,46 @@ export function shownWake(state) {
   return state.ack ? state.ack.until : state.behind == null ? null : state.behind + HOLD_MS;
 }
 
-export function canAdvance(page, setup, step = setupStep(setup)) {
+// The gate (core/setup_profile.py gate_differs): Wermi's build v7 and the
+// PJ64 Fixups. A page with an open gate item never moves on by itself: the
+// user fixes it, or reads the warning and continues (accepted).
+export const BUILD = "emulator_build";
+export const FIXUPS = "rsp_plugin";
+const GATE_OF = {connect: [BUILD], install: [BUILD, FIXUPS]};
+
+export function gateOpen(page, setup, accepted = []) {
+  const differs = setup?.emu?.setup_check?.gate_differs || [];
+  return (GATE_OF[page] || []).filter(id => differs.includes(id) && !accepted.includes(id));
+}
+
+// What a page has proven, before the gate: the emulator found, the setup checked.
+export function pageDone(page, setup, step = setupStep(setup)) {
   if (page === "connect") return setup?.emu?.target?.state === "ready";
   if (page === "install") return step === "ready";
   return false;
+}
+
+// Where Continue is a warning: a finished page with an open gate item, and
+// the fixups step itself (the server holds there until installed or accepted).
+export function gateStop(page, setup, step, accepted = []) {
+  const open = gateOpen(page, setup, accepted);
+  if (page === "install" && step === "fixups") return open.filter(id => id === FIXUPS);
+  return pageDone(page, setup, step) ? open : [];
+}
+
+export function canAdvance(page, setup, step = setupStep(setup), accepted = []) {
+  return pageDone(page, setup, step) && gateOpen(page, setup, accepted).length === 0;
 }
 
 export function pagesFor(platform) {
   return platform === N64 ? ["platform", "console"] : EMU_PAGES;
 }
 
-export function canReviewForward(page, reached, setup, step) {
+export function canReviewForward(page, reached, setup, step, accepted = []) {
   const pages = pagesFor(reached.platform);
   const next = pages[pages.indexOf(page) + 1];
   if (!next || !reached.pages.includes(next)) return false;
-  return page === "platform" || canAdvance(page, setup, step);
+  return page === "platform" || canAdvance(page, setup, step, accepted);
 }
 
 export function readResume() {

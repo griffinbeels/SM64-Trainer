@@ -2,6 +2,7 @@
 working Install in the shipping wizard (his rule, 2026-10-30: "MAKE SURE THAT
 FRAME BUFFER EMULATION IS DISABLED"). Disposable files and fakes only."""
 from test_ui_setup_modal import (
+    no_setup_check,
     CURRENT, MISSING_ROM, body, click_text, get_driver, serve_ui, wait_page, wait_step,
 )
 
@@ -9,18 +10,17 @@ from test_ui_setup_modal import (
 def protected_settings_layer(tmp_path, monkeypatch):
     """A packaged install whose GLideN64.ini came back on and whose automatic
     refresh was refused (a protected Plugin folder): it never asks for UAC."""
-    from test_capturelayer import build, make_layer, renderer_for
+    from test_capturelayer import build, make_layer
     from test_capturelayer_refresh_recovery import TwoTicks
     from test_renderer_settings import LINK_ON, deny_settings_write
     from sm64_events.core import plugin_elevation
-    from sm64_events.core.capturelayer import WRAPPER_DLL
+    from sm64_events.core.capturelayer import PLUGIN_DLL
     from sm64_events.core.renderer_settings import RENDERER_INI
 
     folder = tmp_path / "PJ64"
     (folder / "Plugin").mkdir(parents=True)
-    bundled = tmp_path / WRAPPER_DLL
-    bundled.write_bytes(build(b"wrapper"))
-    renderer_for(bundled).write_bytes(build(b"renderer"))
+    bundled = tmp_path / PLUGIN_DLL
+    bundled.write_bytes(build(b"plugin"))
     with monkeypatch.context() as env:
         # The layer reads its VirtualStore root once; the browser still needs the real one.
         env.setenv("LOCALAPPDATA", str(tmp_path / "original-user"))
@@ -43,6 +43,7 @@ def test_a_protected_settings_file_opens_setup_on_a_working_install(tmp_path, mo
 
     layer, ini, real_write = protected_settings_layer(tmp_path, monkeypatch)
     monkeypatch.setattr(ui_fixture, "_FixtureCaptureLayer", lambda *a, **kw: layer)
+    no_setup_check(monkeypatch)
     observed = dict(target=dict(state="ready", pid=None), rom=dict(MISSING_ROM), checks={})
     with serve_ui(setup_observer=lambda _: observed) as url, get_driver().launch(viewport=(850, 600)) as page:
         page.goto(url + "/ui/index.html")

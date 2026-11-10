@@ -1,0 +1,2280 @@
+// src/sm64_events/ui/components/sceneviewer.js -- the Ghost Lab (the Scene viewer until round 9; M4 E3, lab only).
+//
+// His words (round 9, item 5): "It needs to be organized so that similar things are grouped aesthetically, so
+// that there's no AI slop overexplanations, and so that users understand by just seeing the patterns + symbols
+// + groupings"; his pick: "the Three Tabs approach ... maybe we dont have a tab for Save States, and instead
+// it's just a thin strip that shows the screenshot previews, under the video player? Ghosts tab selected by
+// default"; and "instead of "Scene viewer" it should be called "Ghost Lab"". The page, top to bottom: one bar
+// (the stage picker, the run you watch, the scene recording's sign, a menu of rarely used things, Close);
+// the picture; the play bar (sceneplaybar.js); the save-state strip (scenestrip.js: keys 1-9 save the frame
+// on screen into that slot); and a tray of fixed height with two tabs, Ghosts (sceneghosts.js: watch a run,
+// show others beside it) and Camera (every camera, the saved views on Shift+1-9, the path, Film). Nothing
+// on it moves when a control changes state (SteadyText; round 9, item 3).
+//
+// One recording in its reconstructed stage: the game's own pictures from the
+// recorded camera, and a free camera the server redraws by running the game's
+// drawing code (server/scene_lab_api.py, tools/scene_lab/scene_session.py).
+// app.js imports this module only after GET /api/scene-lab answers, so with
+// the lab switched off none of it loads. Browser and desktop share it whole.
+//
+// The page never redraws on its own: SceneLink keeps up to PICTURES_IN_FLIGHT
+// requests out over the socket (the server runs the game's code for the next
+// while it draws and encodes the one before), and a newer step, seek or camera
+// move replaces the one request waiting behind them (latest wins; the server
+// does the same). A picture stops being in flight when it arrives: the next
+// request goes out while it decodes and draws. Pictures draw as they finish
+// decoding, never over a newer one already on the canvas. In the desktop app's
+// window the pictures skip JPEG: the server hands over the exact pixels through
+// WebView2 shared memory (SHARED_WAIT has the details).
+//
+// While the free camera moves, the page sums up its own numbers every
+// MOVING_WINDOW.ms (input to picture, pictures a second, decode, the server's
+// stages): the readout shows them, and the UI observation log records them
+// (readSceneViewer), so a report carries the person's real numbers.
+//
+// The free camera (components/scenecamera.js owns its math) starts from the
+// picture on screen -- the recorded camera's place, screen tilt and field of
+// view -- and stays in the game's world coordinates while you step or seek.
+// W A S D and Q E fly whenever the page has the keyboard (Shift faster, Alt
+// slower; the first press in the recorded camera enters the free camera from
+// the picture on screen); holding the right button adds looking around with
+// the mouse, and the wheel then sets the speed. Left drag turns around the
+// focus point, Shift-drag or a middle-button drag slides, the wheel moves
+// closer. A double-click flies to the surface under the pointer and looks at
+// Mario. F looks at Mario, Set focus turns to a point on the stage, Reset view
+// goes back to where Free camera began, R returns to the recorded camera. A
+// press that moves under DRAG_DEAD_ZONE pixels is a click, never a drag; any
+// input stops a double-click's flight where it is. One keyboard owner (onKey):
+// arriving on the page gives it the keyboard, a mouse click on its controls
+// hands it back, and a field that types keeps its keys. Opening a scene
+// captures no pointer; Esc, leaving the window or the page, and Close each stop
+// every movement, let go of every key and give the pointer back.
+//
+// The recording's sound (sceneaudio.js) follows the picture clock: SceneLink
+// tells it when Play starts, each picture it draws, and every stop.
+//
+// In the bar, the stage picker (scenestage.js) chooses which recording is the
+// stage; the Ghosts tab (sceneghosts.js) watches another one or shows ghosts in it.
+// Each ghost in the scene gets a view button in the Camera tab (and Their view
+// on its row): the stage seen from that ghost's own recorded camera, which
+// the lab finds for every picture, so it follows the ghost through Play, steps
+// and seeks. Free camera from a ghost's view starts at that camera. The
+// Cinematic row (scenerigs.js) adds Front, Side, Orbit, Chase, Overhead and
+// Tripod, which the lab works out from the followed runner's path for every
+// picture; Free camera from one starts at the camera its picture names
+// (camera_used).
+//
+// The Tilt and lens row (scenelens.js) turns and zooms whichever camera is on
+// screen: a cinematic camera's own, else the free camera's (from the recorded
+// camera or a ghost's view it starts Free camera first, as W A S D do). Z and C
+// tilt while held, X levels, - and = change the lens while held, and Ctrl with
+// the wheel changes it too; Reset view puts the free camera's back as well.
+//
+// The Camera tab's Views row (scenepresets.js) keeps named cameras in slots 1-9 for the course and
+// area on screen: Shift with 1-9 or a click cut to one as a free camera (cutTo), and Play keeps
+// playing. Its Path row (scenepathbar.js, its math scenepath.js) keeps keys the camera moves
+// through; with Path on screen, Play keeps the path's own clock and every display frame asks the
+// picture from the path's camera then.
+//
+// The save-state strip under the play bar (scenestrip.js, its press scenemoment.js) puts the frame
+// on screen in a Usamune slot of the running game, one press or the key 1-9, numbered as Usamune's
+// menu numbers them.
+//
+// Play stops only when the person pauses (Pause, Space, a step, the slider):
+// moving the camera, by any of the ways above, keeps it playing. Restart goes
+// to the first frame and keeps playing or stays paused; Loop plays on from the
+// first frame after the last (a scene still being written loops once it is
+// whole).
+import { h } from "preact";
+import { useEffect, useRef, useState } from "preact/hooks";
+import htm from "htm";
+import { Icon } from "./icons.js";
+import { SteadyText } from "./steadytext.js";
+import { getJSON, send } from "../api.js";
+import { displayName } from "../entitysection.js";
+import { GhostFlag, GhostPanel, sceneGhost, viewName } from "./sceneghosts.js";
+import { StagePicker, attemptIn, entityTarget, stageDefault, targetKey, targetQuery, useStrategies } from "./scenestage.js";
+import { BuildProgress, buildOf, stopBuild, useBuildProgress } from "./scenebuild.js";
+import { PlayBar } from "./sceneplaybar.js";
+import { SaveSlots, SaveStrip } from "./scenestrip.js";
+import { usePop } from "./scenepop.js";
+import { ControlGroups } from "../tunecontrols.js";
+import { postObservation } from "../uilog.js";
+import { SCENE_CAMERA_DEFAULTS, SCENE_CAMERA_GROUPS, SCENE_CAMERA_TUNABLES, sceneCameraTuning,
+  setSceneCameraTuning } from "../scenecameratuning.js";
+import { cameraOf, dollied, flightSpeed, flown, flyToTarget, focusedOn, glideAt, lensed, lookingAt, looked,
+  orbitFromPose, slid, speedStepped, tiltAndLens, tilted, turned, wheelLens, worldPoint } from "./scenecamera.js";
+import { LensBar } from "./scenelens.js";
+import { SceneSound, syncWords } from "./sceneaudio.js";
+import { RecordBar } from "./scenerecord.js";
+import { CameraPresets, CameraSlots, placeKey, placeOf, presetCamera } from "./scenepresets.js";
+import { RecordingSwitch } from "./scenerecording.js";
+import { RomPick } from "./rompick.js";
+import { heardInto, pictureAt, recordedTimes } from "./sceneclock.js";
+import { CinematicBar, CinematicSettings, orbitFolded, orbitPhase, rigChanged, rigHint, rigName, rigRequest, seenOnScreen,
+  startRig } from "./scenerigs.js";
+import { CameraPaths, PathBar, pathCameraNow, pathPlayTick, pathStopped, playSound, playTiming, playedKeys } from "./scenepathbar.js";
+import { stepAction } from "./sceneactions.js";
+
+const html = htm.bind(h);
+const ROOT = "/api/scene-lab";
+
+if (!document.querySelector("link[data-scene-lab]")) {
+  const sheet = Object.assign(document.createElement("link"), { rel: "stylesheet", href: "/ui/scenelab.css" });
+  sheet.dataset.sceneLab = "";
+  document.head.append(sheet);
+}
+
+const clamp = (value, low, high) => Math.max(low, Math.min(high, value));
+const sameOrbit = (a, b) => !!a && !!b && a.yaw === b.yaw && a.pitch === b.pitch && a.dist === b.dist
+  && a.roll === b.roll && a.fov === b.fov && a.focus.every((value, i) => value === b.focus[i]);
+
+// The flight keys, by physical key so they sit under the left hand on any layout.
+export const FLIGHT_KEYS = { KeyW: ["forward", 1], KeyS: ["forward", -1], KeyD: ["right", 1], KeyA: ["right", -1],
+  KeyE: ["up", 1], KeyQ: ["up", -1] };
+// Tilt and lens while held, beside them: Z and C turn the picture counterclockwise and clockwise, - and
+// = widen and lengthen the lens. They act on a cinematic camera too, where the flight keys start Free camera.
+export const LENS_KEYS = { KeyZ: ["tilt", -1], KeyC: ["tilt", 1], Minus: ["zoom", -1], Equal: ["zoom", 1],
+  NumpadSubtract: ["zoom", -1], NumpadAdd: ["zoom", 1] };
+const HELD_KEYS = { ...FLIGHT_KEYS, ...LENS_KEYS };
+const idleFlight = () => ({ keys: new Set(), fast: false, slow: false, ticking: false, last: 0, input: null });
+function movementOf(keys) {
+  const move = { forward: 0, right: 0, up: 0, tilt: 0, zoom: 0 };
+  for (const code of keys) { const [axis, sign] = HELD_KEYS[code]; move[axis] += sign; }
+  return move;
+}
+const flies = (keys) => [...keys].some((code) => FLIGHT_KEYS[code]);
+const WHEEL_LINE = 40, WHEEL_PAGE = 800, WHEEL_NOTCH = 100;   // deltaMode 1 and 2 in pixels; Chromium's notch
+const GLIDE_LEAD_MS = 40;     // a double-click's flight is at most this far along when its first picture goes out
+const wheelPixels = (event) => event.deltaY * (event.deltaMode === 1 ? WHEEL_LINE : event.deltaMode === 2 ? WHEEL_PAGE : 1);
+// Requests out at once: the server draws one while it begins the next (server/scene_lab_api.py
+// PICTURES_IN_FLIGHT holds the same number).
+export const PICTURES_IN_FLIGHT = 2;
+const WANTS = { play: 0, input: 1, move: 2 };
+// How long a picture takes from asked to ready to draw, until the page has measured its own (the
+// median of its last READY_WINDOW): a play asks this much plus a display frame ahead.
+const READY_GUESS_MS = 40, READY_WINDOW = 15;
+// How long the page sums up its numbers while the camera moves before showing and recording them.
+export const MOVING_WINDOW = { ms: 2000 };
+
+function percentile(values, p) {
+  if (!values.length) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.min(sorted.length - 1, Math.round(p * (sorted.length - 1)))];
+}
+function median(values) {
+  if (!values.length) return null;
+  const sorted = [...values].sort((a, b) => a - b), mid = sorted.length >> 1;
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+const tenths = (value) => (value == null || !Number.isFinite(value) ? null : Math.round(value * 10) / 10);
+const spread = (values) => {
+  const present = values.filter((value) => value != null && Number.isFinite(value));
+  return present.length ? { p50: tenths(percentile(present, 0.5)), p95: tenths(percentile(present, 0.95)) } : null;
+};
+
+// One window of drawn pictures as the readout and the observation log show it: null without a
+// picture an input to the free camera asked for. A picture's `at` is when it was drawn. Pictures a
+// second count only while the camera moved: a gap longer than STILL_MS between two pictures is
+// the camera standing still, and neither its time nor its picture counts.
+export const STILL_MS = 150;
+export function movingSummary(samples, skipped = 0) {
+  const moved = samples.filter((sample) => sample.input_ms != null);
+  if (!moved.length) return null;
+  const gaps = samples.slice(1).map((sample, i) => sample.at - samples[i].at).filter((gap) => gap <= STILL_MS);
+  const seconds = gaps.reduce((sum, gap) => sum + gap, 0) / 1000, last = samples[samples.length - 1];
+  const stage = (name) => spread(samples.map((sample) => sample.timings?.[name]));
+  return { pictures: samples.length, seconds: Math.round(seconds * 100) / 100,
+    pictures_per_second: seconds > 0 ? tenths(gaps.length / seconds) : null,
+    input_to_drawn_ms: spread(moved.map((sample) => sample.input_ms)),
+    decode_ms: spread(samples.map((sample) => sample.decode_ms)),
+    trip_ms: spread(samples.map((sample) => sample.trip_ms)),
+    server_ms: spread(samples.map((sample) => sample.server_ms)),
+    evaluate_ms: stage("evaluate_ms"), host_ms: stage("host_ms"), encode_ms: stage("encode_ms"),
+    encoding: last.encoding, width: last.width, height: last.height, in_flight: PICTURES_IN_FLIGHT, skipped };
+}
+
+// Collects drawn pictures from the first one an input to the free camera asked for, and after
+// MOVING_WINDOW.ms hands their summary to `publish`. Pictures drawn while nothing moves are not
+// kept, so a still page publishes nothing.
+export class MovingTimings {
+  constructor(publish) { Object.assign(this, { publish, samples: [], skipped: 0, timer: null }); }
+
+  drawn(sample, moving) {
+    if (!this.timer && !moving) return;
+    this.samples.push(sample);
+    if (!this.timer) this.timer = setTimeout(() => this.close(), MOVING_WINDOW.ms);
+  }
+
+  skip() { if (this.timer) this.skipped += 1; }
+
+  close() {
+    const summary = movingSummary(this.samples, this.skipped);
+    this.stop();
+    if (summary) this.publish(summary);
+  }
+
+  stop() {
+    clearTimeout(this.timer);
+    Object.assign(this, { samples: [], skipped: 0, timer: null });
+  }
+}
+
+// The pointer lock's records (SceneLink.noteLock, about four a right-button hold) reach the UI
+// log at most LOCK_NOTES.records per LOCK_NOTES.ms: a page caught granting and exiting cannot
+// flood it, and the next record that goes says how many did not.
+export const LOCK_NOTES = { records: 40, ms: 10000 };
+export function throttledNotes(post, now = () => performance.now()) {
+  let sent = [], dropped = 0;
+  return (record) => {
+    const at = now();
+    sent = sent.filter((time) => at - time < LOCK_NOTES.ms);
+    if (sent.length >= LOCK_NOTES.records) { dropped += 1; return; }
+    sent.push(at);
+    post(dropped ? { ...record, dropped } : record);
+    dropped = 0;
+  };
+}
+const ms = (value) => (value == null ? "-" : `${Math.round(value)} ms`);
+const megabytes = (bytes) => `${(bytes / 1048576).toFixed(1)} MB`;
+// Three figures, whole numbers with one place: 0.64x, 1.0x, 1.25x, 15.3x.
+export function speedWords(multiplier) {
+  const shown = Number(multiplier.toPrecision(3));
+  return `${Number.isInteger(shown) ? shown.toFixed(1) : shown}x`;
+}
+
+function drawRaw(context, header, bytes) {  // ReadScreen's BGR rows, bottom-up
+  const { width, height } = header, picture = context.createImageData(width, height);
+  const target = new Uint32Array(picture.data.buffer), row = width * 3;
+  for (let y = 0; y < height; y++) {
+    let s = (height - 1 - y) * row, d = y * width;
+    for (let x = 0; x < width; x++, s += 3) target[d++] = 0xff000000 | (bytes[s] << 16) | (bytes[s + 1] << 8) | bytes[s + 2];
+  }
+  context.putImageData(picture, 0, 0);
+}
+
+// Draws the picture once `ready()` lets it (a play's picture waits for the
+// display frame it is due; false: never) and unless `claim()` refuses (a newer
+// one is already drawn: decodes can finish out of order). Returns how long
+// decoding and drawing took, without the wait, or null when it did not draw.
+async function paint(canvas, header, bytes, claim = () => true, ready = null) {
+  const context = canvas?.getContext("2d");
+  if (!context) return null;
+  const started = performance.now();
+  const bitmap = header.encoding === "jpeg"
+    ? await createImageBitmap(new Blob([bytes], { type: "image/jpeg" })) : null;
+  const decoded = performance.now();
+  if ((ready && !(await ready())) || !claim()) { bitmap?.close(); return null; }
+  const drawing = performance.now();
+  if (canvas.width !== header.width || canvas.height !== header.height) {
+    canvas.width = header.width;
+    canvas.height = header.height;
+  }
+  if (!bitmap) drawRaw(context, header, bytes);
+  else {
+    context.drawImage(bitmap, 0, 0);
+    bitmap.close();
+  }
+  return decoded - started + performance.now() - drawing;
+}
+
+// Where a pointer sits on the picture, 0 to 1 across and down, or null off it:
+// the canvas letterboxes its picture (object-fit: contain).
+export function pictureFraction(canvas, clientX, clientY) {
+  const box = canvas.getBoundingClientRect(), fit = Math.min(box.width / canvas.width, box.height / canvas.height);
+  if (!(fit > 0)) return null;
+  const left = box.left + (box.width - canvas.width * fit) / 2, top = box.top + (box.height - canvas.height * fit) / 2;
+  const u = (clientX - left) / (canvas.width * fit), v = (clientY - top) / (canvas.height * fit);
+  return u >= 0 && u <= 1 && v >= 0 && v <= 1 ? { u, v } : null;
+}
+
+// The desktop window's WebView2 (null in a browser). There the server can hand
+// over the renderer's exact pixels through shared memory instead of a JPEG
+// (tools/scene_lab/webview_pictures.py): a "shared" picture's header comes over
+// the socket with no pixels, and the pixels as a sharedbufferreceived event
+// tagged with the request's id. Either can arrive first; a header whose pixels
+// never come is dropped after SHARED_WAIT.ms.
+const webview = () => globalThis.chrome?.webview ?? null;
+export const SHARED_WAIT = { ms: 2000 };
+
+// Loop stays as the person left it, across scenes and visits (this browser only).
+export const LOOP_PREFERENCE = "sm64.sceneLoop";
+function savedLoop() {
+  try { return localStorage.getItem(LOOP_PREFERENCE) === "on"; } catch { return false; }
+}
+
+// HUD likewise (his round 4, item 9: "I might want to see the video WITHOUT a hud"): on unless
+// he turned it off.
+export const HUD_PREFERENCE = "sm64.sceneHud";
+function savedHud() {
+  try { return localStorage.getItem(HUD_PREFERENCE) !== "off"; } catch { return true; }
+}
+
+// The heading for the open scene, never its file name: the server's title when it names the
+// scene's target, else the attempt the Practice log already shows (course, star, strategy and
+// time), else the server's plain title ("Lab recording"), else "Recording".
+export function sceneTitle(scene, view) {
+  if (scene?.title && scene.target) return scene.title;
+  const found = scene?.attempt != null ? attemptIn(view, scene.attempt) : null;
+  if (!found) return scene?.title || "Recording";
+  const { section, attempt } = found, named = displayName(section, view?.catalog?.courses || []);
+  const time = attempt.segment_id != null ? attempt.rta : attempt.igt ?? attempt.rta;
+  return [named.context, named.name, attempt.strat_tag, time].filter(Boolean).join(" · ");
+}
+
+// What the page last showed for a scene -- the stage picker's target, the scene's ghosts, and every
+// page of ghosts the lab answered (sceneghosts.js asks each page once in a scene's life) -- so a
+// page that leaves and comes back to the same scene shows them again, asking nothing (the page's own
+// state goes with it). A scene that ends forgets them: the lab's ghost refs last one server.
+const unkept = (key = null) => ({ scene: key, target: null, ghosts: [], pages: new Map() });
+let kept = unkept();
+const sceneKey = (scene) => (scene ? `${scene.session}|${scene.attempt ?? scene.name}` : null);
+function keep(scene, fields) {
+  if (kept.scene !== sceneKey(scene)) kept = unkept(sceneKey(scene));
+  Object.assign(kept, fields);
+}
+const keptFor = (scene) => (kept.scene === sceneKey(scene) ? kept : unkept());
+
+// The open scene's requests and camera: up to PICTURES_IN_FLIGHT pictures in
+// flight, the newest input waiting behind them, input time kept from the
+// EARLIEST input so input-to-picture stays honest (until that picture is
+// drawn). `changed` re-renders the page.
+export class SceneLink {
+  constructor({ draw, changed, ended, animate = (step) => requestAnimationFrame(step), observe = () => {} }) {
+    Object.assign(this, { draw, changed, ended, animate, observe });
+    Object.assign(this, { lockSerial: 0, lockTarget: null, lockPromised: null, lockExit: null });
+    Object.assign(this, { scene: null, frame: 0, free: false, orbit: null, entry: null, encoding: "jpeg",
+      playing: false, shown: null, notice: null, error: null, drawing: false, ws: null, inFlight: new Map(),
+      wanted: null, sequence: 0, questions: new Map(), latencies: [], pending: [0, 0, false], drag: null,
+      entering: null, arrived: 0, drawnSeq: 0, looking: null, flight: idleFlight(), speed: 1, picking: false,
+      finding: false, glide: null, serial: 0, noticeTimer: null, moving: null, shared: new Map(), playback: null,
+      readies: [], coldId: 0, autoplay: false, loop: savedLoop(), hud: savedHud(), ghosts: [], refusedGhosts: new Map(),
+      view: null, rig: null, lastRig: null, follow: "stage", rigPath: null, orbitSince: null,
+      asked: null, ghostPages: new Map(), ghostNote: null, ghostSerial: 0, waiting: [],
+      sound: new SceneSound({ changed: () => this.changed(), observe: (note) => this.observe(note) }),
+      presets: new CameraPresets({ changed: () => this.changed() }),
+      paths: new CameraPaths({ changed: () => this.changed() }), pathOn: false, pathHeld: null,
+      slots: new SaveSlots({ changed: () => this.changed() }) });
+    this.timings = new MovingTimings((summary) => { this.moving = summary; this.changed(); });
+    this.onShared = (event) => this.sharedArrived(event);
+  }
+
+  get freeAvailable() { return !!this.scene?.free_camera?.available; }
+
+  get sharedAvailable() { return !!this.scene?.shared_pictures && !!webview(); }
+
+  get moved() { return this.free && !sameOrbit(this.orbit, this.entry); }
+
+  // Which course and area's camera presets apply: the place of the frame on screen ("9:1"), or null.
+  get presetKey() { return this.scene ? placeKey(placeOf(this.scene.frames, this.frame)) : null; }
+
+  // `play`: Play starts from the first frame once its picture is drawn (the
+  // Practice log's Ghost button), unless the person steps or plays first.
+  connect(scene, { play = false } = {}) {
+    this.disconnect();
+    this.autoplay = play;
+    const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${ROOT}/ws`);
+    ws.binaryType = "arraybuffer";
+    ws.onmessage = (event) => (typeof event.data === "string"
+      ? this.onText(JSON.parse(event.data)) : this.onPicture(event.data));
+    ws.onopen = () => {
+      this.want("input");
+      // The same scene again: its ghosts again; and a ghost added before the socket opened (a
+      // Library row's Ghost button), after them.
+      const list = [...this.ghosts, ...this.waiting.filter((ghost) => !this.ghosts.some((had) => had.ref === ghost.ref))];
+      this.waiting = [];
+      if (list.length) this.setGhosts(list);
+    };
+    ws.onclose = () => { if (this.ws === ws) this.end("The connection to the Ghost Lab closed."); };
+    // A scene's first picture carries the session's cold start (a seek from nothing), so it never
+    // counts towards how far ahead a play asks: a Play started on it would skip the opening frames.
+    // A new scene starts with no ghosts.
+    Object.assign(this, { ws, scene, frame: 0, free: false, orbit: null, entry: null, inFlight: new Map(),
+      wanted: null, notice: null, error: null, speed: 1, moving: null, readies: [], coldId: this.sequence + 1,
+      ghosts: keptFor(scene).ghosts, asked: null, refusedGhosts: new Map(), ghostNote: null, view: null, rig: null,
+      follow: "stage", orbitSince: null, waiting: [], pathOn: false, pathHeld: null });
+    keep(scene, {});
+    this.ghostPages = kept.pages;
+    this.presets.forget();
+    this.paths.forget();
+    this.slots.forget();
+    if (this.sharedAvailable) {
+      webview().addEventListener("sharedbufferreceived", this.onShared);
+      this.encoding = "shared";
+    } else if (this.encoding === "shared") this.encoding = "jpeg";
+    this.sound.load(scene);
+    this.changed();
+  }
+
+  disconnect() {
+    this.interrupt();
+    this.autoplay = false;
+    this.stopPlay();
+    this.playing = false;
+    this.sound.stop();
+    this.timings.stop();
+    webview()?.removeEventListener("sharedbufferreceived", this.onShared);
+    for (const [id, waiting] of this.shared) {
+      this.shared.delete(id);
+      if (waiting.buffer) webview()?.releaseBuffer(waiting.buffer);
+      else { clearTimeout(waiting.timer); waiting.resolve(null); }
+    }
+    this.stopLook("scene closed");
+    Object.assign(this, { picking: false, drag: null });
+    this.releaseKeys();
+    if (this.ws) { this.ws.onclose = null; this.ws.close(); this.ws = null; }
+  }
+
+  // A shared picture's pixels: handed to its waiting header, else kept until the header comes.
+  sharedArrived(event) {
+    const { id, session } = event.additionalData || {}, buffer = event.getBuffer();
+    const waiting = this.shared.get(id);
+    if (session !== this.scene?.session || waiting?.buffer) return webview()?.releaseBuffer(buffer);
+    if (!waiting) return this.shared.set(id, { buffer });
+    this.shared.delete(id);
+    clearTimeout(waiting.timer);
+    waiting.resolve(buffer);
+  }
+
+  // A picture's pixels: after its header in the socket message, or (encoding "shared") the shared
+  // buffer posted for it; null when that never came.
+  async pixelsOf(header, buffer, offset) {
+    if (header.encoding !== "shared") return { pixels: new Uint8Array(buffer, offset) };
+    const shared = await this.sharedPixels(header.id);
+    return shared && { pixels: new Uint8Array(shared), shared };
+  }
+
+  // The pixels for header `id`: at once if they came first, else when they come (null: they did not).
+  sharedPixels(id) {
+    const stored = this.shared.get(id);
+    if (stored?.buffer) {
+      this.shared.delete(id);
+      return Promise.resolve(stored.buffer);
+    }
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => { this.shared.delete(id); resolve(null); }, SHARED_WAIT.ms);
+      this.shared.set(id, { resolve, timer });
+    });
+  }
+
+  end(message) {
+    this.disconnect();
+    this.sound.load(null);
+    kept = unkept();
+    Object.assign(this, { scene: null, free: false, notice: null, error: message, inFlight: new Map(), wanted: null,
+      orbitSince: null });
+    this.changed();
+    this.ended();
+  }
+
+  // kind: "play" (the playback clock), "input" (the person: a step, a seek, a camera switch) or
+  // "move" (the person moved the free camera); a waiting request takes the strongest that asked.
+  // `frame` is the play's: the picture it asks for ahead of the one on screen.
+  want(kind = "input", inputTime = performance.now(), frame = null) {
+    if (!this.wanted) this.wanted = { kind, inputTime, frame };
+    else {
+      if (WANTS[kind] > WANTS[this.wanted.kind]) this.wanted.kind = kind;
+      if (frame != null) this.wanted.frame = frame;
+    }
+    queueMicrotask(() => this.pump());
+  }
+
+  // During a play every request is for the play's frame and is due when the
+  // recording showed it; otherwise for the frame on screen.
+  pump() {
+    const ready = this.ws && this.ws.readyState === WebSocket.OPEN && this.scene;
+    if (this.inFlight.size >= PICTURES_IN_FLIGHT || !this.wanted || !ready) return;
+    const play = this.playback, frame = this.wanted.frame ?? (play ? play.asked : this.frame);
+    const id = ++this.sequence, camera = this.cameraNow(frame, performance.now() + (play ? this.readyMs() : 0));
+    this.inFlight.set(id, { ...this.wanted, id, frame, camera, free: !!camera, sent: performance.now(), play,
+      due: play ? play.dueOf(frame) : null });
+    if (play && this.wanted.kind !== "play") play.moved = true;
+    this.wanted = null;
+    this.ws.send(JSON.stringify({ id, session: this.scene.session, frame, camera, encoding: this.encoding,
+      ...(this.hud ? {} : { hud: false }), ...(this.mario === false ? { mario: false } : {}) }));
+    this.drawing = true;
+    this.changed();
+  }
+
+  // The camera a picture asked for now is drawn from (interface D): the free camera's pose, a cinematic
+  // camera, a ghost's view, or null for the recorded camera. A recording (scenerecord.js) reads it every
+  // display frame. An orbit circling a paused scene carries its clock at `now` (interface H's clock_ms).
+  cameraNow(frame = this.frame, now = performance.now()) {
+    if (this.free && this.orbit) return cameraOf(this.orbit);
+    if (this.pathOn) return pathCameraNow(this, frame, now);
+    if (this.rig) return rigRequest(this.rig, sceneCameraTuning(), this.orbitSince == null ? null : this.orbitMs(frame, now));
+    return this.view ? { ghost: this.view } : null;
+  }
+
+  // When a picture asked for now is ready to draw: the median of recent ones, ask to decoded.
+  readyMs() { return median(this.readies) ?? READY_GUESS_MS; }
+
+  // A play's picture waits until the display frame it is due has begun, so it shows on that frame:
+  // true then (at once when that frame has already begun), false when its play stopped first.
+  holdUntil(due, play) {
+    if (this.playback !== play) return false;
+    if (play.frameAt != null && due <= play.frameAt + play.frameMs) return true;
+    return new Promise((resolve) => { play.holds.push({ due, resolve }); });
+  }
+
+  // What paint awaits once a picture has decoded: how long that took feeds how far ahead a play
+  // asks; a play's picture then waits for its display frame, and one from a stopped play is not shown.
+  readyFor(request) {
+    return () => {
+      if (request && request.id !== this.coldId) {
+        this.readies = [...this.readies.slice(-(READY_WINDOW - 1)), performance.now() - request.sent];
+      }
+      return request?.play ? this.holdUntil(request.due, request.play) : true;
+    };
+  }
+
+  // A camera moved during the play asked for the play's next frame, which a stopped play never
+  // shows: the camera is asked for again at the frame on screen.
+  stopPlay() {
+    const play = this.playback;
+    if (!play) return;
+    pathStopped(this, play);
+    this.pausedOn = heardInto(play, this.frame, performance.now(), this.scene?.session);
+    Object.assign(this, { playback: null, playing: false });
+    this.holdOrbit();
+    for (const hold of play.holds.splice(0)) hold.resolve(false);
+    if (this.wanted?.frame != null) {
+      if (this.wanted.kind === "play") this.wanted = null;
+      else this.wanted.frame = null;
+    }
+    if (play.moved) this.want("input");
+    this.sound.stop();
+  }
+
+  async onPicture(buffer) {
+    const received = performance.now(), arrived = ++this.arrived;
+    const length = new DataView(buffer).getUint32(0, true);
+    const header = JSON.parse(new TextDecoder().decode(new Uint8Array(buffer, 4, length)));
+    const request = this.inFlight.get(header.id) || null;
+    if (request) {
+      this.inFlight.delete(header.id);
+      this.pump();                    // the next goes out while this one decodes
+    }
+    // Drawn unless a newer picture is on the canvas already: decodes can finish out of order.
+    const claim = () => {
+      if (arrived <= this.drawnSeq) return false;
+      this.drawnSeq = arrived;
+      return true;
+    };
+    const got = await this.pixelsOf(header, buffer, 4 + length);
+    const decodeMs = got ? await this.draw(header, got.pixels, claim, this.readyFor(request)) : null;
+    if (got?.shared) webview()?.releaseBuffer(got.shared);
+    this.drawing = this.inFlight.size > 0;
+    if (decodeMs == null || arrived !== this.drawnSeq) {
+      this.timings.skip();
+      this.changed();
+      return;
+    }
+    this.pictureDrawn(header, request, received, decodeMs);
+  }
+
+  // A picture is on the canvas: the frame on screen during a play, the sound, the page's numbers.
+  pictureDrawn(header, request, received, decodeMs) {
+    const drawnAt = performance.now();
+    if (request?.play) {
+      this.frame = header.frame;
+      // A resumed play's first picture was on screen before its clock started: it says nothing about lateness.
+      if (!(request.play.resumeMs && header.frame === request.play.from)) this.sound.shown(header.frame);
+    }
+    if (request) {
+      header.sentCamera = request.camera;          // what it answers: a recording's camera_used (scenerecord.js)
+      header.trip_ms = received - request.sent;
+      header.input_ms = drawnAt - request.inputTime;
+      if (request.kind !== "play") this.latencies = [...this.latencies.slice(-99), header.input_ms];
+    }
+    const moving = request?.kind === "move";
+    this.timings.drawn({ at: drawnAt, input_ms: moving ? header.input_ms : null, decode_ms: decodeMs,
+      trip_ms: header.trip_ms, server_ms: header.server_ms, timings: header.timings, encoding: header.encoding,
+      width: header.width, height: header.height }, moving);
+    // hud_reason: why a picture asked for without the HUD still has it (the server's sentence).
+    Object.assign(this, { shown: header, notice: header.reason || header.hud_reason || null });
+    this.holdOrbit();
+    this.changed();
+    this.pump();
+    if (this.autoplay) this.play();
+  }
+
+  onText(message) {
+    if (message.kind === "grown") return this.grown(message);
+    const resolve = this.questions.get(message.id);
+    this.questions.delete(message.id);
+    if (resolve) resolve(message.kind ? message : { pose: null, point: null, reason: message.error });
+    if (message.closed) return this.end(message.error);
+    if (resolve) return;
+    this.inFlight.delete(message.id);
+    if (message.error) this.error = message.error;
+    this.drawing = this.inFlight.size > 0;
+    this.changed();
+    this.pump();
+  }
+
+  // The open scene is still being written (an attempt scene whose fade-out has not reached the
+  // recording yet, or a watched run still being built, whose newest "resim" table comes along): the
+  // server's frames replace this scene's from `from` on, the slider grows with them, and a Play
+  // waiting at the newest picture goes on. `growing` false: it is whole.
+  grown(message) {
+    const scene = this.scene;
+    if (!scene || message.session !== scene.session) return;
+    scene.frames.splice(message.from, Infinity, ...message.frames);
+    scene.growing = !!message.growing;
+    if (message.audio) scene.audio = message.audio;
+    if (message.resim) scene.resim = message.resim;       // a watched run still being built (scenebuild.js)
+    this.frame = clamp(this.frame, 0, Math.max(0, scene.frames.length - 1));
+    this.sound.grew(scene);
+    if (this.playback) this.playback.grew(scene);
+    this.changed();
+  }
+
+  // A pose or a pick: answered in order, before any picture.
+  ask(kind, fields) {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.scene) return Promise.resolve({ reason: null });
+    const id = ++this.sequence;
+    return new Promise((resolve) => {
+      this.questions.set(id, resolve);
+      this.ws.send(JSON.stringify({ id, session: this.scene.session, kind, ...fields }));
+    });
+  }
+
+  pose(frame) { return this.ask("pose", { frame }); }
+
+  // ---- the scene's ghosts (sceneghosts.js): the page sends the whole list each time, and the lab's
+  // answer says which it draws (every picture after it shows them) and why it refused the rest.
+  // `ghosts` is what the lab draws; `asked` the list on its way (a ghost new to the lab may take a
+  // download first), which the rows show as adding or removing until the answer comes. Only the
+  // newest list's answer is kept. The picture on screen is asked for again, so an added ghost
+  // appears without a step (the lab never sends a picture by itself).
+  get wantedGhosts() { return this.asked ?? this.ghosts; }
+
+  async setGhosts(list) {
+    const serial = ++this.ghostSerial;
+    Object.assign(this, { asked: list, ghostNote: null });
+    if (this.view && !list.some((ghost) => ghost.ref === this.view)) this.recorded();     // its ghost left
+    this.changed();
+    const answer = await this.ask("ghosts", { set: list.map(({ ref, label }) => ({ ref, label })) });
+    if (serial !== this.ghostSerial) return;
+    this.asked = null;
+    if (answer.kind !== "ghosts") {
+      this.ghostNote = answer.reason || "The scene did not take the ghosts. Try again.";
+      this.changed();
+      return;
+    }
+    const shown = new Set(answer.shown || []), refused = new Map(this.refusedGhosts);
+    for (const ghost of list) refused.delete(ghost.ref);
+    for (const { ref, reason } of answer.refused || []) refused.set(ref, reason);
+    Object.assign(this, { ghosts: list.filter((ghost) => shown.has(ghost.ref)), refusedGhosts: refused });
+    if (this.view && !shown.has(this.view)) this.view = null;
+    if (this.follow !== "stage" && !shown.has(this.follow)) this.followWith("stage");    // its ghost left: Mario
+    this.sound.setGhosts(this.ghosts.map((ghost) => ghost.ref));    // each plays its own sound effects
+    keep(this.scene, { ghosts: this.ghosts });
+    this.want("input");
+    this.changed();
+  }
+
+  // One more ghost (a Library row's Ghost button): added to the list now, or, while the scene's
+  // socket is still opening, the moment it opens.
+  addGhost(entry) {
+    if (this.wantedGhosts.some((ghost) => ghost.ref === entry.ref)) return;
+    if (this.ws?.readyState === WebSocket.OPEN) this.setGhosts([...this.wantedGhosts, entry]);
+    else this.waiting = [...this.waiting, entry];
+  }
+
+  // Why a ghost could not be added, on the ghost panel.
+  noteGhost(reason) {
+    this.ghostNote = reason || null;
+    this.changed();
+  }
+
+  say(notice) { this.notice = notice; this.changed(); }
+
+  // A notice that clears itself unless something replaced it.
+  sayBriefly(notice, ms = 2500) {
+    this.say(notice);
+    clearTimeout(this.noticeTimer);
+    this.noticeTimer = setTimeout(() => { if (this.notice === notice) this.say(null); }, ms);
+  }
+
+  // Any new input: a fly-to in progress (or still asking where to go) stops where it is.
+  interrupt() {
+    this.serial += 1;
+    this.glide = null;
+  }
+
+  fail(error) { this.error = error; this.changed(); }
+
+  // Enter the free camera from the camera on screen -- its place, tilt and
+  // field of view, so the picture does not move -- and remember it for Reset
+  // view; drags made while the recorded camera is read are applied once it
+  // arrives. Every caller waits for the same entry.
+  enterFree() {
+    if (this.free || !this.freeAvailable) return Promise.resolve();
+    if (!this.entering) this.entering = this.readEntry().finally(() => { this.entering = null; });
+    return this.entering;
+  }
+
+  async readEntry() {
+    const seen = this.viewOnScreen(), chosen = !!seen && (!!this.rig || this.pathOn);   // a tilt someone set
+    const answer = seen ? { pose: seen } : await this.pose(this.frame);
+    if (this.free) return;                  // a cut to a saved camera got there first
+    const pose = answer.pose, orbit = pose && orbitFromPose(pose.focus, pose.position, { roll: pose.roll ?? 0,
+      fov: pose.fov ?? null, levels: !chosen });
+    if (!orbit) return this.say(answer.reason || "The free camera is unavailable for this frame.");
+    const [dx, dy, sliding] = this.pending, tuning = sceneCameraTuning();
+    Object.assign(this, { pending: [0, 0, false], free: true, view: null, rig: null, pathOn: false, entry: orbit,
+      orbit: dx || dy ? (sliding ? slid : turned)(orbit, dx, dy, tuning) : orbit });
+    this.want(dx || dy ? "move" : "input");
+    this.flightOn(performance.now());       // a movement key held through the entry moves from here
+  }
+
+  // The camera of the ghost's view or the cinematic camera on screen (its picture's header names the
+  // camera it was drawn from), or null when neither is.
+  viewOnScreen() {
+    if (this.pathOn) return this.shown?.camera === "free" ? this.shown.camera_used ?? null : null;
+    if (this.rig) return this.shown?.rig ? this.shown.camera_used : null;
+    return this.view && this.shown?.view?.ghost === this.view ? this.shown.view.camera : null;
+  }
+
+  recorded(time) {
+    this.interrupt();
+    this.stopLook("recorded camera");
+    this.releaseKeys();
+    Object.assign(this, { free: false, view: null, rig: null, pathOn: false, notice: null, picking: false });
+    this.want("input", time);
+  }
+
+  // A cinematic camera (scenerigs.js): Front, Side or Orbit following the runner Follow names, the lab
+  // working out each picture's camera, with the settings the last one had (`lastRig`, kept through
+  // the other cameras). An orbit chosen now starts where the camera on screen stands.
+  async useRig(kind, time) {
+    if (!this.freeAvailable) return;
+    this.interrupt();
+    this.stopLook("a cinematic camera");
+    this.releaseKeys();
+    const serial = this.serial, next = startRig(kind, this.lastRig, sceneCameraTuning(), this.follow);
+    this.awaitRigPath();
+    if (kind === "orbit" && this.rig?.kind !== "orbit") next.phase = await this.orbitStart(next);
+    if (kind === "tripod") {
+      const stand = await this.tripodStart();
+      if (serial !== this.serial) return;
+      if (!stand.camera) return this.say(stand.reason || "The tripod has nowhere to stand in this picture.");
+      Object.assign(next, { position: stand.camera.position, roll: stand.camera.roll ?? 0, fov: stand.camera.fov ?? null });
+    }
+    if (serial !== this.serial) return;               // another input came first
+    Object.assign(this, { free: false, view: null, rig: next, lastRig: next, pathOn: false, notice: null, picking: false });
+    this.holdOrbit();
+    this.want("input", time);
+    this.changed();
+  }
+
+  // Where a tripod chosen now stands: the camera on screen, its place, tilt and lens, so the picture
+  // only turns to find the runner (the free camera's, the one the lab drew, else the recorded pose).
+  async tripodStart() {
+    if (this.free && this.orbit) return { camera: cameraOf(this.orbit) };
+    const seen = this.viewOnScreen();
+    if (seen) return { camera: seen };
+    const answer = await this.pose(this.frame);
+    return { camera: answer.pose, reason: answer.reason };
+  }
+
+  setRig(changes, time) {
+    if (!this.rig) return;
+    this.rig = this.lastRig = rigChanged(this.rig, changes, this.orbitMs() / 1000);
+    this.holdOrbit();
+    this.want("input", time);
+    this.changed();
+  }
+
+  followWith(target, time) {
+    this.follow = target;
+    if (this.rig) this.setRig({ target }, time);
+    else this.changed();
+  }
+
+  // An orbit's clock at `frame`, in ms: when that picture shows on the scene's own clock (sceneclock.js),
+  // as the lab counts an orbit, plus the time it has circled the scene paused (Orbit while paused).
+  orbitMs(frame = this.frame, now = performance.now()) {
+    const shows = recordedTimes(this.scene)[frame] ?? 0;
+    return this.orbitSince == null ? shows : shows + Math.max(0, now - this.orbitSince);
+  }
+
+  // Orbit while paused: with an orbit on that setting and the scene paused, the picture on screen is
+  // asked for again every display frame with the orbit's clock running from the pause (cameraNow), so
+  // the camera circles the held picture at its speed. Once that ends (Play, the setting off, another
+  // camera), the time it circled goes into the orbit's phase: Play turns on from the angle on screen.
+  // It circles only while the lab draws the orbit: a picture it could not (Mario's path not read yet,
+  // no Mario in this frame) waits for the next one that does, instead of asking 60 times a second.
+  get orbitHeld() {
+    const rig = this.rig, shown = this.shown;
+    return !!(this.scene && this.ws && !this.playing && rig?.kind === "orbit" && rig.whilePaused && rig.speed
+      && shown?.rig?.kind === "orbit" && shown.camera === "free");
+  }
+
+  holdOrbit(now = performance.now()) {
+    if (this.orbitHeld === (this.orbitSince != null)) return;
+    if (this.orbitSince != null) {
+      if (this.rig?.kind === "orbit") this.rig = this.lastRig = orbitFolded(this.rig, Math.max(0, now - this.orbitSince));
+      this.orbitSince = null;
+      return;
+    }
+    const since = this.orbitSince = now;
+    const tick = () => {
+      if (this.orbitSince !== since) return;
+      if (!this.orbitHeld) return this.holdOrbit();
+      this.want("move");
+      this.animate(tick);
+    };
+    this.animate(tick);
+  }
+
+  // The phase that puts a new orbit's camera where the camera on screen stands, seen from its runner:
+  // the cinematic picture on screen names both; else the recorded pose (the stage's Mario only).
+  async orbitStart(rig) {
+    const seen = seenOnScreen(this.shown, rig.target);
+    const pose = seen.from && seen.target ? null : (await this.pose(this.frame)).pose;
+    return orbitPhase(seen.from ?? pose?.position, seen.target ?? (rig.target === "stage" ? pose?.mario : null),
+      rig.speed, this.orbitMs() / 1000);
+  }
+
+  // Mario's path: the lab starts reading it in a process of its own as the scene opens, and a cinematic
+  // picture asked before it is read comes back from the recorded camera, saying so. The first cinematic
+  // camera of a scene asks when the path is ready, and the picture on screen is asked for again then.
+  async awaitRigPath() {
+    if (this.rigPath === this.scene) return;
+    const scene = this.rigPath = this.scene;
+    const answer = await this.ask("rig-path", {});
+    if (this.scene === scene && answer.ready && this.rig && !this.playing) this.want("input");
+  }
+
+  // A Tune controls change: a cinematic camera on screen is drawn again with it.
+  tuned() { if (this.rig) this.want("input"); }
+
+  // ---- Tilt and lens (scenelens.js): the cinematic camera's own, else the free camera's, which the
+  // recorded camera or a ghost's view starts from the picture on screen first.
+  async setTilt(degrees, time) {
+    if (this.rig) return this.setRig({ roll: tilted({}, degrees).roll }, time);
+    this.interrupt();
+    await this.enterFree();
+    if (!this.free) return;
+    this.orbit = tilted(this.orbit, degrees);
+    this.want("move", time);
+    this.changed();
+  }
+
+  async setLens(mm, time) {
+    if (this.rig) return this.setRig({ fov: lensed({}, mm).fov }, time);
+    this.interrupt();
+    await this.enterFree();
+    if (!this.free) return;
+    this.orbit = lensed(this.orbit, mm);
+    this.want("move", time);
+    this.changed();
+  }
+
+  // Ctrl with the wheel (a touchpad pinch): the lens of the camera on screen.
+  async zoomByWheel(wheel, time) {
+    if (this.rig) return this.setRig({ fov: wheelLens(this.rig.fov ?? sceneCameraTuning().rigFov, wheel,
+      sceneCameraTuning()) }, time);
+    this.interrupt();
+    await this.enterFree();
+    if (!this.free) return;
+    this.orbit = { ...this.orbit, fov: wheelLens(this.orbit.fov, wheel, sceneCameraTuning()) };
+    this.want("move", time);
+    this.changed();
+  }
+
+  // X: level the camera on screen (the recorded camera has nothing to level).
+  level(time) { if (this.rig || this.free) this.setTilt(0, time); }
+
+  // A ghost's view: the stage from that ghost's own recorded camera, following it as the scene
+  // plays, steps and seeks (the lab finds its camera for each picture). Free camera from here
+  // starts at that camera; R or Recorded camera goes back to the stage's own view.
+  theirView(ref, time) {
+    if (!this.freeAvailable || !this.ghosts.some((ghost) => ghost.ref === ref)) return;
+    this.interrupt();
+    this.stopLook("a ghost's view");
+    this.releaseKeys();
+    Object.assign(this, { free: false, view: ref, rig: null, pathOn: false, notice: null, picking: false });
+    this.want("input", time);
+    this.changed();
+  }
+
+  // ---- camera presets (scenepresets.js): an instant cut to a saved camera, as a free camera that
+  // Play keeps playing under; Reset view then comes back to it. A movement key held through the cut
+  // flies on from there.
+  cutTo(camera, time) {
+    const orbit = this.freeAvailable && orbitFromPose(camera.focus, camera.position, { roll: camera.roll ?? 0,
+      fov: camera.fov ?? null, levels: false });
+    if (!orbit) return;
+    this.interrupt();
+    Object.assign(this, { free: true, view: null, rig: null, pathOn: false, orbit, entry: orbit, pending: [0, 0, false], picking: false,
+      notice: null });
+    this.want("input", time);
+    this.flightOn(performance.now());
+    this.changed();
+  }
+
+  // Shift with 1-9 (and a click on a view): the saved camera in that slot for the place on screen.
+  recallSlot(number, time) {
+    if (!this.freeAvailable) return;
+    const saved = this.presets.slot(this.presetKey, number);
+    if (saved) this.cutTo(saved.camera, time);
+    else this.sayBriefly(`No camera saved in slot ${number} here yet.`);
+  }
+
+  // The camera of the picture on screen, as a preset keeps it: the free camera's own, else the one
+  // the lab says it drew (any camera it worked out, a ghost's view among them), else the recorded
+  // camera's from a pose question; null, and the reason said, when there is none.
+  async cameraOnScreen() {
+    if (this.free && this.orbit) return presetCamera(cameraOf(this.orbit));
+    const drawn = this.shown?.camera !== "recorded" && (this.shown?.camera_used || this.viewOnScreen());
+    if (drawn) return presetCamera(drawn);
+    const answer = await this.pose(this.frame);
+    if (answer.pose) return presetCamera(answer.pose);
+    this.say(answer.reason || "This picture has no camera to save.");
+    return null;
+  }
+
+  resetView(time) {
+    this.interrupt();
+    if (!this.free || !this.entry) return;
+    this.orbit = this.entry;
+    this.want("move", time);
+  }
+
+  async lookAtMario(time) {
+    this.interrupt();
+    if (!this.freeAvailable) return;
+    await this.enterFree();
+    const answer = this.free ? await this.pose(this.frame) : null;
+    if (!answer?.pose) return answer && this.say(answer.reason);
+    this.orbit = lookingAt(this.orbit, answer.pose.mario, sceneCameraTuning());
+    this.want("move", time);
+  }
+
+  // A drag: it never pauses Play (his report, 2026-10-27: "It should not pause the gameplay when I
+  // adjust the camera, unless I explicitly paused").
+  move(dx, dy, sliding, time) {
+    this.interrupt();
+    if (!this.free) {
+      this.pending = [this.pending[0] + dx, this.pending[1] + dy, sliding];
+      return this.enterFree();
+    }
+    this.orbit = (sliding ? slid : turned)(this.orbit, dx, dy, sceneCameraTuning());
+    this.want("move", time);
+  }
+
+  async dolly(wheel, time) {
+    this.interrupt();
+    await this.enterFree();
+    if (!this.free) return;
+    this.orbit = dollied(this.orbit, wheel, sceneCameraTuning());
+    this.want("move", time);
+  }
+
+  // ---- Set focus: the next click on the picture puts the focus point on what it shows
+  armPick(on = !this.picking) { this.picking = on && this.freeAvailable; this.changed(); }
+
+  async pickAt(u, v, time) {
+    if (this.finding) return;
+    this.interrupt();
+    this.finding = true;
+    this.changed();
+    try {
+      const hit = await this.pickWorld(u, v);
+      if (!hit) return;
+      if (!hit.world) return this.say(hit.reason || "Nothing is drawn there to focus on.");
+      this.picking = false;
+      this.orbit = focusedOn(this.orbit, hit.world);
+      this.notice = null;
+      this.want("move", time);
+    } finally {
+      this.finding = false;
+      this.changed();
+    }
+  }
+
+  // The one way the page turns a place in the picture into a point in the
+  // world (Set focus and fly-to both): the server finds where this frame's
+  // list drew it from the camera on screen, in that camera's axes, and the
+  // camera that asked places it. null when the free camera cannot start.
+  async pickWorld(u, v) {
+    await this.enterFree();
+    if (!this.free) return null;
+    const used = this.orbit;
+    const answer = await this.ask("pick", { frame: this.frame, camera: cameraOf(used), u, v });
+    return { world: answer.point ? worldPoint(used, answer.point) : null, mario: answer.mario || null,
+      reason: answer.reason };
+  }
+
+  // ---- double-click: fly to the surface under the pointer, then look at Mario.
+  // One round trip: the pick's answer carries Mario's place in the frame too.
+  async flyTo(u, v, time) {
+    this.interrupt();
+    const serial = this.serial;
+    const hit = await this.pickWorld(u, v);
+    if (!hit || serial !== this.serial) return;
+    if (!hit.world) return this.sayBriefly("Nothing there to fly to.");
+    const mario = hit.mario || (await this.pose(this.frame)).pose?.mario;
+    if (serial !== this.serial) return;
+    const tuning = sceneCameraTuning();
+    const end = mario && flyToTarget(this.orbit, hit.world, mario, tuning);
+    if (!end) return this.sayBriefly("Nothing there to fly to.");
+    this.notice = null;
+    this.glideTo(end, tuning, time);
+  }
+
+  // An eased flight from the camera now to `end` (scenecamera.glideAt), one
+  // picture asked for per animation frame; any input (interrupt) leaves it
+  // where it is. Its clock starts at the click, but never more than
+  // GLIDE_LEAD_MS back, so a slow answer cannot skip the gentle start, and its
+  // first step runs at once: the first picture that moves goes out the moment
+  // the destination is known.
+  glideTo(end, tuning, time = performance.now()) {
+    const now = performance.now(), from = this.orbit;
+    const glide = { started: clamp(time, now - GLIDE_LEAD_MS, now) };
+    this.glide = glide;
+    let input = time;
+    const step = (at) => {
+      if (this.glide !== glide) return;
+      const place = glideAt(from, end, at - glide.started, tuning);
+      this.orbit = place.orbit;
+      this.want("move", Math.min(input, at));
+      input = Infinity;
+      if (place.done) this.glide = null; else this.animate(step);
+      this.changed();
+    };
+    step(now);
+  }
+
+  // ---- flight: W A S D and Q E whenever the page has the keyboard
+  // A movement key (with Shift or Alt) went down or up: true when it is the
+  // camera's. The first press in the recorded camera enters the free camera
+  // from the picture on screen, and the key moves it once it is in. A key let
+  // go of by Esc, R or leaving the page stays still until pressed again: its
+  // held-down repeats never restart it. The tilt and lens keys (LENS_KEYS) turn
+  // and zoom a cinematic camera where it is; with one on, only a flight key
+  // starts Free camera.
+  moveKey(event) {
+    const flight = this.flight, code = event.code;
+    Object.assign(flight, { fast: event.shiftKey, slow: event.altKey });
+    if (!HELD_KEYS[code]) return false;
+    if (event.type !== "keydown") {
+      flight.keys.delete(code);
+      return true;
+    }
+    if (!this.scene || !this.freeAvailable) return false;
+    if (event.repeat) return true;
+    this.interrupt();
+    if (flight.input == null) flight.input = event.timeStamp;
+    flight.keys.add(code);
+    if (this.free || (this.rig && !flies(flight.keys))) this.flightOn(performance.now());
+    else this.enterFree();
+    return true;
+  }
+
+  releaseKeys() { this.flight = idleFlight(); }
+
+  // One step of flight per animation frame, at a constant speed for the time
+  // that passed (a stall moves at most a tenth of a second); stops the frame
+  // the last key is let go, or once releaseKeys has let go of this flight. The
+  // tilt and lens keys turn and zoom in the same step, the free camera's or a
+  // cinematic camera's (Shift and Alt pace them as they pace flight).
+  flightOn(time) {
+    const flight = this.flight;
+    if (flight.ticking || !(this.free || this.rig) || !flight.keys.size) return;
+    Object.assign(flight, { ticking: true, last: time });
+    const tick = (now) => {
+      if (this.flight !== flight) return;
+      if (!(this.free || this.rig) || !flight.keys.size) { flight.ticking = false; return; }
+      const seconds = clamp((now - flight.last) / 1000, 0, 0.1);
+      flight.last = now;
+      if (this.heldFor(movementOf(flight.keys), seconds, flight)) {
+        this.want("move", Math.min(flight.input ?? now, performance.now()));
+      }
+      flight.input = null;
+      this.animate(tick);
+    };
+    this.animate(tick);
+  }
+
+  // `seconds` of the held keys `move`: the free camera flies, tilts and zooms, a cinematic camera
+  // tilts and zooms. True when the camera changed.
+  heldFor(move, seconds, flight) {
+    const tuning = sceneCameraTuning(), turning = move.tilt || move.zoom;
+    const pace = (flight.fast ? tuning.fastMultiplier : 1) * (flight.slow ? tuning.slowMultiplier : 1);
+    if (this.free) {
+      const flownTo = flown(this.orbit, move, seconds, flightSpeed(this.speed, flight, tuning), tuning);
+      this.orbit = turning ? { ...flownTo, ...tiltAndLens(flownTo, move, seconds, pace, tuning),
+        levels: move.tilt ? false : flownTo.levels } : flownTo;
+      return true;
+    }
+    if (!turning) return false;
+    const rig = this.rig;
+    this.rig = this.lastRig = { ...rig, ...tiltAndLens({ roll: rig.roll ?? 0, fov: rig.fov ?? tuning.rigFov }, move,
+      seconds, pace, tuning) };
+    return true;
+  }
+
+  // ---- looking around: only while the right button is held on the picture
+  async startLook() {
+    if (!this.freeAvailable || this.looking) return;
+    this.interrupt();
+    const look = { locked: false, token: null };
+    Object.assign(this, { looking: look, picking: false });
+    this.changed();
+    await this.enterFree();
+    if (!this.free && this.looking === look) this.stopLook("no free camera");
+  }
+
+  // Every way a look ends: `why` goes into the pointer lock's records.
+  stopLook(why) {
+    const was = this.looking;
+    this.looking = null;
+    if (was) this.noteLock("ended", why);
+    this.exitLock(why);
+    if (was) this.changed();
+  }
+
+  // ---- the pointer lock a look asks for. Chromium on Windows keeps the cursor
+  // inside the page while a lock is held, so a lock no look is using walls the
+  // cursor in (his report, 2026-10-26: "as if there's an invisible wall
+  // blocking its movement"). Each request carries a token: a lock stays only
+  // while the look that asked for it is in progress, the page shows and the
+  // window has focus, and is exited the moment it lands otherwise (released
+  // before the grant, a stale request, a hidden page, another window in front).
+  // Every end of a look exits the lock it holds, and a request still pending
+  // then has no look to land on. noteLock records each step in the UI log:
+  // requested, granted, ended (the look, and why), exited (and why: what asked,
+  // or the browser), error.
+  requestLock(canvas) {
+    const token = ++this.lockSerial;
+    if (this.looking) this.looking.token = token;
+    this.lockTarget = canvas;
+    this.noteLock("requested", null, token);
+    let asked;
+    try { asked = canvas.requestPointerLock?.(); } catch { return this.noteLock("error", "request threw", token); }
+    if (typeof asked?.then !== "function") return;
+    this.lockPromised = token;
+    asked.then(() => this.lockGranted(token), () => {});   // a refusal arrives as pointerlockerror
+  }
+
+  // Why a lock may not stay, or null: the look that asked is in progress, the page shows, the window has focus.
+  unwelcome(token = this.looking?.token) {
+    if (!this.looking) return "no look";
+    if (token !== this.looking.token) return "stale request";
+    if (document.hidden) return "page hidden";
+    if (!document.hasFocus()) return "window unfocused";
+    return null;
+  }
+
+  holdsLock() { return !!this.lockTarget && document.pointerLockElement === this.lockTarget; }
+
+  // Request `token` granted (its promise): kept, or exited at once.
+  lockGranted(token) {
+    if (!this.holdsLock()) return;
+    const why = this.unwelcome(token);
+    if (why) this.exitLock(why);
+    else this.lockKept(token);
+  }
+
+  lockKept(token) {
+    if (this.looking.locked) return;
+    this.looking.locked = true;
+    this.noteLock("granted", null, token);
+  }
+
+  // pointerlockchange. A lock landing with no look to use it is exited; one whose request
+  // promised an answer is judged by that answer (lockGranted), which knows its token. True
+  // when the browser itself ended a lock a look was using (its own Esc): every movement ends.
+  lockChanged() {
+    if (this.holdsLock()) {
+      const why = this.unwelcome();
+      if (why) this.exitLock(why);
+      else if (this.lockPromised !== this.looking.token) this.lockKept(this.looking.token);
+      return false;
+    }
+    const asked = this.lockExit, used = !!this.looking?.locked;
+    if (asked == null && !used) return false;
+    this.lockExit = null;
+    if (this.looking) this.looking.locked = false;
+    this.noteLock("exited", asked ?? "the browser");
+    return asked == null;
+  }
+
+  // Exits the lock this page holds, if it holds one; the browser's pointerlockchange confirms it.
+  exitLock(why) {
+    if (this.looking) this.looking.locked = false;
+    if (!this.holdsLock()) return;
+    this.lockExit = why;
+    document.exitPointerLock?.();
+  }
+
+  noteLock(event, why = null, request = this.lockSerial) {
+    this.observe({ surface: "scene_viewer", kind: "pointer_lock", event, why, request, look: !!this.looking,
+      focused: document.hasFocus(), hidden: document.hidden });
+  }
+
+  look(dx, dy, time) {
+    if (!this.looking || !this.free || (!dx && !dy)) return;
+    this.orbit = looked(this.orbit, dx, dy, sceneCameraTuning());
+    this.want("move", time);
+  }
+
+  stepSpeed(notches) { this.speed = speedStepped(this.speed, notches, sceneCameraTuning()); this.changed(); }
+
+  resetSpeed() { this.speed = 1; this.changed(); }
+
+  // Esc, letting go of the window, leaving the page, Close: every movement stops and every key is let go.
+  release(why) {
+    this.interrupt();
+    Object.assign(this, { drag: null, picking: false });
+    this.stopLook(why);
+    this.releaseKeys();
+    this.changed();
+  }
+
+  seek(next, kind = "input", time) {
+    if (kind === "input") this.interrupt();
+    this.pausedOn = null;                // another picture: Play starts at its beginning
+    this.frame = clamp(next, 0, (this.scene?.frames.length || 1) - 1);
+    this.changed();
+    this.want(kind, time);
+  }
+
+  step(delta, time) { this.pause(); this.seek(this.frame + delta, "input", time); }
+
+  pause() {
+    this.autoplay = false;
+    if (this.playing) { this.stopPlay(); this.changed(); }
+  }
+
+  toggle() { this.interrupt(); if (this.playing) this.pause(); else this.play(); }
+
+  // To the first frame: a play goes on from there at once, a pause stays paused on it.
+  restart(time) {
+    if (!this.playing) return this.seek(0, "input", time);
+    this.interrupt();
+    this.playFromStart();
+  }
+
+  // Restart while playing, and Loop at the end: the play begins again on the first frame.
+  playFromStart() {
+    this.stopPlay();
+    this.pausedOn = null;
+    this.frame = 0;
+    this.play();
+  }
+
+  // The picture on screen is asked for again, with or without the HUD, and every picture after it.
+  setHud(on) {
+    this.hud = on;
+    try { localStorage.setItem(HUD_PREFERENCE, on ? "on" : "off"); } catch { /* kept for this visit only */ }
+    this.want("input");
+    this.changed();
+  }
+
+  // The Mario switch: off leaves the stage's Mario out of every picture the lab redraws (the ghosts
+  // stay), the one on screen at once. For this visit only.
+  setMario(on) {
+    this.mario = on;
+    this.want("input");
+    this.changed();
+  }
+
+  setLoop(on) {
+    this.loop = on;
+    try { localStorage.setItem(LOOP_PREFERENCE, on ? "on" : "off"); } catch { /* kept for this visit only */ }
+    this.changed();
+  }
+
+  // The recording's own clock (sceneclock.js): each picture stays up as long
+  // as the recording showed it. A play asks for each picture ahead, as long
+  // before it is due as a picture takes to be ready plus a display frame, and
+  // draws it on the display frame it is due, so it shows on time instead of
+  // being asked for once due (which showed every picture one to three display
+  // frames late, measured 2026-10-26). A newer request still replaces a
+  // waiting one, so frames a slow server cannot keep up with are skipped. The
+  // clock starts once the sound can start with it (sound.lead()), so the
+  // first picture of a play holds that much longer. The frame on screen
+  // (this.frame) is the last one drawn.
+  //
+  // A scene still being written plays on as it grows: at its newest picture the clock waits
+  // (heldAt) and goes on from there when more arrives (grew), never skipping ahead to catch up.
+  //
+  // Pause holds the clock where it is: Play on the same picture goes on from the moment it paused
+  // (resumeMs into that picture), so a held picture never plays its sound twice and the music
+  // carries on from where it stopped. A step, a seek or Restart starts the picture over.
+  play() {
+    const scene = this.scene;
+    this.autoplay = false;
+    if (!scene) return;
+    this.sound.arm();
+    const from = this.frame >= scene.frames.length - 1 && !scene.growing ? 0 : this.frame, timing = playTiming(this, scene);
+    const times = timing.times;
+    const held = this.pausedOn, resumeMs = held?.session === scene.session && held.frame === from ? held.ms : 0;
+    this.pausedOn = null;
+    const play = { from, start: performance.now() + this.sound.lead() - resumeMs, resumeMs, times,
+      length: timing.lengthFrom(from), asked: from, frameAt: null, frameMs: 1000 / 60, gaps: [], holds: [],
+      heldAt: null, path: timing.path,
+      dueOf: (frame) => play.start + play.times[frame] - play.times[from],
+      grew: (grown) => {
+        const grownTiming = playTiming(this, grown);
+        if (!play.path === !grownTiming.path) {
+          Object.assign(play, { times: grownTiming.times, path: grownTiming.path, length: grownTiming.lengthFrom(from) });
+        }
+        if (play.heldAt != null && play.times.length > play.asked + 1) {
+          play.start += performance.now() - play.heldAt;
+          play.heldAt = null;
+          if (this.playback === play) playSound(this, play);   // the sound follows the wait
+        }
+      } };
+    Object.assign(this, { playback: play, playing: true, frame: from });
+    this.holdOrbit();
+    const tick = (frameTime) => {
+      if (this.playback !== play) return;
+      if (play.frameAt != null) {
+        play.gaps = [...play.gaps.slice(-7), frameTime - play.frameAt];
+        play.frameMs = clamp(median(play.gaps), 4, 50);
+      }
+      play.frameAt = frameTime;
+      if (frameTime - play.start >= play.length) {
+        if (!scene.growing) return this.loop ? this.playFromStart() : this.finishPlay(scene);
+        play.heldAt ??= frameTime;
+      }
+      for (const hold of play.holds.splice(0)) {
+        if (hold.due <= frameTime + play.frameMs) hold.resolve(true);
+        else play.holds.push(hold);
+      }
+      const ahead = pictureAt(play.times, from, Math.max(0, frameTime - play.start + this.readyMs() + play.frameMs));
+      if (ahead !== play.asked) {
+        play.asked = ahead;
+        this.want("play", performance.now(), ahead);
+      }
+      pathPlayTick(this, play, frameTime);
+      requestAnimationFrame(tick);
+    };
+    this.want("play", performance.now(), from);
+    this.changed();
+    playSound(this, play);
+    requestAnimationFrame(tick);
+  }
+
+  // A play ran to its end: it stops on the last picture.
+  finishPlay(scene) {
+    const last = scene.frames.length - 1;
+    this.pause();
+    if (this.frame !== last) this.seek(last, "play");
+  }
+}
+
+const KEYS = {
+  ArrowLeft: (link, event) => link.step(-1, event.timeStamp),
+  ArrowRight: (link, event) => link.step(1, event.timeStamp),
+  ",": (link, event) => link.step(-1, event.timeStamp),
+  ".": (link, event) => link.step(1, event.timeStamp),
+  Home: (link, event) => link.step(-Infinity, event.timeStamp),
+  End: (link, event) => link.step(Infinity, event.timeStamp),
+  " ": (link) => link.toggle(),
+  f: (link, event) => link.lookAtMario(event.timeStamp),
+  r: (link, event) => link.recorded(event.timeStamp),
+  m: (link) => link.sound.toggleMute(),
+  x: (link, event) => link.level(event.timeStamp),
+  "[": (link, event) => stepAction(link, -1, event.timeStamp),
+  "]": (link, event) => stepAction(link, 1, event.timeStamp),
+};
+
+// The number keys, by where they sit on the keyboard (event.code, so Shift does not change them): 1-9 save
+// the frame on screen into that Usamune slot, Shift with 1-9 cuts to that saved view. His words: "I think we
+// should prioritize 1-9 for save states, and then Shift 1-9 for camera views, since save stating is more likely
+// as an action."
+const DIGIT = /^Digit([1-9])$/;
+function onDigit(link, event) {
+  const digit = DIGIT.exec(event.code || "");
+  if (!digit || event.altKey || !link.scene) return false;
+  event.preventDefault();
+  const number = Number(digit[1]);
+  if (event.shiftKey) link.recallSlot(number, event.timeStamp);
+  else link.slots.press(link, number);
+  return true;
+}
+
+// A control that is clicked rather than typed into, and the keys it acts on
+// itself while it has focus: Space and Enter press it, a slider's arrows move it.
+const PRESSED = new Set(["button", "submit", "reset", "checkbox", "radio"]);
+const SLIDER_KEYS = new Set(["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown"]);
+function ownKey(target, key) {
+  const type = target?.tagName === "INPUT" ? target.type : null;
+  if (target?.getAttribute?.("role") === "tab") return key === " " || key === "Enter" || key === "ArrowLeft" || key === "ArrowRight";
+  if (target?.tagName === "BUTTON" || PRESSED.has(type)) return key === " " || key === "Enter";
+  return type === "range" && SLIDER_KEYS.has(key);
+}
+
+// An open dialog (the stage picker's course grid) keeps every key and click it gets.
+const inDialog = (target) => !!target?.closest?.('[role="dialog"]');
+
+// A field that takes typing keeps every key: text and number fields, selects, contenteditable.
+export function typesInto(target) {
+  const tag = target?.tagName;
+  return !!target?.isContentEditable || tag === "TEXTAREA" || tag === "SELECT"
+    || (tag === "INPUT" && target.type !== "range" && !PRESSED.has(target.type));
+}
+
+// The page's one keyboard owner: each keydown on the viewer, or with nothing
+// on the page focused (SceneViewer). The movement keys first, then the
+// transport and camera keys. A field that types keeps every key, a focused
+// control the keys it acts on itself (a mouse click hands the keyboard back to
+// the viewer, so only a control reached with Tab keeps them), and Ctrl or Meta
+// combinations are the browser's: reload, copy, devtools. Keys are let go
+// wherever focus has gone since (useSceneLink).
+function onKey(link, event, canvas) {
+  if (event.ctrlKey || event.metaKey || typesInto(event.target) || inDialog(event.target)) return;
+  const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
+  if (key === "Escape") return endLook(link, canvas, "Esc", true);
+  if (onDigit(link, event)) return undefined;
+  if (link.moveKey(event)) return event.preventDefault();
+  if (key === "Alt" && link.freeAvailable) return event.preventDefault();   // Alt alone would open the window menu
+  const action = KEYS[key];
+  if (!action || !link.scene || ownKey(event.target, key)) return;
+  event.preventDefault();
+  action(link, event);
+}
+
+// Stops looking around (and a drag; and Set focus and every key when
+// `everything`) and gives the pointer back: the pointer lock (stopLook) and
+// the capture. `why` goes into the pointer lock's record.
+function endLook(link, canvas, why, everything = false) {
+  const drag = link.drag;
+  if (everything) link.release(why); else { link.stopLook(why); link.drag = null; }
+  for (const id of [drag?.id, link.capture].filter((value) => value != null)) {
+    try { canvas?.releasePointerCapture(id); } catch { /* already released */ }
+  }
+  link.capture = null;
+}
+
+// pointerrawupdate reaches the page when the pointer moves; Chromium holds
+// pointermove for the next animation frame, up to a frame later. It exists in
+// secure contexts (the Trainer's localhost page is one); elsewhere pointermove
+// carries the drag.
+const MOVE_EVENT = typeof window !== "undefined" && "onpointerrawupdate" in window
+  ? "onpointerrawupdate" : "onpointermove";
+
+// A press that moves less than this is a click (a double-click's two halves
+// among them), never a drag: the camera does not move until the pointer has.
+export const DRAG_DEAD_ZONE = 4;
+
+// Hold the right button: the viewer takes the pointer (lock, else capture) and the mouse looks around.
+function takeOff(link, surface, event) {
+  const canvas = event.currentTarget;
+  event.preventDefault();
+  surface.current?.focus({ preventScroll: true });
+  canvas.setPointerCapture(event.pointerId);
+  link.capture = event.pointerId;
+  link.startLook();
+  link.requestLock(canvas);          // refused, the capture still holds
+}
+
+function pointerHandlers(link, surface) {
+  const movable = () => link.scene && link.freeAvailable;
+  return {
+    onpointerdown: (event) => {
+      if (!movable()) return;
+      const canvas = event.currentTarget;
+      if (event.button === 2 && !link.drag) return takeOff(link, surface, event);
+      if ((event.button !== 0 && event.button !== 1) || link.looking) return;
+      if (event.button === 1) event.preventDefault();  // the middle button slides, never autoscrolls
+      if (event.button === 0 && link.picking) {
+        const at = pictureFraction(canvas, event.clientX, event.clientY);
+        if (at) link.pickAt(at.u, at.v, event.timeStamp);
+        return;
+      }
+      canvas.setPointerCapture(event.pointerId);
+      link.drag = { x: event.clientX, y: event.clientY, id: event.pointerId, sliding: event.button === 1,
+        moving: false };
+    },
+    [MOVE_EVENT]: (event) => {
+      if (link.looking) {
+        if (!(event.buttons & 2)) return endLook(link, event.currentTarget, "button up elsewhere");
+        return link.look(event.movementX, event.movementY, event.timeStamp);
+      }
+      const drag = link.drag;
+      if (!drag || drag.id !== event.pointerId) return;
+      const dx = event.clientX - drag.x, dy = event.clientY - drag.y;
+      if (!drag.moving && Math.hypot(dx, dy) < DRAG_DEAD_ZONE) return;
+      link.drag = { ...drag, x: event.clientX, y: event.clientY, moving: true };
+      if (dx || dy) link.move(dx, dy, drag.sliding || event.shiftKey, event.timeStamp);
+    },
+    onmousedown: (event) => { if (event.button === 1 && movable()) event.preventDefault(); },
+    onauxclick: (event) => { if (event.button === 1 && movable()) event.preventDefault(); },
+    ondblclick: (event) => {
+      if (!movable() || link.looking || event.button !== 0) return;
+      const at = pictureFraction(event.currentTarget, event.clientX, event.clientY);
+      if (at) link.flyTo(at.u, at.v, event.timeStamp);
+    },
+    onpointerup: (event) => {
+      if (link.looking && !(event.buttons & 2)) endLook(link, event.currentTarget, "button up");
+      link.drag = null;
+    },
+    onpointercancel: (event) => endLook(link, event.currentTarget, "pointer cancelled"),
+    onlostpointercapture: () => { link.drag = null; },
+    oncontextmenu: (event) => { if (movable()) event.preventDefault(); },
+    onwheel: (event) => {
+      if (!movable()) return;
+      event.preventDefault();                   // with Ctrl, the browser's own zoom too
+      if (event.ctrlKey) link.zoomByWheel(wheelPixels(event), event.timeStamp);
+      else if (link.looking) link.stepSpeed(-wheelPixels(event) / WHEEL_NOTCH);
+      else link.dolly(wheelPixels(event), event.timeStamp);
+    },
+  };
+}
+
+function openerReason(status) {
+  if (!status) return "Reading the lab setup...";
+  if (status.problems?.length) return status.problems.join(" ");
+  if (status.hold) return `The renderer is on hold: ${status.hold}`;
+  return status.packages?.length ? null : "No scene packages in the lab's folder yet.";
+}
+
+// The lab folder's recordings by file: a lab tool, shown only while no scene is open and the
+// stage picker has nothing chosen.
+function Opener({ status, opening, open }) {
+  const [choice, setChoice] = useState("");
+  const packages = status?.packages || [];
+  const picked = packages.some((row) => row.name === choice) ? choice : packages[0]?.name || "";
+  const why = openerReason(status);
+  return html`<div class="scene-lab-open">
+    <label>Recording
+      <select value=${picked} disabled=${!packages.length || opening}
+          onchange=${(event) => setChoice(event.currentTarget.value)}>
+        ${packages.map((row) => html`<option key=${row.name} value=${row.name}>
+          ${row.name} (${megabytes(row.bytes)})</option>`)}
+      </select>
+    </label>
+    <button type="button" class="primary" disabled=${!!why || opening || !picked}
+        title=${why || "Start the renderer and show this recording"} onclick=${() => open({ package: picked })}>
+      ${opening ? "Opening..." : "Open"}</button>
+    ${why && html`<p class="scene-lab-reason">${why}</p>`}
+  </div>`;
+}
+
+// What each camera does with the keyboard and the mouse: hintFor says it for the camera on screen (the
+// Camera tab's note while the free camera is unavailable; tests read the rest), and the keys list in the
+// bar's More menu says it all at once.
+const HINTS = {
+  picking: "Click a surface in the picture to turn around it. Esc cancels.",
+  looking: "Move the mouse to look around. W A S D move, Q and E go down and up, Shift is faster, Alt slower, the wheel sets the speed. Let go of the right button to stop looking.",
+  free: "W A S D move, Q and E go down and up, Shift is faster, Alt slower; hold the right button to look around. Drag to turn around the focus point, Shift-drag or middle-drag to slide, the wheel moves closer, double-click a surface to fly there. Z and C tilt, X levels, - and = (or Ctrl and the wheel) change the lens. F looks at Mario, R returns to the recorded camera.",
+  view: "The stage seen from this ghost's own camera as it plays. Moving the camera starts Free camera from here; R returns to the recorded camera.",
+  path: "The camera follows the camera path as the scene plays, steps and seeks. Moving the camera starts Free camera from here; R returns to the recorded camera.",
+  recorded: "W A S D move the camera from this picture, Q and E go down and up; dragging, scrolling, double-clicking or holding the right button move it too. Left and Right (or , and .) step one frame, Space plays.",
+};
+
+// The hint teaches only what applies right now.
+export function hintFor(link) {
+  if (!link.freeAvailable) return `Only the recorded camera is available: ${link.scene.free_camera.reason}`;
+  if (link.picking) return HINTS.picking;
+  if (link.looking) return HINTS.looking;
+  if (link.free) return HINTS.free;
+  if (link.pathOn) return HINTS.path;
+  if (link.rig) return rigHint(link.rig, link.ghosts);
+  if (link.view) return HINTS.view;
+  return HINTS.recorded;
+}
+
+// The same lesson on the picture itself while it is what you are acting on:
+// looking around with the right button, or choosing a point.
+export function cueFor(link) {
+  if (link.picking) return "Click a surface to turn around it · Esc cancels";
+  if (link.looking) return `W A S D move · Q E down, up · Shift faster · Alt slower · wheel: speed ${speedWords(link.speed)}`;
+  return null;
+}
+
+// speedWords' widest: three figures and a point.
+const SPEED_SIZE = ["00.0x"];
+
+function SpeedControl({ link }) {
+  const tuning = sceneCameraTuning(), unitsPerSecond = Math.round(flightSpeed(link.speed, {}, tuning));
+  return html`<div class="scene-lab-speed" role="group" aria-label="Flight speed"
+      title=${`W A S D move ${unitsPerSecond} units a second; the wheel changes it while you hold the right button`}>
+    <span>Flight speed</span>
+    <button type="button" aria-label="Slower" onclick=${() => link.stepSpeed(-1)}>−</button>
+    <output aria-live="polite"><${SteadyText} text=${speedWords(link.speed)} sizes=${SPEED_SIZE} /></output>
+    <button type="button" aria-label="Faster" onclick=${() => link.stepSpeed(1)}>+</button>
+    <button type="button" disabled=${link.speed === 1} onclick=${() => link.resetSpeed()}
+      title="Back to the flight speed at 1x">Reset</button>
+  </div>`;
+}
+
+// Beside HUD: the stage's Mario in the pictures, or left out so only the ghosts show.
+function MarioSwitch({ link }) {
+  const shown = link.mario !== false, available = link.freeAvailable;
+  const why = shown ? "Hide the stage's Mario, so only the ghosts show" : "Show the stage's Mario again";
+  return html`<button type="button" aria-pressed=${shown} disabled=${!available}
+    onclick=${() => link.setMario(!shown)} title=${available ? why : link.scene.free_camera.reason}>Mario</button>`;
+}
+
+const FOCUS_WORDS = ["Set focus", "Finding..."];
+
+// One labeled row of the Camera tab: its name in the first column, its controls after it.
+function CameraRow({ name, children, className = "" }) {
+  return html`<div class=${`ghost-lab-row ${className}`.trim()} role="group" aria-label=${name}>
+    <span class="ghost-lab-row-name">${name}</span>
+    <div class="ghost-lab-row-body">${children}</div>
+  </div>`;
+}
+
+// The cameras: the recorded one, each runner's own (with its flag), Free camera and what it can do.
+function CameraChoices({ link }) {
+  const available = link.freeAvailable, reason = link.scene.free_camera.reason;
+  return html`<div class="scene-lab-bar" aria-label="Camera">
+    <button type="button" aria-pressed=${!link.free && !link.view && !link.rig && !link.pathOn} onclick=${(event) => link.recorded(event.timeStamp)}
+        title="Show what the player saw (R)">Recorded camera</button>
+    ${link.ghosts.map((ghost) => html`<button type="button" key=${ghost.ref} class="scene-lab-view"
+        aria-pressed=${!link.free && link.view === ghost.ref} disabled=${!available}
+        title=${available ? "See the stage from this ghost's own camera, following it as the scene plays" : reason}
+        onclick=${(event) => link.theirView(ghost.ref, event.timeStamp)}>
+      <${GhostFlag} version=${ghost.version} />${" "}
+      ${viewName(link.ghosts, ghost.ref)}</button>`)}
+    <button type="button" aria-pressed=${link.free} disabled=${!available}
+        title=${available ? "Move the camera yourself, starting from the picture on screen (W A S D)" : reason}
+        onclick=${() => link.enterFree()}>Free camera</button>
+    <button type="button" disabled=${!available} onclick=${(event) => link.lookAtMario(event.timeStamp)}
+        title=${available ? "Point the free camera at Mario (F)" : reason}>Look at Mario</button>
+    <button type="button" aria-pressed=${link.picking} disabled=${!available || link.finding}
+        onclick=${() => link.armPick()}
+        title=${available ? "Then click a surface in the picture: the camera turns around that point" : reason}>
+      <${SteadyText} text=${link.finding ? "Finding..." : "Set focus"} sizes=${FOCUS_WORDS} /></button>
+    <button type="button" disabled=${!link.moved} onclick=${(event) => link.resetView(event.timeStamp)}
+        title=${link.free ? "Back to where Free camera began" : "Available once you move the free camera"}>
+      Reset view</button>
+  </div>`;
+}
+
+// What the picture shows besides the world: the HUD and the stage's Mario, kept together, then the tilt and lens.
+function LookChoices({ link }) {
+  return html`<span class="ghost-lab-pair">
+      <button type="button" aria-pressed=${link.hud} onclick=${() => link.setHud(!link.hud)}
+          title=${link.hud ? "Hide the lives, coins, stars and timer drawn over the picture"
+            : "Show the lives, coins, stars and timer over the picture"}>HUD</button>
+      <${MarioSwitch} link=${link} /></span>
+    ${link.freeAvailable && html`<${LensBar} link=${link} tuning=${sceneCameraTuning()} />`}`;
+}
+
+// The Camera tab: every way to choose and shape the camera, one labeled row each. Saved views cut on
+// Shift+1-9; Film makes a video of what the Ghost Lab shows.
+function CameraTab({ link }) {
+  const available = link.freeAvailable;
+  return html`<div class="ghost-lab-camera">
+    ${!available && html`<p class="scene-lab-hint ghost-lab-camera-note" title=${hintFor(link)}>${hintFor(link)}</p>`}
+    <${CameraRow} name="Camera"><${CameraChoices} link=${link} /><//>
+    <${CameraRow} name="Cinematic"><${CinematicBar} link=${link} tuning=${sceneCameraTuning()} /><//>
+    <${CameraRow} name="Look" className="ghost-lab-look"><${LookChoices} link=${link} /><//>
+    <${CameraRow} name="Views"><${CameraSlots} link=${link} /><//>
+    <${CameraRow} name="Path"><${PathBar} link=${link} /><//>
+    ${available && html`<${CameraRow} name="Fly"><${SpeedControl} link=${link} /><//>`}
+    <${CameraRow} name="Film"><${RecordBar} link=${link} /><//>
+  </div>`;
+}
+
+// Every key the Ghost Lab knows, for the More menu: what you press, then what it does.
+const KEY_LIST = [
+  ["Space", "Play or pause"], [", .  or  ← →", "One frame back or on"], ["[  ]", "Back or on to a change of move"],
+  ["Home  End", "First or last frame"], ["1 to 9", "Save this frame in that slot"], ["Shift 1 to 9", "Cut to that saved view"],
+  ["W A S D  Q E", "Fly (Shift faster, Alt slower)"], ["Right button", "Look around while held"],
+  ["Drag, wheel", "Turn around the focus, move closer"], ["Double-click", "Fly to a surface"],
+  ["Z C  X", "Tilt, level"], ["-  =", "Lens"], ["F", "Look at Mario"], ["R", "Recorded camera"], ["M", "Mute"],
+];
+
+function KeysList() {
+  return html`<dl class="ghost-lab-keys">
+    ${KEY_LIST.map(([keys, does]) => html`<div key=${keys}><dt><kbd>${keys}</kbd></dt><dd>${does}</dd></div>`)}
+  </dl>`;
+}
+
+const ENCODING_WORDS = { jpeg: "JPEG", raw: "exact pixels", shared: "exact pixels through shared memory" };
+
+// The two lines at their widest, three-digit times: each line is as tall as that at its width (a
+// slower time than that may add a line), and the second keeps its place before the camera first
+// moves, so the ghost panel under them stays put.
+const DRAWN_SIZE = [`0000x0000 ${ENCODING_WORDS.shared}, input to picture 000 ms (p95 000 ms), server 000 ms: `
+  + "game code 000 ms, renderer 000 ms, encode 000 ms, sound to picture 000 ms (p95 000 ms)"];
+const MOVING_SIZE = ["Last time the camera moved: 000 pictures a second, input to picture 000 ms (p95 000 ms), "
+  + "decode 000 ms, server 000 ms"];
+
+function Readout({ link }) {
+  const shown = link.shown, timings = shown?.timings || {}, moving = link.moving;
+  if (!shown) return null;
+  const rate = moving && (moving.pictures_per_second == null ? `${moving.pictures} picture`
+    : `${Math.round(moving.pictures_per_second)} pictures a second`);
+  const sync = syncWords(link.sound);
+  const drawn = `${shown.width}x${shown.height} ${ENCODING_WORDS[shown.encoding] || shown.encoding}, `
+    + `input to picture ${ms(percentile(link.latencies, 0.5))} (p95 ${ms(percentile(link.latencies, 0.95))}), `
+    + `server ${ms(shown.server_ms)}: game code ${ms(timings.evaluate_ms)}, renderer ${ms(timings.host_ms)}, `
+    + `encode ${ms(timings.encode_ms)}${sync ? `, ${sync}` : ""}`;
+  const moved = moving ? `Last time the camera moved: ${rate}, input to picture ${ms(moving.input_to_drawn_ms?.p50)} `
+    + `(p95 ${ms(moving.input_to_drawn_ms?.p95)}), decode ${ms(moving.decode_ms?.p50)}, `
+    + `server ${ms(moving.server_ms?.p50)}` : "";
+  return html`<p class="scene-lab-readout"><${SteadyText} block text=${drawn} sizes=${DRAWN_SIZE} /></p>
+  <p class=${`scene-lab-readout${moving ? " scene-lab-moving" : ""}`} data-summary=${moving ? JSON.stringify(moving) : undefined}>
+    <${SteadyText} block text=${moved} sizes=${MOVING_SIZE} /></p>`;
+}
+
+// The UI observation log's reader for this page (ui/uilog.js posts it; core/uilog.py keeps the
+// "scene_viewer" surface): the summary the readout shows for the last time the camera moved.
+export function readSceneViewer(root) {
+  const line = root?.querySelector(".scene-lab-moving");
+  if (!line) return null;
+  try {
+    return { surface: "scene_viewer", ...JSON.parse(line.dataset.summary) };
+  } catch {
+    return null;
+  }
+}
+
+// The camera's tuning inspector: one control per registry row, live on the
+// next movement; SAVE writes the changed numbers into scenecameratuning.js as
+// the shipped defaults (server/tuning_api.py, a source checkout only).
+export function TunePanel({ link = null } = {}) {
+  const [values, setValues] = useState(() => ({ ...sceneCameraTuning() }));
+  const [shipped, setShipped] = useState(() => ({ ...SCENE_CAMERA_DEFAULTS }));
+  const [status, setStatus] = useState(null);
+  const changed = Object.fromEntries(Object.entries(values).filter(([key, value]) => value !== shipped[key]));
+  const apply = (next) => { setValues(next); setSceneCameraTuning(next); link?.tuned(); };
+  async function save() {
+    setStatus({ ok: true, text: "Saving..." });
+    try {
+      const answer = await send("POST", "/api/tuning/scenecamera", { values: changed });
+      setShipped({ ...values });
+      setStatus({ ok: true, text: answer.written ? `Saved ${answer.written} as the shipped defaults.`
+        : "Nothing to save: every number is already the shipped default." });
+    } catch (problem) { setStatus({ ok: false, text: problem.message }); }
+  }
+  return html`<section class="practice-card scene-lab-tune" aria-label="Tune controls">
+    <div class="scene-lab-tune-head">
+      <h3>Tune controls</h3>
+      <button type="button" disabled=${!Object.keys(changed).length} onclick=${() => apply({ ...shipped })}
+        title="Put every number back to the shipped default">Shipped values</button>
+      <button type="button" class="primary" disabled=${!Object.keys(changed).length} onclick=${save}
+        title="Write these numbers into the repo as the new defaults">SAVE</button>
+    </div>
+    <p class="scene-lab-hint">Changes apply on your next movement, and to a cinematic camera at once. Hover a label for what it does.
+      ${" "}${Object.keys(changed).length ? `${Object.keys(changed).length} changed from the shipped values.` : ""}</p>
+    ${status && html`<p class=${`scene-lab-hint ${status.ok ? "" : "is-bad"}`} role="status">${status.text}</p>`}
+    <div class="scene-lab-tune-groups">
+      <${ControlGroups} groups=${SCENE_CAMERA_GROUPS} rows=${SCENE_CAMERA_TUNABLES} values=${values}
+        defaults=${shipped} onChange=${(name, value) => apply({ ...values, [name]: value })} />
+    </div>
+  </section>`;
+}
+
+// The picture's corner: which camera it is drawn from.
+function cameraTag(link) {
+  if (link.free) return "Free camera";
+  if (link.pathOn) return "Camera path";
+  if (link.rig) return rigName(link.rig, link.ghosts);
+  return link.view ? viewName(link.ghosts, link.view) : "Recorded camera";
+}
+
+// What the picture wears over it: whose camera it is, Drawing..., and at its foot the notice, the
+// cue and, while a cinematic camera is on, that camera's settings (none of them takes a row, so
+// none moves the controls under the picture).
+function StageOverlays({ link }) {
+  const cue = cueFor(link);
+  return html`<span class=${`scene-lab-tag ${link.free ? "is-free" : link.view || link.rig || link.pathOn ? "is-view" : ""}`}>${
+      cameraTag(link)}</span>
+    ${link.drawing && html`<span class="scene-lab-busy">Drawing...</span>`}
+    ${(link.notice || cue || link.rig) && html`<div class="scene-lab-overlay">
+      ${link.notice && html`<p class="scene-lab-reason scene-lab-notice" role="status">${link.notice}</p>`}
+      ${cue && html`<p class="scene-lab-cue" aria-hidden="true">${cue}</p>`}
+      <${CinematicSettings} link=${link} tuning=${sceneCameraTuning()} />
+    </div>`}`;
+}
+
+// The picture, the play bar and the save-state strip: what you watch and the frame you save.
+function Player({ link, canvas, surface, building, stop }) {
+  const classes = [link.freeAvailable && "is-movable", link.picking && "is-picking", link.looking && "is-flying"];
+  return html`<section class="practice-card scene-lab-player ghost-lab-player">
+    <div class="scene-lab-stage">
+      <canvas ref=${canvas} width="640" height="480" class=${classes.filter(Boolean).join(" ")}
+        aria-label="The recording's picture" ...${pointerHandlers(link, surface)}></canvas>
+      <${StageOverlays} link=${link} />
+    </div>
+    <${PlayBar} link=${link} building=${building} stop=${stop} />
+    <${SaveStrip} link=${link} />
+  </section>`;
+}
+
+// The tray's two tabs, Ghosts first (his words: "Ghosts tab selected by default"); each names its job and
+// a one-line summary of what it holds now. Left and Right move between them.
+const TABS = [["ghosts", "Ghosts", "ghost"], ["camera", "Camera", "camera"]];
+
+function tabSummary(link, key, watching) {
+  if (key === "ghosts") {
+    const shown = link.ghosts.length, who = watching?.player || "you";
+    return shown ? `${shown} beside ${who === "You" ? "you" : who}` : `Watching ${who === "You" ? "you" : who}`;
+  }
+  const keys = link.freeAvailable ? playedKeys(link).length : 0;
+  return keys ? `${cameraTag(link)} · path of ${keys} keys` : cameraTag(link);
+}
+
+function Tray({ link, tab, setTab, watching, panels }) {
+  const move = (event) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    const at = TABS.findIndex(([key]) => key === tab), next = TABS[(at + (event.key === "ArrowRight" ? 1 : TABS.length - 1)) % TABS.length];
+    setTab(next[0]);
+    event.currentTarget.querySelector(`#ghost-lab-tab-${next[0]}`)?.focus();
+  };
+  return html`<section class="practice-card ghost-lab-tray">
+    <div class="ghost-lab-tabs" role="tablist" aria-label="Ghost Lab" onkeydown=${move}>
+      ${TABS.map(([key, name, icon]) => html`<button type="button" role="tab" key=${key} id=${`ghost-lab-tab-${key}`}
+          aria-selected=${tab === key} aria-controls=${`ghost-lab-panel-${key}`} tabindex=${tab === key ? 0 : -1}
+          onclick=${() => setTab(key)}>
+        <${Icon} name=${icon} size=${18} />
+        <span class="ghost-lab-tab-words"><strong>${name}</strong>
+          <small title=${tabSummary(link, key, watching)}>${tabSummary(link, key, watching)}</small></span>
+      </button>`)}
+    </div>
+    ${TABS.map(([key]) => html`<div role="tabpanel" key=${key} id=${`ghost-lab-panel-${key}`}
+        aria-labelledby=${`ghost-lab-tab-${key}`} class="ghost-lab-panel" hidden=${tab !== key}>${panels[key]}</div>`)}
+  </section>`;
+}
+
+function useSceneLink(canvas, refresh) {
+  const [, setRevision] = useState(0);
+  const link = useRef(null);
+  if (!link.current) {
+    link.current = new SceneLink({
+      draw: (header, bytes, claim, ready) => paint(canvas.current, header, bytes, claim, ready),
+      changed: () => setRevision((revision) => revision + 1), ended: () => refresh.current(),
+      observe: throttledNotes(postObservation) });
+  }
+  useEffect(() => {
+    const scene = link.current, release = (why) => endLook(scene, canvas.current, why, true);
+    const hidden = () => { if (document.hidden) { scene.pause(); release("window hidden"); } };
+    const blurred = () => release("window blur");
+    const lock = () => { if (scene.lockChanged()) release("the browser"); };
+    const refused = () => scene.noteLock("error");
+    // A key let go of anywhere is let go of: focus may have left the viewer since it went down.
+    const keyUp = (event) => {
+      scene.moveKey(event);
+      if (event.key === "Alt" && scene.freeAvailable && event.target.closest?.(".scene-lab")) event.preventDefault();
+    };
+    document.addEventListener("visibilitychange", hidden);
+    document.addEventListener("pointerlockchange", lock);
+    document.addEventListener("pointerlockerror", refused);
+    window.addEventListener("blur", blurred);
+    window.addEventListener("keyup", keyUp);
+    return () => {
+      release("left the page");
+      document.removeEventListener("visibilitychange", hidden);
+      document.removeEventListener("pointerlockchange", lock);
+      document.removeEventListener("pointerlockerror", refused);
+      window.removeEventListener("blur", blurred);
+      window.removeEventListener("keyup", keyUp);
+      // The server frees the renderer once no page has shown the scene for a
+      // little while, so a tab switch and back keeps it open.
+      scene.disconnect();
+      scene.sound.close();
+    };
+  }, []);
+  return link.current;
+}
+
+export const STAGE_WORDS = {
+  prompt: "Choose a course and star to watch one of your attempts.",
+  finding: "Finding your fastest attempt with a saved scene...",
+  none: "None of your attempts at this has a saved scene.",
+  // A Library ghost whose star this Trainer cannot place (round 9, item 8): one short sentence, why.
+  unplaced: "This ghost's star or segment is not one this Trainer knows.",
+};
+
+// The run on screen, for the bar and "In the scene": the row it was watched from, else his attempt's
+// (its time and version from the Practice log's row), else the scene's own words.
+function watchingOf(link, view) {
+  const scene = link.scene;
+  if (!scene) return null;
+  if (scene.watching) return scene.watching;
+  const found = scene.attempt != null ? attemptIn(view, scene.attempt) : null;
+  const attempt = found?.attempt;
+  const time = attempt ? (attempt.segment_id != null ? attempt.rta : attempt.igt ?? attempt.rta) : null;
+  return { ref: null, player: scene.attempt != null ? "You" : scene.title || "Lab recording", time: time || null,
+    version: attempt?.game_version ?? null, attempt: scene.attempt ?? null };
+}
+
+// The bar's "which run": a star, its flag, whose it is and its time, the scene's whole title on hover.
+function Watching({ link, view, watching }) {
+  if (!watching) return null;
+  return html`<span class="ghost-lab-watching" title=${sceneTitle(link.scene, view)}>
+    <span class="ghost-lab-star" aria-hidden="true">★</span><${GhostFlag} version=${watching.version} />
+    <strong>${watching.player}</strong>${watching.time ? html`<span class="ghost-lab-watching-time">${watching.time}</span>` : null}
+  </span>`;
+}
+
+// The bar's More menu: what is used rarely. The picture's quality, the numbers (the readout, always on the
+// page so the observation log can read it), Tune controls, every key, and the lab folder's recordings.
+function MoreMenu({ link, status, opening, open, tuning, setTuning }) {
+  const { open: shown, setOpen, place } = usePop();
+  return html`<span class="ghost-lab-more" ref=${place}>
+    <button type="button" class="icon-button" aria-expanded=${shown} aria-label="More"
+        title="Picture quality, numbers, keys and tuning" onclick=${() => setOpen(!shown)}>
+      <${Icon} name="menu" size=${18} /></button>
+    <div class="ghost-lab-pop ghost-lab-more-pop" hidden=${!shown}>
+      ${link.scene && html`<label class="scene-lab-quality">Pictures
+        <select value=${link.encoding} onchange=${(event) => { link.encoding = event.currentTarget.value; link.want("input"); }}>
+          ${link.sharedAvailable && html`<option value="shared">Exact pixels, fastest (shared memory)</option>`}
+          <option value="jpeg">Faster (JPEG)</option>
+          <option value="raw">Exact pixels (slower)</option>
+        </select></label>`}
+      ${link.scene && link.freeAvailable && html`<button type="button" aria-pressed=${tuning} onclick=${() => setTuning(!tuning)}
+          title="Adjust how the free camera feels, and save the numbers as the defaults">Tune controls</button>`}
+      ${link.scene && html`<div class="ghost-lab-numbers"><${Readout} link=${link} /></div>`}
+      <${KeysList} />
+      ${status?.packages?.length ? html`<${Opener} status=${status} opening=${opening} open=${open} />` : null}
+    </div>
+  </span>`;
+}
+
+// What the bar says on its one line: an error, why the stage is missing, or how the last scene ended. While the
+// lab cannot open anything yet, the empty stage says why in full (LabSetup), so the bar says nothing: one place
+// says it.
+function barNote(link, status, stageNote) {
+  if (link.error) return { text: link.error, bad: true };
+  if (stageNote && !(status?.ready === false && !link.scene)) return { text: stageNote, bad: false };
+  if (!link.scene && status?.ended) return { text: status.ended.message, bad: false };
+  return null;
+}
+
+// What the empty stage says while the lab cannot open anything yet (D6: the tab shows why, never hides): in the
+// installed app with no ROM found, the ROM card (rompick.js: the store's whole sentence, the file pick, and the
+// found line once the game is open in Project64); otherwise each problem the lab names, in full (the bar's one
+// line cuts a long sentence). Asked only while the lab is not ready (a ready lab never asks for the ROM routes); a
+// developer's lab has no ROM routes (404), so it shows only the problems.
+function useRomCard() {
+  const [needed, setNeeded] = useState(false);
+  useEffect(() => {
+    let live = true;
+    getJSON("/api/scene-lab/roms")
+      .then((answer) => { if (live) setNeeded(!Object.values(answer?.regions || {}).some((region) => region?.found)); })
+      .catch(() => { if (live) setNeeded(false); });
+    return () => { live = false; };
+  }, []);
+  return needed;
+}
+
+function LabSetup({ status, onFound }) {
+  const romCard = useRomCard();
+  const [found, setFound] = useState(false);
+  if (romCard && !found) {
+    return html`<div class="ghost-lab-setup"><${RomPick} region="us"
+      onFound=${() => { setFound(true); onFound(); }} /></div>`;
+  }
+  const problems = status.problems || [];
+  if (!problems.length) return null;
+  return html`<div class="ghost-lab-setup">${problems.map((problem) => html`<p class="ghost-lab-setup-line">${problem}</p>`)}</div>`;
+}
+
+// The Ghost Lab's one bar: the stage picker, the run you watch, a note, the scene recording's sign, More and
+// Close. Where it wraps (narrow panes: the note and the right side take the second line) depends on the
+// pane's width alone.
+function StageBar({ t, link, watching, note, status, opening, open, close, tuning, setTuning, children }) {
+  return html`<header class="practice-card ghost-lab-top">
+    <div class="ghost-lab-top-left">${children}<${Watching} link=${link} view=${t?.view} watching=${watching} /></div>
+    <p class=${`ghost-lab-top-note${note?.bad ? " is-bad scene-lab-error" : ""}`} role="status" title=${note?.text || ""}>${note?.text || ""}</p>
+    <div class="ghost-lab-top-right">
+      <${RecordingSwitch} />
+      <${MoreMenu} link=${link} status=${status} opening=${opening} open=${open} tuning=${tuning} setTuning=${setTuning} />
+      ${link.scene && html`<button type="button" class="icon-button" aria-label="Close" onclick=${close}
+          title="Close this scene and stop the renderer"><${Icon} name="close" size=${18} /></button>`}
+    </div>
+  </header>`;
+}
+
+// The page's one keyboard owner, wired to its root (onKey): arriving gives the viewer the keyboard
+// (from the sidebar, or the Ghost button's open), and a key pressed while nothing on the page has
+// focus (a clicked control went away) is its too. Returns the root's handlers.
+function useKeyboardOwner(link, surface, canvas) {
+  const pointed = useRef(null);
+  useEffect(() => {
+    surface.current?.focus({ preventScroll: true });
+    const stray = (event) => { if (event.target === document.body) onKey(link, event, canvas.current); };
+    document.addEventListener("keydown", stray);
+    return () => document.removeEventListener("keydown", stray);
+  }, []);
+  const back = () => surface.current?.focus({ preventScroll: true });
+  return {
+    onkeydown: (event) => {
+      pointed.current = null;        // a key reaching the page: whatever has focus is used from the keyboard
+      onKey(link, event, canvas.current);
+    },
+    // A mouse click on one of the page's controls hands the keyboard back to the viewer, so Space
+    // plays after clicking Free camera; a control pressed from the keyboard (detail 0) keeps it, and
+    // so does a field the click itself put the typing in (a saved camera's name, scenepresets.js).
+    onclick: (event) => {
+      if (event.detail > 0 && !typesInto(event.target) && !inDialog(event.target) && !typesInto(document.activeElement)) back();
+    },
+    // A select's choice made with the mouse does the same (its letters would otherwise pick an
+    // option by its first letter: E and S switch Pictures to "Exact..."); one reached with Tab
+    // keeps its keys.
+    onpointerdown: (event) => { pointed.current = event.target; },
+    onchange: (event) => { if (event.target.tagName === "SELECT" && pointed.current === event.target) back(); },
+    // Focus leaving for the rest of the page, or for a field that types, lets go of every key.
+    onfocusout: (event) => {
+      const next = event.relatedTarget;
+      if (!next || !surface.current?.contains(next) || typesInto(next)) link.releaseKeys();
+    },
+  };
+}
+
+// One observation per summary, read off the page once it shows it. Not useUiLog: that runs on
+// every render, and this page renders every picture, which would claim the practice page's
+// latency marks (ui/latency.js) dozens of times a second.
+function useMovingObservations(link, surface) {
+  useEffect(() => {
+    const observation = link.moving && readSceneViewer(surface.current);
+    if (observation) postObservation(observation);
+  }, [link.moving]);
+}
+
+// The lab's stage for `next`; with `anyStrategy` and none of its strategy, his fastest scene of any.
+async function stageFor(next, anyStrategy) {
+  const answer = await getJSON(`${ROOT}/stage?${targetQuery(next)}`);
+  if (answer.attempt != null || !anyStrategy) return answer;
+  return getJSON(`${ROOT}/stage?${targetQuery({ ...next, strat: null })}&strategies=all`);
+}
+
+// A Library ghost as a row of `target`'s list, from the lab: {item}, or {item: null, reason}.
+async function libraryGhostRow(ghost, target) {
+  try {
+    return await getJSON(`${ROOT}/ghost?recording=${encodeURIComponent(ghost.recording)}&${
+      targetQuery({ ...target, strat: null })}`);
+  } catch (problem) {
+    return { item: null, reason: problem.message };
+  }
+}
+
+// What the stage picker shows (`target`), what it says (`stageNote`: "Finding...", or why a target
+// has no stage), and how a choice becomes the stage. `asked` counts choices: an older answer is dropped.
+function useStageChoice(link, open, close) {
+  const [target, setTarget] = useState(null);
+  const [stageNote, setStageNote] = useState(null);
+  const asked = useRef(0);
+  // A target from the stage picker (or the Practice log's, on arriving): the lab's stage for it opens,
+  // or the lab's reason shows and the scene of another target closes. `anyStrategy`: with no stage
+  // of `next`'s strategy, his fastest scene of any strategy; `none` replaces the lab's reason. The
+  // opened scene, or null (none, a failure, or a newer choice).
+  async function choose(next, { anyStrategy = false, none = null } = {}) {
+    const serial = ++asked.current;
+    setTarget(next);
+    setStageNote(STAGE_WORDS.finding);
+    let answer;
+    try {
+      answer = await stageFor(next, anyStrategy);
+    } catch (problem) {
+      if (serial === asked.current) setStageNote(problem.message);
+      return null;
+    }
+    if (serial !== asked.current) return null;
+    const staged = { ...next, ...answer.target };
+    setTarget(staged);
+    if (answer.attempt == null) {
+      setStageNote(none || answer.reason || STAGE_WORDS.none);
+      if (link.scene) await close();
+      return null;
+    }
+    setStageNote(null);
+    const scene = link.scene?.attempt === answer.attempt ? link.scene : await open({ attempt: answer.attempt });
+    if (!scene || serial !== asked.current) return null;
+    keep(scene, { target: staged });
+    return scene;
+  }
+  return { target, setTarget, stageNote, setStageNote, asked, choose };
+}
+
+// Watching a run (a ghost row, or a Library ghost): it becomes the scene. One of his attempts with a scene
+// opens that scene; any other run is made into a scene from its ghost (POST /open {ghost}, scenebuild.js:
+// it answers once the first frames are built, the old scene playing on until then, and the scene grows
+// while the rest is built). `building` says how far, `stop` ends it (the scene keeps what it has). A newer
+// watch, or any other open, takes over from an older one (the lab cancels the older build). The opened
+// scene carries the run it shows (`watching`) and, made from a ghost, that ghost's ref, which its save
+// states are made from. `play`: it plays from its first frame once that picture is drawn (the Practice
+// log's Ghost button).
+function useWatch(link, open) {
+  const [pending, setPending] = useState(null);           // {ref, name, serial}: its /open has not answered
+  const progress = useBuildProgress(!!pending), stopped = useRef(0), serial = useRef(0);
+  async function watch(item, target, { play = false } = {}) {
+    const mine = ++serial.current, hush = () => stopped.current === mine;
+    setPending({ ref: item.ref, name: item.player, serial: mine });
+    const watching = sceneGhost(item);
+    let scene = item.attempt != null
+      ? await open({ attempt: item.attempt }, { play, quiet: true, adopt: { watching, ghost: null } }) : null;
+    const made = !scene && !hush() && mine === serial.current;
+    if (made) scene = await open({ ghost: item.ref }, { play, quiet: hush, adopt: { watching, ghost: item.ref } });
+    if (scene) keep(scene, { target, watching: scene.watching, ghost: scene.ghost });
+    setPending((now) => (now?.serial === mine ? null : now));
+    return scene;
+  }
+  async function stop() {
+    stopped.current = pending?.serial ?? stopped.current;
+    setPending(null);
+    try { await stopBuild(); } catch (problem) { link.fail(problem.message); }
+  }
+  return { watch, stop, building: buildOf(link.scene, pending, progress) };
+}
+
+// Opening a scene: `open(body)` with {package} from the lab's list, {attempt} from the Ghost button or the
+// stage picker, or {ghost} for a run watched from a row. A refusal shows the server's own sentence
+// (`quiet`, true or a function asked when the answer comes: none). `adopt`: fields the scene carries from
+// its first picture on (the run it shows). An open that a newer one took over from neither connects nor
+// speaks (the lab ended it for the newer). The opened scene, or null; `opening` while one is on its way.
+function useOpen(link, surface, refresh) {
+  const [opening, setOpening] = useState(false);
+  const newest = useRef(0);
+  async function open(body, { play = false, quiet = false, adopt = null } = {}) {
+    const mine = ++newest.current, hush = () => (typeof quiet === "function" ? quiet() : quiet);
+    setOpening(true);
+    if (!hush()) link.fail(null);
+    let scene = null;
+    try {
+      scene = await send("POST", `${ROOT}/open`, body);
+    } catch (problem) { if (!hush() && mine === newest.current) link.fail(problem.message); }
+    if (scene && mine === newest.current) {
+      link.connect(Object.assign(scene, adopt), { play });
+      surface.current?.focus();
+    } else scene = null;
+    if (mine === newest.current) setOpening(false);
+    refresh.current();
+    return scene;
+  }
+  return { open, opening };
+}
+
+// What the page hands its parts each render: the watched run's star ({course_id, star_id}: a save joins
+// that star's set, scenestrip.js) and the store's event feed (its slot_sets_changed redraws the strip).
+function shareWithParts(link, target, t) {
+  link.stageTarget = target;
+  link.feed = t?.feed;
+}
+
+// The Practice log's Ghost button: the attempt's recorded take, else the scene made from its ghost
+// recording (GET /ghost?attempt=: the lab's ghost row for it), watched the way a ghost row is; both play
+// from the first frame. With neither, the lab's reason shows as a refused open's does: the ghost row's
+// reason, or (a lab with no ghost rows) the take's own refusal, asked again aloud. `current()` is false
+// once a newer choice of stage or ghost has replaced this one.
+async function showAttempt(attempt, named, { link, open, watch, setTarget, current }) {
+  const take = async (quiet) => {
+    const scene = await open({ attempt }, { play: true, quiet });
+    if (scene) {
+      setTarget(scene.target || named);
+      keep(scene, { target: scene.target || named });
+    }
+    return scene;
+  };
+  if ((await take(true)) || !current()) return null;
+  let answer = null;
+  try {
+    answer = await getJSON(`${ROOT}/ghost?attempt=${encodeURIComponent(attempt)}`);
+  } catch { /* a lab with no ghost rows: the take's refusal below says why */ }
+  if (!current()) return null;
+  if (answer?.item) return watch(answer.item, named, { play: true });
+  if (answer?.reason) return link.fail(answer.reason);
+  return take(false);
+}
+
+// `t.sceneLab.intent` (app.js): the Practice log's Ghost button names an attempt; the Ghost Lab opens
+// that attempt's scene and plays it, once per click (with no recorded take, the scene made from its
+// ghost recording, watched like a ghost row). A Library row's Ghost button names a ghost
+// ({recording, entity, strat}): the Ghost Lab turns to that star or segment and watches that ghost (it
+// becomes the scene, made from the ghost when he has no scene of it). The stage picker (scenestage.js)
+// starts on the target of the scene on screen, else, with none open, on what the Practice log has
+// selected, whose stage it then opens; a choice there opens that target's stage.
+export function SceneViewer({ t }) {
+  const lab = t?.sceneLab, intent = lab?.intent;
+  const [status, setStatus] = useState(null);
+  const [tab, setTab] = useState("ghosts");
+  const [tuning, setTuning] = useState(false);
+  const canvas = useRef(null), surface = useRef(null), refresh = useRef(null);
+  const link = useSceneLink(canvas, refresh);
+  const { open, opening } = useOpen(link, surface, refresh);
+  const { target, setTarget, stageNote, setStageNote, asked, choose } = useStageChoice(link, open, close);
+  const { watch, stop, building } = useWatch(link, open);
+  const strategies = useStrategies(targetKey(target));
+  shareWithParts(link, target, t);
+  refresh.current = async () => {
+    try {
+      const next = await getJSON(`${ROOT}/status`);
+      setStatus(next);
+      return next;
+    } catch (problem) { link.fail(problem.message); return null; }
+  };
+  useEffect(() => {
+    if (intent) return;              // the attempt below replaces whatever scene was open
+    refresh.current().then((next) => {
+      if (next?.session) {
+        const kept = keptFor(next.session);
+        link.connect(Object.assign(next.session, { watching: kept.watching ?? null, ghost: kept.ghost ?? null }));
+        setTarget(kept.target || stageDefault(next.session, t?.view));
+      } else {
+        const practiced = stageDefault(null, t?.view);
+        if (practiced) choose(practiced);
+      }
+    });
+  }, []);
+  useEffect(() => {
+    if (!intent) return;
+    lab.clearIntent();
+    if (intent.ghost) {
+      showGhost(intent.ghost);
+      return;
+    }
+    asked.current += 1;              // a stage still being found is no longer wanted
+    setStageNote(null);
+    const named = stageDefault({ attempt: intent.attempt }, t?.view);
+    setTarget(named);
+    const mine = asked.current;
+    showAttempt(intent.attempt, named, { link, open, watch, setTarget, current: () => mine === asked.current });
+  }, [intent]);
+  // A Library row's Ghost button: its star or segment in the picker, then that ghost watched.
+  async function showGhost(ghost) {
+    const wanted = entityTarget(ghost.entity, ghost.strat ?? null);
+    if (!wanted) return setStageNote(STAGE_WORDS.unplaced);
+    asked.current += 1;
+    setTarget(wanted);
+    setStageNote(null);
+    const answer = await libraryGhostRow(ghost, wanted);
+    if (!answer.item) return setStageNote(answer.reason);
+    return watch(answer.item, wanted);
+  }
+  const owner = useKeyboardOwner(link, surface, canvas);
+  useMovingObservations(link, surface);
+  async function close() {
+    endLook(link, canvas.current, "closed", true);
+    link.disconnect();
+    link.scene = null;
+    link.changed();
+    try { await send("POST", `${ROOT}/close`); } catch (problem) { link.fail(problem.message); }
+    refresh.current();
+  }
+  const watching = watchingOf(link, t?.view);
+  const note = barNote(link, status, stageNote) ?? (!target && !link.scene ? { text: STAGE_WORDS.prompt, bad: false } : null);
+  return html`<div class="workshop-page scene-lab ghost-lab" ref=${surface} tabindex="-1" ...${owner}>
+    <${StageBar} t=${t} link=${link} watching=${watching} note=${note} status=${status} opening=${opening} open=${open}
+        close=${close} tuning=${tuning} setTuning=${setTuning}>
+      <${StagePicker} t=${t} target=${target} strategies=${strategies} onChoose=${choose} note=${null} />
+    <//>
+    ${link.scene ? html`<${Player} link=${link} canvas=${canvas} surface=${surface} building=${building} stop=${stop} />
+      <${Tray} link=${link} tab=${tab} setTab=${setTab} watching=${watching} panels=${{
+        ghosts: html`<${GhostPanel} link=${link} target=${target} strategies=${strategies} watching=${watching}
+          building=${building} watch=${(item) => watch(item, target)} />`,
+        camera: html`<${CameraTab} link=${link} />` }} />
+      ${tuning && html`<${TunePanel} link=${link} />`}`
+      : html`<section class="practice-card ghost-lab-empty">
+        ${building ? html`<${BuildProgress} build=${building} stop=${stop} />` : html`<${Icon} name="ghost" size=${28} />`}
+        ${!building && status?.ready === false && html`<${LabSetup} status=${status}
+          onFound=${() => refresh.current().then(() => target && choose(target))} />`}
+      </section>`}
+  </div>`;
+}

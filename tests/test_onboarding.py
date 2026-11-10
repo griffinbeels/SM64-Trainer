@@ -19,9 +19,7 @@ from test_version_probe import LIVE_USAMUNE_BE, _header, _word_swapped
 def installed(**kwargs):
     return _status("active", consented_at="yesterday", wrapper_present=True,
                    wrapper_current=True, wrapper_selected=True, pj64_dir="C:/PJ64",
-                   pj64_running=True, layer_alive=True, plugin_pid=123,
-                   wrapped_name="sm64_trainer_gfx.renderer", renderer_present=True,
-                   renderer_current=True, **kwargs)
+                   pj64_running=True, layer_alive=True, plugin_pid=123, **kwargs)
 
 
 def observation(raw=LIVE_USAMUNE_BE):
@@ -78,6 +76,21 @@ def test_us_requires_every_live_check(missing):
     assert readiness(installed(), observed)["step"] == "verify"
 
 
+def test_missing_fixups_are_their_own_step_before_the_game_opens():
+    """Both installs need Project64 closed, so the fixups come right after the
+    plugin; with them installed or the warning accepted, setup moves on."""
+    closed = replace(installed(), pj64_running=False)
+    assert readiness(installed(), observation(), fixups_needed=True)["step"] == "close"
+    verdict = readiness(closed, observation(), fixups_needed=True)
+    assert verdict["step"] == "fixups" and not verdict["ready"] and verdict["installed"]
+    assert readiness(closed, observation())["step"] == "reopen"
+    assert readiness(installed(), observation())["ready"]
+    # The plugin install still comes first.
+    fresh = replace(closed, consented_at=None, wrapper_present=False, wrapper_current=False,
+                    wrapper_selected=False, state="not_installed")
+    assert readiness(fresh, observation(), fixups_needed=True)["step"] == "install"
+
+
 def test_just_opening_project64_never_proves_a_rom_or_completion():
     observed = observation(None)
     assert readiness(installed(), observed)["step"] == "rom"
@@ -95,7 +108,7 @@ def test_matching_existing_installation_does_not_require_local_consent():
     layer = replace(installed(), consented_at=None)
     assert readiness(layer, observation())["ready"]
     assert readiness(layer, observation(None))["step"] == "rom"
-    assert not readiness(replace(layer, wrapped_name=None), observation())["installed"]
+    assert not readiness(replace(layer, leftovers=["sm64_trainer_gfx.renderer"]), observation())["installed"]
 
 
 def test_movement_is_not_consumed_by_another_client_and_expires():

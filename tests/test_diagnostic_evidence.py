@@ -123,7 +123,7 @@ def sample_snapshot():
                               "stage_timings": {"channel": {"total_ms": 5000, "count": 1}}}}},
         "ghost": {"enabled": True, "has_target": True, "label": "PrivatePlayer",
                   "native": {"state": 5, "reason": 8, "displayed": False, "clip_path": "private.z64"}},
-        "setup": {"state": "needs_restart", "configuration_consistent": False, "pj64_dir": "C:\\Users\\PrivateName", "runtime": {
+        "setup": {"state": "needs_restart", "frame_buffer_emulation_off": False, "pj64_dir": "C:\\Users\\PrivateName", "runtime": {
                   "checks": {"pictures": False, "game": True}, "rom": {"region": "jp", "name": "PrivateROM"}}},
         "resources": {"rss_mib": 300, "machine": {"top_cpu": ["PrivateProgram"]}},
         "native": {"events": technical_events(native_line()), "raw": "PrivateLog"}}
@@ -192,7 +192,7 @@ def test_real_sdk_carries_current_fault_evidence_through_both_scrubbers(reporter
     reporting.capture_problem("Synthetic capture startup failure")
     event = captured_event(reporter)
     assert event["extra"]["diagnostics"]["ghost"]["native"]["reason"] == 8
-    assert event["extra"]["diagnostics"]["setup"]["configuration_consistent"] is False
+    assert event["extra"]["diagnostics"]["setup"]["frame_buffer_emulation_off"] is False
     assert "Private" not in json.dumps(event)
     unbind()
 
@@ -326,3 +326,14 @@ def test_silent_native_playback_fault_reports_once_and_normal_waits_do_not(monke
     for reason in GIPC_ROM_REASONS:
         capture._report_native_fault(5, reason)
     assert [kwargs["context"]["native_reason"] for _, kwargs in errors[1:]] == list(GIPC_ROM_REASONS)
+
+
+def test_an_automatic_report_carries_the_ghost_lab_rom_row_as_found_or_not_only():
+    """The setup check's lab_rom row (core/setup_profile.py) says which ROM the Ghost Lab keeps: an automatic report
+    carries its status alone, never its words, and flags it like any other row."""
+    check = {"flagged": ["lab_rom"], "items": [
+        {"id": "lab_rom", "importance": "recommended", "status": "differs", "yours": "Only v1.93j (JP)",
+         "tested": "Found", "yours_sha256": "a" * 64, "shared": True}]}
+    projected = safe_snapshot({"setup": {"check": check}})["setup"]["check"]
+    assert projected["flagged"] == ["lab_rom"]
+    assert projected["items"] == [{"id": "lab_rom", "status": "differs", "importance": "recommended"}]

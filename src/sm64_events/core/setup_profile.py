@@ -6,7 +6,11 @@ item's importance, fix sentence and guide link, so an importance can change
 when evidence arrives without touching this code.
 
   required     known to stop the trainer working (our graphics plugin, frame
-               buffer emulation off, 8 MB memory, Counter Factor 1)
+               buffer emulation off, 8 MB memory, Counter Factor 1), and the
+               two "gate" items: Wermi's build v7 and the PJ64 Fixups. A
+               tester on another build cost weeks (2026-11-09: "I want to
+               prevent that FOREVER"), so the wizard stops at a gate
+               difference until the user fixes it or accepts the warning.
   recommended  differs from what we test with; may or may not matter
   noted        recorded only, never a problem (the controller plugin; his
                rule, 2026-10-30: "it's not necessarily a problem to use
@@ -43,7 +47,7 @@ from sm64_events.core.capturelayer import (
     REGISTRY_DLL_SUBKEY, REGISTRY_KEY, virtualstore_copy,
 )
 from sm64_events.core.identity_privacy import contains_identity
-from sm64_events.core.plugin_installation import WRAPPER_DLL, WRAPPER_INI
+from sm64_events.core.plugin_installation import PLUGIN_DLL
 from sm64_events.core.renderer_settings import RENDERER_INI
 
 BASELINE_PATH = Path(__file__).resolve().parents[1] / "data" / "setup_baseline.json"
@@ -142,7 +146,7 @@ class SetupProfile:
         self._hashes: dict[str, tuple] = {}
         self._rdb: tuple | None = None
         self._last: dict | None = None
-        self._inputs: tuple = ({}, None)
+        self._inputs: tuple = ({}, None, None)
         self._from_registry: set = set()
 
     # -- cached file reads ---------------------------------------------------
@@ -176,11 +180,12 @@ class SetupProfile:
 
     # -- the comparison ------------------------------------------------------
 
-    def compare(self, layer: dict | None, rom: dict | None) -> dict:
-        """The setup check for this capture-layer status and loaded ROM."""
+    def compare(self, layer: dict | None, rom: dict | None, lab_roms: dict | None = None) -> dict:
+        """The setup check for this capture-layer status and loaded ROM. `lab_roms` is the Ghost Lab's
+        ROM store as the setup observer saw it (`RomStore.held`); without it there is no lab_rom row."""
         layer, rom = layer or {}, rom or {}
         with self._lock:
-            self._inputs = (layer, rom)
+            self._inputs = (layer, rom, lab_roms)
             self._from_registry = set()
             pj64 = Path(layer["pj64_dir"]) if layer.get("pj64_dir") else None
             plugin = Path(layer["plugin_dir"]) if layer.get("plugin_dir") else (pj64 / "Plugin" if pj64 else None)
@@ -194,8 +199,10 @@ class SetupProfile:
                 "audio_plugin": self._selected(plugin, "Audio Dll", "audio_plugin"),
                 "install_location": self._location(pj64, rdb_source),
                 "controller_plugin": self._selected(plugin, "Controller Dll", "controller_plugin"),
+                "lab_rom": self._lab_rom(lab_roms),
             }
-            items = [self._item(row, *readings[row["id"]]) for row in self.baseline["items"]]
+            items = [self._item(row, *readings[row["id"]]) for row in self.baseline["items"]
+                     if readings.get(row["id"]) is not None]
             for item in items:
                 # A per-ROM value that fell back to the registry default is
                 # shared too: every Project64 on this account reads it.
@@ -212,6 +219,11 @@ class SetupProfile:
                       "rdb": rdb_source,
                       "folder": self._folder(pj64, plugin, layer),
                       "items": items, "flagged": flagged,
+                      # The gate: the items a user must match or knowingly
+                      # skip (the wizard's warning). Only a proven difference
+                      # counts; "unknown" never accuses anyone.
+                      "gate_differs": [item["id"] for item in items if item["status"] == "differs"
+                                       and item["id"] in self.baseline.get("gate", ())],
                       "required_differs": sum(item["status"] == "differs" and item["importance"] == "required"
                                               for item in items),
                       "unknown": sum(item["status"] == "unknown" for item in items)}
@@ -221,12 +233,13 @@ class SetupProfile:
     def diagnostic_status(self, layer: dict | None = None, rom: dict | None = None) -> dict | None:
         """For reports: recompute from the given (or last) inputs with cached
         reads, never discovering a process; None before anything was seen."""
+        lab_roms = None
         if layer is None and rom is None:
-            layer, rom = self._inputs
+            layer, rom, lab_roms = self._inputs
             if not layer and not rom and self._last is None:
                 return None
         try:
-            return self.compare(layer, rom)
+            return self.compare(layer, rom, lab_roms)
         except Exception as error:  # noqa: BLE001 - a report must still build
             return {"error_type": type(error).__name__, "items": []}
 
@@ -257,7 +270,7 @@ class SetupProfile:
         if name is None:
             return "differs", "None selected"
         name = str(name)
-        return ("match", self._rows["graphics_plugin"]["tested"]) if name.lower() == WRAPPER_DLL.lower() \
+        return ("match", self._rows["graphics_plugin"]["tested"]) if name.lower() == PLUGIN_DLL.lower() \
             else ("differs", name)
 
     def _frame_buffer(self, plugin):
@@ -373,10 +386,21 @@ class SetupProfile:
         if any(_inside(pj64, folder) for folder in self._program_dirs):
             shadows = [virtualstore_copy(self._local_appdata, pj64, RDB)]
             if plugin is not None:
-                shadows += [virtualstore_copy(self._local_appdata, plugin, name)
-                            for name in (RENDERER_INI, WRAPPER_INI)]
+                shadows.append(virtualstore_copy(self._local_appdata, plugin, RENDERER_INI))
             location = "VirtualStore" if any(shadows) else "Program Files"
         return {"name": folder_name(pj64.name), "location": location, "running": layer.get("pj64_running") is True}
+
+    @staticmethod
+    def _lab_rom(lab_roms):
+        """The Ghost Lab's copy of the practice ROM (`scenelab/roms.py`, read by the setup observer): it matches
+        once the US build is kept, which the lab's re-simulation needs. None (no row) when no store watched."""
+        if not isinstance(lab_roms, dict):
+            return None
+        held = [(lab_roms.get(region) or {}, name) for region, name in (("us", "US"), ("jp", "JP"))]
+        found = [f"{row.get('version')} ({name})" for row, name in held if row.get("found")]
+        if held[0][0].get("found"):
+            return "match", "Found: " + " and ".join(found)
+        return "differs", f"Only {found[0]}" if found else "Not found"
 
     def _location(self, pj64, rdb_source):
         if pj64 is None:

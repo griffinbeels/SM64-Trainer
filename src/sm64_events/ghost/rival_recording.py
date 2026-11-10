@@ -635,6 +635,10 @@ class PopulationRecorder:
             return 0
         from sm64_events.ghost.adaptive import PracticeIdentity, rank_recordings
         from sm64_events.ghost.community_catalog import strategy_ghost_cutoff, within_ghost_ceiling
+        from sm64_events.tracking.activestrat import reds_pipe_segments
+        definitions = getattr(getattr(self.tracker, "db", None), "segment_defs", None)
+        # A reds->pipe segment grades on its paired star's ladder, as Practice does.
+        borrowed = reds_pipe_segments(definitions())[1] if definitions is not None else {}
         groups = {}
         for row in snapshot_all():
             key = (row["kind"], row["entity_key"], row.get("signature"),
@@ -643,7 +647,8 @@ class PopulationRecorder:
         doomed = []
         for (kind, entity, signature, clock, version, strategy), rows in groups.items():
             try:
-                identity = PracticeIdentity(kind, entity, clock, version, strategy, signature)
+                identity = PracticeIdentity(kind, entity, clock, version, strategy, signature,
+                                            ladder_key=borrowed.get(int(entity)) if kind == "segment" else None)
                 graded = rank_recordings(rows, ranks, identity)
                 slowest = strategy_ghost_cutoff(ranks, identity)  # once per group, not per row
             except (ValueError, LookupError):

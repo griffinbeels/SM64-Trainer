@@ -102,7 +102,8 @@ def test_the_installed_app_starts_the_helper_as_itself(monkeypatch):
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     command, identity, env = helper_launch()
     assert command == [sys.executable, process_worker.GPU_HELPER_FLAG]
-    assert env is None and identity["entry"] == str(Path(sys.executable).resolve())
+    assert env == {k: v for k, v in os.environ.items() if k != "__PYVENV_LAUNCHER__"}   # inherited, as a copy
+    assert identity["entry"] == str(Path(sys.executable).resolve())
     spawned = []
 
     class Job:
@@ -349,7 +350,36 @@ def test_portable_hardware_is_asked_and_nvidia_keeps_its_driver_requirement(monk
     api[0] = (12, 2)
     assert "too old" in gpuadapter.unsupported_reason(NVIDIA)
     api[0] = None
-    assert "driver" in gpuadapter.unsupported_reason(NVIDIA)
+    assert gpuadapter.unsupported_reason(NVIDIA) is None  # failed probe is unknown
+
+
+@pytest.mark.parametrize('failure', ['query', 'export', 'load'])
+def test_failed_nvenc_probe_is_unknown_instead_of_a_missing_driver_verdict(monkeypatch, failure):
+    class Function:
+        def __init__(self, operation):
+            self.operation = operation
+        def __call__(self, *args):
+            return self.operation(*args)
+    query = ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.POINTER(ctypes.c_uint32))(lambda _value: 1)
+    address = ctypes.cast(query, ctypes.c_void_p).value
+    released = []
+    kernel = NS(LoadLibraryExW=Function(lambda *_: 0 if failure == 'load' else 123),
+        GetProcAddress=Function(lambda *_: 0 if failure == 'export' else address),
+        FreeLibrary=Function(lambda handle: released.append(handle) or 1))
+    monkeypatch.setattr(ctypes, 'WinDLL', lambda *_args, **_kwargs: kernel)
+    monkeypatch.setattr(ctypes, 'get_last_error', lambda: 5)  # access failure, not module-not-found
+    assert gpuadapter.unsupported_reason(NVIDIA) is None
+    assert released == ([] if failure == 'load' else [123])
+
+
+def test_proven_nvenc_dll_absence_still_produces_a_driver_verdict(monkeypatch):
+    class Function:
+        def __call__(self, *_):
+            return 0
+    kernel = NS(LoadLibraryExW=Function(), GetProcAddress=Function(), FreeLibrary=Function())
+    monkeypatch.setattr(ctypes, 'WinDLL', lambda *_args, **_kwargs: kernel)
+    monkeypatch.setattr(ctypes, 'get_last_error', lambda: 126)  # ERROR_MOD_NOT_FOUND
+    assert 'video encoder driver' in gpuadapter.unsupported_reason(NVIDIA)
 
 
 def test_the_verdict_is_asked_once_per_adapter_and_driver(monkeypatch):

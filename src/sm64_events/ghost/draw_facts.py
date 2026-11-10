@@ -64,6 +64,7 @@ _LIST_WHY = {
     "stale": "the frame ended early or the ghost command changed",
     "close_dirty": "a graphics error happened while the ghost was drawn",
     "finalize": "the ghost drawer could not finish the picture",
+    "ineligible": "a GLideN64 setting blocks it (MSAA, FXAA, Overscan or the blit screen workaround)",
 }
 _PRESENT_WHY = {
     "unknown": "the renderer never offered it a picture to go in",

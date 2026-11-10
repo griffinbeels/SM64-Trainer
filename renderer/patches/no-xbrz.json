@@ -1,0 +1,53 @@
+{
+  "about": "Removes xBRZ (TextureFilters_xbrz.*, Zenju, GPL-3.0 only) from the renderer's prebuilt libraries, libGLideNHQ.lib and GLideNUI.lib: GLideN64 is GPL-2.0 only and cannot be combined with it. Applied by tools/build_renderer_libs.py to the pinned upstream tree; each `before` must occur exactly once.",
+  "edits": [
+    {
+      "file": "src/GLideNHQ/TxFilter.cpp",
+      "why": "The xBRZ enhancement modes enhance nothing, as None does.",
+      "before": "\t\t\tcase BRZ3X_ENHANCEMENT:\n\t\t\t\txbrz::init();\n\t\t\t\tif (srcwidth  <= (_maxwidth / 3) && srcheight <= (_maxheight / 3)) {\n\t\t\t\t\tfilter |= BRZ3X_ENHANCEMENT;\n\t\t\t\t\tscale = 3;\n\t\t\t\t\tnum_filters++;\n\t\t\t\t} else if (srcwidth  <= (_maxwidth >> 1) && srcheight <= (_maxheight >> 1)) {\n\t\t\t\t\tfilter |= BRZ2X_ENHANCEMENT;\n\t\t\t\t\tscale = 2;\n\t\t\t\t\tnum_filters++;\n\t\t\t\t}\n\t\t\tbreak;\n\t\t\tcase BRZ4X_ENHANCEMENT:\n\t\t\t\txbrz::init();\n\t\t\t\tif (srcwidth <= (_maxwidth >> 2) && srcheight <= (_maxheight >> 2)) {\n\t\t\t\t\tfilter |= BRZ4X_ENHANCEMENT;\n\t\t\t\t\tscale = 4;\n\t\t\t\t\tnum_filters++;\n\t\t\t\t} else if (srcwidth  <= (_maxwidth >> 1) && srcheight <= (_maxheight >> 1)) {\n\t\t\t\t\tfilter |= BRZ2X_ENHANCEMENT;\n\t\t\t\t\tscale = 2;\n\t\t\t\t\tnum_filters++;\n\t\t\t\t}\n\t\t\tbreak;\n\t\t\tcase BRZ5X_ENHANCEMENT:\n\t\t\t\txbrz::init();\n\t\t\t\tif (srcwidth <= (_maxwidth / 5) && srcheight <= (_maxheight / 5)) {\n\t\t\t\t\tfilter |= BRZ5X_ENHANCEMENT;\n\t\t\t\t\tscale = 5;\n\t\t\t\t\tnum_filters++;\n\t\t\t\t} else if (srcwidth  <= (_maxwidth >> 1) && srcheight <= (_maxheight >> 1)) {\n\t\t\t\t\tfilter |= BRZ2X_ENHANCEMENT;\n\t\t\t\t\tscale = 2;\n\t\t\t\t\tnum_filters++;\n\t\t\t\t}\n\t\t\tbreak;\n\t\t\tcase BRZ6X_ENHANCEMENT:\n\t\t\t\txbrz::init();\n\t\t\t\tif (srcwidth <= (_maxwidth / 6) && srcheight <= (_maxheight / 6)) {\n\t\t\t\t\tfilter |= BRZ6X_ENHANCEMENT;\n\t\t\t\t\tscale = 6;\n\t\t\t\t\tnum_filters++;\n\t\t\t\t}\n\t\t\t\telse if (srcwidth <= (_maxwidth >> 1) && srcheight <= (_maxheight >> 1)) {\n\t\t\t\t\tfilter |= BRZ2X_ENHANCEMENT;\n\t\t\t\t\tscale = 2;\n\t\t\t\t\tnum_filters++;\n\t\t\t\t}\n\t\t\t\tbreak;\n",
+      "after": "\t\t\tcase BRZ2X_ENHANCEMENT:\n\t\t\tcase BRZ3X_ENHANCEMENT:\n\t\t\tcase BRZ4X_ENHANCEMENT:\n\t\t\tcase BRZ5X_ENHANCEMENT:\n\t\t\tcase BRZ6X_ENHANCEMENT:\n\t\t\t\t// SM64 Trainer: xBRZ is not in this build (GPL v3 only; renderer/README.md): no enhancement.\n\t\t\tbreak;\n"
+    },
+    {
+      "file": "src/GLideNHQ/TextureFilters.cpp",
+      "why": "No xbrz::scale call: TextureFilters_xbrz.cpp is not compiled.",
+      "before": "\tcase BRZ2X_ENHANCEMENT:\n\t\txbrz::scale(2, (const uint32_t *)const_cast<const uint32 *>(src), (uint32_t *)dest, srcwidth, srcheight, xbrz::ColorFormat::ABGR);\n\treturn;\n\tcase BRZ3X_ENHANCEMENT:\n\t\txbrz::scale(3, (const uint32_t *)const_cast<const uint32 *>(src), (uint32_t *)dest, srcwidth, srcheight, xbrz::ColorFormat::ABGR);\n\treturn;\n\tcase BRZ4X_ENHANCEMENT:\n\t\txbrz::scale(4, (const uint32_t *)const_cast<const uint32 *>(src), (uint32_t *)dest, srcwidth, srcheight, xbrz::ColorFormat::ABGR);\n\treturn;\n\tcase BRZ5X_ENHANCEMENT:\n\t\txbrz::scale(5, (const uint32_t *)const_cast<const uint32 *>(src), (uint32_t *)dest, srcwidth, srcheight, xbrz::ColorFormat::ABGR);\n\treturn;\n\tcase BRZ6X_ENHANCEMENT:\n\t\txbrz::scale(6, (const uint32_t *)const_cast<const uint32 *>(src), (uint32_t *)dest, srcwidth, srcheight, xbrz::ColorFormat::ABGR);\n\t\treturn;\n",
+      "after": ""
+    },
+    {
+      "file": "src/GLideNHQ/TextureFilters.h",
+      "why": "The xBRZ header is no longer included.",
+      "before": "#include \"TextureFilters_xbrz.h\"\n",
+      "after": ""
+    },
+    {
+      "file": "projects/msvc/libGLideNHQ.vcxproj",
+      "why": "TextureFilters_xbrz.cpp (GPL-3.0) is not compiled.",
+      "before": "    <ClCompile Include=\"..\\..\\src\\GLideNHQ\\TextureFilters_xbrz.cpp\" />\n",
+      "after": ""
+    },
+    {
+      "file": "src/GLideNUI/Settings.cpp",
+      "why": "An ini or per-game setting that names an xBRZ mode (9 to 13) loads as None (0).",
+      "before": "\tconfig.textureFilter.txEnhancementMode = settings.value(\"txEnhancementMode\", config.textureFilter.txEnhancementMode).toInt();\n",
+      "after": "\tconfig.textureFilter.txEnhancementMode = settings.value(\"txEnhancementMode\", config.textureFilter.txEnhancementMode).toInt();\n\tif (config.textureFilter.txEnhancementMode > 8) // SM64 Trainer: xBRZ is not in this build (GPL v3 only; renderer/README.md)\n\t\tconfig.textureFilter.txEnhancementMode = 0;\n"
+    },
+    {
+      "file": "src/GLideNUI/configDialog.ui",
+      "why": "The settings window no longer offers the five xBRZ modes (the last five entries).",
+      "before": "                      <item>\n                       <property name=\"text\">\n                        <string notr=\"true\">2xBRZ</string>\n                       </property>\n                      </item>\n                      <item>\n                       <property name=\"text\">\n                        <string notr=\"true\">3xBRZ</string>\n                       </property>\n                      </item>\n                      <item>\n                       <property name=\"text\">\n                        <string notr=\"true\">4xBRZ</string>\n                       </property>\n                      </item>\n                      <item>\n                       <property name=\"text\">\n                        <string notr=\"true\">5xBRZ</string>\n                       </property>\n                      </item>\n                      <item>\n                       <property name=\"text\">\n                        <string notr=\"true\">6xBRZ</string>\n                       </property>\n                      </item>\n",
+      "after": ""
+    },
+    {
+      "file": "src/GLideNUI/configDialog.ui",
+      "why": "The deposterize option no longer recommends xBRZ.",
+      "before": "&lt;/p&gt;&lt;p&gt;[Recommended:&lt;span style=&quot; font-style:italic;&quot;&gt; Checked for xBRZ&lt;/span&gt;]&lt;/p&gt;&lt;/body&gt;",
+      "after": "&lt;/p&gt;&lt;/body&gt;"
+    },
+    {
+      "file": "src/GLideNUI/configDialog.ui",
+      "why": "The deposterize option no longer recommends xBRZ.",
+      "before": "<string>Decrease color banding (recommended for xBRZ enhancement)</string>",
+      "after": "<string>Decrease color banding</string>"
+    }
+  ]
+}

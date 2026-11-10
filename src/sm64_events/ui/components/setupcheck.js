@@ -9,9 +9,13 @@ import { useEffect, useState } from "preact/hooks";
 import htm from "htm";
 import { getJSON } from "../api.js";
 import { Modal } from "./modal.js";
+import { PRIVACY, RomPickButton } from "./rompick.js";
 
 const html = htm.bind(h);
 const STATUS_WORDS = { differs: "Different", unknown: "Can't tell", match: "Same" };
+// The Ghost Lab's copy of the practice ROM (setup_profile.py `lab_rom`): the one row with an action of its own,
+// shown while the US ROM is missing. It is not a Project64 setting, so it never explains unseen ghosts.
+export const LAB_ROM = "lab_rom";
 
 /** How often an open Check my setup reads again, so opening or closing a ROM shows at once. */
 export const SETUP_CHECK_POLL_MS = 1000;
@@ -58,6 +62,8 @@ function SetupCheckItem({ item, highlighted }) {
     </dl>
     ${item.shared && html`<p class="setup-check-shared">Every Project64 on this Windows account uses this setting.</p>`}
     ${item.fix && html`<p class="setup-check-fix">${item.fix}</p>`}
+    ${item.id === LAB_ROM && item.status === "differs" && html`<div class="setup-check-action">
+      <${RomPickButton} region="us"/><p class="setup-check-shared">${PRIVACY}</p></div>`}
     ${item.fix && !noted && html`<p class="setup-check-links">
       <a href=${item.link} target="_blank" rel="noopener noreferrer">How to fix ↗</a>
       ${item.download && html`<a href=${item.download} target="_blank" rel="noopener noreferrer">Download ↗</a>`}
@@ -82,9 +88,11 @@ function FolderLine({ folder }) {
     ${" "}(${PLACES[folder.location] || folder.location}${folder.running ? "" : ", not running"})</p>`;
 }
 
+// The rows are Project64's settings and, for the Ghost Lab, whether the Trainer has the game's ROM: an item, not a
+// setting, so the count names neither.
 function summary(check) {
   const count = check.flagged.length;
-  if (count) return `${count} ${count === 1 ? "setting is" : "settings are"} different from the tested setup.`;
+  if (count) return `${count} ${count === 1 ? "item needs" : "items need"} your attention.`;
   return check.unknown ? "We couldn't check everything. The rest matches the tested setup."
     : "Your setup matches the tested setup.";
 }
@@ -111,7 +119,7 @@ export function GhostSetupNotice({ session }) {
   const stalled = session?.display_stalled === true;
   const { check } = useSetupCheck(stalled);
   const [open, setOpen] = useState(false);
-  const flagged = stalled ? check?.flagged || [] : [];
+  const flagged = stalled ? (check?.flagged || []).filter(id => id !== LAB_ROM) : [];
   return html`${flagged.length > 0 && html`<div class="ghost-setup-notice" role="status" data-testid="ghost-setup-notice">
       <p>Ghosts aren't showing. Your Project64 setup is different from the tested setup.</p>
       <button type="button" onclick=${() => setOpen(true)}>Check my setup</button>
@@ -124,7 +132,7 @@ export function SetupCheckNotes({ check }) {
   const flagged = check?.flagged || [];
   if (!flagged.length) return null;
   return html`<div class="setup-check-notes" data-testid="setup-check-notes">
-    <p>These settings are different from the tested setup. You can still practice.</p>
+    <p>These items need your attention. You can still practice.</p>
     <${SetupCheckList} check=${check} only=${flagged}/>
   </div>`;
 }

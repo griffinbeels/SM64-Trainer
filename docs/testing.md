@@ -17,6 +17,11 @@ wrappers see [local verification](local-verification.md).
 | **Merge check** | `uv run python tools/run_tests.py` (`--why` shows the selection) | the **blast radius**: the tests this change can affect | for one of two slots |
 | **Full run** | GitHub Actions, every push to main; `uv run python tools/full_run.py status` | the whole suite, browser tests included, split across parallel jobs | not on this machine |
 
+The admission lock and runner registry in `tools/test_resources.py` use
+`tempfile.gettempdir()`. Keep the normal shared `TEMP`/`TMP` location across
+worktrees; pytest's `--basetemp` places case artifacts without splitting that
+machine-wide coordination.
+
 The merge check gates a merge; the full run gates a release (`tools/release.py`
 waits for a green one on the commit it releases). **Wrap runs the merge check
 once; don't run it yourself first.** A direct `run_tests.py` run leaves no
@@ -107,8 +112,10 @@ instead of two cut the median browser job by 11% and not the wall
 files, whose tests share a page (about three minutes each), plus setup.
 
 Per job: `uv sync --frozen` from uv's cache, Node 24 and the pinned Node tools
-(cached), ffmpeg (the gyan.dev build the desktop app bundles, pinned by
-`FFMPEG_BUILD`, cached: a newer build broke the CFR sink's audio), and on
+(cached), ffmpeg (the pinned build the desktop app bundles, with the
+ffprobe.exe the tests count with: the `ffmpeg` job makes it with
+`tools/build_ffmpeg.py`, about 20 minutes when its recipe changes and a cache
+hit otherwise, and hands it to every job), and on
 browser jobs only Chromium (cached) and uilab at `UILAB_REF` (bump it after
 pushing uilab). A test running past five minutes prints every thread's stack.
 A newer push to main cancels an older run on main; nightly runs and other
@@ -155,6 +162,22 @@ tripwire in `tests/conftest.py`); `tests/test_test_lanes.py` checks the
 classification against an independent token scan. A merge check whose radius
 holds browser tests refuses to start without uilab.
 
+No browser a test or tool launches may reach the operating system's pointer
+lock: on Windows it confines the real cursor to the test's viewport, which
+walled Griffin's mouse in while he played (2026-10-26). `tools/browser_guard.py`
+gives every Playwright context an in-page stand-in (installed by
+`tests/conftest.py`, by `tools/find_uilab.py`, and by any tool that imports
+Playwright itself); check `window.__pointerLockStandIn.armed()` before a
+right press. `tests/test_browser_guard.py` scans every launch path, and every
+browser-lane test fails, freeing the cursor, if it leaves the cursor clipped.
+
+The same door raises Chromium's resource-timing buffer in every page. By default
+Chromium keeps 250 entries and silently drops the rest, and the app loads about
+260 at startup once its database has attempts (2026-11-08). A probe that waits
+for one request's `performance.getEntriesByType('resource')` entry can rely on
+it; one that wants only its own gesture's requests calls
+`performance.clearResourceTimings()` first.
+
 ## One budget across worktrees
 
 A merge check (or `--all`) takes one of two OS-lock slots before creating any
@@ -188,6 +211,16 @@ cancels it (`tools/verify_full.py` uses 30).
 A whole-suite run (each full-run job) fails on a skip whose reason is not in
 `tests/skip_inventory.py`; a narrowed run may skip freely. Add a row only for
 something the machine genuinely cannot run, saying what would lift it.
+
+## His real user data is fenced off
+
+Every test's per-user roots (the app's user data, the Slot Library, the scene lab and the shared installation
+record) land in that test's own temporary folder: `tests/conftest.py::_fence_user_data` rebinds
+`core/paths.py::local_app_data`, the one door they all join their folders to, while LOCALAPPDATA still names his
+real folder. A test that sets its own LOCALAPPDATA keeps it. A test that must reach his real data says so with
+`@pytest.mark.real_user_data(reason=...)`. The fence does not reach a child process or a module that reads
+LOCALAPPDATA itself, which is why every per-user root goes through `core/paths.py`. Why: on 2026-11-08 his Slot
+Library held this suite's fake slot as a captured state. `tests/test_user_data_fence.py` holds the fence.
 
 ## Native host builds
 

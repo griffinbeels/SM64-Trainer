@@ -121,8 +121,13 @@ class SteadyChecks:
                 for name, value in checks.items()}
 
 
-def readiness(layer, observation: dict) -> dict:
-    """The current next action. JP bypasses only unimplemented tracking."""
+def readiness(layer, observation: dict, *, fixups_needed: bool = False) -> dict:
+    """The current next action. JP bypasses only unimplemented tracking.
+
+    `fixups_needed`: the setup check proved the PJ64 Fixups missing and the
+    user has not accepted the warning. That is its own step, right after the
+    plugin install and before the game opens, because both need Project64
+    closed; accepting the warning (or installing them) moves on."""
     target = observation.get("target", {})
     rom = observation.get("rom", identify_rom(None))
     checks = observation.get("checks", {})
@@ -132,6 +137,10 @@ def readiness(layer, observation: dict) -> dict:
     elif not installed:
         step = "close" if layer.pj64_running else "install"
         message = "Close Project64 before installing." if layer.pj64_running else "Install Practice Replay."
+    elif fixups_needed:
+        step = "close" if layer.pj64_running else "fixups"
+        message = ("Close Project64 before installing the PJ64 Fixups." if layer.pj64_running
+                   else "Install the PJ64 Fixups.")
     elif not layer.pj64_running:
         step, message = "reopen", "Open Project64 v1.6."
     elif rom["state"] == "missing":

@@ -13,8 +13,9 @@ themselves, and this page is where a behavior gets its full description.
    `%LOCALAPPDATA%\Programs\SM64Trainer`, puts an **SM64 Trainer** shortcut on
    your Desktop, and launches. **That shortcut is your launcher from now on** —
    it keeps working no matter how many updates land.
-3. **Follow the setup wizard.** Select Emulator, open Project64 1.6 so the
-   trainer can find it, close it to install Practice Replay, then reopen it
+3. **Follow the setup wizard.** Select Emulator, download Wermi's Build v7
+   of Project64 1.6 from the wizard's button and open it so the trainer can
+   find it, close it to install Practice Replay and the PJ64 Fixups, then reopen it
    and load Usamune v1.93u (US), **windowed**. Setup checks the game, replay
    pictures and inputs before **Ready to practice!** takes you to Practice.
 
@@ -52,6 +53,12 @@ only the first manual download does.)
 - **Windowed**, not exclusive fullscreen, or replay capture can't see the game.
 - Your data lives in `%LOCALAPPDATA%\SM64Trainer\` and survives every update.
 
+**Course pictures come from your own ROM.** The Trainer does not ship any of
+the game's pictures. Once it has found your Usamune ROM, it copies each
+course's painting out of that ROM on your computer and keeps the copies in
+your data folder. Until then, each course shows a plain tile with its short
+name, such as "BoB". Nothing from your ROM is uploaded.
+
 **Setup and Practice Replay.** Each page shows the current action, with
 optional help for getting Project64, setting up your own Usamune ROM, and
 configuring the game/controller. Pages advance after a visible acknowledgment;
@@ -67,20 +74,39 @@ plugin is fine; it is only noted. If ghosts stop showing and your setup differs,
 the practice card says so and opens this check for you. The setup wizard's
 last page lists any differences too, but never stops you from practicing.
 
-Already set up? The trainer compares the installed wrapper's SHA-256 hash with
-this build and checks its selected graphics configuration. A matching installation
+**Your ROM for the Ghost Lab.** The Ghost Lab plays ghosts with your own Usamune
+ROM. You don't have to do anything: while setup watches your game, the trainer
+copies the Usamune ROM you have open in Project64, and it finds the other version
+(US or JP) in Project64's ROM folder if you have it there. The copy stays on your
+computer, in `%LOCALAPPDATA%\SM64Trainer\scene-lab\roms`, and is never uploaded.
+The trainer only reads Project64's files and never changes them. If the trainer
+can't find the US ROM, **Check my setup** and the Ghost Lab show a
+**Choose ROM file** button so you can pick it once.
+
+Already set up? The trainer compares the installed graphics plugin's build with
+this build and checks Project64's selected graphics plugin. A matching installation
 skips automatic onboarding, including in a fresh worktree. A stale or incomplete
 installation opens its repair step directly. Only Project64 installation metadata
 is shared across checkouts; your practice data stays in its existing location.
 
-Installing Practice Replay adds a **capture layer** to Project64's plugin
-folder and selects it as the `Graphics Dll`: the trainer's own renderer
-(`sm64_trainer_gfx.renderer`, LINK's GLideN64 v4.2 with the capture hooks,
-GPL-2.0, credits in its About box) and the capture wrapper (`SM64 Trainer
-v1.0`) that loads it and supplies replay pictures stamped with the game's
-frame counter and inputs. Project64's plugin list shows only `SM64 Trainer
-v1.0`; an older install's second entry goes away when the trainer updates
-it. Your existing graphics plugin stays in the folder
+**The tested setup.** The trainer is built and tested with Wermi's Build v7
+of Project64 1.6 and the PJ64 Fixups 2.0, the standard setup for SM64
+speedrunning. The wizard checks both. With another build or without the
+fixups, it stops and shows how to fix it; **Continue anyway** opens a warning
+first, because ghosts and replays may not work on a setup we never tested.
+Install downloads the fixups (`RSP.dll`) from their author's GitHub page and
+keeps your old file beside it as `RSP.before-fixups`. If you continued
+anyway, **Fix my setup** stays available in Settings → Setup.
+
+Installing Practice Replay adds one file to Project64's plugin folder,
+`sm64_trainer_gfx.dll`, and selects it as the `Graphics Dll` (`SM64 Trainer
+v1.0` in Project64's list). It is the trainer's own graphics plugin: LINK's
+GLideN64 v4.2 (GPL-2.0, credits in its About box) with the **capture layer**
+built in, which supplies replay pictures stamped with the game's frame counter
+and inputs. An older trainer installed more files (`sm64_trainer_gfx.ini`,
+`sm64_trainer_gfx.renderer` or `GLideN64_SM64Trainer.dll`); the trainer
+removes its own copies of those when it updates the plugin, and your choice in
+Project64 stays as it is. Your existing graphics plugin stays in the folder
 untouched. Install also turns off frame buffer emulation in the folder's
 `GLideN64.ini`, and makes that file if it is missing. With this setting on,
 ghosts do not show and the game lags. If the setting gets turned on again, the
@@ -123,9 +149,29 @@ Choosing a strategy also classifies pending attempts and automatically saves
 the fastest eligible success as GOLD. Correcting the latest attempt's strategy
 saves it when it beats that strategy's PB, with the usual rank celebration.
 
+**See your PB history.** The practice log hides resets and deaths from the
+start, so each card shows the runs you finished. To see them again, open the
+log's settings (the gear) and turn off **Hide resets and deaths**. Press
+**PBs only** beside the gear to see every time you beat your own best: each
+card then lists only the runs that set a new personal best, newest first.
+PBs only shows every session, so the Session card switches to Lifetime. When
+you turn PBs only off, the log goes back to the session you were looking at.
+When the Ghost Lab is on, every run with a ghost has a Ghost button that opens
+it there. If the Ghost Lab has no recording of that run, it builds the scene
+from the ghost.
+
 **Segments.** Not just stars: define any repeatable piece of the run (LBLJ,
 a pipe entry, a Bowser fight, a castle movement) and it becomes a first-class
 practice target with the same history, PBs, ranks and replays a star gets.
+
+**Ghost Lab.** Open **Ghost Lab** in the sidebar to watch a ghost from any angle:
+your own runs, and other players' ghosts for the star you pick. It works as soon as
+the setup wizard is done; there is nothing else to set up. Pick a star, then a
+ghost. The Ghost Lab plays the run again inside a copy of the game that runs on
+your computer, so you can move the camera anywhere, step one frame at a time, and
+press 1 to 9 to put that moment into the matching Usamune save state slot. After
+setup, the trainer prepares each course in the background while your computer is
+not busy, so ghosts open quickly later. It pauses whenever your game runs slow.
 
 **Ghost Overlay.** Race recorded Mario poses in the game window, following the
 live camera and terrain through the trainer's GLideN64 renderer. Adjust colour,
@@ -141,6 +187,30 @@ recorded on this computer go on your account, and other players can race them. O
 the first account that shares from this computer gets them. You can turn sharing off
 in your account settings. If you press **Remove shared ghosts**, your older ghosts
 will not upload again by themselves.
+
+**What a shared ghost carries.** A shared ghost carries Mario's poses, the camera,
+the timing and your controller inputs, with your player name. It can also carry its
+start: a copy of the game's memory when the run begins, about 21 KB. The start
+includes your save file's star flags and your practice ROM's settings. With it,
+another player can replay your whole run exactly. Players who can download the ghost
+can also download its start, and the start is deleted with the ghost or your account.
+Your ROM, videos and full practice history are never uploaded. When the privacy
+notice changes, the app asks you to read and accept it once. Until you accept,
+uploads wait: ghosts you finish in the meantime are kept and upload afterwards.
+
+**Free up space from ghosts.** Settings shows how much space ghost files use on
+this computer under **Ghost files**. **Delete ghosts, keep PBs** deletes every
+ghost except your PB ghosts, the ghosts you saved and the ghosts you imported. It
+keeps every PB you ever set, not only your newest one, so your whole PB history
+stays. The Ghost Lab also makes a scene ahead of time for each PB ghost, so it opens
+at once. That scene is about 3 MB, counts with its ghost, and stays or goes with it.
+**Delete all ghosts** deletes those too. Each button says how many ghosts and how
+many MB it frees, and asks before it deletes. Neither one touches your times, your
+saved replays and their videos, your scene clips, your save states, or the ghosts
+you shared online. A ghost that is waiting to upload, or that keeps a run with no
+strategy in your practice log, stays. A ghost the game is racing right now stays
+too, and the app tells you how many stayed. Downloaded community ghosts download
+again the next time you race them.
 
 **Share ghosts.** Open **Ghost Library · Import / Export** from a star or segment.
 Export that target's overall best, each strategy's best, all your personal bests,

@@ -1,6 +1,8 @@
 import asyncio
 from datetime import datetime, timezone
 
+import pytest
+
 from sm64_events.core.events import Event
 from sm64_events.server.broadcaster import Broadcaster
 from sm64_events.storage.db import Database
@@ -437,6 +439,49 @@ def test_a_save_state_success_is_absent_from_progress_even_with_a_saved_pb(tmp_p
     points = sec["progress"]["sessions"][0]["points"]
     assert [p["attempt_id"] for p in points] == [clean.id]
     assert all(not p["is_pb_igt"] for p in points)
+
+
+def test_every_row_that_set_a_pb_says_so_on_the_views_clock(tmp_path):
+    """The practice log's PBs filter (his ask, 2026-11-09: "see my PB progression directly in the practice
+    log"): a row that saved a PB says `set_pb`, the current PB and the one it beat alike; a row with no saved
+    PB, or a PB on the other clock only, does not."""
+    db, svc = make(tmp_path)
+    seed(svc)
+    asyncio.run(svc.set_strat(2, 2, "Standard", save_adopted=False))
+    a343 = next(a.id for a in db.attempts() if a.igt_frames == 343)
+    a350 = next(a.id for a in db.attempts() if a.igt_frames == 350)
+    save_pb(svc, db, a350, "igt")
+    save_pb(svc, db, a343, "igt")     # supersedes a350 as current PB
+    [sec] = build_session_view(db, svc, clock="igt")["stars"]
+    flags = {row["id"]: row["set_pb"] for row in sec["attempts"]}
+    assert flags[a343] is True and flags[a350] is True and sum(flags.values()) == 2
+    [rta] = build_session_view(db, svc, clock="rta")["stars"]
+    assert not any(row["set_pb"] for row in rta["attempts"])     # those were IGT PBs
+
+
+@pytest.mark.parametrize("proof", [
+    {"anchor_type": "state_loaded"}, {"state_loads": 1},
+    {"invalid_reason": "save_state", "valid": False}, {"outcome": "loaded"},
+])
+def test_every_attempt_row_carries_the_save_state_verdict(tmp_path, proof):
+    """The browser reads `save_state` (goal plate, log filter) and never
+    restates the predicate, so every row the session view ships carries
+    caveats.save_state_run's own answer: True on save-state practice, False
+    on the clean control beside it."""
+    from dataclasses import replace
+
+    from sm64_events.tracking.caveats import save_state_run
+
+    db, svc = make(tmp_path)
+    seed(svc)
+    attempts = db.attempts()
+    clean, partial = [a for a in attempts if a.outcome == "success"]
+    partial = replace(partial, **proof)
+    db.replace_attempts([partial if a.id == partial.id else a for a in attempts])
+    [sec] = build_session_view(db, svc, clock="igt")["stars"]
+    rows = {row["id"]: row for row in sec["attempts"]}
+    assert rows[clean.id]["save_state"] is False
+    assert rows[partial.id]["save_state"] is True is save_state_run(partial)
 
 
 def test_progress_superseded_pbs_stay_gold(tmp_path):

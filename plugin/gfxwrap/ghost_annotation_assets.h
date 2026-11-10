@@ -3,6 +3,7 @@
 #pragma once
 #include "ghost_annotation.h"
 #include <array>
+#include <atomic>
 namespace ghost_annotation {
 // Atlas cells (pixels, row 0 at the top). Dialogue glyph c sits at
 // ((c%32)*8, (c/32)*16); everything else below it.
@@ -39,8 +40,17 @@ constexpr uint8_t floor=89;
 struct UsFont {
     std::array<uint8_t,32> present{};       // bit c of byte c/8: code c has a tile
     std::array<uint8_t,256*64> tiles{};     // code c's tile at c*64
+    std::array<uint8_t,256> widths{};       // code c's advance (gDialogCharWidths)
 };
 constexpr char us_font_sha256[]="b34b151dd4caf9b82ad34605584fd90e1b393e6a2a43163f53b3843313a35ca6";
+// The US dialogue advances, read from the cartridge's own gDialogCharWidths
+// (256 bytes at ROM 0xEC370 in stock US and Usamune US, 2026-11-09); never
+// compiled in. Its SHA-256, which the font cache also holds the widths to:
+constexpr char us_widths_sha256[]="f651695186c26c8e44b0bbe0109053ccfb657f8de2f2f90f402d40fde3419147";
+// The advances of the US font the last atlas loaded (its own cartridge's, or
+// the ones a JP atlas borrowed with the font). Every load writes the same
+// values; zero until one has, when no atlas is ready to draw names with.
+inline std::array<std::atomic<uint8_t>,256> us_advances{};
 struct Assets {
     std::array<uint8_t,atlas_width*atlas_height*4> rgba{};
     bool ready=false,usamune=false,chevron=false;
@@ -54,7 +64,7 @@ struct Assets {
     View view() const {return ready?View{rgba.data(),atlas_width,atlas_height,usamune}:View{};}
 };
 // Pinned n64decomp 06ec56df7f951f88da05f468cdcacecba496145a:
-// charmap.txt, ingame_menu.c:gDialogCharWidths, segment2.c:font LUT.
+// charmap.txt, segment2.c:font LUT (the widths are the cartridge's, above).
 // An underscore uses the canonical hyphen stroke lowered to the baseline.
 // Glyph cells are named by these US codes on both cartridges: a JP atlas
 // fills each from JP's own font (Assets::load says which glyph).
@@ -80,14 +90,10 @@ inline bool supported(uint32_t c) {return c=='?' || glyph(c)!=glyph('?');}
 inline uint8_t jp_advance(uint8_t c) {
     return c==0x9e || c==0x3e || c==0x3f || c==0xe6 ? 5 : 10;
 }
+// US: the cartridge's own advance for the code; the underscore, drawn with
+// the hyphen's stroke, takes the hyphen's.
 inline uint8_t advance(uint8_t c,uint8_t font=font::us) {
     if(font==font::jp)return jp_advance(c);
-    constexpr uint8_t first[]={7,7,7,7,7,7,7,7,7,7,6,6,6,6,6,6,6,6,5,6,6,5,8,8,6,6,6,6,6,5,6,6,
-        8,7,6,6,6,5,5,6,5,5,6,5,4,5,5,3,7,5,5,5,6,5,5,5,5,5,7,7,5,5,4,4};
-    if(c<sizeof(first))return first[c];
-    switch(c) {case 0x50:case 0x51:case 0x52:case 0x53:return 8;case 0x6f:return 4;
-    case 0x9e:return 5;case underscore:case 0x9f:return 6;case 0xd0:return 7;case 0xe1:return 5;case 0xe3:return 5;
-    case 0xe4:return 9;case 0xe5:return 8;case 0xe6:return 4;case 0xf2:return 5;case 0xf3:return 7;
-    case 0xf4:return 7;case 0xf7:return 8;case 0xf9:return 8;default:return 7;}
+    return us_advances[c==underscore?0x9f:c].load(std::memory_order_relaxed);
 }
 }

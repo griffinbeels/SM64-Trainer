@@ -46,8 +46,8 @@ def main() -> int:
     second = Pj64Memory()
     second.attach()
     reads: list[int] = []
-    read = second._pm.read_bytes
-    second._pm.read_bytes = lambda address, size: reads.append(size) or read(address, size)
+    read = second._process.read
+    second._process.read = lambda address, size: reads.append(size) or read(address, size)
     again = time.perf_counter()
     same = second.rom_header()
     again = time.perf_counter() - again

@@ -88,10 +88,14 @@ void abandon(Instance*); // lost context; no GL calls
 void set_provider(ImageProvider,PresentationNotice,ImageValidity);
 void clean_consumer(bool negotiated);
 bool clean_consumer();
+// Independent display demand; never negotiates or starts a recording source.
+void live_consumer(bool active);
 // The ghost copy's lane: any thread. Off, record_display copies nothing.
 void display_consumer(bool active);
 bool display_consumer();
-void context_ready();
+bool context_ready(); // false: setup refused this time; retry on a bounded later list
+bool eligible(); // renderer settings can present this optional overlay this list
+uint32_t ineligible_reasons(); // 1 MSAA, 2 FXAA, 4 blit workaround, 8 overscan
 void context_stopping();
 void drawable_changing(); // invalidate pictures before resize; retain live context resources
 void begin_update(uint64_t source_occurrence);

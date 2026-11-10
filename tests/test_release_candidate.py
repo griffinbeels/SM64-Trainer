@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import runpy
 import sys
+import zipfile
 
 import pytest
 
@@ -13,12 +14,18 @@ import release_candidate as candidate
 import release_flow
 from make_manifest import build_zip, make_manifest
 from sm64_events.core.build_channel import BuildChannel, CONFIG_FILENAME
+from sm64_events.core.update_plan import (BUNDLED_NATIVES, LAB_NATIVES, NATIVE_FOLDER, RETIRED_NATIVE_TEXT,
+                                          RETIRED_NATIVES)
 from test_bootstrap_installer import _app_files
 
 
-def prepared(tmp_path, *, private=True, version="1.10.0-beta.1", manifest_version=None):
+def prepared(tmp_path, *, private=True, version="1.10.0-beta.1", manifest_version=None, placeholder=None):
     app = tmp_path / "app"
     files = _app_files(b"FROZEN-APP")
+    files.update({f"{candidate.LAB_FOLDER}/{name}": b"LAB NATIVE " + name.encode() for name in LAB_NATIVES})
+    files[candidate.SIM_PROGRAM] = b"MZ SIMULATION PROGRAM"
+    if placeholder is not None:
+        files.update({f"{NATIVE_FOLDER}/{name}": placeholder for name in RETIRED_NATIVES})
     build = BuildChannel(channel="beta", build_id="qa-1", installation="normal")
     files["_internal/" + CONFIG_FILENAME] = json.dumps(build.metadata()).encode()
     files["_internal/release-version.json"] = json.dumps({"schema": 1, "version": version}).encode()
@@ -33,10 +40,14 @@ def prepared(tmp_path, *, private=True, version="1.10.0-beta.1", manifest_versio
     (directory / "SM64Trainer.exe").write_bytes(b"BOOTSTRAP")
     for name in ("SM64Trainer-full.zip", "manifest.json", "SM64Trainer.exe"):
         release.write_sha(directory / name)
+    for asset in release.source_assets(directory):   # stand-in source archives, sidecars beside them
+        if not asset.name.endswith(".sha256"):
+            asset.write_bytes(b"SOURCE ARCHIVE " + asset.name.encode())
+            release.write_sha(asset)
     lock = tmp_path / "uv.lock"
     lock.write_bytes(b"LOCKED DEPENDENCIES")
     hook, _ = build_exe.stage_version(tmp_path / "hooks", version)
-    candidate.record_candidate(directory, version=version, build=build, artifacts=release.release_assets(directory),
+    candidate.record_candidate(directory, version=version, build=build, artifacts=release.candidate_assets(directory),
                                source_commit="a" * 40, lock=lock, app=app, version_hook=hook, private=private,
                                service_provenance={"worker_commit": "b" * 40, "catalog_sha256": "c" * 64})
     return directory, app, build
@@ -44,26 +55,76 @@ def prepared(tmp_path, *, private=True, version="1.10.0-beta.1", manifest_versio
 
 def test_candidate_binds_all_six_artifacts_runtime_version_native_and_public_config(tmp_path):
     directory, _, build = prepared(tmp_path)
-    record = candidate.verify_artifacts(directory, expected_assets=[p.name for p in release.release_assets(directory)])
+    record = candidate.verify_artifacts(directory, expected_assets=[p.name for p in release.candidate_assets(directory)])
     assert record["version"] == "1.10.0-beta.1"
-    assert len(record["artifacts"]) == 6
-    assert len(record["native_sha256"]) == 3
+    assert set(record["artifacts"]) == {p.name for p in release.candidate_assets(directory)}
+    assert {p.name for p in release.release_assets(directory)} < set(record["artifacts"])
+    assert any(name.endswith("-source-ffmpeg.tar") for name in record["artifacts"])
+    assert set(record["native_sha256"]) == set(BUNDLED_NATIVES)
+    assert set(record["lab_native_sha256"]) == set(LAB_NATIVES)
     assert record["public_config_sha256"] == candidate.public_fingerprint(build)
     assert record["service"]["catalog_sha256"] == "c" * 64
     assert "friend_invitation" not in (directory / candidate.RECORD).read_text()
+
+
+@pytest.mark.parametrize("fault", ["changed", "unrecorded"])
+def test_candidate_refuses_a_lab_native_other_than_the_one_it_recorded(tmp_path, fault):
+    """The installed app runs the Ghost Lab's natives and never compiles them: their bytes are
+    as much the candidate as the plugin's (core/update_plan.py LAB_NATIVES)."""
+    directory, _, _ = prepared(tmp_path)
+    record = candidate.read_record(directory)
+    if fault == "changed":
+        record["lab_native_sha256"]["viewer_host.exe"] = "0" * 64
+    else:
+        del record["lab_native_sha256"]["scene_cxd4.dll"]
+    (directory / candidate.RECORD).write_text(json.dumps(record))
+    with pytest.raises(ValueError, match="lab native provenance"):
+        candidate.verify_artifacts(directory, expected_assets=[p.name for p in release.candidate_assets(directory)])
+
+def test_candidate_refuses_a_simulation_program_other_than_the_one_it_recorded(tmp_path):
+    """SM64TrainerSim.exe is the only program that runs Unicorn: its bytes are recorded like the natives'."""
+    directory, _, _ = prepared(tmp_path)
+    record = candidate.read_record(directory)
+    assert len(record["sim_program_sha256"]) == 64
+    record["sim_program_sha256"] = "0" * 64
+    (directory / candidate.RECORD).write_text(json.dumps(record))
+    with pytest.raises(ValueError, match="simulation program provenance"):
+        candidate.verify_artifacts(directory, expected_assets=[p.name for p in release.candidate_assets(directory)])
 
 
 def test_candidate_detects_artifact_changed_after_preparation(tmp_path):
     directory, _, _ = prepared(tmp_path)
     (directory / "SM64Trainer.exe").write_bytes(b"REPLACED BOOTSTRAP")
     with pytest.raises(ValueError, match="changed"):
-        candidate.verify_artifacts(directory, expected_assets=[p.name for p in release.release_assets(directory)])
+        candidate.verify_artifacts(directory, expected_assets=[p.name for p in release.candidate_assets(directory)])
+
+
+@pytest.mark.parametrize("path", [
+    "_internal/local-service.json", "_internal/sm64_events/data/local-service.json",
+    "_internal/sm64_events/ui/local-settings.js", "_internal/SM64_EVENTS/data/local-service.json",
+    "_internal/eos-private/client.json", "_internal/eos-sdk/SDK/header.h",
+])
+def test_candidate_checks_zip_paths_even_with_consistent_manifests_and_receipts(tmp_path, path):
+    directory, _, _ = prepared(tmp_path)
+    archive_path = directory / "SM64Trainer-full.zip"
+    with zipfile.ZipFile(archive_path, "a") as archive:
+        archive.writestr(path, b"synthetic incidental local input")
+    (directory / "manifest.json").write_text(make_manifest(archive_path, "1.10.0-beta.1"))
+    for name in ("SM64Trainer-full.zip", "manifest.json", "SM64Trainer.exe"):
+        release.write_sha(directory / name)
+    record = candidate.read_record(directory)
+    assets = release.candidate_assets(directory)
+    record["artifacts"] = {asset.name: {"sha256": candidate.digest(asset), "size": asset.stat().st_size}
+                           for asset in assets}
+    (directory / candidate.RECORD).write_text(json.dumps(record))
+    with pytest.raises(ValueError, match="unexpected"):
+        candidate.verify_artifacts(directory, expected_assets=[asset.name for asset in assets])
 
 
 def test_candidate_rejects_manifest_bound_to_another_version(tmp_path):
     directory, _, _ = prepared(tmp_path, manifest_version="1.10.0-beta.2")
     with pytest.raises(ValueError, match="offered release"):
-        candidate.verify_artifacts(directory, expected_assets=[p.name for p in release.release_assets(directory)])
+        candidate.verify_artifacts(directory, expected_assets=[p.name for p in release.candidate_assets(directory)])
 
 
 def test_existing_immutable_record_can_only_resume_identical_provenance(tmp_path):
@@ -232,7 +293,10 @@ def test_public_candidate_packages_the_reviewed_author_in_the_actual_descriptor(
     monkeypatch.setattr(release, "_assert_build_source", lambda *_: None)
     monkeypatch.setattr(candidate, "record_candidate", lambda *a, **kw: destination / "candidate.json")
     monkeypatch.setattr(release, "verify_candidate", lambda *_args, **_kwargs: None)
+    written = []
+    monkeypatch.setattr(release, "_write_source_archives", written.append)
     release.prepare_candidate("1.10.0-beta.16", destination, config=config, ghosts=source, ghost_author=author)
+    assert written == [destination]   # every candidate carries the source archives it will attach
     with zipfile.ZipFile(destination / "SM64Trainer-full.zip") as archive:
         descriptor = json.loads(archive.read("_internal/" + build_beta.SEED_DESCRIPTOR))
         assert archive.read("griffman1212.sm64ghosts") == source.read_bytes()
@@ -330,3 +394,14 @@ def test_candidate_provenance_requires_source_still_unchanged_after_long_build(t
     else:
         with pytest.raises(ValueError, match="changed during preparation"):
             release._assert_build_source("a" * 40, lock_digest)
+
+
+@pytest.mark.parametrize("placeholder", [b"MZ a program under the retired name", RETIRED_NATIVE_TEXT + b" "])
+def test_candidate_refuses_anything_but_the_placeholder_text_at_a_retired_name(tmp_path, placeholder):
+    """Older apps need a file at each retired native name; the candidate must
+    carry exactly the placeholder text there, never a program."""
+    good, _, _ = prepared(tmp_path / "good")
+    assert candidate.verify_artifacts(good, expected_assets=[p.name for p in release.candidate_assets(good)])
+    directory, _, _ = prepared(tmp_path / "bad", placeholder=placeholder)
+    with pytest.raises(ValueError, match="placeholder|unexpected"):
+        candidate.verify_artifacts(directory, expected_assets=[p.name for p in release.candidate_assets(directory)])

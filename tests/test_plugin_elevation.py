@@ -16,8 +16,7 @@ import threading
 import pytest
 
 from sm64_events.core.capturelayer import (
-    CaptureLayer, GRAPHICS_DLL_VALUE, LayerRefused, REGISTRY_DLL_SUBKEY,
-    RENDERER_FILE, WRAPPER_DLL, WRAPPER_INI,
+    CaptureLayer, GRAPHICS_DLL_VALUE, LayerRefused, PLUGIN_DLL, REGISTRY_DLL_SUBKEY,
 )
 from sm64_events.core import plugin_elevation, plugin_elevation_worker, plugin_installation
 from sm64_events.core.plugin_installation import (
@@ -31,9 +30,8 @@ def install(tmp_path):
     pj64 = tmp_path / "PJ64"
     (pj64 / "Plugin").mkdir(parents=True)
     (pj64 / "Project64.exe").write_bytes(b"fake exe; version checker injected")
-    source, renderer = tmp_path / WRAPPER_DLL, tmp_path / RENDERER_FILE
+    source = tmp_path / PLUGIN_DLL
     source.write_bytes(b"MZ" + b"1" * 64 + b"-gpu-runtime\0")
-    renderer.write_bytes(b"MZ" + b"2" * 64 + b"-renderer\0")
     settings = tmp_path / "capture_layer.json"
     settings.write_text(json.dumps({"pj64_dir": str(pj64)}))
 
@@ -55,8 +53,8 @@ def install(tmp_path):
             return None
 
     registry = Registry()
-    layer = CaptureLayer(registry, Processes(), settings, source, renderer_source=renderer)
-    return layer, registry, settings, pj64, source, renderer
+    layer = CaptureLayer(registry, Processes(), settings, source)
+    return layer, registry, settings, pj64, source
 
 
 def deny_first_copy(monkeypatch):
@@ -76,7 +74,7 @@ def deny_first_copy(monkeypatch):
 
 
 def test_denied_write_immediately_retries_and_commits_in_original_user(install, monkeypatch):
-    layer, registry, settings, pj64, source, renderer = install
+    layer, registry, settings, pj64, source = install
     attempts = deny_first_copy(monkeypatch)
     elevated = []
 
@@ -85,20 +83,20 @@ def test_denied_write_immediately_retries_and_commits_in_original_user(install, 
         elevated.append(args)
         assert registry.selected == "original.dll"
         assert not json.loads(settings.read_text()).get("consented_at")
-        with layer._install_plugin_files(pj64, source, renderer, elevated=False) as receipts:
+        with layer._install_plugin_files(pj64, source, elevated=False) as receipts:
             yield receipts
-        assert registry.selected == WRAPPER_DLL
+        assert registry.selected == PLUGIN_DLL
 
     monkeypatch.setattr(plugin_elevation, "elevated_install", helper)
     result = layer.install(True)
-    assert len(elevated) == 1 and len(attempts) == 3
+    assert len(elevated) == 1 and len(attempts) == 2
     assert result.installation_verified
     assert json.loads(settings.read_text())["consented_at"]
-    assert (pj64 / "Plugin" / WRAPPER_DLL).read_bytes() == source.read_bytes()
+    assert (pj64 / "Plugin" / PLUGIN_DLL).read_bytes() == source.read_bytes()
 
 
 def test_uac_cancel_is_distinct_and_does_not_select_or_record_install(install, monkeypatch):
-    layer, registry, settings, pj64, _, _ = install
+    layer, registry, settings, pj64, _ = install
     before = settings.read_bytes()
     deny_first_copy(monkeypatch)
 
@@ -119,7 +117,7 @@ def test_uac_cancel_is_distinct_and_does_not_select_or_record_install(install, m
 
 
 def test_per_user_save_failure_never_prompts_and_restores_files(install, monkeypatch):
-    layer, registry, settings, pj64, _, _ = install
+    layer, registry, settings, pj64, _ = install
     before = settings.read_bytes()
 
     def failed_save(overlay):
@@ -137,27 +135,27 @@ def test_per_user_save_failure_never_prompts_and_restores_files(install, monkeyp
 
 
 def test_terminal_admin_error_retains_actual_operation_path_and_windows_code(install, monkeypatch):
-    layer, _, _, pj64, _, _ = install
+    layer, _, _, pj64, _ = install
     deny_first_copy(monkeypatch)
     error = OSError(errno.ENOSPC, "Disk full")
     error.winerror = 112
 
     @contextmanager
     def failed(*args):
-        raise PluginInstallError("copy plugin", pj64 / "Plugin" / RENDERER_FILE, error)
+        raise PluginInstallError("copy plugin", pj64 / "Plugin" / PLUGIN_DLL, error)
         yield  # pragma: no cover
 
     monkeypatch.setattr(plugin_elevation, "elevated_install", failed)
     with pytest.raises(PluginInstallError) as raised:
         layer.install(True)
     assert raised.value.operation == "copy plugin"
-    assert raised.value.filename == str(pj64 / "Plugin" / RENDERER_FILE)
+    assert raised.value.filename == str(pj64 / "Plugin" / PLUGIN_DLL)
     assert raised.value.winerror == 112
 
 
 @pytest.mark.parametrize("original", ["original.dll", None])
 def test_helper_commit_failure_restores_original_user_selection_and_files(install, monkeypatch, original):
-    layer, registry, settings, pj64, source, renderer = install
+    layer, registry, settings, pj64, source = install
     registry.selected = original
     before = settings.read_bytes()
     deny_first_copy(monkeypatch)
@@ -166,9 +164,9 @@ def test_helper_commit_failure_restores_original_user_selection_and_files(instal
 
     @contextmanager
     def failed_commit(*args):
-        with layer._install_plugin_files(pj64, source, renderer, elevated=False) as receipts:
+        with layer._install_plugin_files(pj64, source, elevated=False) as receipts:
             yield receipts
-            assert registry.selected == WRAPPER_DLL
+            assert registry.selected == PLUGIN_DLL
             assert json.loads(settings.read_text())["consented_at"]
             raise terminal
 
@@ -182,19 +180,19 @@ def test_helper_commit_failure_restores_original_user_selection_and_files(instal
 
 
 def test_registry_rollback_failure_logs_separately_and_preserves_root_error(install, monkeypatch, caplog):
-    layer, registry, _, pj64, source, renderer = install
+    layer, registry, _, pj64, source = install
     deny_first_copy(monkeypatch)
     terminal = PluginInstallError("commit administrator install", pj64 / "Plugin",
                                  OSError("Root helper failure"))
 
     def fail_restore(key, name, value):
-        if value != WRAPPER_DLL:
+        if value != PLUGIN_DLL:
             raise PermissionError("Registry rollback was refused")
         registry.selected = value
 
     @contextmanager
     def failed_commit(*args):
-        with layer._install_plugin_files(pj64, source, renderer, elevated=False) as receipts:
+        with layer._install_plugin_files(pj64, source, elevated=False) as receipts:
             yield receipts
             raise terminal
 
@@ -210,8 +208,8 @@ def test_registry_rollback_failure_logs_separately_and_preserves_root_error(inst
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows mapped-image semantics")
 def test_real_mapped_dll_access_denied_is_in_use_and_never_elevates(install, monkeypatch):
-    layer, registry, _, pj64, _, _ = install
-    destination = pj64 / "Plugin" / WRAPPER_DLL
+    layer, registry, _, pj64, _ = install
+    destination = pj64 / "Plugin" / PLUGIN_DLL
     shutil.copyfile(Path(os.environ["SystemRoot"]) / "System32" / "version.dll", destination)
     library = ctypes.WinDLL(str(destination))
     kernel = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -237,21 +235,19 @@ def test_real_mapped_dll_access_denied_is_in_use_and_never_elevates(install, mon
 
 @pytest.fixture
 def privileged_request(install, monkeypatch):
-    _, _, _, pj64, source, renderer = install
+    _, _, _, pj64, source = install
     from sm64_events.core import capturelayer_win, paths
     monkeypatch.setattr(paths, "bundled_plugin_dll", lambda: source)
-    monkeypatch.setattr(paths, "bundled_renderer_dll", lambda: renderer)
     monkeypatch.setattr(capturelayer_win.WinProcesses, "check_folder", lambda folder: {"state": "ready"})
     monkeypatch.setattr(capturelayer_win.WinProcesses, "pj64_image_path", lambda self: None)
     return {"pj64_dir": str(pj64), "plugin_dir": str(pj64 / "Plugin"),
-            "wrapper_sha256": plugin_installation.sha256(source),
-            "renderer_sha256": plugin_installation.sha256(renderer)}
+            "plugin_sha256": plugin_installation.sha256(source)}
 
 
 @pytest.mark.parametrize("change", [
     {"source": "C:/Windows/System32/evil.dll"},
     {"plugin_dir": "C:/Windows/System32"},
-    {"wrapper_sha256": "0" * 64},
+    {"plugin_sha256": "0" * 64},
     {"pj64_dir": "C:/somewhere/../Windows"},
 ])
 def test_privileged_boundary_rejects_tampered_request(privileged_request, change):
@@ -262,7 +258,7 @@ def test_privileged_boundary_rejects_tampered_request(privileged_request, change
 def test_wrong_bundle_role_is_refused(privileged_request, install):
     source = install[4]
     source.write_bytes(b"MZ" + b"1" * 64 + b"-renderer\0")
-    privileged_request["wrapper_sha256"] = plugin_installation.sha256(source)
+    privileged_request["plugin_sha256"] = plugin_installation.sha256(source)
     with pytest.raises(ValueError, match="role"):
         plugin_elevation_worker.validate_request(privileged_request)
 
@@ -270,22 +266,75 @@ def test_wrong_bundle_role_is_refused(privileged_request, install):
 @pytest.mark.skipif(os.name != "nt", reason="Windows handle pinning")
 def test_privileged_transaction_rolls_back_all_files_on_parent_failure(privileged_request, install):
     plugin = install[3] / "Plugin"
-    (plugin / WRAPPER_DLL).write_bytes(b"old wrapper")
+    (plugin / PLUGIN_DLL).write_bytes(b"old wrapper")
     (plugin / RENDERER_INI).write_bytes(MINIMAL.replace(b"enable=0", b"enable=1"))
     before = {path.name: path.read_bytes() for path in plugin.iterdir()}
     with pytest.raises(OSError, match="parent settings failed"):
         with plugin_elevation_worker.privileged_files(privileged_request):
-            assert (plugin / WRAPPER_DLL).read_bytes() == install[4].read_bytes()
+            assert (plugin / PLUGIN_DLL).read_bytes() == install[4].read_bytes()
             assert (plugin / RENDERER_INI).read_bytes() == MINIMAL
             raise OSError("parent settings failed")
     assert {path.name: path.read_bytes() for path in plugin.iterdir()} == before
+
+
+FIXUPS = b"MZ the tested fixups"
+
+
+@pytest.fixture
+def fixups_request(privileged_request, tmp_path, monkeypatch):
+    """The request with a kept PJ64 Fixups download whose hash the bundled
+    baseline names (the test stores that baseline, never the shipped one)."""
+    import hashlib
+    from sm64_events.core import setup_profile
+    kept = tmp_path / "downloads" / "pj64fixups-RSP.dll"
+    kept.parent.mkdir()
+    kept.write_bytes(FIXUPS)
+    monkeypatch.setattr(setup_profile, "load_baseline", lambda *a: {
+        "items": [{"id": "rsp_plugin", "sha256": hashlib.sha256(FIXUPS).hexdigest()}]})
+    return {**privileged_request, "fixups_dll": str(kept)}, kept
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows handle pinning")
+def test_privileged_transaction_adds_the_fixups_and_rolls_them_back_with_the_plugin(fixups_request, install):
+    request, _ = fixups_request
+    plugin = install[3] / "Plugin"
+    (plugin / "RSP.dll").write_bytes(b"stock rsp")
+    before = {path.name: path.read_bytes() for path in plugin.iterdir()}
+    with pytest.raises(OSError, match="parent settings failed"):
+        with plugin_elevation_worker.privileged_files(request):
+            assert (plugin / "RSP.dll").read_bytes() == FIXUPS
+            assert (plugin / "RSP.before-fixups").read_bytes() == b"stock rsp"
+            raise OSError("parent settings failed")
+    assert {path.name: path.read_bytes() for path in plugin.iterdir()} == before
+    with plugin_elevation_worker.privileged_files(request):
+        pass
+    assert (plugin / "RSP.dll").read_bytes() == FIXUPS
+    assert (plugin / "RSP.before-fixups").read_bytes() == b"stock rsp"
+    # Already the tested file: a second install touches neither file again.
+    (plugin / "RSP.before-fixups").write_bytes(b"kept as it was")
+    with plugin_elevation_worker.privileged_files(request):
+        pass
+    assert (plugin / "RSP.before-fixups").read_bytes() == b"kept as it was"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows handle pinning")
+def test_the_helper_copies_only_the_tested_fixups_file(fixups_request, install):
+    request, kept = fixups_request
+    plugin = install[3] / "Plugin"
+    kept.write_bytes(b"MZ some other dll")
+    with pytest.raises(ValueError, match="not the tested release"):
+        with plugin_elevation_worker.privileged_files(request):
+            pytest.fail("An unverified file passed the privilege boundary")
+    assert not (plugin / "RSP.dll").exists() and not (plugin / PLUGIN_DLL).exists()
+    with pytest.raises(ValueError):
+        plugin_elevation_worker.privileged_files({**request, "fixups_dll": "relative/RSP.dll"}).__enter__()
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows hardlink/handle pinning")
 def test_privileged_destination_cannot_be_a_hardlink(privileged_request, install, tmp_path):
     protected = tmp_path / "unrelated.bin"
     protected.write_bytes(b"leave alone")
-    os.link(protected, install[3] / "Plugin" / WRAPPER_DLL)
+    os.link(protected, install[3] / "Plugin" / PLUGIN_DLL)
     with pytest.raises(PermissionError, match="linked"):
         with plugin_elevation_worker.privileged_files(privileged_request):
             pytest.fail("Hardlink passed privilege boundary")
@@ -317,7 +366,7 @@ def test_frozen_helper_dispatch_precedes_every_normal_app_import(monkeypatch):
 @pytest.mark.skipif(os.name != "nt", reason="Windows privileged file transaction")
 def test_authenticated_parent_helper_transaction_without_real_uac(privileged_request, install, monkeypatch):
     from sm64_events.core import plugin_elevation_win
-    layer, registry, settings, pj64, _, _ = install
+    layer, registry, settings, pj64, _ = install
     outcomes, threads = [], []
     deny_first_copy(monkeypatch)
     monkeypatch.setattr(plugin_elevation_win, "process_image", lambda pid: Path(sys.executable))
@@ -341,8 +390,46 @@ def test_authenticated_parent_helper_transaction_without_real_uac(privileged_req
     monkeypatch.setattr(plugin_elevation_win, "launch_admin", launch)
     assert layer.install(True).installation_verified
     assert outcomes == [0]
-    assert registry.selected == WRAPPER_DLL
+    assert registry.selected == PLUGIN_DLL
     assert json.loads(settings.read_text())["consented_at"]
-    assert (pj64 / "Plugin" / WRAPPER_INI).read_text() == f"wrapped={RENDERER_FILE}\n"
-    # The administrator half writes the renderer's settings file the same way.
+    # The administrator half writes the one plugin file and the renderer's
+    # settings file, and nothing else.
+    assert sorted(path.name for path in (pj64 / "Plugin").iterdir()) == sorted([PLUGIN_DLL, RENDERER_INI])
     assert (pj64 / "Plugin" / RENDERER_INI).read_bytes() == MINIMAL
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows privileged file transaction")
+def test_one_permission_prompt_installs_the_plugin_and_the_fixups(fixups_request, install, monkeypatch):
+    """The capture layer hands its kept fixups download to the same helper
+    transaction, through the real authenticated channel (no real UAC)."""
+    from types import SimpleNamespace
+    from sm64_events.core import plugin_elevation_win
+    _, kept = fixups_request
+    layer, registry, _, pj64, _ = install
+    layer.fixups = SimpleNamespace(cached=lambda: kept)
+    (pj64 / "Plugin" / "RSP.dll").write_bytes(b"stock rsp")
+    outcomes, threads, launches = [], [], []
+    deny_first_copy(monkeypatch)
+    monkeypatch.setattr(plugin_elevation_win, "process_image", lambda pid: Path(sys.executable))
+
+    class ThreadProcess:
+        pid = os.getpid()
+
+        def exited(self):
+            return not threads[0].is_alive()
+
+        def close(self):
+            threads[0].join(timeout=5)
+
+    def launch(argv):
+        launches.append(argv)
+        thread = threading.Thread(target=lambda: outcomes.append(plugin_elevation_worker.main(argv[-3:])))
+        threads.append(thread)
+        thread.start()
+        return ThreadProcess()
+
+    monkeypatch.setattr(plugin_elevation_win, "launch_admin", launch)
+    assert layer.install(True).installation_verified
+    assert outcomes == [0] and len(launches) == 1 and registry.selected == PLUGIN_DLL
+    assert (pj64 / "Plugin" / "RSP.dll").read_bytes() == FIXUPS
+    assert (pj64 / "Plugin" / "RSP.before-fixups").read_bytes() == b"stock rsp"

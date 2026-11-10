@@ -313,7 +313,7 @@ def usamune_stop_now(attempts) -> str | None:
 
 
 def _attempt_json(a, clock, ranks=None, rank_clock=None, rank_ek=None,
-                  pbs_by_strat=None, active_strat=None, stop_now=None):
+                  pbs_by_strat=None, active_strat=None, stop_now=None, pb_ids=frozenset()):
     # A row is MEASURED only when it belongs to the ACTIVE strategy, and then
     # against that strategy's own PB -- never the entity-wide one. A row on
     # any other strategy shows no delta at all (his ruling, 2026-08-22: "the
@@ -395,6 +395,12 @@ def _attempt_json(a, clock, ranks=None, rank_clock=None, rank_ek=None,
             # 2026-08-22; match `pb.attempt_id` for the heading's row).
             "pb_action": pb_action_key,
             "pb_blocked": pb_blocked,
+            # This run SET a personal best on the view's clock when it ran: a
+            # saved pb row names it, current or since beaten (the PB
+            # progression; `pb_ids` is the visible pbs rows' (attempt, timer)).
+            # The practice log's PBs filter reads it (his ask, 2026-11-09: "be
+            # able to see my PB progression directly in the practice log").
+            "set_pb": (a.id, clock) in pb_ids,
             # "the number printed on this row is not the quantity you think
             # you were practising", as a caveats.py KEY or None — the mark the
             # practice log draws beside the time itself. Separate from
@@ -420,6 +426,12 @@ def _attempt_json(a, clock, ranks=None, rank_clock=None, rank_ek=None,
             "valid": a.valid,
             "invalid_reason": a.invalid_reason,
             "state_loads": a.state_loads,
+            # Save-state practice (caveats.save_state_run), the ONE answer:
+            # never a goal, PB or celebration, and hidden by the log's
+            # save-state filter. Shipped so the browser reads the verdict
+            # instead of restating the predicate (2026-11-09: a loaded
+            # state's 10"00 played the goal plate's "GOAL!").
+            "save_state": save_state_run(a),
             # A time he brought rather than played: a real row with every
             # row affordance, and provably no replay -- the one control the
             # log hides for it, rather than drawing a player for a run the
@@ -1778,7 +1790,7 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             "attempts": [_attempt_json(a, clock, service.ranks, rank_clock,
                                        pbs_by_strat=pbs_by_strat,
                                        active_strat=star_strat,
-                                       stop_now=stop_now)
+                                       stop_now=stop_now, pb_ids=pb_ids)
                         for a in in_section],
             "stats": _stats_for(history, stat_menu, clock),
             "strategies": star_strategies,
@@ -2008,7 +2020,7 @@ def build_session_view(db, service, clock: str, scope: str = "session") -> dict:
             "attempts": [_attempt_json(a, "rta", service.ranks, seg_rank_clock,
                                        rank_ek=grading_ek,
                                        pbs_by_strat=pbs_by_strat,
-                                       active_strat=seg_strat)
+                                       active_strat=seg_strat, pb_ids=pb_ids)
                         for a in in_section],
             "stats": _stats_for(history, stat_menu, "rta"),
             # registered ∪ observed-on-attempts ∪ rank-standard strategies --

@@ -393,10 +393,19 @@ def _prepare_startup_confirmation(app, updater, bootstrap_cleanup_path):
     app.state.bootstrap_cleanup_path = bootstrap_cleanup_path
 
 
+async def _stop_multiplayer(multiplayer):
+    if multiplayer is not None:
+        try:
+            # Withdraw room grants before replay releases its sole source.
+            await asyncio.to_thread(multiplayer.close)
+        except Exception:  # noqa: BLE001 -- teardown continues without exposing private IPC
+            log.warning("Live ghost room could not finish closing.")
+
+
 def _create_lifespan(poller, service, replay, monitor, db_retry,
                      refresh_library_on_start, on_db_attached=None, capture_layer=None,
                      ghost=None, community_account=None, community_sync=None,
-                     updater=None, bootstrap_cleanup_path=None, progress=None):
+                     updater=None, bootstrap_cleanup_path=None, progress=None, multiplayer=None):
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         await _start_app_service(service)
@@ -425,6 +434,7 @@ def _create_lifespan(poller, service, replay, monitor, db_retry,
         # the desktop readiness request reaches this server's healthy /health.
         _prepare_startup_confirmation(app, updater, bootstrap_cleanup_path)
         yield
+        await _stop_multiplayer(multiplayer)
         await _stop_community_restore(community_task)
         await _stop_community_and_ghost(ghost, community_account, community_sync)
         if refresh_task is not None:
@@ -492,7 +502,7 @@ def _install_progress_invalidation(app, progress):
         # again after the route finishes, even if that notice was consumed.
         if (request.method not in ("GET", "HEAD", "OPTIONS") and 200 <= response.status_code < 300
                 and request.url.path.startswith("/api/")
-                and not request.url.path.startswith(("/api/community/", "/api/uilog"))):
+                and not request.url.path.startswith(("/api/community/", "/api/uilog", "/api/multiplayer"))):
             try:
                 progress.invalidate()
             except Exception:  # noqa: BLE001 -- publication cannot fail a completed local mutation
@@ -848,7 +858,8 @@ def _mount_diagnostics(app, poller, broadcaster, service, monitor, replay=None, 
     setup_profile = getattr(app.state, "setup_profile", None)
     snapshot = make_snapshot(poller=poller, service=service, monitor=monitor, replay=replay,
         capture_layer=capture_layer, ghost=ghost, setup_observer=setup_observer,
-        polling_state=lambda: _polling_state(app), setup_profile=setup_profile)
+        polling_state=lambda: _polling_state(app), multiplayer=getattr(app.state, 'multiplayer', None),
+        setup_profile=setup_profile)
     app.state.diagnostic_snapshot = snapshot
 
     def debug_report(*, attached=False):
@@ -977,7 +988,11 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
                library_path=None, refresh_library_on_start=False,
                library_bundled_path=None, ghost=None, protect_local_api=False,
                local_port=None, community_account=None, community_sync=None,
-               bootstrap_cleanup_path=None) -> FastAPI:
+               bootstrap_cleanup_path=None, multiplayer=None, course_art=None) -> FastAPI:
+    # `course_art` is the cache of course portraits cut from the player's ROM
+    # (sm64_events/course_art.py). None -- every test and fixture unless it
+    # passes one -- serves the plain stand-ins and never looks for a ROM;
+    # main.py passes the real one.
     # `library_bundled_path` overrides the BUNDLED snapshot the library falls
     # back to (None = the shipped one). Since round 33 every fitted star row
     # in the library becomes a sheet-fitted rank standard at load, so a test
@@ -1010,7 +1025,7 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
     lifespan = _create_lifespan(poller, service, replay, monitor, db_retry,
                                 refresh_library_on_start, on_db_attached, capture_layer,
                                 ghost, community_account, community_sync,
-                                updater, bootstrap_cleanup_path, progress)
+                                updater, bootstrap_cleanup_path, progress, multiplayer)
     app = FastAPI(title="SM64 Event API", lifespan=lifespan)
     _mount_ui_routes(app, broadcaster)
     _mount_library_routes(app, service, library_path, library_bundled_path,
@@ -1018,12 +1033,17 @@ def create_app(poller: Poller, broadcaster: Broadcaster,
     _mount_service_routes(app, service, mode_path)
     _mount_optional_routes(app, replay, inputs, capture_layer, compare,
                            compilation, updater, mode_path, setup_observer, poller, setup_profile)
+    from sm64_events.server.course_art_api import create_course_art_router
+    app.include_router(create_course_art_router(course_art, broadcaster))
     from sm64_events.server.ghost_api import mount_ghost_routes
     mount_ghost_routes(app, session=ghost)
     from sm64_events.server.community_api import create_community_router
     app.include_router(create_community_router(community_account, progress, community_sync))
     from sm64_events.server.player_api import create_player_router
     app.include_router(create_player_router(service, progress, ghost, community_account))
+    from sm64_events.server.multiplayer_api import create_multiplayer_router
+    app.include_router(create_multiplayer_router(multiplayer))
+    app.state.multiplayer = multiplayer
     app.state.progress = progress
     _install_progress_invalidation(app, progress)
     _mount_controls(app, poller, replay)

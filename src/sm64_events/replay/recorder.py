@@ -120,7 +120,8 @@ class ReplayRecorder:
                  video_sink_factory=None,
                  recorder_lock_factory=acquire_recorder_lock,
                  scratch_protection: Callable[[], Iterable[Path]] | None = None,
-                 ghost_capture_factory=None, capture_diagnostics=None):
+                 ghost_capture_factory=None, capture_diagnostics=None, live_capture_factory=None,
+                 codec_factory=None):
         self._cfg = cfg
         # machine-wide single-recorder guard (injectable for tests): only the
         # instance holding this lock actually captures; others run viewer-only.
@@ -144,6 +145,7 @@ class ReplayRecorder:
         self.ledger = PictureLedger()
         self._ledger_name = f"picture-identity-{uuid4().hex}.sqlite3"
         self._configure_pose_capture(ghost_capture_factory)
+        self._configure_live_capture(live_capture_factory)
         # The picture feed (config.picture_feed, item 38): with the ffmpeg
         # sink, a grab reaches the encoder only when the ledger says it is
         # a NEW picture, and every write the sink completes lands in the
@@ -154,6 +156,7 @@ class ReplayRecorder:
         # number he can see, not a clip that merely looks thinner.
         self._grabs_skipped = 0
         self._codec: str | None = codec
+        self._codec_factory = codec_factory
         # ffmpeg-subprocess video path: when set, frames bypass the in-process
         # writer entirely (sink.submit is a lock-free reference swap; pacing,
         # encoding and segmentation happen in the child process — the GIL
@@ -217,6 +220,10 @@ class ReplayRecorder:
             if enabled != self._recording_enabled:
                 self._recording_revision += 1
                 self._recording_enabled = enabled
+            owner = self._pose_owner if enabled and self._source_profile == "live" else None
+        if owner is not None:
+            owner.request_stop()
+            self._window_lost.set()
         self._attach_wake.set()
 
     def _capture_allowed(self) -> bool:
@@ -225,6 +232,80 @@ class ReplayRecorder:
                         else self._capture_revision)
             return (self._recording_enabled and not self._stopping
                     and (revision is None or revision == self._recording_revision))
+
+    def _desired_source_profile(self):
+        with self._recording_control_lock:
+            if self._stopping:
+                return None
+            if self._recording_enabled:
+                return "media"
+            if self._ghost_capture_factory is not None:
+                return "poses"
+            if any(value is not None for value in self._live_session) and self._live_capture_factory is not None:
+                return "live"
+            return None
+
+    def _effective_live_session(self):
+        outgoing, incoming = self._live_session
+        return (None if self._session_paused else outgoing), incoming
+
+    def _sync_live_session_locked(self):
+        desired = self._effective_live_session()
+        if self._pose_owner is not None and any(a is not b for a, b in zip(desired, self._pose_live_session, strict=True)):
+            self._pose_owner.set_live_session(*desired)
+            self._pose_live_session = desired
+
+    def set_live_session(self, outgoing=None, incoming=None) -> None:
+        """Request local room endpoints without enabling media or waiting on IO."""
+        with self._recording_control_lock:
+            desired = outgoing, incoming
+            if any(a is not b for a, b in zip(desired, self._live_session, strict=True)):
+                self._live_session = desired
+                self._live_revision += 1
+            self._sync_live_session_locked()
+            owner = self._pose_owner if self._source_profile == "live" and outgoing is None and incoming is None else None
+        if owner is not None:
+            owner.request_stop()
+            self._window_lost.set()
+        self._attach_wake.set()
+
+    def set_live_capture_factory(self, factory) -> None:
+        """The next strictly silent source; never substitute a media factory."""
+        with self._recording_control_lock:
+            changed = factory is not self._live_capture_factory
+            self._live_capture_factory = factory
+            if changed:
+                self._live_revision += 1
+            owner = self._pose_owner if self._source_profile == "live" and changed else None
+        if owner is not None:
+            owner.request_stop()
+            self._window_lost.set()
+        self._attach_wake.set()
+
+    def live_session_status(self) -> dict:
+        """Cached local demand/ownership, never provider or native readiness."""
+        with self._recording_control_lock:
+            outgoing, incoming = self._live_session
+            requested = outgoing is not None or incoming is not None
+            attached = self._pose_owner is not None and self._pose_owner.source is not None
+            if self._capture_cleanup_failed and self._retained_profile == "live":
+                state = "stopping"
+            elif not requested:
+                state = "off"
+            elif self._stopping or self._capture_cleanup_failed:
+                state = "stopping"
+            elif not self._recording_enabled and self._live_capture_factory is None and self._ghost_capture_factory is None:
+                state = "unavailable"
+            elif self._session_paused and outgoing is not None and incoming is None:
+                state = "paused"
+            elif self._live_start_revision is not None:
+                state = "starting"
+            else:
+                state = "attached" if attached else "waiting"
+            return {"requested": requested, "outgoing": outgoing is not None,
+                    "incoming": incoming is not None, "sharing": outgoing is not None and not self._session_paused,
+                    "paused": self._session_paused, "profile": self._source_profile,
+                    "source_attached": attached, "state": state}
 
     def _wait_attach(self, seconds: float) -> None:
         self._attach_wake.wait(seconds)
@@ -243,7 +324,8 @@ class ReplayRecorder:
                      and self._capture_revision != self._recording_revision)
             stale = stale or (starting and self._capture_start_revision != self._recording_revision)
             if not enabled:
-                state = "off" if quiet else "stopping"
+                live_only = self._source_profile == "live" or self._retained_profile == "live"
+                state = "off" if quiet or live_only else "stopping"
             elif self._capture_tearing_down or stale or self._capture_cleanup_failed:
                 state = "stopping"
             elif starting:
@@ -265,6 +347,16 @@ class ReplayRecorder:
         self.pose_archive = None
         self._pose_window = None
         self._pose_retarget = False
+
+    def _configure_live_capture(self, factory):
+        self._live_capture_factory = factory
+        self._live_session = (None, None)
+        self._pose_live_session = (None, None)
+        self._live_revision = 0
+        self._live_start_revision = None
+        self._source_profile = None
+        self._profile_handover = False
+        self._retained_profile = None
 
     def _configure_fragments(self, cfg) -> None:
         self.fragments = FragmentMedia(cfg.scratch_dir, self.ring, self.ledger,
@@ -343,7 +435,7 @@ class ReplayRecorder:
                 return  # Keep its identity; start() cannot create a second owner.
             self._thread = None
         self._teardown_capture()
-        if cleanup:
+        if cleanup and self._scratch_ready:
             self.cleanup_scratch()
 
     # -- attach loop ---------------------------------------------------------
@@ -374,31 +466,31 @@ class ReplayRecorder:
         while not self._stop_event.is_set():
             self._attach_wake.clear()
             if self._pose_retarget:
-                # A same-window ROM change replaces the native layout too.
-                # Consume it before media-only teardown clears window loss.
+                # Consume before media teardown: a ROM change arriving during
+                # close remains pending for the next iteration.
                 self._pose_retarget = False
                 self._teardown_capture()
-            if self._wait_without_capture():
+            desired = self._desired_source_profile()
+            self._reconcile_source_profile(desired)
+            if desired is None:
+                if self._capture_cleanup_failed:
+                    delay = self._recovery_delay(self._recovery_error or "capture cleanup pending")
+                else:
+                    self._recovery_error = None
+                    self._recovery_retry_at = 0.0
+                    delay = self._cfg.attach_poll_s
+                self._wait_attach(delay)
                 continue
             if self._capture_cleanup_failed:
                 # Retry the retained objects, not their constructors. The
                 # machine lease and scratch stay owned until each close passes.
-                self._teardown_capture(keep_poses=True)
+                self._teardown_capture(keep_owner=self._profile_handover and desired is not None,
+                    keep_poses=self._source_profile != "live" and self._ghost_capture_factory is not None)
                 if self._capture_cleanup_failed:
                     delay = self._recovery_delay(self._recovery_error or "capture cleanup pending")
                     self._wait_attach(delay)
                     continue
-            if self._rec_lock is not None and time.monotonic() >= self._next_storage_maintenance:
-                self._next_storage_maintenance = time.monotonic() + 1.0
-                with self._capture_lock:
-                    self.ring.maintain()
-                    self.fragments.maintain()
-                    self.ghost_copies.maintain()
-                    self.maintain_history()
-                    # The GPU path never rotates a legacy segment, so its
-                    # picture rows sat in one open SQLite transaction until
-                    # the first eviction (round 48). Commit them here.
-                    self.ledger.flush()
+            self._maintain_media_storage()
             if self.ring.storage_pressure and self._recording:
                 log.warning("replay capture paused: disk free-space floor cannot be restored")
                 self._teardown_capture(keep_owner=True, keep_poses=True)
@@ -408,19 +500,20 @@ class ReplayRecorder:
 
             identity = (win.pid, win.hwnd) if win is not None else None
             if (self._window_lost.is_set()
-                    or (self._recording and identity != self._capture_window)
+                    or (self._capture_window is not None and identity != self._capture_window)
                     or (self._pose_owner is not None and identity != self._pose_window)):
                 # A fast process restart can replace the window before the old
                 # video source notices. Audio is process-bound: replace BOTH.
                 log.info("capture source ended or window changed; reconnecting")
-                self._teardown_capture(keep_poses=not self._pose_retarget and identity is not None
-                                       and identity == self._pose_window)
+                self._teardown_capture(keep_owner=self._source_profile == "live" and desired is not None,
+                    keep_poses=self._source_profile != "live" and not self._pose_retarget
+                               and identity is not None and identity == self._pose_window)
 
             if win is not None:
                 self._ensure_pose_capture(win)
 
             if (win is not None and not self._recording
-                    and (not self.ring.storage_pressure or self._rec_lock is None)):
+                    and (desired == "live" or not self.ring.storage_pressure or self._rec_lock is None)):
                 self._begin_capture(win)
 
             if self._recording:
@@ -433,27 +526,47 @@ class ReplayRecorder:
                 self._recovery_retry_at = 0.0
             self._wait_attach(self._cfg.attach_poll_s)
 
-    def _wait_without_capture(self) -> bool:
-        if self._capture_allowed():
-            return False
-        # Footage controls media demand. Poses and playback keep their own
-        # lifetime under the same machine lease, without waking media workers.
-        if (not self._capture_closed
-                or (self._rec_lock is not None and self._pose_owner is None)
-                or (self._pose_owner is not None and self._ghost_capture_factory is None)):
-            self._teardown_capture(keep_poses=self._ghost_capture_factory is not None)
-        if self.recording_enabled or self._ghost_capture_factory is not None:
-            return False
-        if self._capture_cleanup_failed:
-            delay = self._recovery_delay(self._recovery_error or "capture cleanup pending")
-        else:
-            self._recovery_error = None
-            self._recovery_retry_at = 0.0
-            delay = self._cfg.attach_poll_s
-        self._wait_attach(delay)
-        return True
+    def _reconcile_source_profile(self, desired):
+        media_retired = self._source_profile == "media" and not self._capture_allowed()
+        live_retired = self._source_profile == "live" and desired != "live"
+        poses_retired = self._source_profile == "poses" and self._ghost_capture_factory is None
+        if not (media_retired or live_retired or poses_retired or desired is None):
+            return
+        if not self._capture_closed or self._rec_lock is not None:
+            handover = ((self._source_profile == "media" and desired == "live")
+                        or (self._source_profile == "live" and desired in {"media", "poses"})
+                        or self._profile_handover and desired is not None)
+            self._teardown_capture(keep_owner=handover,
+                keep_poses=desired is not None and self._source_profile != "live"
+                           and self._ghost_capture_factory is not None)
+
+    def _maintain_media_storage(self):
+        # Free-space pressure stops the encoder but retains media scratch and
+        # the machine lease. Keep rechecking that owned media demand so a
+        # recovered floor can restart capture. Silent live-only demand never
+        # prepares scratch or performs this media/storage maintenance.
+        if (self._rec_lock is None or not self._scratch_ready or self._desired_source_profile() != "media"
+                or time.monotonic() < self._next_storage_maintenance):
+            return
+        self._next_storage_maintenance = time.monotonic() + 1.0
+        with self._capture_lock:
+            self.ring.maintain()
+            self.fragments.maintain()
+            self.ghost_copies.maintain()
+            self.maintain_history()
+            # Paired GPU capture never rotates legacy segments; commit its
+            # picture rows here rather than retaining the transaction forever.
+            self.ledger.flush()
 
     # -- capture setup / teardown --------------------------------------------
+
+    def set_video_sink_factory(self, factory) -> None:
+        """Resolve the desktop backend before capture creates its media sink.
+
+        Composition may defer the executable probe until the codec factory is
+        called on the first owned media start. Live-only capture never calls it.
+        """
+        self._video_sink_factory = factory
 
     def _prepare_scratch(self) -> None:
         if self._scratch_ready:
@@ -550,6 +663,11 @@ class ReplayRecorder:
         A viewer or an old owner of replaced scratch cannot rotate it.
         """
         with self._capture_lock:
+            if self._source_profile == "live":
+                if self._stopping or not self._scratch_ready or not self._scratch.owns():
+                    return False
+                self._rotate_scratch_contents()
+                return True
             if self._stopping or not self._scratch.owns():
                 return False
             if self._rec_lock is None:
@@ -563,17 +681,7 @@ class ReplayRecorder:
             self._close_capture(keep_owner=True)
             if not self._capture_closed:
                 return False
-            self._scratch.resume_deletion()
-            self.ring.clear()
-            self.fragments.reset()
-            self.ghost_copies.reset()
-            self.ledger.reset()
-            self._ledger_name = f"picture-identity-{uuid4().hex}.sqlite3"
-            self._pose_archive_name = f"ghost-poses-{uuid4().hex}.sqlite3"
-            self.pose_archive = None
-            self._scratch.prepare(self._protected_scratch())
-            self.ring.prune_missing()
-            self._scratch_ready = True
+            self._rotate_scratch_contents()
             self._window_lost.clear()
             if resume and not self._stopping:
                 win = self._window_finder(self._cfg.window_title)
@@ -584,8 +692,29 @@ class ReplayRecorder:
                 self._release_recorder()
             return True
 
+    def _rotate_scratch_contents(self):
+        self._scratch.resume_deletion()
+        self.ring.clear()
+        self.fragments.reset()
+        self.ghost_copies.reset()
+        self.ledger.reset()
+        self._ledger_name = f"picture-identity-{uuid4().hex}.sqlite3"
+        self._pose_archive_name = f"ghost-poses-{uuid4().hex}.sqlite3"
+        self.pose_archive = None
+        self._scratch.prepare(self._protected_scratch())
+        self.ring.prune_missing()
+        self._scratch_ready = True
+
     def _begin_capture(self, win: WindowInfo) -> None:
+        desired = self._desired_source_profile()
+        if desired == "live":
+            self._begin_live_capture(win)
+            return
+        if desired != "media":
+            return
         with self._capture_lock:
+            if self._source_profile == "live":
+                self._teardown_capture(keep_owner=True)
             if self._recording:
                 if self._capture_allowed():
                     return
@@ -597,15 +726,66 @@ class ReplayRecorder:
             try:
                 self._start_capture(win)
                 if not self._capture_allowed():
-                    self._teardown_capture(keep_poses=True)
+                    self._teardown_capture(keep_owner=self._desired_source_profile() == "live",
+                        keep_poses=self._ghost_capture_factory is not None)
                 elif self._recording:
                     self._capture_revision = self._capture_start_revision
             except BaseException:
-                self._teardown_capture(keep_poses=True)
+                self._teardown_capture(keep_poses=self._ghost_capture_factory is not None)
                 raise
             finally:
                 with self._recording_control_lock:
                     self._capture_start_revision = None
+
+    def _live_start_allowed(self, revision) -> bool:
+        with self._recording_control_lock:
+            return (not self._stopping and not self._recording_enabled
+                    and self._ghost_capture_factory is None
+                    and self._live_revision == revision and self._live_capture_factory is not None
+                    and any(value is not None for value in self._live_session))
+
+    def _begin_live_capture(self, win) -> None:
+        with self._capture_lock:
+            if self._source_profile == "live" and self._pose_owner is not None:
+                return
+            if self._recording or self._source_profile == "media":
+                self._teardown_capture(keep_owner=True)
+            if self._capture_cleanup_failed:
+                return
+            with self._recording_control_lock:
+                revision = self._live_revision
+                self._live_start_revision = revision
+            try:
+                if not self._live_start_allowed(revision) or not self._acquire_recorder():
+                    return
+                self._source_profile = "live"
+                self._capture_closed = False
+                self._capture_window = (win.pid, win.hwnd)
+                self._start_pose_capture(win, live_only=True)
+                if not self._live_start_allowed(revision):
+                    self._teardown_capture(keep_owner=self._desired_source_profile() is not None)
+                    return
+                if self._pose_owner is None:
+                    raise RuntimeError("native live source could not start")
+                self._profile_handover = False
+            except BaseException:
+                self._teardown_capture()
+                raise
+            finally:
+                with self._recording_control_lock:
+                    self._live_start_revision = None
+
+    def _acquire_recorder(self) -> bool:
+        if self._rec_lock is not None:
+            return True
+        self._rec_lock = self._recorder_lock_factory()
+        if self._rec_lock is None:
+            if not self._lock_warned:
+                log.warning("another tracker instance owns capture; running VIEWER-ONLY")
+                self._lock_warned = True
+            return False
+        self._lock_warned = False
+        return True
 
     def _start_capture(self, win: WindowInfo) -> None:
         # M2: bail immediately if stop() already ran — prevents a zombie begin
@@ -619,35 +799,19 @@ class ReplayRecorder:
         # that doubles GPU/encode/audio load and collides on the shared replay
         # buffer. Retried every attach cycle, so this instance takes over the
         # moment the owner exits (the OS frees the lock). Released in teardown.
-        if not self._claim_recorder():
+        if not self._acquire_recorder():
             return
 
+        self._source_profile = "media"
         self._prepare_scratch()
         if self._codec is None:
-            self._codec = pick_video_codec()
+            self._codec = self._codec_factory() if self._codec_factory is not None else pick_video_codec()
         if not self._capture_allowed():
             return
         self.ring.maintain()
         if self.ring.storage_pressure:
             return  # retain ownership, retry after maintenance sees free space
         self._capture_closed = False
-        self._start_media(win)
-
-    def _claim_recorder(self) -> bool:
-        """Video and native ghosts share one machine-wide producer owner."""
-        if self._rec_lock is None:
-            self._rec_lock = self._recorder_lock_factory()
-            if self._rec_lock is None:
-                if not self._lock_warned:
-                    log.warning("another tracker instance is already recording "
-                                "this machine — running VIEWER-ONLY (no "
-                                "capture); will take over if it exits")
-                    self._lock_warned = True
-                return False
-            self._lock_warned = False
-        return True
-
-    def _start_media(self, win: WindowInfo) -> None:
         # Only the picture feed retains source-PTS identities. Legacy CFR
         # observations stay in the bounded diagnostic cache; persisting
         # them would imply a retention join its media never supplied.
@@ -717,6 +881,7 @@ class ReplayRecorder:
         self._set_idle(self._session_paused)
         self._capture_window = (win.pid, win.hwnd)
         self._recording = True
+        self._profile_handover = False
         # The GPU route picks its own codec per adapter and logs it on "GPU
         # recording active"; self._codec is only the desktop route's pick.
         log.info("capture started — window=%r audio=%s route=%s", win.title, self._audio_mode,
@@ -898,22 +1063,37 @@ class ReplayRecorder:
         self.fragments.evicted(group, start, end)
         self.ghost_copies.evicted(group, start, end)
 
-    def _start_pose_capture(self, win):
-        if self._ghost_capture_factory is None or self._stopping or self._pose_owner is not None:
+    def _start_pose_capture(self, win, *, live_only=False):
+        factory = self._live_capture_factory if live_only else self._ghost_capture_factory
+        if factory is None or self._stopping or self._pose_owner is not None:
             return
         from sm64_events.ghost.recording import PoseRecording
         owner = None
         try:
-            owner = PoseRecording(self._cfg.scratch_dir / self._pose_archive_name,
-                                  self._ghost_capture_factory, producer_pid=win.pid,
-                                  allowed=lambda: not self._stopping and not self._session_paused)
-            self._pose_owner, self.pose_archive = owner, owner.archive
-            self._pose_window = (win.pid, win.hwnd)
-            if self._stopping:
+            with self._recording_control_lock:
+                live_session = self._effective_live_session()
+            options = {name: value for name, value in zip(("live_source", "live_input"), live_session, strict=True)
+                       if value is not None}
+            path = None if live_only else self._cfg.scratch_dir / self._pose_archive_name
+            owner = PoseRecording(path, factory, producer_pid=win.pid,
+                                  allowed=lambda: not self._stopping and not self._session_paused, **options)
+            with self._recording_control_lock:
+                self._pose_owner = owner
+                self._pose_window = (win.pid, win.hwnd)
+                self._pose_live_session = live_session
+                if owner.archive is not None:
+                    self.pose_archive = owner.archive
+                self._sync_live_session_locked()
+            if self._stopping or self._pose_retarget:
+                owner.request_stop()
+                return
+            if live_only and not self._live_start_allowed(self._live_start_revision):
+                owner.request_stop()
                 return
             owner.start()
         except Exception:
-            log.exception("native ghost capture unavailable; keeping video recording")
+            if not live_only or self._live_start_allowed(self._live_start_revision):
+                log.exception("native ghost source unavailable")
             if owner is not None:
                 # Cleanup failure must still retain ownership and block replacement.
                 try:
@@ -924,17 +1104,20 @@ class ReplayRecorder:
                     self._capture_cleanup_failed = True
                     raise
             self._pose_owner = None
-            self.pose_archive = None
             self._pose_window = None
+            if not live_only:
+                self.pose_archive = None
 
     def _ensure_pose_capture(self, win) -> None:
         with self._capture_lock:
             if (self._ghost_capture_factory is None or self._pose_owner is not None
                     or self._stopping or self._capture_cleanup_failed):
                 return
-            if self._claim_recorder():
+            if self._acquire_recorder():
                 self._prepare_scratch()
                 self._start_pose_capture(win)
+                if self._pose_owner is not None and not self._recording:
+                    self._source_profile = "poses"
 
     def _teardown_capture(self, *, keep_owner: bool = False, keep_poses: bool = False) -> None:
         with self._capture_lock:
@@ -1001,11 +1184,14 @@ class ReplayRecorder:
 
         self._capture_closed = not owners
         self._capture_cleanup_failed = not self._capture_closed
+        self._retained_profile = (self._source_profile or self._retained_profile) if owners else None
+        self._source_profile = "poses" if keep_poses and self._pose_owner is not None else None
+        self._profile_handover = keep_owner
         self._recording = False
         self._capture_revision = None
         self._idle = False
         self._idle_since = None
-        if self._stopping and self._cleanup_on_stop and self._rec_lock is not None:
+        if self._stopping and self._cleanup_on_stop and self._rec_lock is not None and self._scratch_ready:
             self.cleanup_scratch()
         # Release the machine-wide recorder lock so another instance can take
         # over recording (e.g. PJ64 closed here, or this instance is shutting
@@ -1106,6 +1292,8 @@ class ReplayRecorder:
         elif not paused:
             self._session_paused_since = None
         self._session_paused = paused
+        with self._recording_control_lock:
+            self._sync_live_session_locked()
         if paused:
             self._set_idle(True)
         else:
@@ -1129,6 +1317,8 @@ class ReplayRecorder:
 
     def can_collect(self) -> bool:
         """Do not treat retained GPU lead-in as disposable GC time."""
+        if self._source_profile == "live":
+            return False
         if getattr(self, "_capture_retained", None):
             return False
         if self._pose_owner is not None and not self._session_paused:

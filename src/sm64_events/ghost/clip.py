@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Runs in the simulation program (SM64TrainerSim.exe); licenses/README.md lists its GPL-2.0-or-later code.
 """Portable native ghost files; byte layout is plugin/gfxwrap/ghost_clip.h.
 
 Capture refusals remain records. A clip never fills a gap from a nearby pose,
@@ -58,6 +60,7 @@ _PREFIX = struct.Struct("<4I")
 _SAMPLE = struct.Struct("<4I2QqI2H2h2I")
 _WARP = struct.Struct("<Hh")
 _CLOCK = struct.Struct("<4I6Q")
+_CAMERA = struct.Struct("<6f2hf")    # gc_camera's position, focus, roll, roll_screen, fov
 _SOUND = struct.Struct("<4B8I")
 _PAD = struct.Struct("<hhHH")
 # gc_refusal (ghost_capture.h), by value: the one check that refused the pose.
@@ -162,12 +165,29 @@ class Frame:
         return bool(self.valid_fields & POSE) and self.refusal != 0
 
     @property
+    def pose_hidden(self) -> bool:
+        """GC8 hidden byte immediately precedes refusal; usable poses may hide."""
+        return bool(self.raw[REFUSAL_AT - 1])
+
+    @property
     def has_shadow(self) -> bool:
         return bool(self.valid_fields & SHADOW)
 
     @property
     def has_sound(self) -> bool:
         return bool(self.valid_fields & SOUND)
+
+    @property
+    def camera(self) -> dict | None:
+        """The camera the game drew this frame with (gc_camera: the area's graph camera and its
+        perspective), None without its validity bit: "position" and "focus" in the recorded
+        area's world coordinates, "roll" (the look-at roll, 0 in play), "screen_roll" (the s16
+        the picture turns by: gLakituState.roll) and "fov" in degrees."""
+        if not self.valid_fields & CAMERA:
+            return None
+        values = _CAMERA.unpack_from(self.raw, CAMERA_AT)
+        return {"position": list(values[0:3]), "focus": list(values[3:6]), "roll": values[6],
+                "screen_roll": values[7], "fov": values[8]}
 
     @property
     def playable(self) -> bool:
@@ -416,14 +436,23 @@ class Clip:
     def canonical_frames(self) -> dict[int, Frame]:
         """First exact owner-coordinate occurrence, including pose refusals."""
         result = {}
+        for coordinate, frame in self.indexed_rows():
+            result.setdefault(coordinate, frame)
+        return result
+
+    def indexed_rows(self) -> list[tuple[int, Frame]]:
+        """The rows playback indexes, in order, each with its owner coordinate (game frames since
+        the origin, plus the origin's raw IGT on a star clock: ghost_figure.h coordinate); a star
+        clip's rows stop at its first change of clock origin (ghost_playback.cpp valid_clip)."""
+        rows = []
         for frame in self.frames:
             if self.clock_kind == STAR_CLOCK and frame.clock.origin_id != self.frames[0].clock.origin_id:
                 break
             coordinate = frame.clock.elapsed_frames - self.origin_elapsed
             if self.clock_kind == STAR_CLOCK:
                 coordinate += self.origin_raw
-            result.setdefault(coordinate, frame)
-        return result
+            rows.append((coordinate, frame))
+        return rows
 
 
 def _checked_frames(frames: tuple[Frame, ...], configuration: int, epoch: int,

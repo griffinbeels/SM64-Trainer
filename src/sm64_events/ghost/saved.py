@@ -33,6 +33,11 @@ def saved_for(database, kind: str, entity_key: str) -> list[int]:
             if (row["kind"], row["entity_key"]) == (kind, entity_key)]
 
 
+def saved_ids(database) -> list[int]:
+    """Every saved attempt id, any target (Settings' ghost files keep them, `ghost/storage.py`)."""
+    return [row["attempt_id"] for row in _rows(database)]
+
+
 def is_saved(database, attempt_id: int) -> bool:
     return any(row["attempt_id"] == attempt_id for row in _rows(database))
 

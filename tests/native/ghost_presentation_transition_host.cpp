@@ -12,6 +12,7 @@ unsigned checks=0,creates=0,destroys=0,abandons=0,shader_creates=0,shader_delete
 unsigned foreign_resets=0;
 unsigned drawable_width=640,drawable_height=480;
 bool identity_available=true,format_known=true,extent_available=true,extent_succeeds=true,negotiated=true;
+bool fail_gateway_once=false,fail_create_once=false,fail_shader_once=false;
 renderer::Identity live{1,1,1,1,1};
 void check(bool okay,const char* what){++checks;if(!okay)throw std::runtime_error(what);}
 // How the last context_ready ended (ghost_draw_facts.h): a tester's report says it.
@@ -24,14 +25,14 @@ bool CandidateBindings(renderer::Identity* out,snapshot::RestoreBindings* bindin
 }
 unsigned SourceFormat(){return format_known?2u:RB_SOURCE_UNKNOWN;}
 bool DrawableExtent(unsigned* w,unsigned* h){*w=drawable_width;*h=drawable_height;return extent_available;}
-bool BeginCapture(){return true;}
+bool BeginCapture(){if(fail_gateway_once){fail_gateway_once=false;return false;}return true;}
 bool EndCapture(){return true;}
 }
 namespace graphics {
 struct ShaderProgram {~ShaderProgram(){++shader_deletes;}};
 }
 struct Context {
-    graphics::ShaderProgram* createGammaCorrectionShader(){++shader_creates;return new graphics::ShaderProgram;}
+    graphics::ShaderProgram* createGammaCorrectionShader(){++shader_creates;if(fail_shader_once){fail_shader_once=false;return nullptr;}return new graphics::ShaderProgram;}
     void destroy(){}
 } gfxContext;
 struct Config {struct {uint32_t force=0;float level=2;} gammaCorrection;} config;
@@ -59,7 +60,7 @@ PresentationNotice notice=announced;
 void reset(Instance* p){if(p->context_generation!=live.context_generation)++foreign_resets;}
 }
 bool clean_consumer(){return negotiated;}
-Instance* create(const Dispatch&,uint32_t generation){++creates;auto* p=new Instance;p->context_generation=generation;return p;}
+Instance* create(const Dispatch&,uint32_t generation){++creates;if(fail_create_once){fail_create_once=false;return nullptr;}auto* p=new Instance;p->context_generation=generation;return p;}
 void destroy(Instance* p){++destroys;delete p;}
 void abandon(Instance* p){++abandons;delete p;}
 bool prepare(Instance* p,uint32_t generation,uint32_t w,uint32_t h,uint32_t sw,uint32_t sh){
@@ -98,13 +99,15 @@ int main(){try {
     context_ready();check(creates==1 && shader_creates==1 && allocations==1,"initial setup prewarms and prepares without a ghost");
     check(step()==GDF_READY_READY,"a readied context says so");
     context_ready();check(creates==1 && shader_creates==1 && allocations==1,"stable setup allocates nothing");
+    fail_gateway_once=true;check(!context_ready() && current && !current->ready,"transient prepare gateway refusal remains retriable with owned storage");
+    check(context_ready() && current->ready && creates==1,"next setup recovers after transient gateway refusal");
     DisplayWindow window;
     publish();window.m_bResizeWindow=true;check(window.resizeWindow(),"pinned resize forwards");
     check(creates==1 && shader_creates==1 && destroys==0 && shader_deletes==0,"drawable resize preserves context resources");
-    check(allocations==2 && !published(),"resize prepares extent and retires old picture");
+    check(allocations==3 && !published(),"resize prepares extent and retires old picture");
     publish();window.m_bToggleFullscreen=true;check(window.changeWindow(),"pinned fullscreen forwards");
     check(creates==1 && shader_creates==1 && destroys==0 && shader_deletes==0,"fullscreen preserves context resources");
-    check(allocations==3 && !published(),"fullscreen refreshes extent and image identity");
+    check(allocations==4 && !published(),"fullscreen refreshes extent and image identity");
     publish();++live.drawable_generation;check(!published(),"new drawable generation refuses old tokens before refresh");
     context_ready();check(!published() && owner.drawable_generation==live.drawable_generation,"ready renews drawable identity");
     publish();source_width=320;source_height=240;extent_available=false;++live.drawable_generation;context_ready();
@@ -122,21 +125,29 @@ int main(){try {
           "reused context handle abandons old generation without foreign deletes");
     ++live.context;context_ready();check(creates==3 && shader_creates==3 && abandons==2,"new context prewarms again");
     ++live.owner_thread;context_ready();check(creates==4 && shader_creates==4 && abandons==3,"new owner cannot retain old resources");
-    publish();identity_available=false;context_ready();check(!current && !gamma_program && abandons==4,"missing identity safely abandons");
+    publish();identity_available=false;check(!context_ready() && current && gamma_program && abandons==3,"missing identity retains resources without claiming current presentation");
     check(step()==GDF_READY_NO_IDENTITY,"a context without identity says so");
     identity_available=true;context_ready();publish();format_known=false;context_ready();
-    check(!current && !gamma_program && destroys==old_destroys+1 && shader_deletes==old_deletes+1,"missing format refuses setup with owned cleanup");
+    check(current && gamma_program && destroys==old_destroys && shader_deletes==old_deletes,"temporarily unknown format preserves still-owned resources");
     check(step()==GDF_READY_SOURCE_FORMAT,"an unobserved framebuffer format says so");
     format_known=true;context_ready();publish();window.resize_ok=false;window.m_bResizeWindow=true;window.resizeWindow();
-    check(creates==7 && shader_creates==7 && abandons==5,"failed resize fallback rebuilds new context generation");
+    check(creates==5 && shader_creates==5 && abandons==4,"failed resize fallback rebuilds new context generation");
     const unsigned gamma_deletes=shader_deletes;
     config.gammaCorrection.force=1;config.gammaCorrection.level=2.5f;context_ready();
-    check(creates==7 && shader_creates==8 && shader_deletes==gamma_deletes+1 && current->ready &&
+    check(creates==5 && shader_creates==6 && shader_deletes==gamma_deletes+1 && current->ready &&
           gamma_force==1 && gamma_level==2.5f,"changed gamma settings renew only gamma while preserving context storage");
     publish();window.stop();check(!current && !gamma_program && !published(),"true stop cleans up before context disappears");
     check(!foreign_resets,"no presentation reset restores a foreign generation");
     context_ready();check(!current,"zero context cannot become ready");
     check(step()==GDF_READY_NO_IDENTITY,"a zero context names no identity");
+    live={9,9,9,9,9};fail_create_once=true;
+    check(!context_ready() && !current,"transient presentation create failure reports unsuccessful setup");
+    check(context_ready() && current && current->ready,"presentation create failure recovers on a later setup attempt");
+    context_stopping();
+    fail_shader_once=true;
+    check(!context_ready() && current && !current->ready && current->width==drawable_width && current->height==drawable_height,
+        "optional shader refusal retains a clean extent without allowing VI replacement");
+    check(context_ready() && current && current->ready,"optional shader refusal recovers under the same identity");context_stopping();
     negotiated=false;context_ready();check(!current && step()==GDF_READY_NO_CLEAN_CONSUMER,"an unnegotiated presentation says so");
     std::printf("transition passed checks=%u resize=retained fullscreen=retained initial=prewarmed stale=refused failure=refused foreign=abandoned stop=destroyed\n",checks);
     return 0;

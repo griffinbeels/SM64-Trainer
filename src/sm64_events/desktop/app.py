@@ -125,11 +125,11 @@ def main() -> None:
         quit_all()
         return
 
-    _run_native_desktop(state, quit_all)
+    _run_native_desktop(app, state, quit_all)
     quit_all()      # idempotent backstop for the normal close path
 
 
-def _run_native_desktop(state, quit_all):
+def _run_native_desktop(app, state, quit_all):
     def ask_page() -> bool:
         win.show()   # a tray Quit can arrive with the window hidden
         return win.evaluate_js(ASK_PAGE_JS) is True
@@ -140,6 +140,12 @@ def _run_native_desktop(state, quit_all):
         is_active=lambda: compression_active(server_port()),
         ask_page=ask_page, quit_all=quit_all)
     win = window.create(on_closed=quit_all, on_closing=guard.closing)
+    # The lab's Scene viewer, where SM64_SCENE_LAB mounted it, hands this window's page the
+    # renderer's pixels through WebView2 shared memory instead of a JPEG (a transport only:
+    # the page and its controls are the browser's).
+    scene_lab = getattr(app.state, "scene_lab", None)
+    if scene_lab is not None:
+        scene_lab.attach_window(win)
     state["tray"] = tray.create(on_show=win.show, on_quit=guard.quit_requested)
     tray.start(state["tray"])
 

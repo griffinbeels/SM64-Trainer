@@ -1,8 +1,10 @@
 # src/sm64_events/server/ghost_api.py
-"""Ghost preferences, saved runs and collections over the native session."""
+"""Ghost preferences, saved runs, ghost files and collections over the native session."""
+import asyncio
 import json
 from typing import Literal
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
+from pydantic import BaseModel, StrictBool
 
 from sm64_events.ghost import settings
 
@@ -50,6 +52,36 @@ def _mount_saved_ghosts(router, session, _session) -> None:
         return await _session().remove_ghost(attempt_id)
 
 
+NO_STORAGE = "Ghost file sizes are not available in this window."
+
+
+class PurgeBody(BaseModel):
+    keep_pbs: StrictBool          # a destructive choice: "yes" or 1 is no answer
+
+
+def _mount_ghost_files(router, session, _session) -> None:
+    """Settings' Ghost files (`ghost/storage.py`): what ghost files use, and the two purges. The
+    lab's attempt scenes and made ghost scenes join when the scene lab is mounted (`app.state.scene_lab`)."""
+    def storage(request: Request):
+        lab = getattr(request.app.state, "scene_lab", None)
+        return _session().storage(scenes=lambda: getattr(lab, "scenes", None),
+                                  made=lambda: getattr(lab, "resim", None))
+
+    @router.get("/ghost/storage")
+    async def ghost_storage(request: Request):
+        if session is None:
+            return {"available": False, "reason": NO_STORAGE}
+        return await asyncio.to_thread(storage(request).usage)
+
+    @router.post("/ghost/storage/purge")
+    async def purge_ghost_files(body: PurgeBody, request: Request):
+        """{deleted, bytes, skipped, usage}; 409 while another purge runs."""
+        try:
+            return await _session().purge_files(storage(request), keep_pbs=body.keep_pbs)
+        except RuntimeError as busy:
+            raise HTTPException(409, str(busy)) from busy
+
+
 def create_ghost_router(session=None) -> APIRouter:
     """Mount ghost routes even before a session is available.
 
@@ -79,6 +111,7 @@ def create_ghost_router(session=None) -> APIRouter:
         return await session.refresh(resolve=False)
 
     _mount_saved_ghosts(router, session, _session)
+    _mount_ghost_files(router, session, _session)
     @router.get("/ghost/rivals/search")
     async def search_rivals(target: str = Query(max_length=512),
                             player: str = Query(default="",max_length=80),

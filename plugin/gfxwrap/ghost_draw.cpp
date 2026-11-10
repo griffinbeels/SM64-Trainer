@@ -5,6 +5,8 @@
 #include "ghost_compositor.h"
 #include "ghost_dispatch.h"
 #include "ghost_playback.h"
+#include "ghost_live_session.h"
+#include "ghost_viewer.h"
 #include "ghost_annotation.h"
 #include "ghost_presentation.h"
 #include "ghost_stream.h"
@@ -22,12 +24,23 @@
 namespace ghost_draw {
 namespace {
 ghost_compositor::Instance *compositor = nullptr;
+bool compositor_ready=false;
+bool list_identified=false;
 ghost_compositor::Dispatch dispatch{};
-renderer::Identity owner{}, presentation_owner{};
+renderer::Identity owner{}, presentation_owner{}, setup_owner{};
 uint32_t width = 0, height = 0, prepared_width = 0, prepared_height = 0;
 uint32_t configuration = 0, clean_fbo = 0, clean_texture = 0;
+uint32_t context_gl_major=0,context_gl_minor=0;
 uint64_t model_id = 0, particle_model = 0, annotation_model = 0, occurrence = 0;
 gp_draw_token draw_token{};
+ghost_live_session::Token live_token{};
+// viewer: the scene viewer host's ghosts (ghost_viewer.h); never in the game.
+bool saved_contributor=false,live_contributor=false,viewer_contributor=false;
+unsigned presentation_retry=0,compositor_retry=0;
+using Reason=ghost_live_session::PresentationReason;
+Reason compositor_failure=Reason::setup_pending;
+void refused(Reason reason) {ghost_live_session::presentation(reason);}
+void setup_refused(Reason reason) {compositor_failure=reason;refused(reason);}
 bool provisional = false, hud = false, ready = false, layer = false;
 // This list draws a ghost: playback chose one from the list's own sample
 // (ghost_playback::plan) on the prepared model. The translucent world layer
@@ -83,6 +96,16 @@ using Clock = std::chrono::steady_clock;
 gs_hook_cost cost{};
 uint64_t query_nanos = 0;
 Clock::time_point hud_start{};
+uint64_t now_ns() {
+    const auto value=std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now().time_since_epoch()).count();
+    return value<0?0:uint64_t(value);
+}
+bool contributors_current() {
+    return (saved_contributor || live_contributor || viewer_contributor)
+        && (!saved_contributor || ghost_playback::current(draw_token))
+        && (!live_contributor || ghost_live_session::current(live_token,now_ns()))
+        && (!viewer_contributor || ghost_viewer::current());
+}
 uint32_t since(Clock::time_point start) {
     const auto us = std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - start).count();
     return us < 0 ? 0u : us > INT32_MAX ? uint32_t(INT32_MAX) : uint32_t(us);
@@ -139,8 +162,8 @@ bool same(const renderer::Identity &a, const renderer::Identity &b) {
     return same_context(a, b) && a.drawable_generation == b.drawable_generation && a.read_drawable == b.read_drawable;
 }
 bool valid_image(const ghost_presentation::GhostViImage &image) {
-    return ready && image.occurrence == occurrence && image.configuration == configuration
-        && image.context_generation == owner.context_generation && ghost_playback::current(draw_token);
+    return list_identified && ready && image.occurrence == occurrence && image.configuration == configuration
+        && image.context_generation == owner.context_generation && contributors_current();
 }
 bool image_for_vi(const ghost_presentation::ViSource &source, ghost_presentation::GhostViImage *out) {
     if (out) *out = {};
@@ -150,12 +173,14 @@ bool image_for_vi(const ghost_presentation::ViSource &source, ghost_presentation
     const auto display = ghost_compositor::display(compositor);
     ghost_presentation::GhostViImage image{display.texture, display.width, display.height,
         configuration, owner.context_generation, display.occurrence, display.framebuffer,
-        ghost_playback::records_display() ? 1u : 0u};
+        ((saved_contributor && ghost_playback::records_display())
+            || (live_contributor && ghost_live_session::records_display())) ? 1u : 0u};
     if (!valid_image(image) || display.width != source.width || display.height != source.height) return false;
     *out = image; return true;
 }
 void presented(const ghost_presentation::GhostViImage &image, uint64_t, bool displayed) {
-    ghost_ipc::presented(displayed && valid_image(image) ? draw_token.revision : 0);
+    ghost_ipc::presented(displayed && valid_image(image) && saved_contributor ? draw_token.revision : 0);
+    if(live_contributor && displayed && valid_image(image))ghost_live_session::presentation(Reason::displayed,true);
 }
 bool image_writes_disabled() {
     // The pinned combiner's depth_compare returns before any image access when
@@ -197,43 +222,57 @@ bool close_display() {
     const auto stage = Clock::now();
     const bool clean = gateway(replay_gl::EndCapture);
     cost.close_micros += since(stage);
-    if (!clean) fault(GDF_FAULT_DISPLAY);
+    if (!clean) { refused(Reason::gateway_refused); fault(GDF_FAULT_DISPLAY); }
     return clean;
 }
 void forget_scopes() {
     provisional = ready = hud = layer = display_scope = layer_scope = layer_color = false;
-    occurrence = 0; draw_token = {};
+    occurrence = 0; draw_token = {};live_token={};saved_contributor=live_contributor=viewer_contributor=false;
 }
 }
 void cancel(uint32_t why) {
+    if(!list_identified)return;
     // An image this list had sealed is discarded: the list says why.
     if (why && (provisional || ready)) ghost_facts::refuse(why);
     if (hud) end_hud();
     ghost_compositor::abort(compositor);
     close_display();
-    provisional = ready = false; occurrence = 0; draw_token = {};
+    provisional = ready = false; occurrence = 0; draw_token = {};live_token={};saved_contributor=live_contributor=viewer_contributor=false;
 }
 void context_lost() {
     renderer::Identity identity{};snapshot::RestoreBindings ignored{};
     const bool owned = replay_gl::CandidateBindings(&identity, &ignored) && same_context(identity, owner);
+    list_identified=owned;
     ghost_ipc::presented(0);
     if (owned) { close_layer(); cancel(); }
     else {
         // A scope from another generation cannot restore bindings here.
         forget_scopes();
     }
+    ghost_live_session::retire_on_context_loss();
     ghost_playback::retire_on_context_loss();
     if (compositor) {
         if (owned) ghost_compositor::destroy(compositor);
         else ghost_compositor::abandon(compositor);
     }
-    compositor = nullptr; owner = {}; presentation_owner = {}; dispatch = {};
+    compositor = nullptr;compositor_ready=false;owner = {}; presentation_owner = {}; setup_owner={};dispatch = {};
     model_id = particle_model = annotation_model = 0; prepared_width = prepared_height = width = height = 0; will_draw = false;
     get_uniform = nullptr;
+    list_identified=false;
+    presentation_retry=compositor_retry=0;
+    context_gl_major=context_gl_minor=0;
 }
 void begin(uint32_t rom, uint32_t config_id, const gc_sample *sample) {
     renderer::Identity identity{}; snapshot::RestoreBindings ignored{};
     const bool identified = replay_gl::CandidateBindings(&identity, &ignored);
+    list_identified=identified;
+    if(!identified) {
+        // A bounded observation miss does not establish context loss. Keep
+        // still-owned GPU storage; no restore, allocation or draw this list.
+        will_draw=false;ghost_live_session::retire_list();
+        if(!ghost_playback::safe_boundary(rom,config_id))ghost_facts::refuse(GDF_LIST_OTHER_THREAD);
+        ghost_facts::refuse(GDF_LIST_NO_IDENTITY);refused(Reason::setup_pending);return;
+    }
     if (identified && same_context(identity, owner)) {
         close_layer(); cancel(); ghost_compositor::clear_layer(compositor);
     } else {
@@ -241,68 +280,99 @@ void begin(uint32_t rom, uint32_t config_id, const gc_sample *sample) {
         // them without restoring their bindings through the new context.
         forget_scopes();
         if (compositor) ghost_compositor::abandon(compositor);
-        compositor = nullptr; owner = {};
+        compositor = nullptr;compositor_ready=false;owner = {};
         prepared_width = prepared_height = 0; model_id = particle_model = annotation_model = 0;
     }
     will_draw = false;
+    ghost_live_session::retire_list();
     if (!ghost_playback::safe_boundary(rom, config_id)) ghost_facts::refuse(GDF_LIST_OTHER_THREAD);
+    ghost_live_session::begin(rom,config_id,identified?identity.context_generation:0,sample,now_ns());
     configuration = config_id;
+    if(!same_context(identity,setup_owner)) {
+        setup_owner=identity;compositor_retry=0;compositor_failure=Reason::setup_pending;context_gl_major=context_gl_minor=0;
+    }
+    ghost_live_session::presentation_environment(context_gl_major,context_gl_minor,ghost_presentation::ineligible_reasons());
     if (!ghost_presentation::clean_consumer()) { ghost_facts::refuse(GDF_LIST_NO_CLEAN_CONSUMER); return; }
-    if (!identified) { ghost_facts::refuse(GDF_LIST_NO_IDENTITY); return; }
     if (!same(identity, presentation_owner)) {
         ghost_presentation::set_provider(image_for_vi, presented, valid_image);
-        ghost_presentation::context_ready(); presentation_owner = identity;
+        if(presentation_retry)--presentation_retry;
+        else {
+            presentation_retry=31;
+            if(ghost_presentation::context_ready()) {presentation_owner=identity;presentation_retry=0;}
+            else refused(Reason::setup_pending);
+        }
     }
+    if(!ghost_presentation::eligible()) {refused(Reason::ineligible);ghost_facts::refuse(GDF_LIST_INELIGIBLE);return;}
+    // Stepped aside for this context: no ghost GL at all, setup retries included.
+    if (faulted()) {refused(Reason::gateway_refused);ghost_facts::refuse(GDF_LIST_FAULTED);return;}
     // The compositor and its programs exist before any ghost is asked for, so
     // the driver's compile lands seconds after the game starts, not on the
     // first ghost's list (a fresh shader cache cost that list 36 ms, 2026-10-02).
-    if (!same_context(identity, owner)) {
-        compositor = nullptr; prepared_width = prepared_height = 0; model_id = particle_model = annotation_model = 0;
+    if (!same_context(identity, owner) || !compositor || !compositor_ready) {
+        if(compositor_retry) {--compositor_retry;refused(compositor_failure);ghost_facts::refuse(GDF_LIST_NO_COMPOSITOR);return;}
+        compositor_retry=31;
+        prepared_width = prepared_height = 0; model_id = particle_model = annotation_model = 0;
         using ghost_facts::relaxed;
         ghost_facts::prepare_result.store(0, relaxed); ghost_facts::batch_result.store(0, relaxed);
         ghost_facts::finalize_result.store(0, relaxed);
         if (!ghost_dispatch::load(dispatch)) {
-            ghost_facts::create_step.store(GDF_CREATE_DISPATCH, relaxed); ghost_facts::refuse(GDF_LIST_NO_DISPATCH); return;
+            ghost_facts::create_step.store(GDF_CREATE_DISPATCH, relaxed); ghost_facts::refuse(GDF_LIST_NO_DISPATCH);
+            setup_refused(Reason::unsupported);return;
         }
         owner = identity;
         get_uniform = reinterpret_cast<GetUniform>(wglGetProcAddress("glGetUniformiv"));
         const auto proc = reinterpret_cast<uintptr_t>(get_uniform);
         if (proc <= 3 || proc == UINTPTR_MAX) get_uniform = nullptr;
         if (!replay_gl::BeginCapture()) {
-            ghost_facts::create_step.store(GDF_CREATE_SCOPE, relaxed); ghost_facts::refuse(GDF_LIST_CREATE_SCOPE); return;
+            ghost_facts::create_step.store(GDF_CREATE_SCOPE, relaxed); ghost_facts::refuse(GDF_LIST_CREATE_SCOPE);
+            setup_refused(Reason::gateway_refused);return;
         }
+        int32_t major=0,minor=0;dispatch.GetIntegerv(0x821B,&major);dispatch.GetIntegerv(0x821C,&minor);
+        context_gl_major=major>0?uint32_t(major):0;context_gl_minor=minor>0?uint32_t(minor):0;
+        ghost_live_session::presentation_environment(context_gl_major,context_gl_minor,ghost_presentation::ineligible_reasons());
+        if(major<4 || (major==4 && minor<3)) {
+            replay_gl::EndCapture();
+            ghost_facts::create_step.store(GDF_CREATE_REFUSED, relaxed); ghost_facts::refuse(GDF_LIST_NO_COMPOSITOR);
+            setup_refused(Reason::unsupported);return;
+        }
+        compositor=nullptr;compositor_ready=false;
         compositor = ghost_compositor::create(dispatch, owner.context_generation);
         if (compositor) ghost_compositor::warm(compositor);
         if (!replay_gl::EndCapture()) {
-            ghost_compositor::abandon(compositor); compositor = nullptr; fault(GDF_FAULT_CREATE);
-            ghost_facts::create_step.store(GDF_CREATE_DIRTY, relaxed); ghost_facts::refuse(GDF_LIST_FAULTED); return;
+            ghost_compositor::abandon(compositor); compositor = nullptr; compositor_ready=false;
+            fault(GDF_FAULT_CREATE);
+            ghost_facts::create_step.store(GDF_CREATE_DIRTY, relaxed); ghost_facts::refuse(GDF_LIST_FAULTED);
+            setup_refused(Reason::gateway_refused); return;
         }
         ghost_facts::create_step.store(compositor ? GDF_CREATE_CREATED : GDF_CREATE_REFUSED, relaxed);
+        if(!compositor) {ghost_facts::refuse(GDF_LIST_NO_COMPOSITOR);setup_refused(Reason::compositor_refused);return;}
+        compositor_retry=0;compositor_ready=true;
     }
     // Programs belong to the context. Picture admission still follows every
     // drawable change, and prepare below reallocates only a changed extent.
     owner = identity;
-    // stepped aside for this context: no ghost GL at all
-    if (faulted()) { ghost_facts::refuse(GDF_LIST_FAULTED); return; }
-    if (!compositor) ghost_facts::refuse(GDF_LIST_NO_COMPOSITOR); // every step below needs one
     sg_atlas_view atlas{}; uint64_t wanted_model = 0;
-    if (!ghost_playback::atlas(&atlas, &wanted_model)) { ghost_facts::refuse(GDF_LIST_NO_MODEL); return; }
+    // Saved playback's model, else the scene viewer host's own (only there).
+    if (!ghost_playback::atlas(&atlas, &wanted_model) && !ghost_viewer::atlas(&atlas, &wanted_model)) {
+        ghost_facts::refuse(GDF_LIST_NO_MODEL); return;
+    }
     if (compositor && (!width || !height)) ghost_facts::refuse(GDF_LIST_NO_EXTENT);
     if (compositor && width && height && (width != prepared_width || height != prepared_height || model_id != wanted_model)) {
-        if (!replay_gl::BeginCapture()) { ghost_facts::refuse(GDF_LIST_PREPARE_SCOPE); return; }
+        if (!replay_gl::BeginCapture()) { refused(Reason::gateway_refused); ghost_facts::refuse(GDF_LIST_PREPARE_SCOPE); return; }
         // One vertex range per displayed ghost; begin_batch shares the buffer.
-        const auto result = ghost_compositor::prepare(compositor, width, height, GP_GHOSTS * SG_MODEL_MAX_VERTICES,
+        const auto result = ghost_compositor::prepare(compositor, width, height, ghost_compositor::max_poses * SG_MODEL_MAX_VERTICES,
                                                      atlas.rgba, atlas.width, atlas.height);
         const bool clean = replay_gl::EndCapture();
         ghost_facts::prepare_result.store(result_code(result), ghost_facts::relaxed);
         if (!clean) { fault(GDF_FAULT_PREPARE); ghost_facts::refuse(GDF_LIST_FAULTED); return; }
         if (result == ghost_compositor::Result::ok) {
             prepared_width = width; prepared_height = height; model_id = wanted_model; particle_model = annotation_model = 0;
-        }
+        } else refused(!clean?Reason::gateway_refused:result==ghost_compositor::Result::unsupported?Reason::unsupported:Reason::compositor_refused);
     }
     // The ROM particle atlas rides on the prepared model; none leaves particles undrawn.
     sg_particle_view particles{}; uint64_t particle_id = 0;
-    if (compositor && model_id && particle_model != model_id && ghost_playback::particles(&particles, &particle_id)
+    if (compositor && model_id && particle_model != model_id
+            && (ghost_playback::particles(&particles, &particle_id) || ghost_viewer::particles(&particles, &particle_id))
             && particle_id == model_id) {
         if (!replay_gl::BeginCapture()) { ghost_facts::refuse(GDF_LIST_PREPARE_SCOPE); return; }
         const auto result = ghost_compositor::prepare_particles(compositor, particles.atlas_rgba,
@@ -311,17 +381,20 @@ void begin(uint32_t rom, uint32_t config_id, const gc_sample *sample) {
         if (result == ghost_compositor::Result::ok) particle_model = model_id;
     }
     ghost_annotation::View annotations{};uint64_t annotation_id=0;
-    if(compositor && model_id && annotation_model!=model_id && ghost_playback::annotations(&annotations,&annotation_id)
+    if(compositor && model_id && annotation_model!=model_id
+            && (ghost_playback::annotations(&annotations,&annotation_id) || ghost_viewer::annotations(&annotations,&annotation_id))
             && annotation_id==model_id) {
         if(!replay_gl::BeginCapture()){ghost_facts::refuse(GDF_LIST_PREPARE_SCOPE);return;}
         const auto result=ghost_compositor::prepare_annotations(compositor,annotations.rgba,annotations.width,annotations.height);
         if(!replay_gl::EndCapture()){fault(GDF_FAULT_ANNOTATIONS);ghost_facts::refuse(GDF_LIST_FAULTED);return;}
         if(result==ghost_compositor::Result::ok)annotation_model=model_id;
     }
-    // Playback plans only on the prepared model; a missing one already said why.
+    const bool saved=sample && ghost_playback::plan(*sample);
+    const bool viewer=sample && ghost_viewer::plan(*sample);
+    // Any contributor plans only on the prepared model; a missing one already said why.
     if (compositor && model_id && model_id == wanted_model) {
-        if (!sample) ghost_facts::refuse(GDF_LIST_NO_SAMPLE);
-        else if (!(will_draw = ghost_playback::plan(*sample))) ghost_facts::refuse(GDF_LIST_NO_PLAN);
+        will_draw = saved || ghost_live_session::plan() || viewer;
+        if (!will_draw) ghost_facts::refuse(sample ? GDF_LIST_NO_PLAN : GDF_LIST_NO_SAMPLE);
     } else if (compositor) ghost_facts::refuse(GDF_LIST_PREPARE);
 }
 void observe(const ghost::RasterTarget &target) {
@@ -330,20 +403,32 @@ void observe(const ghost::RasterTarget &target) {
     }
 }
 void seal(const gc_sample &sample, const ghost::WorldPass &world, bool usamune_hidden, int usamune_values) {
+    if(!list_identified)return;
     if (display_scope) cancel(); // a list seals once; never nest its scope
-    const uint32_t refused = faulted() ? GDF_LIST_FAULTED : !compositor ? GDF_LIST_NO_COMPOSITOR
+    if(!ghost_presentation::eligible()) {refused(Reason::ineligible);ghost_facts::refuse(GDF_LIST_INELIGIBLE);return;}
+    const uint32_t gate = faulted() ? GDF_LIST_FAULTED : !compositor ? GDF_LIST_NO_COMPOSITOR
         : !model_id ? GDF_LIST_PREPARE : !ghost_presentation::clean_consumer() ? GDF_LIST_NO_CLEAN_CONSUMER
         : world.context_generation != owner.context_generation
             || world.target.width != prepared_width || world.target.height != prepared_height ? GDF_LIST_SEAL_WORLD : 0u;
-    if (refused) { ghost_facts::refuse(refused); return; }
+    if (gate) { ghost_facts::refuse(gate); return; }
     auto *buffer = ghost_link::raster_buffer();
     if (!buffer || !buffer->m_pTexture || uint32_t(buffer->m_FBO) != world.target.color) {
         ghost_facts::refuse(GDF_LIST_SEAL_BUFFER); return;
     }
     // Zero visible ghosts and no path leaves this frame exactly as a hidden
     // single ghost did.
-    ghost_compositor::Pose poses[GP_GHOSTS]{}; uint32_t count = 0;
-    if (!ghost_playback::evaluate(sample, world, poses, count, draw_token)) { ghost_facts::refuse(GDF_LIST_NO_POSE); return; }
+    ghost_compositor::Pose poses[ghost_compositor::max_poses]{};uint32_t count=0,live_count=0;
+    saved_contributor=ghost_playback::evaluate(sample,world,poses,count,draw_token);
+    live_contributor=ghost_live_session::evaluate(sample,world,now_ns(),poses+count,live_count,live_token);
+    count+=live_count;
+    uint32_t viewer_count=0;
+    viewer_contributor=ghost_viewer::evaluate(sample,world,poses+count,ghost_compositor::max_poses-count,viewer_count);
+    count+=viewer_count;
+    if(!saved_contributor && !live_contributor && !viewer_contributor) {ghost_facts::refuse(GDF_LIST_NO_POSE);return;}
+    if(!contributors_current()) {ghost_facts::refuse(GDF_LIST_STALE);cancel();return;}
+    // One stable ordering across saved and live contributions; neither group
+    // can be concatenated after the other when their depths interleave.
+    ghost_compositor::sort_back_to_front(poses,count);
     // His ask, 2026-10-02: "when in the usamune menu, we should hide the input
     // display in the bottom left ... because the normal player's input display
     // is also hidden." The stack follows his display; names and bodies do not.
@@ -372,7 +457,7 @@ void seal(const gc_sample &sample, const ghost::WorldPass &world, bool usamune_h
     }
     auto stage = Clock::now();
     const bool open = gateway(replay_gl::BeginCapture); cost.open_micros += since(stage);
-    if (!open) { ghost_facts::refuse(GDF_LIST_SEAL_SCOPE); return; }
+    if (!open) { refused(Reason::gateway_refused); ghost_facts::refuse(GDF_LIST_SEAL_SCOPE); return; }
     display_scope = true;
     stage = Clock::now();
     // The ghost's path rides the same batch; it may draw with no ghost in view.
@@ -385,21 +470,31 @@ void seal(const gc_sample &sample, const ghost::WorldPass &world, bool usamune_h
     if (provisional) {
         occurrence = world.list_serial; clean_fbo = world.target.color;
         clean_texture = uint32_t(buffer->m_pTexture->name);
-    } else { ghost_facts::refuse(GDF_LIST_BATCH); cancel(); }
+    } else {
+        refused(result==ghost_compositor::Result::unsupported?Reason::unsupported:Reason::compositor_refused);
+        ghost_facts::refuse(GDF_LIST_BATCH);
+        cancel();
+    }
 }
 void finish(const ghost::WorldPass *world) {
+    if(!list_identified) { publish_list(false); return; } // begin already said no_identity
     // In the order the original single test ran: the display scope closes
     // only for a sealed, still-current image.
-    uint32_t refused = !provisional ? GDF_LIST_NO_SEAL
-        : !world || world->list_serial != occurrence || !ghost_playback::current(draw_token) ? GDF_LIST_STALE : 0u;
-    if (!refused && !close_display()) refused = GDF_LIST_CLOSE_DIRTY;
-    if (refused) { ghost_facts::refuse(refused); cancel(); publish_list(false); return; }
+    uint32_t gate = !provisional ? GDF_LIST_NO_SEAL
+        : !world || world->list_serial != occurrence || !contributors_current() ? GDF_LIST_STALE : 0u;
+    if (!gate && !close_display()) gate = GDF_LIST_CLOSE_DIRTY;
+    if (gate) {
+        if (viewer_contributor) ghost_viewer::finished(false);
+        ghost_facts::refuse(gate); cancel(); publish_list(false); return;
+    }
     const auto stage = Clock::now();
     const auto result = ghost_compositor::finalize(compositor, occurrence);
     ready = result == ghost_compositor::Result::ok;
     cost.finalize_micros += since(stage);
     ghost_facts::finalize_result.store(result_code(result), ghost_facts::relaxed);
-    if (!ready) { ghost_facts::refuse(GDF_LIST_FINALIZE); cancel(); }
+    if (viewer_contributor) ghost_viewer::finished(ready);
+    if (!ready) { refused(Reason::compositor_refused); ghost_facts::refuse(GDF_LIST_FINALIZE); cancel(); }
+    else if(live_contributor)ghost_live_session::presentation(same(owner,presentation_owner)?Reason::ready:Reason::setup_pending);
     publish_list(ready);
 }
 bool begin_layer(uint32_t pass, uint32_t framebuffer, uint64_t attachments) {
@@ -425,11 +520,11 @@ bool begin_layer(uint32_t pass, uint32_t framebuffer, uint64_t attachments) {
     return layer;
 }
 void end_layer() {
-    if (!layer) return;
+    if (!list_identified || !layer) return;
     ghost_compositor::end_layer(compositor); layer = false;
 }
 void close_layer() {
-    if (!layer_scope) return;
+    if (!list_identified || !layer_scope) return;
     end_layer(); layer_scope = false;
     // A surface whose color entered the layer without its depth would tint
     // nothing behind it consistently, and the layer's own GL error drops it:
@@ -438,11 +533,11 @@ void close_layer() {
     if (!clean || layer_color) ghost_compositor::break_layer(compositor);
     layer_color = false;
 }
-bool layer_open() { return layer_scope; }
-void break_layer() { ghost_compositor::break_layer(compositor); }
+bool layer_open() { return list_identified && layer_scope; }
+void break_layer() { if(list_identified)ghost_compositor::break_layer(compositor); }
 bool drawing() { return will_draw; }
 bool begin_hud() {
-    if (!provisional || hud) return false;
+    if (!list_identified || !provisional || hud) return false;
     hud_start = Clock::now();
     auto *buffer = ghost_link::raster_buffer();
     if ((gSP.geometryMode & G_ZBUFFER) || !buffer || buffer->m_isDepthBuffer
@@ -457,7 +552,7 @@ bool begin_hud() {
     return hud;
 }
 void end_hud() {
-    if (!hud) return;
+    if (!list_identified || !hud) return;
     ghost_compositor::end_hud(compositor); hud = false;
     cost.hud_micros += since(hud_start); // the mirrored draw included
 }

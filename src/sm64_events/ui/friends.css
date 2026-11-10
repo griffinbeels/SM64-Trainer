@@ -1,0 +1,65 @@
+.friends-control { position: relative; }
+@media (max-width: 1180px) {
+  .app-sidebar .friends-control .friends-badge { display:inline-flex; position:absolute; top:0; right:0; min-width:1rem; padding:0 .15rem; }
+}
+@media (max-width: 760px) {
+  .mobile-appbar .friends-control-label { display:none; }
+  .mobile-appbar .friends-badge { position:absolute; top:-4px; right:-5px; }
+}
+.friends-control .friends-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 1.5rem; min-height: 1.35rem; margin-left: auto; padding: 0 .3rem;
+  border-radius: 5px; color: var(--text); background: #264565;
+  font-size: .68rem; font-variant-numeric: tabular-nums;
+}
+.friends-surface { container-type: inline-size; display: grid; gap: 18px; min-width: 0; }
+.friends-surface p { margin: 0; line-height: 1.45; }
+.friends-surface h3 { font-size: 1rem; }
+.friends-start { display: grid; justify-items: start; gap: 12px; padding: 4px 0; }
+.friends-start > .friends-join-help { margin-top: 4px; font-size: .8rem; }
+.friends-invites { display: grid; gap: 10px; }
+.friends-invitation {
+  display: flex; align-items: center; justify-content: space-between; gap: 14px;
+  padding: 12px 0; border-bottom: 1px solid var(--border-soft);
+}
+.friends-invitation-name { display: grid; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
+.friends-invitation-name .meta { font-size: .78rem; }
+.friends-row-actions { display: flex; flex: 0 0 auto; gap: 8px; align-items: center; }
+.friends-section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.friends-section-head .meta { font-size: .8rem; font-variant-numeric: tabular-nums; }
+.friends-slots { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-rows: 1fr; border: 1px solid var(--border-soft); border-radius: 8px; overflow: hidden; }
+.friends-seat {
+  display: grid; grid-template-columns: 26px minmax(0, 1fr); gap: 10px;
+  align-content: start; padding: 16px; min-height: 132px; box-sizing: border-box;
+  background: rgba(20, 41, 62, .35);
+}
+.friends-seat:nth-child(odd) { border-right: 1px solid var(--border-soft); }
+.friends-seat:nth-child(-n+2) { border-bottom: 1px solid var(--border-soft); }
+.friends-seat > .ui-icon { color: var(--gold-soft); margin-top: 2px; }
+.friends-seat-info { display: grid; gap: 5px; min-width: 0; }
+.friends-seat-info strong { line-height: 1.25; overflow-wrap: anywhere; }
+.friends-member-state { color: var(--muted); font-size: .8rem; }
+.friends-self { color: #9cc8ef; font-size: .76rem; }
+.friends-seat.is-empty { color: var(--muted); background: rgba(6, 18, 30, .25); }
+.friends-seat.is-empty > .ui-icon { color: #6b8197; }
+.friends-seat-actions { grid-column: 2; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.friends-seat-actions > button { min-height: 30px; padding: .15rem .45rem; font-size: .72rem; }
+.friends-remove { grid-column: 2; justify-self: start; min-height: 30px; padding: .15rem .45rem; font-size: .72rem; background: transparent; color: var(--muted); }
+.friends-invite-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: end; }
+.friends-code-label { display: grid; gap: 7px; min-width: 0; font-size: .8rem; }
+.friends-code-label input { width: 100%; min-width: 0; box-sizing: border-box; }
+.friends-invite-form > button { min-height: 36px; }
+.friends-invite-note { grid-column: 1 / -1; font-size: .77rem; }
+.friends-full { color: var(--muted); font-size: .8rem; }
+.friends-source, .friends-phase, .friends-copy-state { font-size: .8rem; }
+.friends-phase { color: #a9cae7; }
+.friends-error { display: flex; align-items: center; justify-content: space-between; gap: 14px; color: #f0a4aa; }
+.friends-error > span { min-width: 0; overflow-wrap: anywhere; }
+.friends-leave { margin-left: auto; color: #f0a4aa; }
+.friends-loading, .friends-unavailable { padding: 8px 0; color: var(--muted); }
+@container (max-width: 520px) {
+  .friends-invitation { align-items: flex-start; flex-direction: column; }
+  .friends-seat { padding: 12px; }
+  .friends-invite-form { grid-template-columns: minmax(0, 1fr); }
+  .friends-invite-form > button { justify-self: start; }
+}

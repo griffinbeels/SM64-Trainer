@@ -3,6 +3,15 @@
   "recorded": "2026-10-30",
   "source": "Griffin's working Project64 1.6 (Wermi's build v7, LINK's Project64), read from his registry, Plugin folder and Project64.rdb on 2026-10-30",
   "guide": "https://wermi.neocities.org/emuguide/",
+  "gate": [
+    "emulator_build",
+    "rsp_plugin"
+  ],
+  "fixups": {
+    "version": "2.0",
+    "url": "https://github.com/aglab2/PJ64Fixups/releases/download/2.0/RSP.zip",
+    "zip_sha256": "1868e19e933f7eedbdcc0f3b6da3740f3deda926e7d49bdff865d921f8ae83f6"
+  },
   "items": [
     {
       "id": "graphics_plugin",
@@ -51,22 +60,22 @@
     },
     {
       "id": "emulator_build",
-      "importance": "recommended",
+      "importance": "required",
       "label": "Project64 build",
       "tested": "Wermi's build v7 (LINK's Project64 1.6)",
       "sha256": "8d7d373d024206f7513721b320ef3359b885aa6ea73dc2c14b3a42f0c099be2b",
-      "fix": "Your Project64 is not the build we test with. We test with Wermi's build v7 of Project64 1.6. The guide shows how to get it.",
+      "fix": "Your Project64 is not Wermi's build v7. The trainer is only tested with that build. Download it, open the file, and choose a folder outside Program Files. Then open the new Project64.",
       "unknown": "We could not read your Project64 program file. Open Project64 so we can find it.",
       "link": "https://wermi.neocities.org/emuguide/getting_emu/#download",
       "download": "https://www.dropbox.com/s/cgkbhsarjthgnz8/Project64%201.6%20%28wermi%27s%20build%20v7%29.exe?dl=1"
     },
     {
       "id": "rsp_plugin",
-      "importance": "recommended",
+      "importance": "required",
       "label": "RSP plugin",
-      "tested": "PJ64Fixups RSP",
+      "tested": "PJ64 Fixups 2.0",
       "sha256": "2e7ede23d96c634c4f2266dd4fe36459432140c617424065a1622cc57c623a9f",
-      "fix": "Your RSP plugin is not the PJ64Fixups one. Download RSP.dll from PJ64Fixups. Put it in the Plugin folder inside your Project64 folder.",
+      "fix": "Your Project64 does not have the PJ64 Fixups 2.0. The trainer is only tested with them. Close Project64. Then choose Install the PJ64 Fixups in Settings, under Setup.",
       "unknown": "We could not read RSP.dll in your Plugin folder. Open Project64 so we can find it.",
       "link": "https://wermi.neocities.org/emuguide/fixups/#pj64-fixups",
       "download": "https://github.com/aglab2/PJ64Fixups/releases"
@@ -100,7 +109,16 @@
       "fix": "You use a different controller plugin. That is fine. We only keep a note of it.",
       "unknown": "We could not read which controller plugin Project64 uses. That is fine.",
       "link": "https://wermi.neocities.org/emuguide/raphnetraw/#raphnetraw-for-project64"
+    },
+    {
+      "id": "lab_rom",
+      "importance": "recommended",
+      "label": "Usamune ROM for the Ghost Lab",
+      "tested": "Found: v1.93u (US)",
+      "fix": "The Ghost Lab needs Super Mario 64 Usamune v1.93u: start that game once in Project64 while the Trainer is open, or choose its ROM file.",
+      "unknown": "We could not check for the Ghost Lab's copy of your Usamune ROM.",
+      "link": "https://wermi.neocities.org/emuguide/getting_game/"
     }
   ],
-  "links_read": "Links and downloads are the ones the Wermi guide itself gives, read 2026-10-30; the trainer never downloads or bundles them."
+  "links_read": "Links and downloads are the ones the Wermi guide itself gives, read 2026-10-30. The trainer bundles none of them. Setup downloads one file, the PJ64 Fixups release named in fixups, from its author's GitHub (release read and hashed 2026-11-09)."
 }

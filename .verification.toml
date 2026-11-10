@@ -1,6 +1,13 @@
 schema_version = 1
 
 [[checks]]
+name = "secrets"
+lanes = ["quick", "full"]
+command = ["{python}", "{project}/tools/secret_scan.py"]
+identity_command = ["{python}", "{project}/tools/secret_scan.py", "--version"]
+timeout = 150
+
+[[checks]]
 name = "lint"
 lanes = ["quick"]
 command = ["{python}", "{project}/tools/verify_lint.py"]

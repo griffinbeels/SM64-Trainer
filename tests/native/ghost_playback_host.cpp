@@ -187,7 +187,7 @@ Result evaluate(sg_model *p,const gs_record& recorded,const gc_sample& live,
     out.vertices=triangle;out.count=recorded.sample.pose.hidden?0:3;out.body_count=out.count;out.opacity=opacity;
     // Identify the recorded row and its depth in the otherwise opaque matrix.
     out.view_projection[0]=recorded.sample.pose.position[0];
-    out.view_projection[15]=recorded.sample.pose.position[2];
+    out.view_projection[15]=1;out.sort_depth=recorded.sample.pose.position[2];
     if(perspective) {
         // clip = (x, y, z, -z): the camera at the origin looking down -z.
         std::memset(out.view_projection,0,sizeof(out.view_projection));
@@ -341,6 +341,12 @@ int main() {
         renderer.run([&] {ghost_playback::safe_boundary(7,4);sg_atlas_view atlas{};uint64_t id=0;
             check(ghost_playback::atlas(&atlas,&id) && id==1 && atlas.rgba,"renderer adopted atlas");});
         draw(8,true,GP_BEFORE_START,1);draw(10,true,GP_READY,1);check(selected_x==0,"preloaded frame is an owned copy");
+#if defined(SM64_GHOST_TEST_HOOKS)
+        ghost_playback::test_miss_next_request();
+        renderer.run([&]{ghost_playback::safe_boundary(7,4);});
+        draw(10,true,GP_READY,1);
+        check(api->collect()==GP_OK && closes==0,"bounded request miss retains saved-only model and clips");
+#endif
         check(selected_rom_layout==GC_ROM_JP,"pose evaluated without its clip's capture cartridge");
         check(selected_world==static_cast<uint32_t>(ghost::PassStatus::InvalidIdentity),
             "selected pose retains its historical renderer diagnostic");

@@ -26,6 +26,35 @@ import { optionIconSrc } from "./entityicons.js";
 
 const html = htm.bind(h);
 
+// The picker's courses and what you practice in each, with their portraits; `ranks` are the
+// cells' badges. The Scene viewer's stage picker (scenestage.js) draws the same grid.
+export function targetGroups(t, ranks = {}) {
+  // A HUNDRED_COIN_EXIT engine is excluded here (spec 2026-07-28-multi-step-segments, "the
+  // 100-coin star IS the segment") -- picking it would be picking the SAME practiced thing its
+  // course's "100 Coins" star already offers, and its own section no longer exists to land on
+  // (views.py excludes it from `segments`/`segment_targets` entirely). `is_hundred_coin_engine` is
+  // server-stamped (views.stamp_origins) rather than re-derived here, so this filter can't drift
+  // from projection.py's own attribution rule.
+  return courseUnionGroups(
+    t.view.catalog, (t.segments || []).filter((s) => !s.is_hundred_coin_engine),
+    (t.vocab || {}).course_by_level || {}, ranks,
+    (t.vocab || {}).origins || null,
+  ).map((group) => ({
+    ...group,
+    icon: optionIconSrc(t, "course", group.key.replace("course-", "")),
+  }));
+}
+
+// The cell a picker highlights for a target: "8:1" for a star, "segment:12" for a segment. The
+// Practice target names its kind; a target without one (the Scene viewer's) is a segment when it
+// names a segment and no course.
+export function targetCell(target) {
+  if (!target) return null;
+  const segment = target.kind ? target.kind === "segment" : target.course_id == null && target.segment_id != null;
+  if (segment) return `segment:${target.segment_id}`;
+  return target.course_id != null ? starId(Number(target.course_id), Number(target.star_id)) : null;
+}
+
 export function useTargetPicker(t) {
   const v = t.view;
   const [editing, setEditing] = useState(false);
@@ -78,34 +107,15 @@ export function useTargetPicker(t) {
     // Layer 1 is a grid of COURSES carrying their portraits; layer 2 is that
     // course's stars AND the segments that begin in it, because both are
     // things you practice and /api/target already takes either (user,
-    // 2026-07-25). A HUNDRED_COIN_EXIT engine is excluded here (spec
-    // 2026-07-28-multi-step-segments, "the 100-coin star IS the segment")
-    // -- picking it would be picking the SAME practiced thing its course's
-    // "100 Coins" star already offers, and its own section no longer exists
-    // to land on (views.py excludes it from `segments`/`segment_targets`
-    // entirely). `is_hundred_coin_engine` is server-stamped
-    // (views.stamp_origins) rather than re-derived here, so this filter
-    // can't drift from projection.py's own attribution rule.
-    const courseGroups = courseUnionGroups(
-      v.catalog, (t.segments || []).filter((s) => !s.is_hundred_coin_engine),
-      (t.vocab || {}).course_by_level || {}, targetRanks,
-      (t.vocab || {}).origins || null,
-    ).map((group) => ({
-      ...group,
-      icon: optionIconSrc(t, "course", group.key.replace("course-", "")),
-    }));
-    // The currently-set target, so the picker highlights it. `tgt` always
+    // 2026-07-25); targetGroups above leaves out the 100-coin engines.
+    const courseGroups = targetGroups(t, targetRanks);
+    // The currently-set target, so the picker highlights it. `v.target` always
     // exists once `v` does (views.py always populates it with defaults).
-    // Branching on `tgt.kind` FIRST is load-bearing: a SEGMENT target's
-    // course_id is null, and computing starId unconditionally highlighted
-    // Bob-omb Battlefield's first star instead of the segment being
-    // practiced.
-    const tgt = v.target;
-    const targetValue = tgt.kind === "segment"
-      ? `segment:${tgt.segment_id}`
-      : tgt.course_id != null
-        ? starId(Number(tgt.course_id), Number(tgt.star_id))
-        : null;
+    // targetCell branches on the kind FIRST, which is load-bearing: a SEGMENT
+    // target's course_id is null, and computing starId unconditionally
+    // highlighted Bob-omb Battlefield's first star instead of the segment
+    // being practiced.
+    const targetValue = targetCell(v.target);
     // placeholder=null renders no clear cell at either layer. /api/target
     // always requires an identity, so a clear cell posted {course_id: null,
     // star_id: null}, the server 409d, and the button silently did nothing

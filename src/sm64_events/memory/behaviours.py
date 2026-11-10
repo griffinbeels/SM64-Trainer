@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Runs in the simulation program (SM64TrainerSim.exe); licenses/README.md lists its GPL-2.0-or-later code.
 """The behaviour-script SYMBOL is the identity; the pointer is per version.
 
 WHY A SYMBOL. A landmark used to be keyed by its behaviour POINTER — the RAM
@@ -59,6 +61,7 @@ NAME_OVERRIDES = {
     "bhvMessagePanel": "sign",
     "bhvMrBlizzard": "Mr. Blizzard",
     "bhvMrI": "Mr. I",
+    "bhvPlaysMusicTrackWhenTouched": "music trigger",
     "bhvPoleGrabbing": "pole",
     "bhvSignOnWall": "wall sign",
     "bhvToadMessage": "Toad",

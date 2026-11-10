@@ -25,6 +25,7 @@ questions.
 | --- | --- | --- |
 | Build, capture stage, native codes, first/latest GPU failure | Yes | Yes |
 | Ghost enabled/target-present, native playback/display state, counts | Yes | Yes |
+| Friends phase, fixed failure codes, peer counts, transport counters and scoped native receiver status | Yes | Yes |
 | Cached setup checks, ROM region, polling/input health counters | Yes | Yes |
 | The [setup check](glossary.md#setup-check): each item's fixed id, importance and status, your plugin/file names and SHA-256, whether a value is shared by every Project64 on the account, the ROM's rdb section, which rdb copy was read, and the Project64 folder's own name (bounded; "unnamed" otherwise); never a path (location reads "Program Files" or "Outside Program Files") | Yes, under `setup.check`, beside the ghost's `draw_refusal` | Yes, its own "Setup compared with the tested setup" table |
 | Own memory/handle/thread counts | Yes | Yes |
@@ -62,6 +63,13 @@ ordinary preparation, another scene and waiting for an attempt do not. A saved
 PB that keeps no Mario poses reports an error with the pose archive's reason:
 it can never become a ghost, and until 2026-10-25 nothing said so. There is
 no background native/log sampler or automatic report-file generation.
+
+Friends reports fixed provider, room-observation and native-receiver failures
+through the same consent fence and queue, at most once per category per hour.
+Normal waiting, pause, another area and preparation do not report. Its cached
+snapshot retains only fixed states and numeric counters; names, player codes,
+invitation references, room nonces, payloads and raw SDK errors are excluded.
+Native application acceptance alone does not prove that a ghost was visible.
 
 The attached report comes from the same builder and redaction as the export.
 The upload worker builds it after capture, never the failing thread: about 18 ms
@@ -102,6 +110,9 @@ game observations with recent player activity:
 - Setup was explicitly started and remains incomplete, the verified installation
   has a supported game running, and freshly polled game checks move while required
   plugin, picture or input checks remain missing.
+- Friends has a current native-applied, selected live contribution and a fresh
+  playing peer, but its presentation counter stops while the local game moves.
+  Hidden, mismatched-area, pending or unsupported graphics withdraw that expectation.
 
 Player activity comes from the existing ActivityTap's actual IGT/action/reset or
 level-entry evidence. A static Usamune menu's advancing global timer does not
@@ -129,7 +140,8 @@ timed failure cannot upload after opt-out/re-enable. A saved opt-out is never
 overridden by the default-on setting, and an unreadable preference stays off.
 
 These are operational invariants, not visual recognition. A short intermittent
-no-show, failed work without enough current native evidence, or UI progress before a running
+no-show, failed work without enough current native evidence, an incoming live
+peer without a per-peer presentation receipt, or UI progress before a running
 game cannot all be classified honestly. Existing browser/operation exceptions
 still report, but this detector does not claim every invisible failure is
 observable or that an absent receipt proves a particular GPU root cause.
@@ -300,9 +312,9 @@ repeating the same denied writes for that bundle and target. Explicit successful
 installation clears the retained denial; a changed bundle can retry normally.
 
 Files roll back until the helper commits. If its final acknowledgment is lost
-after commit, the complete verified DLL pair may remain while the original user's
-settings and graphics selection restore. Setup does not claim success or select
-the wrapper in that ambiguous case; retrying installation is safe.
+after commit, the verified plugin may remain while the original user's settings
+and graphics selection restore. Setup does not claim success or select the
+plugin in that ambiguous case; retrying installation is safe.
 
 ## Verification limits
 

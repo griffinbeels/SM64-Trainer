@@ -23,12 +23,12 @@ from uilab.driver import get_driver
 import ui_fixture
 from ui_fixture import serve_ui
 from uilab_project import _SETUP_SETUP
-from sm64_events.core.capturelayer import CaptureLayer, RENDERER_FILE, WRAPPER_DLL, WRAPPER_INI
+from sm64_events.core.capturelayer import CaptureLayer, PLUGIN_DLL
 from sm64_events.core.renderer_settings import MINIMAL as FRAME_BUFFER_EMULATION_OFF, RENDERER_INI
 from sm64_events.core.setup_gpu import GpuSetupProbe
 from sm64_events.replay import capturecontrol as C
 from test_onboarding import runtime
-from test_ui_setup_modal import body, wait_page, wait_step
+from test_ui_setup_modal import body, no_setup_check, wait_page, wait_step
 
 
 class GpuFacts:
@@ -45,19 +45,15 @@ class GpuFacts:
             kind="gpu", capture_receipt=self.receipt))
         plugin = directory / "PJ64/Plugin"
         plugin.mkdir(parents=True)
-        bundle = directory / WRAPPER_DLL
-        bundle.write_bytes(b"matching offline GPU wrapper")
-        (plugin / WRAPPER_DLL).write_bytes(bundle.read_bytes())
-        renderer = directory / RENDERER_FILE
-        renderer.write_bytes(b"matching offline GPU renderer")
-        (plugin / RENDERER_FILE).write_bytes(renderer.read_bytes())
-        (plugin / WRAPPER_INI).write_text(f"wrapped={RENDERER_FILE}")
+        bundle = directory / PLUGIN_DLL
+        bundle.write_bytes(b"matching offline GPU plugin")
+        (plugin / PLUGIN_DLL).write_bytes(bundle.read_bytes())
         (plugin / RENDERER_INI).write_bytes(FRAME_BUFFER_EMULATION_OFF)
-        registry = SimpleNamespace(get=lambda key, name: WRAPPER_DLL if name == "Graphics Dll" else None)
+        registry = SimpleNamespace(get=lambda key, name: PLUGIN_DLL if name == "Graphics Dll" else None)
         processes = SimpleNamespace(pj64_image_path=lambda: str(plugin.parent / "Project64.exe"))
         gpu = GpuSetupProbe(lambda: self.recorder, self.read_control, clock=lambda: self.now[0])
         self.layer = CaptureLayer(registry, processes, directory / "capture.json", bundle,
-                                  renderer_source=renderer, gpu_observation=gpu)
+                                  gpu_observation=gpu)
 
     def read_control(self):
         # Each external poll observes four more seconds of the chosen fixture
@@ -92,6 +88,7 @@ def capture(page, artifacts, name, records):
 
 def install_fixture(monkeypatch, facts):
     monkeypatch.setattr(ui_fixture, "_FixtureCaptureLayer", lambda *a, **kw: facts.layer)
+    no_setup_check(monkeypatch)
     fixture_routes = ui_fixture._fixture_replay_routes
     def replay_routes(app, database):
         fixture_routes(app, database)

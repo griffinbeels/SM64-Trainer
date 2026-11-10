@@ -12,7 +12,7 @@ import pytest
 
 from sm64_events.core.childproc import quiet_spawn_kwargs
 from sm64_events.memory import addresses as A
-from sm64_events.memory import pj64
+from sm64_events.memory import pj64, winprocess
 
 pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="Windows process memory")
 
@@ -148,22 +148,21 @@ def no_sightings():
 
 
 def attached_to(emulator, rdram_base: int | None = None) -> pj64.Pj64Memory:
-    import pymem
     memory = pj64.Pj64Memory()
-    memory._pm = pymem.Pymem(emulator.process.pid)
+    memory._process = winprocess.ProcessHandle(emulator.process.pid, winprocess.READ_RIGHTS)
     memory._rdram_base = rdram_base
     return memory
 
 
 def reads_of(memory) -> list[tuple[int, int]]:
     """Every (address, size) the reader reads from the process from now on."""
-    reads, read = [], memory._pm.read_bytes
+    reads, read = [], memory._process.read
 
     def counted(address, size):
         reads.append((address, size))
         return read(address, size)
 
-    memory._pm.read_bytes = counted
+    memory._process.read = counted
     return reads
 
 
@@ -235,6 +234,47 @@ def test_the_image_where_project64_keeps_it_is_one_read_and_no_walk(emulator, wa
         memory._close()
 
 
+def test_the_whole_image_is_one_read_in_project64s_order_and_a_swap_mid_read_is_refused(emulator):
+    """The Ghost Lab's ROM store copies the cartridge with `cartridge_image`: the bytes come back exactly as
+    Project64 holds them (word-swapped), through the read-only handle, and never half of two cartridges."""
+    base = emulator.machine(USAMUNE)
+    image_at = base + ROM_AFTER_RDRAM
+    tail = bytes(range(256)) * 4
+    assert emulator.send(f"write {image_at + 0x100000:x} {tail.hex()}") == "ok"
+    memory = attached_to(emulator, rdram_base=base)
+    reads = reads_of(memory)
+    try:
+        image = memory.cartridge_image(A.RDRAM_FULL_SIZE)
+        assert image is not None and len(image) == A.RDRAM_FULL_SIZE
+        assert image[:0x40] == cartridge(USAMUNE)
+        assert image[0x100000:0x100000 + len(tail)] == tail
+        assert (image_at, A.RDRAM_FULL_SIZE) in reads
+        assert memory.cartridge_image(A.RDRAM_FULL_SIZE + 0x1000) is None, "past the image's region"
+
+        # Another cartridge lands while the image is being read: the header read after it differs.
+        read = memory._process.read
+
+        def swapped_during(address, size):
+            data = read(address, size)
+            if size == A.RDRAM_FULL_SIZE:
+                assert emulator.send(f"write {image_at:x} {cartridge(VANILLA).hex()}") == "ok"
+            return data
+
+        memory._process.read = swapped_during
+        assert memory.cartridge_image(A.RDRAM_FULL_SIZE) is None
+    finally:
+        memory._close()
+
+
+def booted(emulator) -> int:
+    """RDRAM's base, holding the start-up values a booted game writes."""
+    base = emulator.machine(USAMUNE)
+    for at, value in ((A.OS_TV_TYPE, 1), (A.OS_ROM_BASE, 0xB0000000), (A.OS_MEM_SIZE, 0x800000)):
+        offset = base + at - A.KSEG0_BASE
+        assert emulator.send(f"write {offset:x} {value.to_bytes(4, 'little').hex()}") == "ok"
+    return base
+
+
 def test_a_known_pid_attaches_without_listing_processes_and_says_so_once(
         emulator, monkeypatch, caplog):
     """The setup screen knows Project64's pid from its own process check, so
@@ -243,16 +283,12 @@ def test_a_known_pid_attaches_without_listing_processes_and_says_so_once(
     reader notices its process exit."""
     import logging
 
-    import pymem.process
-    base = emulator.machine(USAMUNE)
-    for at, value in ((A.OS_TV_TYPE, 1), (A.OS_ROM_BASE, 0xB0000000), (A.OS_MEM_SIZE, 0x800000)):
-        offset = base + at - A.KSEG0_BASE
-        assert emulator.send(f"write {offset:x} {value.to_bytes(4, 'little').hex()}") == "ok"
+    base = booted(emulator)
 
     def listed(*_args, **_kwargs):
         raise AssertionError("a known pid needs no process list")
 
-    monkeypatch.setattr(pymem.process, "process_from_name", listed)
+    monkeypatch.setattr(winprocess, "pids_named", listed)
     caplog.set_level(logging.DEBUG, logger="sm64.pj64")
     first, second = pj64.Pj64Memory(), pj64.Pj64Memory()
     try:
@@ -266,6 +302,30 @@ def test_a_known_pid_attaches_without_listing_processes_and_says_so_once(
     finally:
         first._close()
         second._close()
+
+
+def test_windows_refuses_the_reader_a_write_and_a_slot_write_brings_its_own_handle(emulator):
+    """Windows itself, not a fake (tests/test_process_access.py holds the
+    masks): the reader's handle is refused WriteProcessMemory, and
+    write_rdram's separate write-only handle puts the bytes where the reader
+    then reads them."""
+    import ctypes
+    base = booted(emulator)
+    memory = pj64.Pj64Memory()
+    try:
+        assert memory.attach(pid=emulator.process.pid) and memory.pid == emulator.process.pid
+        kernel = winprocess.kernel32()
+        assert not kernel.WriteProcessMemory(memory._process.handle, base + 0x100, b"\1\2\3\4", 4, None)
+        assert ctypes.get_last_error() == 5, "access denied, not some other failure"
+        memory.write_rdram(0x100, b"\x11\x22\x33\x44")
+        assert memory._read_raw(0x100, 4) == b"\x11\x22\x33\x44"
+    finally:
+        memory._close()
+
+
+def test_a_process_is_found_by_name_without_opening_it(emulator):
+    from pathlib import Path
+    assert emulator.process.pid in winprocess.pids_named(Path(INTERPRETER).name.upper())
 
 
 def test_a_fresh_reader_for_the_same_process_does_not_search_again(emulator, walks):

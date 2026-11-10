@@ -1,6 +1,9 @@
 ---
 paths:
   - "src/sm64_events/ghost/**"
+  - "src/sm64_events/multiplayer/**"
+  - "src/sm64_events/server/multiplayer_api.py"
+  - "integrations/eos-transport/**"
   - "src/sm64_events/server/ghost_api.py"
   - "src/sm64_events/server/ghost_sharing_api.py"
   - "src/sm64_events/ui/ghostsession.js"
@@ -13,6 +16,8 @@ paths:
 # Ghost — where to change what
 
 Runtime contracts, format versions and witnesses: [ghost-native-runtime](../../docs/ghost-native-runtime.md).
+Private friends rooms, source/media demand, provider boundary and verification
+limits: [multiplayer runtime](../../docs/multiplayer-runtime.md).
 
 | To change... | Edit |
 |---|---|
@@ -25,6 +30,7 @@ Runtime contracts, format versions and witnesses: [ghost-native-runtime](../../d
 | The ghost hotkey flipping the Ghost Overlay in game | `ghost/dpad_toggle.py`: `hotkey_for` (D-pad Up, or all four C buttons while Usamune's save state byte reads `SAVESTATE_ON_DPAD_UP`), the press rule (a rising edge of the hotkey, other buttons held or not, never in Usamune's menu) and the flip through the card's own GET/PUT; wired as the last poller chain member in `main.build`, which tells `GhostSession.note_hotkey` on change for the payload's `hotkey` and the toggle's hover |
 | When the set changes | Held: `select_rivals(previous=...)` keeps every seat through a PB; `Rivals._hold_seats` decides what counts as changing stars; `action: "new"` is the New ghosts button. Tests: `tests/test_ghost_adaptive.py`, `tests/test_ghost_lineup.py` |
 | Which ghosts play | Adaptive `ghost/rivals.py` uses `ghost/adaptive.py` and the current strategy saved PB from `ghost/pb.py`; legacy choices use `ghost/selection.py`. Which ROM's recordings may serve is the strategy's region scope (`ranks/region_scope.py`): shared serves both ROMs, regional only the running one; providers fetch by `PracticeIdentity.region_scope`, `adaptive.ghost_region_scope` decides. Native sets are built in `ghost/native_session.py`. A PB with no poses races your [[best recorded run]] in its seat (`Rivals._pb_seat`); the PB stays the rank. |
+| A ghost's start frame (the lab re-simulates from it) | `ghost/start_frame.py`, beside the population's clips in `starts/`, named by clip sha256; never in a clip. Its .data travels as its change from the ROM's boot image (format v3). A new span or format field also changes the Worker's `cloud/community/src/start-header.js` and `start-spans.json` (a Worker deploy). Whoever deletes a clip calls `remove_start` |
 | Historical bests and surviving recordings in Ghost Library | `ghost/library_bests.py` resolves winners before joining `sharing_catalog.py` availability. It never changes the current saved PB slot or promotes a slower recording when a winner expires. |
 | Reviewing and importing only selected ghosts | `ghost/library_imports.py` owns bounded staging leases; `sharing.py` revalidates selected clips before publishing the collection index; `server/ghost_sharing_api.py` mounts preview/commit/discard jobs. |
 | Remembered export credit and saved searches | `ghost/library_preferences.py` validates and stores the existing author key plus versioned dynamic criteria; `ui/ghostlibraryflow.js` keeps pending choices local. |
@@ -54,5 +60,13 @@ the current strategy's saved PB. The card's Strategy/Overall pair picks only the
 rank shown. The Strategy scope stays valid for callers that name it;
 `tests/test_ghost_rival_scope.py` pins both scopes, the version-5 widening of
 older per-strategy pins, search guards and native target propagation.
+
+Bowser courses: the reds star, the reds->pipe segment and the No Reds pipe each
+grade on their own Sheet Overall curve (`library/placements.py::scoring_rows`
+files pipe rows under the reds->pipe segment). Ranks built without the Sheet
+calibration have no reds->pipe curve, so test Overall through the calibrated
+fixture in `tests/test_ghost_bowser_overall.py`. A reds->pipe run's grab is its
+own star attempt, tagged with the Pipe strategy's " (Star)" twin
+(`Projector._reds_star_twin`); that attempt is the star ghost.
 
 `tests/test_ghost_settings.py` covers the row with no edit: refused, applied, remembered, carried to the native command, and read by the card. The fixture and the API docs follow the registry. A setting of another kind also needs its sample pair in that test's `SAMPLES`, plus its control in `ui/components/ghostswitch.js`.

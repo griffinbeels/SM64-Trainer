@@ -160,8 +160,8 @@ sources when the product changes instead of extending old marketing copy.
 | Asset | Actual dimensions | Provenance and role |
 | --- | --- | --- |
 | [logo.png](assets/logo.png) | 256 × 256 | Repository [logo master](../assets/sm64_tracker.png), reduced from 1024 × 1024 as RGBA with Lanczos; canonical project mark |
-| [star.png](assets/star.png) | 256 × 256 | Identical to [star_1.png](../src/sm64_events/ui/assets/star_1.png); decoration |
-| [bob.webp](assets/bob.webp) | 621 × 621 | Identical to the [Bob-omb Battlefield course art](../src/sm64_events/ui/assets/course_icons/bob.webp); illustration, not ghost gameplay |
+| [goal-plate.png](assets/goal-plate.png) | 202 × 82 | Actual Trainer capture (2026-11-09): the achieved PB/GOAL plate from the UI fixture, 2x; decoration in the hero and the closing call to action |
+| [ghost-lineup.png](assets/ghost-lineup.png) | 984 × 230 | Actual Trainer capture (2026-11-09): the practice card's ghost Lineup from the ghost fixture, made-up runner names, 2x; illustration beside the ghost section |
 | [practice-gold.png](assets/practice-gold.png) | 1072 × 613 | Authentic community development-build Bomb Clip GOLD capture; hero and social image |
 | [trainer-app.png](assets/trainer-app.png) | 1500 × 1100 | Authentic Trainer Practice/analysis capture with the earlier full interface layout |
 
@@ -184,7 +184,7 @@ For a replacement:
 4. Update the table's dimensions/provenance and compare mobile/desktop previews.
    Keep decorative stars and course art out of the accessibility reading order.
 
-The current raster assets total roughly 434 KB. Treat that as a measured
+The current raster assets total roughly 417 KB. Treat that as a measured
 baseline, not a universal budget. Keep the hero image prioritized, retain lazy
 loading below the fold, and avoid introducing a heavy animation or embed for a
 small explanatory benefit. Reuse authoritative art for canonical marks.

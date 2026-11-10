@@ -13,7 +13,7 @@ from uuid import uuid4
 from sm64_events.ghost.sharing_targets import canonical, checked_target
 from sm64_events.ranks.region_scope import REGIONAL, servable_versions
 
-from . import claims, codec, library
+from . import claims, codec, ghost_start, library
 from .cache import LEASE_RENEW_S, account_owner, checked_metadata, target_key, value_of
 from .config import CommunityError
 from .earlier_ghosts import OLDER_TERMS, QUEUED, EarlierClaim, checked_offers
@@ -24,6 +24,9 @@ logger = logging.getLogger(__name__)
 MAX_QUEUE = 32
 MAX_RETIRED = 256
 RETRACT_ROUTE = "/v1/recordings/retract"
+WAITING = ("active", "consent_required")
+"""Account states whose finished runs are saved for upload. Only an active account
+sends them: one that must accept a new notice keeps them until it does."""
 CONTRIBUTIONS = ("offer", "retract")  # Serial owner-bound work on the contribution task.
 
 
@@ -54,7 +57,32 @@ def _prepare_source(source):
         claims.check_claims(raw, game_version=source['game_version'], clock=source['clock'], frames=source['frames'])
     except ValueError as error:  # CommunityError, or the decoder's ClipError
         raise CommunityError('invalid_source', str(error)) from None
-    return raw, codec.encode(raw)
+    return raw, codec.encode(raw), _upload_start(source)
+
+
+def _upload_start(source):
+    """The ghost's start its owner gives for this clip, or None. A start is an
+    extra: a missing or malformed one never holds up sharing the ghost."""
+    start = ghost_start.start_for_upload(source['path'], source['raw_sha256'])
+    if start is None:
+        return None
+    if not isinstance(start, bytes) or not 1 <= len(start) <= ghost_start.MAX_BYTES:
+        logger.warning("A ghost's start was not shared: its owner gave %s.", type(start).__name__)
+        return None
+    return start
+
+
+def _declared_start(headers):
+    """The (sha256, size) a ghost download's headers name for its start, or None."""
+    digest, size = headers.get("ghost-start-sha256"), headers.get("ghost-start-bytes")
+    if digest is None and size is None:
+        return None
+    if (not isinstance(digest, str) or len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest)
+            or not isinstance(size, str) or not size.isascii() or not size.isdigit()
+            or not 1 <= int(size) <= ghost_start.MAX_BYTES):
+        logger.info("A ghost download named a start this trainer does not accept.")
+        return None
+    return digest, int(size)
 
 
 def _upload_identifier(grant):
@@ -221,6 +249,8 @@ class CommunitySync:
         self._closing = False
         self._catalog, self._catalog_generation, self._catalog_until = {}, None, 0
         self._catalog_lock = asyncio.Lock()
+        # The largest ghost's start the service accepts now, and the privacy notice that describes it.
+        self._start_cap, self._start_privacy, self._start_read, self._start_until = 0, None, float("-inf"), 0
         self._local_jobs = set()
         self._search_task = None
         self._library_tasks = set()
@@ -365,6 +395,11 @@ class CommunitySync:
             return "offline"
         return failure
 
+    def pending_uploads(self):
+        """(paths, raw digests) his unsent contributions name, any account: Settings' ghost
+        purge leaves those files for the upload (`ghost/storage.py`)."""
+        return self._outbox.named()
+
     def refused_assets(self):
         """Recordings that cannot download now; automatic seats pass them over."""
         owner, now = self.account.snapshot().get("uid"), time.monotonic()
@@ -410,7 +445,9 @@ class CommunitySync:
             return True
         return self._enqueue(("assets",), ("assets", identifiers))
 
-    def _freeze_source(self, source):
+    def _freeze_source(self, source, *, waiting=False):
+        """The offer this account may send, owner attached, or None. `waiting`
+        also takes an account that must accept a new notice first."""
         fields = {"target", "clock", "game_version", "strategy", "frames", "path", "raw_sha256", "full_start", "valid"}
         try:
             if (not isinstance(source, dict) or set(source) - {"bin"} != fields or source["full_start"] is not True
@@ -422,7 +459,7 @@ class CommunitySync:
             checked_hash(source["raw_sha256"])
             target = checked_target(source["target"])
             snapshot = self.account.snapshot()
-            if snapshot.get("status") != "active" or not snapshot.get("sharing"):
+            if snapshot.get("status") not in (WAITING if waiting else ("active",)) or not snapshot.get("sharing"):
                 return None
             frozen = {**source, "target": target, "path": str(Path(source["path"]).resolve()), "owner": snapshot.get("uid")}
             return {**checked_source(frozen), "consent_epoch": self._consent_epoch}
@@ -440,10 +477,14 @@ class CommunitySync:
         return frame_band(cutoffs, [(frames, frames)])[0] if cutoffs else None
 
     def contribution_context(self):
-        """Capture attribution and consent before native qualification starts."""
+        """Capture attribution and consent before native qualification starts.
+
+        A run finished while the account must accept a new notice (status
+        consent_required) is captured too: it is saved and waits. Nothing is
+        sent until the account accepts; signing out or sharing off drops it."""
         with self._lock:
             snapshot = self.account.snapshot()
-            if self._closing or snapshot.get("status") != "active" or not snapshot.get("sharing"):
+            if self._closing or snapshot.get("status") not in WAITING or not snapshot.get("sharing"):
                 return None
             return {"owner": snapshot.get("uid"), "consent_epoch": self._consent_epoch}
 
@@ -452,21 +493,25 @@ class CommunitySync:
 
         The owner was captured before qualification. A login/consent change
         during preservation refuses attribution instead of assigning a new UID.
+        An account that must accept a new notice keeps the offer in the outbox
+        only; recovery sends it once the account is active again.
         """
-        frozen = self._freeze_source(source)
+        frozen = self._freeze_source(source, waiting=True)
         if frozen is None or frozen["owner"] != owner:
             return False
         frozen["consent_epoch"] = consent_epoch
-        if not self._source_active(frozen):
+        if not self._source_active(frozen, waiting=True):
             return False
         try:
             self._outbox.remember({key: value for key, value in frozen.items() if key != "consent_epoch"})
         except (CommunityError, OSError):
             self.last_error = "A community contribution could not be saved for retry."
             return self._enqueue(source_key(frozen), ("offer", frozen))
-        if not self._source_active(frozen):
+        if not self._source_active(frozen, waiting=True):
             self._outbox.discard((frozen,))
             return False
+        if not self._source_active(frozen):
+            return True  # Saved; it waits for the new notice.
         return self._enqueue(source_key(frozen), ("offer", frozen))
 
     def retract_other_strategies(self, *, raw_sha256, keep_strategy):
@@ -517,11 +562,12 @@ class CommunitySync:
             self.last_error = "A community retraction could not be saved for retry."
         return self._enqueue(retraction_key(retraction), ("retract", retraction))
 
-    def _source_active(self, source):
+    def _source_active(self, source, *, waiting=False):
+        """Whether this offer may be sent now (or, `waiting`, kept for after a new notice)."""
         snapshot = self.account.snapshot()
         with self._lock:
             kept = self._retired.get(source["raw_sha256"], source["strategy"])
-        return (not self._closing and snapshot.get("status") == "active" and snapshot.get("sharing")
+        return (not self._closing and snapshot.get("status") in (WAITING if waiting else ("active",)) and snapshot.get("sharing")
                 and snapshot.get("uid") == source["owner"] and kept == source["strategy"]
                 and source.get("consent_epoch", self._consent_epoch) == self._consent_epoch)
 
@@ -532,8 +578,10 @@ class CommunitySync:
         outbox and go up at the recovery pace, like any other offer.
         """
         context = self.contribution_context()
-        terms = self.account.snapshot().get("terms_version")
-        if (context is None or self.earlier_sources is None or not terms or terms in OLDER_TERMS
+        snapshot = self.account.snapshot()
+        terms = snapshot.get("terms_version")
+        if (context is None or snapshot.get("status") != "active" or self.earlier_sources is None
+                or not terms or terms in OLDER_TERMS
                 or not self._earlier.open_to(context["owner"])):
             return
         sources = self.earlier_sources()
@@ -660,6 +708,30 @@ class CommunitySync:
             generation, catalog = checked_catalog(value)
             self._catalog_generation, self._catalog = generation, catalog
             self._catalog_until = time.monotonic() + CATALOG_RENEW_S
+
+    async def _start_limit(self):
+        """The largest ghost's start this account may send now, 0 when none.
+
+        An older Worker advertises no `limits.start_bytes` and refuses unknown
+        upload fields, so the trainer sends a start only after reading this
+        public config (no account ticket), held for the catalog's hour. A start
+        goes only from an account that accepted the privacy notice that config
+        names: the Worker that takes starts serves the notice that describes
+        them (beta-3, /policies#ghost-start). An account whose accepted version
+        differs from the held one reads the config again, at most once a minute,
+        so accepting the new notice is seen at the next upload."""
+        accepted = self.account.snapshot().get("privacy_version")
+        now = time.monotonic()
+        if self._start_until <= now or (accepted != self._start_privacy and self._start_read < now - 60):
+            value = await self._json("GET", "/v1/config", authenticated=False)
+            limits = value.get("limits")
+            cap = limits.get("start_bytes") if isinstance(limits, dict) else None
+            version = value.get("privacy_version")
+            self._start_cap = min(cap, ghost_start.MAX_BYTES) if type(cap) is int and cap > 0 else 0
+            self._start_privacy = version if isinstance(version, str) and version else None
+            self._start_read = time.monotonic()
+            self._start_until = self._start_read + CATALOG_RENEW_S
+        return self._start_cap if accepted is not None and accepted == self._start_privacy else 0
 
     def _query(self, identity):
         key = self.population.identity_key(identity)
@@ -793,6 +865,16 @@ class CommunitySync:
         task.add_done_callback(self._local_jobs.discard)
         return await asyncio.shield(task)
 
+    async def catalog_lists(self, identity) -> bool:
+        """Whether the catalog lists this identity (read as the race reads it: at most once an
+        hour). The service refuses a recordings page for an identity it omits, so a reader that
+        asks only what this says spends no ticket on a strategy no one can share."""
+        await self._catalog_ready()
+        try:
+            return self.population.identity_key(identity) in self._catalog
+        except (CommunityError, ValueError, TypeError):
+            return False
+
     async def library_summary(self, cursor=None, *, target=None, game_version=None):
         scope, query = library.summary_query(cursor, target, game_version)
         return await self._library_page("/v1/library", query, summary=True, summary_scope=scope)
@@ -873,14 +955,41 @@ class CommunitySync:
         if self.population.is_ready(identifier):
             # Renew the actual current publication gate, including a rename.
             return
+        headers = {}
         encoded = await self.account.request_bytes("GET", "/v1/recordings/" + identifier + "/asset",
-                                                  http=self._http, limit=codec.MAX_ENCODED, deadline=180)
+                                                  http=self._http, limit=codec.MAX_ENCODED, deadline=180,
+                                                  response_headers=headers)
         if len(encoded) != row["encoded_bytes"] or hashlib.sha256(encoded).hexdigest() != row["encoded_sha256"]:
             raise CommunityError("asset_mismatch")
+        start = await self._download_start(identifier, headers)
         raw = await self._cpu(lambda data: codec.decode(data, raw_sha256=row["raw_sha256"]), encoded)
         if self._closing or self.account.snapshot().get("uid") != owner:
             return
-        await self._cpu(lambda: self.population.store_asset(row, encoded, raw, owner=owner))
+        kept = await self._cpu(lambda: self.population.store_asset(row, encoded, raw, owner=owner, start=start))
+        if start is not None and kept:
+            try:
+                await self._cpu(ghost_start.accept_download, identifier, row["raw_sha256"], start, raw)
+            except Exception:  # noqa: BLE001 -- a start its owner refuses must never cost the ghost
+                logger.warning("The owner of ghost starts refused one; its ghost plays without it.", exc_info=True)
+
+    async def _download_start(self, identifier, headers):
+        """The ghost's start the ghost's download named, or None. One more
+        account ticket per ghost that has one. A failure leaves the ghost
+        playable without it, for this cache's life."""
+        declared = _declared_start(headers)
+        if declared is None:
+            return None
+        digest, size = declared
+        try:
+            start = await self.account.request_bytes("GET", "/v1/recordings/" + identifier + "/start",
+                                                    http=self._http, limit=size, deadline=60)
+        except CommunityError as error:
+            logger.info("A ghost's start was not downloaded (%s); its ghost plays without it.", error.code)
+            return None
+        if len(start) != size or hashlib.sha256(start).hexdigest() != digest:
+            logger.info("A ghost's start did not match its download's hash; its ghost plays without it.")
+            return None
+        return start
 
     async def _metadata_batch(self, identifiers, identity_key, versions):
         if not self._batch_metadata_supported:
@@ -973,17 +1082,27 @@ class CommunitySync:
             for queue_key, _ in candidates:
                 self._queue.pop(queue_key, None)
                 self._offer_retry.pop(queue_key, None)
-        raw, encoded = await self._cpu(_prepare_source, source)
+        raw, encoded, start = await self._cpu(_prepare_source, source)
         if not self._source_active(source):
             return
+        if start is not None and len(start) > await self._start_limit():
+            start = None  # An older Worker, or a start past its cap: the ghost goes alone.
         # The ROM comes from the clip header, never the attempt's own claim.
         body = {"target": source["target"], "clock": source["clock"], "rom": claims.region_of(raw),
             "strategy": source["strategy"], "frames": source["frames"], "raw_sha256": source["raw_sha256"],
             "raw_bytes": len(raw), "encoded_sha256": hashlib.sha256(encoded).hexdigest(), "encoded_bytes": len(encoded),
             "codec": "ghc1", "generation": self._catalog_generation}
-        if source.get("mutation_generation") != self._catalog_generation:
+        wire = self._catalog_generation
+        if start is not None:
+            body["start_sha256"], body["start_bytes"] = hashlib.sha256(start).hexdigest(), len(start)
+            wire = hashlib.sha256((wire + "\n" + body["start_sha256"]).encode()).hexdigest()
+        # A grant key binds one exact admission body. A new catalog generation,
+        # or a start that now rides along (the Worker was updated between
+        # retries), needs a new key, or the service answers a conflict. The
+        # outbox keeps this as the key's generation (at most 128 characters).
+        if source.get("mutation_generation") != wire:
             source.pop("mutation_keys", None)
-            source["mutation_generation"] = self._catalog_generation
+            source["mutation_generation"] = wire
         mutation_keys = source.setdefault("mutation_keys", {})
         mutation_keys.setdefault("grant", str(uuid4()))
         await self._cpu(self._outbox.update, source)
@@ -1000,7 +1119,8 @@ class CommunitySync:
         await self._cpu(self._outbox.update, source)
         if not self._source_active(source):
             return
-        result = await self._json("PUT", "/v1/uploads/" + identifier, content=encoded,
+        # The service stores the start right after the ghost, in one object.
+        result = await self._json("PUT", "/v1/uploads/" + identifier, content=encoded if start is None else encoded + start,
                                  headers={"Idempotency-Key": mutation_keys["publish"]})
         if result.get("disposition") not in ("published", "already_present", "not_faster"):
             raise CommunityError("invalid_response")

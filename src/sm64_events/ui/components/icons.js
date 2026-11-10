@@ -6,6 +6,7 @@ const html = htm.bind(h);
 // Small, dependency-free outline icon set for the zero-build UI.  Icons are
 // decorative companions to visible labels; controls provide their own names.
 const PATHS = {
+  friends: "M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM2 21v-3a7 7 0 0 1 14 0v3M17 3a4 4 0 0 1 0 8m2 3a6 6 0 0 1 3 5v2",
   practice: "M12 2l1.7 4.9L19 8.6l-4.2 3.1 1.6 5.1-4.4-3-4.4 3 1.6-5.1L5 8.6l5.3-1.7L12 2zM19 2v4M17 4h4",
   run: "M8 5v14l11-7L8 5z",
   compare: "M3 5h7v14H3V5zm11 0h7v14h-7V5zM10 9h4m-4 6h4",
@@ -24,6 +25,7 @@ const PATHS = {
   speakerMuted: "M3 9h4l5-4v14l-5-4H3V9z",
   speed: "M20.5 9a9 9 0 1 0 .4 4M12 12l8-7M8 5l1 2M4 11h2m1 6 1.5-1.5",
   restart: "M20 7v5h-5M4 17v-5h5M6.1 8a7 7 0 0 1 11.3-2.2L20 9M4 15l2.6 3.2A7 7 0 0 0 17.9 16",
+  loop: "M17 2l3 3-3 3M20 5H8a4 4 0 0 0-4 4v1M7 22l-3-3 3-3M4 19h12a4 4 0 0 0 4-4v-1",
   updates: "M12 3v12m0 0-4-4m4 4 4-4M5 19h14",
   plus: "M12 5v14M5 12h14",
   minus: "M5 12h14",
@@ -31,6 +33,11 @@ const PATHS = {
   arrowRight: "M5 12h14m-6-6 6 6-6 6",
   sort: "M8 6h11M8 12h8M8 18h5M3 4v16m0 0-2-2m2 2 2-2",
   eyeOff: "M3 3l18 18M10.6 10.6a2 2 0 0 0 2.8 2.8M9.9 4.2A11.7 11.7 0 0 1 12 4c5 0 8.5 4 9.5 6a12 12 0 0 1-2.4 3.4M6.2 6.2A13 13 0 0 0 2.5 12c1 2 4.5 6 9.5 6a10 10 0 0 0 3-.5",
+  eye: "M2.5 12c1-2 4.5-7 9.5-7s8.5 5 9.5 7c-1 2-4.5 7-9.5 7s-8.5-5-9.5-7zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z",
+  camera: "M4 8h3l2-3h6l2 3h3v11H4V8zm8 3a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7z",
+  search: "M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zm9 16-4-4",
+  actionBack: "M5 5v14M19 6l-6 6 6 6M13 6l-6 6 6 6",
+  actionForward: "M19 5v14M5 6l6 6-6 6M11 6l6 6-6 6",
   menu: "M4 6h16M4 12h16M4 18h16",
   close: "M5 5l14 14M19 5L5 19",
   play: "M8 5v14l11-7L8 5z",
@@ -59,6 +66,8 @@ const PATHS = {
   resources: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zm3.6 5.4-2.1 5.1-5.1 2.1 2.1-5.1 5.1-2.1z",
   about: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM9.6 9.4a2.5 2.5 0 0 1 4.9.6c0 1.7-2.5 2.1-2.5 3.7M12 17h.01",
   external: "M14 4h6v6M20 4l-9 9M18 14v6H4V6h6",
+  record: "M12 6a6 6 0 1 0 0 12 6 6 0 0 0 0-12z",
+  stop: "M7 7h10v10H7V7z",
 };
 
 export function Icon({ name, size = 18, className = "" }) {

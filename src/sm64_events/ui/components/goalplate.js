@@ -150,10 +150,23 @@ function goalShownAt(shown, endedUtc) {
   return on.length ? on[on.length - 1].cs : null;
 }
 
+/** `{timeCs, chased}` when this finished attempt meets the goal the plate
+ *  showed as it ended, else null. Only an uncleared success counts, and never
+ *  save-state practice: the server's `save_state` verdict, not a restated
+ *  predicate (2026-11-09, a loaded state's 10"00 played GOAL!: "If the
+ *  attempt was save stated, then this should NEVER count towards your
+ *  goals"). */
+function metShownGoal(attempt, clock, shown) {
+  if (attempt.outcome !== "success" || attempt.cleared || attempt.save_state) return null;
+  const timeCs = attemptCs(attempt, clock);
+  const chased = goalShownAt(shown, attempt.ended_utc);
+  return timeCs != null && chased != null && timeCs <= chased ? { timeCs, chased } : null;
+}
+
 /** Fires when a FRESH finished attempt meets the goal the plate showed when
- *  that attempt ended. Never on mount or on a page load catching up on
- *  history (the glossary's Celebration rule): the first render only records
- *  which attempts exist. */
+ *  that attempt ended (`metShownGoal`). Never on mount or on a page load
+ *  catching up on history (the glossary's Celebration rule): the first render
+ *  only records which attempts exist. */
 export function useGoalCelebration(attempts, goal) {
   const seen = useRef(null);
   // Every goal time this plate has shown, oldest first, each stamped with
@@ -183,11 +196,9 @@ export function useGoalCelebration(attempts, goal) {
     if (goal && goal.count > 1) return;
     if (!fresh.length || !goal) return;
     for (const attempt of fresh) {
-      const timeCs = attemptCs(attempt, goal.clock);
-      const chased = goalShownAt(shown.current, attempt.ended_utc);
-      if (attempt.outcome !== "success" || attempt.cleared || timeCs == null
-          || chased == null || timeCs > chased) continue;
-      if (celebrationsEnabled()) setParty({ id: attempt.id, beatenCs: chased, timeCs });
+      const met = metShownGoal(attempt, goal.clock, shown.current);
+      if (!met) continue;
+      if (celebrationsEnabled()) setParty({ id: attempt.id, beatenCs: met.chased, timeCs: met.timeCs });
       return;
     }
   }, [attempts]);

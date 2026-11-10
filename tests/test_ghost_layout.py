@@ -67,6 +67,8 @@ def test_python_decoders_fill_the_spans_they_read():
     # gc_sample's scalar head (bytes .. live_action) runs up to the pose block.
     assert L.RECORD_PREFIX_BYTES + clip._SAMPLE.size == L.POSE_AT
     assert L.WARP_AT + clip._WARP.size == L.CLOCK_AT
+    # gc_camera's position, focus, both rolls and its fov (the planes after it are not read).
+    assert L.CAMERA_AT + clip._CAMERA.size == L.CAMERA_FOV_AT + 4
     assert clip._CLOCK.size == L.CLOCK_BYTES and L.CLOCK_AT + L.CLOCK_BYTES == L.SHADOW_AT
     assert clip._SOUND.size == L.SOUND_BYTES
     assert L.SOUND_BITS_AT + 4 * L.SOUND_EVENTS == L.SOUND_BYTES
