@@ -33,6 +33,18 @@
 /* After a capture request every slow callback is logged, unthrottled, for
  * this long: the first capture's preparation is where a freeze would be. */
 #define STALL_WATCH_SECONDS 15
+/* How long CloseDLL waits for the log writer to drain its queue. Shipped: a
+ * bound, so slow storage never holds Project64's shutdown (records still
+ * queued then are lost, which the log accepts). A test plugin
+ * (GFXWRAP_TEST_PLUGIN) waits until the writer is done: its host exits right
+ * after CloseDLL, and under a loaded machine (the merge check's parallel
+ * workers, 2026-11-09) 200 ms lost the final close_end/diagnostics_stop
+ * records that tests/test_gfxwrap_host.py reads. */
+#ifdef GFXWRAP_TEST_PLUGIN
+#define DIAGNOSTICS_DRAIN_MS 30000u
+#else
+#define DIAGNOSTICS_DRAIN_MS 200u
+#endif
 typedef struct {
     SRWLOCK lock;
     HANDLE thread, event;
@@ -280,7 +292,7 @@ static void diagnostics_stop(void) {
     ReleaseSRWLockExclusive(&g_log_lifetime);
     /* Never called by DllMain. Slow storage cannot hang emulator shutdown;
      * the writer retains its own module reference until the queue drains. */
-    WaitForSingleObject(thread, 200);
+    WaitForSingleObject(thread, DIAGNOSTICS_DRAIN_MS);
     CloseHandle(thread);
 }
 
