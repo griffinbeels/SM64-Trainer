@@ -29,7 +29,11 @@ start lies over (boot()).
 Every reset is cached under the cache folder by its recipe (STAGE_VERSION, build, ROM, level, area, act),
 so a second ask costs a file read. Both cartridges simulate (2026-11-09): each build's own frame facts are
 read off its code (frame_sim.SimBuild), so a JP lab rebuilds a ghost on the JP cartridge, whichever cartridge
-recorded it (the same seven levels' ghosts part, or never part, at the same record on both).
+recorded it. Measured 2026-11-09 (jp_sim_proof.py corpus, 219 padded ghosts over 7 levels, 218 recorded on US):
+210 part at the same record on both cartridges, or never part on either. The other 9 are US WF ghosts that read
+King Whomp's text on the mountain top: the JP text box closes at another frame, so on JP Mario is still reading
+(0x20001306) when the recording is idle again, at records 413-443. A ghost from the other region follows exactly
+until its first text box.
 """
 from __future__ import annotations
 
