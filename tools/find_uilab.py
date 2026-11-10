@@ -17,8 +17,10 @@ REPO = Path(__file__).resolve().parents[1]
 
 try:            # every browser uilab launches runs the pointer lock stand-in (browser_guard.py)
     from browser_guard import install as _guard_browsers
+    from browser_guard import retire_own_navigation_aborts as _retire_navigation_aborts
 except ImportError:
     from tools.browser_guard import install as _guard_browsers
+    from tools.browser_guard import retire_own_navigation_aborts as _retire_navigation_aborts
 
 
 def _primary_checkout() -> Path:
@@ -59,6 +61,7 @@ def find_uilab() -> str | None:
 
     _guard_browsers()
     if importlib.util.find_spec("uilab") is not None:
+        _retire_navigation_aborts()
         return None
     repo = _primary_checkout()
     candidates = []
@@ -68,6 +71,7 @@ def find_uilab() -> str | None:
     for candidate in candidates:
         if (candidate / "uilab" / "__init__.py").exists():
             sys.path.insert(0, str(candidate))
+            _retire_navigation_aborts()
             return None
     return (
         "uilab not found. It is an optional dev module shared across this "

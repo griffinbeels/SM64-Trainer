@@ -131,12 +131,25 @@ def _plate(page):
           party: !!p.querySelector('.goal-plate-party'), party_on_top: {PARTY_ON_TOP} }}; }})()""")
 
 
-def _watch_celebration(page):
-    """Whether the celebration showed within 3 s, and what it painted over
-    the first time it did."""
-    party, on_top = False, None
-    for _ in range(20):
+def _settle(page, reached, timeout_ms=15000):
+    """The plate once `reached(plate)` holds, or as it stands after `timeout_ms`. Each state is waited for, not
+    slept for: under a loaded full run the page took longer than the old fixed sleeps (2026-11-09), and a plate
+    read early is a false failure."""
+    waited = 0
+    while True:
+        plate = _plate(page)
+        if (plate and reached(plate)) or waited >= timeout_ms:
+            return plate
+        _wait(page, 100)
+        waited += 100
+
+
+def _watch_celebration(page, timeout_ms=10000):
+    """Whether the celebration showed (within `timeout_ms`), and what it painted over the first time it did."""
+    party, on_top, waited = False, None, 0
+    while waited < timeout_ms and not (party and on_top is not None):
         _wait(page, 150)
+        waited += 150
         plate = _plate(page)
         party = party or plate["party"]
         if plate["party"] and on_top is None:
@@ -152,8 +165,7 @@ def seen():
         with serve_ui_live(Path(scratch) / "plate.db") as (base, service):
             with driver.get_driver().launch(headless=True, viewport=(1500, 1000)) as page:
                 page.goto(base)
-                _wait(page, 2500)
-                out["automatic"] = _plate(page)
+                out["automatic"] = _settle(page, lambda plate: "Auto" in plate["text"])
                 out.update(_whole_plate(page))
                 out["automatic_api"] = _get(
                     base, f"/api/scorecard/entry_goals?scope=overall&keys={KEY}")["goals"][KEY]
@@ -171,9 +183,8 @@ def seen():
                 out["search_hits"] = page.evaluate(f"""[...{PLATE}.querySelectorAll('.search-menu-option')]
                     .map(e => e.innerText)""")
                 page.evaluate(f"{PLATE}.querySelector('.search-menu-option').click()")
-                _wait(page, 1500)
                 out["runner"] = runner
-                out["runner_plate"] = _plate(page)
+                out["runner_plate"] = _settle(page, lambda plate: runner["runner"] in plate["text"])
                 card = _get(base, "/api/scorecard?scope=overall")
                 out["runner_tile"] = next(tile for row in card["rows"] for tile in row["tiles"]
                                           if tile["key"] == KEY)
@@ -187,27 +198,24 @@ def seen():
                                            "division": top["division"], "count": 3, "streak": True}})
                 _wait(page, 1500)
                 frames = iter(range(20000, 60000, 2000))
-                for igt in (340, 341):                       # two under 11"50
+                for lit, igt in enumerate((340, 341), 1):     # two under 11"50
                     _grab(service, next(frames), igt)
-                    _wait(page, 1500)
+                    _settle(page, lambda plate, lit=lit: plate["lit"] == lit)
                 out["two"] = _plate(page)
                 _grab(service, next(frames), 360)             # 12"00 breaks it
-                _wait(page, 1500)
-                out["broken"] = _plate(page)
-                for igt in (339, 340):
+                out["broken"] = _settle(page, lambda plate: plate["lit"] == 0)
+                for lit, igt in enumerate((339, 340), 1):
                     _grab(service, next(frames), igt)
-                    _wait(page, 1500)
+                    _settle(page, lambda plate, lit=lit: plate["lit"] == lit)
                 _grab(service, next(frames), 338)             # the third in a row
                 out["celebrated"], out["party_on_top"] = _watch_celebration(page)
-                _wait(page, 3200)
-                out["done"] = _plate(page)
+                out["done"] = _settle(page, lambda plate: plate["lit"] == 3 and "\u2713" in plate["text"])
                 # The longest source words the sheet can put there.
                 longest = max(runners, key=lambda r: len(r["runner"]))
                 _put(base, "/api/scorecard/entry_goal",
                      {"key": KEY, "goal": {"kind": "runner", "runner": longest["runner"],
                                            "count": 3, "streak": True}})
-                _wait(page, 1500)
-                out["long_source"] = _plate(page)
+                out["long_source"] = _settle(page, lambda plate: longest["runner"] in plate["text"])
                 # Last: its jump may move the log's scope.
                 out["pb_time_opens"] = _pb_time_opens_picker(page)
     return out

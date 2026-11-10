@@ -926,6 +926,25 @@ class Outputs:
             handle.flush()
 
 
+REPLACE_TRIES = 100                  # 10 ms apart: a reader holds the sidecar for a few milliseconds
+
+
+def replace_while_read(source: Path, target: Path) -> None:
+    """os.replace(source, target) while another process may be reading `target` (the server reading a growing
+    scene's sidecar, scene_session.read_letting_go). Windows refuses to replace a file that is open even with
+    delete sharing (PermissionError, access denied); the reader lets go within milliseconds, so this tries again
+    for up to a second before it lets the error stand (measured: 28 of 40 replaces refused under a busy reader,
+    2026-11-09)."""
+    for attempt in range(REPLACE_TRIES):
+        try:
+            os.replace(source, target)
+            return
+        except PermissionError:
+            if attempt == REPLACE_TRIES - 1:
+                raise
+            time.sleep(0.01)
+
+
 class PackageWriter:
     """write_package one frame at a time: each frame's record, blocks and state go to disk as it
     arrives, and finish() writes only what is still pending, the index and the header. So a
@@ -1116,7 +1135,7 @@ class PackageWriter:
                              stored, index_raw, version)
         partial = sidecar.with_name(sidecar.name + ".partial")
         partial.write_bytes(header + stored)
-        os.replace(partial, sidecar)
+        replace_while_read(partial, sidecar)
         return kept
 
     def abandon(self) -> None:

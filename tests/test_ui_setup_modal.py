@@ -208,10 +208,7 @@ def test_first_run_reveals_only_the_current_page_and_back_stays_put(tmp_path):
         page.goto(url + "/ui/index.html")
         page.wait_ms(1500)
         assert page.count(".setup-modal") == 0
-        # The header polls GET /api/setup for its setup note (the setup gate, 2026-11-09); this test's own reload
-        # cancels a poll still in flight, which simply runs again on the new page. Any other failure still counts.
-        assert [problem for problem in page.problems()
-                if not (problem.startswith("requestfailed: ") and problem.endswith("/api/setup (net::ERR_ABORTED)"))] == []
+        assert page.problems() == []
 
 
 def slows_before_rest(frames):

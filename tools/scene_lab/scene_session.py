@@ -95,6 +95,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import math
+import os
 import re
 import struct
 import sys
@@ -407,6 +408,36 @@ def start_encoder():
         return None
 
 
+def read_letting_go(path: Path) -> bytes:
+    with open_letting_go(path) as file:
+        return file.read()
+
+
+def open_letting_go(path: Path):
+    """A file's bytes, read without stopping its writer from replacing or deleting it meanwhile. Python's open
+    shares only reading and writing on Windows, so while the server read a growing scene's sidecar the cutter's
+    next publication (os.replace onto it) or its final delete failed with WinError 32 (the full runs of 2026-11-09;
+    pb-fin saw it too). This opens it (binary, for reading) with FILE_SHARE_DELETE as well; elsewhere a plain open."""
+    if os.name != "nt":
+        return open(path, "rb")  # noqa: SIM115 - the caller closes it
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+    create = ctypes.windll.kernel32.CreateFileW
+    create.restype = wintypes.HANDLE
+    create.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID, wintypes.DWORD,
+                       wintypes.DWORD, wintypes.HANDLE)
+    generic_read, share_all, open_existing, normal = 0x80000000, 0x7, 3, 0x80
+    handle = create(str(path), generic_read, share_all, None, open_existing, normal, None)
+    if handle in (None, wintypes.HANDLE(-1).value):
+        error = ctypes.get_last_error() or ctypes.GetLastError()
+        if error in (2, 3):                             # ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND
+            raise FileNotFoundError(2, "No such file", str(path))
+        raise OSError(error, ctypes.FormatError(error), str(path))
+    descriptor = msvcrt.open_osfhandle(handle, os.O_RDONLY | os.O_BINARY)
+    return os.fdopen(descriptor, "rb")
+
+
 class Growth:
     """A package its writer is still writing in place (attempt_cutter.py's takes): `sidecar` is
     the writer's newest publication (package.PackageWriter.publish), a header and index over the
@@ -422,7 +453,7 @@ class Growth:
 
     def read(self, rom: bytes, previous: scene_package.Package | None = None):
         try:
-            published = self.sidecar.read_bytes()
+            published = read_letting_go(self.sidecar)
         except FileNotFoundError:
             return None
         except OSError as error:

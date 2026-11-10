@@ -197,3 +197,49 @@ def test_the_reader_sees_a_real_clip_without_moving_his_cursor():
     after = browser_guard.cursor_clip()
     assert browser_guard.left_clipped(before, during) == shrunk
     assert after[0] == after[1] and held_ms < 100, (after, held_ms)
+
+
+class _Events:
+    """A page's event wiring as uilab's PlaywrightPage uses it (on, goto)."""
+
+    def __init__(self):
+        self.handlers, self.visited = {}, []
+
+    def on(self, event, handler):
+        self.handlers.setdefault(event, []).append(handler)
+
+    def fire(self, event, value):
+        for handler in self.handlers.get(event, []):
+            handler(value)
+
+    def goto(self, url, **options):
+        self.visited.append(url)
+
+
+class _Request:
+    def __init__(self, url, method="GET", failure="net::ERR_ABORTED"):
+        self.url, self.method, self.failure = url, method, failure
+
+
+def test_a_get_the_page_s_own_navigation_cancels_is_no_problem_and_nothing_else_is_retired():
+    """The header's GET /api/setup poll (and /api/pause, /api/replay/status) in flight when a test navigates comes
+    back net::ERR_ABORTED; the poll runs again on the new page, so it is the test's doing. A POST cut by the same
+    navigation, a GET started after it, and a GET that failed some other way still count."""
+    sys.path.insert(0, str(ROOT / "tools"))
+    from find_uilab import find_uilab
+    if find_uilab() is not None:
+        pytest.skip("uilab is not installed")
+    from uilab.drivers.playwright_driver import PlaywrightPage
+    browser_guard.retire_own_navigation_aborts()
+    events = _Events()
+    page = PlaywrightPage(events, None)
+    poll, write, refused = _Request("/api/setup"), _Request("/api/ghost", "POST"), _Request("/api/x", failure="net::ERR_FAILED")
+    for request in (poll, write, refused):
+        events.fire("request", request)
+    page.goto("/ui/index.html")
+    late = _Request("/api/session")
+    events.fire("request", late)
+    for request in (poll, write, refused, late):
+        events.fire("requestfailed", request)
+    assert page.problems() == ["requestfailed: /api/ghost (net::ERR_ABORTED)", "requestfailed: /api/x (net::ERR_FAILED)",
+                               "requestfailed: /api/session (net::ERR_ABORTED)"]

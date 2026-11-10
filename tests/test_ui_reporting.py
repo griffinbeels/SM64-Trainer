@@ -107,7 +107,16 @@ def test_reporting_setting_and_automatic_browser_capture(tmp_path, monkeypatch, 
         assert len(captured) == 1
         assert captured[0][0] == "Synthetic browser capture control"
         assert captured[0][1]["context"]["component"] == "browser"
-        assert "Synthetic browser capture control" in "\n".join(page.problems())
+        # The page's report can reach the server before Playwright hands the test the same pageerror (a loaded
+        # full run, 2026-11-09): collect until it arrives, then nothing else may be there.
+        problems = []
+        for _ in range(200):
+            problems += page.problems()
+            if any("Synthetic browser capture control" in problem for problem in problems):
+                break
+            page.wait_ms(25)
+        assert "Synthetic browser capture control" in "\n".join(problems)
+        assert [problem for problem in problems if "Synthetic browser capture control" not in problem] == []
         assert page.problems() == []
 
 
