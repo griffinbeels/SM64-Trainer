@@ -217,6 +217,34 @@ class Pj64Memory(RdramReader):
         self._remember(pid, address, how)
         return head
 
+    def cartridge_image(self, size: int) -> bytes | None:
+        """The first `size` bytes of the cartridge image, in Project64's own byte
+        order (1.6 stores it word-swapped, like RDRAM), or None.
+
+        The image is found where `rom_header` finds it and read in one call
+        through the read-only handle. The header is read again afterward: an
+        image released mid-read (a ROM swap) returns None, never half of two
+        cartridges. The Ghost Lab's ROM store copies the image this way.
+        """
+        from sm64_events.memory.version_probe import HEADER_SIZE
+        if self._process is None or size < HEADER_SIZE:
+            return None
+        head = self.rom_header()
+        if head is None:
+            return None
+        with self._roms_lock:
+            sighting = self._roms.get(self._process.pid)
+            address = sighting.address if sighting is not None else None
+        if address is None:
+            return None
+        try:
+            image = self._process.read(address, size)
+        except ProcessAccessError:
+            return None
+        if len(image) != size or image[:HEADER_SIZE] != head or self._header_at(address, HEADER_SIZE) != head:
+            return None
+        return image
+
     def _header_at(self, address: int, size: int) -> bytes | None:
         from sm64_events.memory.version_probe import plausible_header
         try:

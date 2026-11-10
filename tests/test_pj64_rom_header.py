@@ -234,6 +234,38 @@ def test_the_image_where_project64_keeps_it_is_one_read_and_no_walk(emulator, wa
         memory._close()
 
 
+def test_the_whole_image_is_one_read_in_project64s_order_and_a_swap_mid_read_is_refused(emulator):
+    """The Ghost Lab's ROM store copies the cartridge with `cartridge_image`: the bytes come back exactly as
+    Project64 holds them (word-swapped), through the read-only handle, and never half of two cartridges."""
+    base = emulator.machine(USAMUNE)
+    image_at = base + ROM_AFTER_RDRAM
+    tail = bytes(range(256)) * 4
+    assert emulator.send(f"write {image_at + 0x100000:x} {tail.hex()}") == "ok"
+    memory = attached_to(emulator, rdram_base=base)
+    reads = reads_of(memory)
+    try:
+        image = memory.cartridge_image(A.RDRAM_FULL_SIZE)
+        assert image is not None and len(image) == A.RDRAM_FULL_SIZE
+        assert image[:0x40] == cartridge(USAMUNE)
+        assert image[0x100000:0x100000 + len(tail)] == tail
+        assert (image_at, A.RDRAM_FULL_SIZE) in reads
+        assert memory.cartridge_image(A.RDRAM_FULL_SIZE + 0x1000) is None, "past the image's region"
+
+        # Another cartridge lands while the image is being read: the header read after it differs.
+        read = memory._process.read
+
+        def swapped_during(address, size):
+            data = read(address, size)
+            if size == A.RDRAM_FULL_SIZE:
+                assert emulator.send(f"write {image_at:x} {cartridge(VANILLA).hex()}") == "ok"
+            return data
+
+        memory._process.read = swapped_during
+        assert memory.cartridge_image(A.RDRAM_FULL_SIZE) is None
+    finally:
+        memory._close()
+
+
 def booted(emulator) -> int:
     """RDRAM's base, holding the start-up values a booted game writes."""
     base = emulator.machine(USAMUNE)

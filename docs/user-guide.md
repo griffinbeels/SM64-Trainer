@@ -68,6 +68,15 @@ plugin is fine; it is only noted. If ghosts stop showing and your setup differs,
 the practice card says so and opens this check for you. The setup wizard's
 last page lists any differences too, but never stops you from practicing.
 
+**Your ROM for the Ghost Lab.** The Ghost Lab plays ghosts with your own Usamune
+ROM. You don't have to do anything: while setup watches your game, the trainer
+copies the Usamune ROM you have open in Project64, and it finds the other version
+(US or JP) in Project64's ROM folder if you have it there. The copy stays on your
+computer, in `%LOCALAPPDATA%\SM64Trainer\scene-lab\roms`, and is never uploaded.
+The trainer only reads Project64's files and never changes them. If the trainer
+can't find the US ROM, **Check my setup** and the Ghost Lab show a
+**Choose ROM file** button so you can pick it once.
+
 Already set up? The trainer compares the installed graphics plugin's build with
 this build and checks Project64's selected graphics plugin. A matching installation
 skips automatic onboarding, including in a fresh worktree. A stale or incomplete
