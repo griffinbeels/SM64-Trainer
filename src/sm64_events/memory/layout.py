@@ -466,8 +466,8 @@ JP = Layout(
     usamune_slots_start=0x80500000,  # every occupied slot word points past the object pool's start
     segment_table=0x8033A090,        # its behaviour segment equals the verified behaviour base
     second_camera_focus=0x8032CFD0,  # holds zero or an object's start
-    # VERIFY until his JP game passes their address.* gates (read-only; the sync run the lead holds). The JP
-    # re-simulation and its scene packages read them (P15, 2026-11-09). Derived as US's were: STROOP MappingJP.map's
+    # The JP re-simulation's spans, verified live 2026-11-10 by the lead's read-only sync run on his JP game: all
+    # sixteen address.* gates (data/version_sync/jp.json). Its scene packages read them (P15). Derived as US's were: STROOP MappingJP.map's
     # section layout (.data main.o 0x...C620 .. moving_texture.o end; .bss game_init.o .. object_list_processor.o
     # end; engine .bss geo_layout.o .. surface_load.o end); the pool bounds sPoolStart/sPoolEnd hold in the
     # cold-booted JP game (the same as US); gSaveBuffer up to the next symbol (gGfxSPTaskStack), 0x200 bytes as on
