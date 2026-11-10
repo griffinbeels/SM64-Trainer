@@ -432,6 +432,11 @@ def _build_capture_layer(poller, replay):
     # A developer's lab (SM64_SCENE_LAB) reads its own ROM files and never fills the store.
     setup_observer = SetupRuntime(WinProcesses(), Pj64Memory, poller, replay,
                                   rom_store=None if dev_lab_roms() is not None else lab_rom_store())
+    from sm64_events.core.fixups import Fixups
+    from sm64_events.core.paths import mode_settings_path
+    from sm64_events.core.setup_profile import load_baseline
+    # Setup's download of the PJ64 Fixups; the setup routes read it off the layer.
+    capture_layer.fixups = Fixups(load_baseline(), mode_settings_path().parent / "downloads")
     if not capture_layer.auto_refresh:
         return capture_layer, setup_observer
     try:

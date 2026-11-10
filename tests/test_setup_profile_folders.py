@@ -44,7 +44,7 @@ def test_each_check_describes_one_folder_and_labels_account_wide_choices(tmp_pat
     assert "- Project64 folder: 02-stock-vanilla (other), running" in markdown
     assert ("| memory_size | required | match | 8 MB (Project64's default) | 8 MB "
             "| every Project64 on this Windows account |") in markdown
-    assert "| rsp_plugin | recommended | differs |" in markdown and str(tmp_path) not in markdown
+    assert "| rsp_plugin | required | differs |" in markdown and str(tmp_path) not in markdown
 
 
 def test_program_files_and_virtualstore_name_the_location(tmp_path):

@@ -277,6 +277,59 @@ def test_privileged_transaction_rolls_back_all_files_on_parent_failure(privilege
     assert {path.name: path.read_bytes() for path in plugin.iterdir()} == before
 
 
+FIXUPS = b"MZ the tested fixups"
+
+
+@pytest.fixture
+def fixups_request(privileged_request, tmp_path, monkeypatch):
+    """The request with a kept PJ64 Fixups download whose hash the bundled
+    baseline names (the test stores that baseline, never the shipped one)."""
+    import hashlib
+    from sm64_events.core import setup_profile
+    kept = tmp_path / "downloads" / "pj64fixups-RSP.dll"
+    kept.parent.mkdir()
+    kept.write_bytes(FIXUPS)
+    monkeypatch.setattr(setup_profile, "load_baseline", lambda *a: {
+        "items": [{"id": "rsp_plugin", "sha256": hashlib.sha256(FIXUPS).hexdigest()}]})
+    return {**privileged_request, "fixups_dll": str(kept)}, kept
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows handle pinning")
+def test_privileged_transaction_adds_the_fixups_and_rolls_them_back_with_the_plugin(fixups_request, install):
+    request, _ = fixups_request
+    plugin = install[3] / "Plugin"
+    (plugin / "RSP.dll").write_bytes(b"stock rsp")
+    before = {path.name: path.read_bytes() for path in plugin.iterdir()}
+    with pytest.raises(OSError, match="parent settings failed"):
+        with plugin_elevation_worker.privileged_files(request):
+            assert (plugin / "RSP.dll").read_bytes() == FIXUPS
+            assert (plugin / "RSP.before-fixups").read_bytes() == b"stock rsp"
+            raise OSError("parent settings failed")
+    assert {path.name: path.read_bytes() for path in plugin.iterdir()} == before
+    with plugin_elevation_worker.privileged_files(request):
+        pass
+    assert (plugin / "RSP.dll").read_bytes() == FIXUPS
+    assert (plugin / "RSP.before-fixups").read_bytes() == b"stock rsp"
+    # Already the tested file: a second install touches neither file again.
+    (plugin / "RSP.before-fixups").write_bytes(b"kept as it was")
+    with plugin_elevation_worker.privileged_files(request):
+        pass
+    assert (plugin / "RSP.before-fixups").read_bytes() == b"kept as it was"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows handle pinning")
+def test_the_helper_copies_only_the_tested_fixups_file(fixups_request, install):
+    request, kept = fixups_request
+    plugin = install[3] / "Plugin"
+    kept.write_bytes(b"MZ some other dll")
+    with pytest.raises(ValueError, match="not the tested release"):
+        with plugin_elevation_worker.privileged_files(request):
+            pytest.fail("An unverified file passed the privilege boundary")
+    assert not (plugin / "RSP.dll").exists() and not (plugin / PLUGIN_DLL).exists()
+    with pytest.raises(ValueError):
+        plugin_elevation_worker.privileged_files({**request, "fixups_dll": "relative/RSP.dll"}).__enter__()
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Windows hardlink/handle pinning")
 def test_privileged_destination_cannot_be_a_hardlink(privileged_request, install, tmp_path):
     protected = tmp_path / "unrelated.bin"
@@ -343,3 +396,40 @@ def test_authenticated_parent_helper_transaction_without_real_uac(privileged_req
     # settings file, and nothing else.
     assert sorted(path.name for path in (pj64 / "Plugin").iterdir()) == sorted([PLUGIN_DLL, RENDERER_INI])
     assert (pj64 / "Plugin" / RENDERER_INI).read_bytes() == MINIMAL
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows privileged file transaction")
+def test_one_permission_prompt_installs_the_plugin_and_the_fixups(fixups_request, install, monkeypatch):
+    """The capture layer hands its kept fixups download to the same helper
+    transaction, through the real authenticated channel (no real UAC)."""
+    from types import SimpleNamespace
+    from sm64_events.core import plugin_elevation_win
+    _, kept = fixups_request
+    layer, registry, _, pj64, _ = install
+    layer.fixups = SimpleNamespace(cached=lambda: kept)
+    (pj64 / "Plugin" / "RSP.dll").write_bytes(b"stock rsp")
+    outcomes, threads, launches = [], [], []
+    deny_first_copy(monkeypatch)
+    monkeypatch.setattr(plugin_elevation_win, "process_image", lambda pid: Path(sys.executable))
+
+    class ThreadProcess:
+        pid = os.getpid()
+
+        def exited(self):
+            return not threads[0].is_alive()
+
+        def close(self):
+            threads[0].join(timeout=5)
+
+    def launch(argv):
+        launches.append(argv)
+        thread = threading.Thread(target=lambda: outcomes.append(plugin_elevation_worker.main(argv[-3:])))
+        threads.append(thread)
+        thread.start()
+        return ThreadProcess()
+
+    monkeypatch.setattr(plugin_elevation_win, "launch_admin", launch)
+    assert layer.install(True).installation_verified
+    assert outcomes == [0] and len(launches) == 1 and registry.selected == PLUGIN_DLL
+    assert (pj64 / "Plugin" / "RSP.dll").read_bytes() == FIXUPS
+    assert (pj64 / "Plugin" / "RSP.before-fixups").read_bytes() == b"stock rsp"

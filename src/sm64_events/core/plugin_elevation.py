@@ -75,11 +75,13 @@ def _active_source(source):
 
 
 @contextmanager
-def elevated_install(pj64_dir: Path, plugin_dir: Path, source: Path):
+def elevated_install(pj64_dir: Path, plugin_dir: Path, source: Path, fixups_dll: Path | None = None):
     """Keep privileged rollback alive until the original user's commit succeeds.
 
     Sources are derived by the helper; hashes here bind this attempt to the
     active build. No request file or user-selected privileged source exists.
+    `fixups_dll` names the kept PJ64 Fixups download (core/fixups.py); the
+    helper copies it only when its bytes match the bundled baseline's hash.
     """
     from sm64_events.core.plugin_elevation_win import launch_admin
     with socket.socket() as listener:
@@ -91,6 +93,8 @@ def elevated_install(pj64_dir: Path, plugin_dir: Path, source: Path):
             _active_source(source)
             request = {"pj64_dir": str(pj64_dir.absolute()), "plugin_dir": str(plugin_dir.absolute()),
                        "plugin_sha256": sha256(source)}
+            if fixups_dll is not None:
+                request["fixups_dll"] = str(Path(fixups_dll).absolute())
         process = launch_admin(helper_argv(listener.getsockname()[1], secret))
         try:
             deadline = time.monotonic() + 120

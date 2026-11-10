@@ -5,7 +5,10 @@ bundle's graphics plugin into a verified Project64/Plugin directory under its
 fixed name, turns off one fixed setting (frame buffer emulation) in the
 renderer's GLideN64.ini there, deletes an older install's leftovers of its own
 (fixed names, ours by identity) after the commit, and rolls everything back on
-failure. It cannot copy arbitrary files or run commands.
+failure. When asked, it also copies the PJ64 Fixups to the fixed name RSP.dll,
+only from a file whose bytes match the hash in this build's bundled baseline
+(data/setup_baseline.json), keeping the file it replaces once. It cannot copy
+arbitrary files or run commands.
 """
 from __future__ import annotations
 
@@ -53,7 +56,7 @@ PLUGIN_ROLE = b"-gpu-runtime"
 def validate_request(request):
     from sm64_events.core.capturelayer_win import WinProcesses
     from sm64_events.core.paths import bundled_plugin_dll
-    if set(request) != {"pj64_dir", "plugin_dir", "plugin_sha256"}:
+    if set(request) - {"fixups_dll"} != {"pj64_dir", "plugin_dir", "plugin_sha256"}:
         raise ValueError("Invalid administrator installer request")
     pj64, plugin = _safe_path(request["pj64_dir"]), _safe_path(request["plugin_dir"])
     if plugin != pj64 / "Plugin":
@@ -71,22 +74,62 @@ def validate_request(request):
     return pj64, plugin, source
 
 
+def fixups_source(request) -> Path | None:
+    """The requested PJ64 Fixups file, only when it IS the tested DLL: the
+    request names where the download is kept, the bundled baseline says what
+    its bytes must be."""
+    if "fixups_dll" not in request:
+        return None
+    from sm64_events.core.fixups import tested_sha256
+    from sm64_events.core.setup_profile import load_baseline
+    path = _safe_path(request["fixups_dll"])
+    if path.read_bytes()[:2] != b"MZ" or sha256(path) != tested_sha256(load_baseline()):
+        raise ValueError("The PJ64 Fixups file is not the tested release")
+    return path
+
+
+def _fixups_plan(plugin: Path, fixups: Path | None):
+    """(destination, backup or None) when RSP.dll must change, else None."""
+    from sm64_events.core.fixups import BACKUP, RSP_DLL
+    if fixups is None:
+        return None
+    rsp, backup = plugin / RSP_DLL, plugin / BACKUP
+    if rsp.is_file() and sha256(rsp) == sha256(fixups):
+        return None
+    return rsp, (backup if rsp.is_file() and not backup.exists() else None)
+
+
+def _install_fixups(fixups: Path, rsp: Path, backup: Path | None) -> None:
+    with file_operation("install the PJ64 Fixups", rsp):
+        if backup is not None:
+            backup.write_bytes(rsp.read_bytes())
+        rsp.write_bytes(fixups.read_bytes())
+        if sha256(rsp) != sha256(fixups):
+            raise OSError("PJ64 Fixups copy verification failed")
+
+
 @contextmanager
 def privileged_files(request):
     from sm64_events.core.capturelayer_win import WinProcesses
     from sm64_events.core.plugin_elevation_win import locked_paths
     pj64, plugin, source = validate_request(request)
-    parents = {path for item in (pj64, source.parent) for path in (*item.parents, item)}
+    fixups = fixups_source(request)
+    folders = [pj64, source.parent] + ([fixups.parent] if fixups else [])
+    parents = {path for item in folders for path in (*item.parents, item)}
     directories = sorted(parents, key=lambda path: (len(path.parts), str(path)))
-    with locked_paths(directories, [pj64 / "Project64.exe", source], []):
+    with locked_paths(directories, [pj64 / "Project64.exe", source] + ([fixups] if fixups else []), []):
         # Lock handles now prevent source replacement or directory redirection.
         validate_request(request)
+        fixups_source(request)
         if WinProcesses().pj64_image_path() is not None:
             raise OSError("Close Project64 before installing Practice Replay")
         with file_operation("create plugin folder", plugin):
             plugin.mkdir(exist_ok=True)
         settings = plugin / SETTINGS
         destinations = [plugin / PLUGIN, settings]
+        fixups_plan = _fixups_plan(plugin, fixups)
+        fixups_files = [path for path in (fixups_plan or ()) if path is not None]
+        destinations += fixups_files
         for destination in [*destinations, *(plugin / name for name in LEFTOVERS)]:
             if in_use(destination):
                 raise OSError(f"Plugin is in use by another process: {destination}")
@@ -95,9 +138,11 @@ def privileged_files(request):
         with locked_paths([plugin], [], destinations):
             settings_before = read_settings(settings) if settings_existed else None
             with verified_copy(source, plugin / PLUGIN, reason="elevated_install",
-                               rollback=(settings,)) as receipt:
+                               rollback=(settings, *fixups_files)) as receipt:
                 with file_operation("turn off frame buffer emulation", settings):
                     turn_off_in_place(settings, settings_before)
+                if fixups_plan is not None:
+                    _install_fixups(fixups, *fixups_plan)
                 try:
                     yield {"installation_receipt": receipt}
                     # The commit means the original user selected the plugin,

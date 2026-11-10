@@ -28,7 +28,7 @@ from sm64_events.core.renderer_settings import MINIMAL as FRAME_BUFFER_EMULATION
 from sm64_events.core.setup_gpu import GpuSetupProbe
 from sm64_events.replay import capturecontrol as C
 from test_onboarding import runtime
-from test_ui_setup_modal import body, wait_page, wait_step
+from test_ui_setup_modal import body, no_setup_check, wait_page, wait_step
 
 
 class GpuFacts:
@@ -88,6 +88,7 @@ def capture(page, artifacts, name, records):
 
 def install_fixture(monkeypatch, facts):
     monkeypatch.setattr(ui_fixture, "_FixtureCaptureLayer", lambda *a, **kw: facts.layer)
+    no_setup_check(monkeypatch)
     fixture_routes = ui_fixture._fixture_replay_routes
     def replay_routes(app, database):
         fixture_routes(app, database)
