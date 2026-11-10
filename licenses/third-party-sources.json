@@ -275,6 +275,21 @@
           }
         ]
       }
+    },
+    "SM64Trainer-third-party-source-unicorn.tar": {
+      "about": "Unicorn 2.1.4, the CPU emulator the Ghost Lab runs the game's own code in: its source release on PyPI, which the unicorn wheel (the Python binding and unicorn.dll) is built from. Its engine is the src/ folder, the same files as the project's tag 2.1.4 (https://github.com/unicorn-engine/unicorn/tree/2.1.4). The engine is GPL-2.0 only; licenses/python/unicorn/README.md says why.",
+      "sources": [
+        {
+          "url": "https://files.pythonhosted.org/packages/b2/1b/b4248aa8422e86de690cf8e85cf8feae4c33405a097d1ebe71570bdaa6f5/unicorn-2.1.4.tar.gz",
+          "sha256": "00567a70e323f749b419cd86bee4f9115beab7ebba32194581c090cbb7c59cff",
+          "license": "GPL-2.0-only (the engine; parts LGPL-2.1-or-later, BSD, MIT) AND BSD (the Python binding)",
+          "used_in": [
+            "unicorn.dll (Ghost Lab)",
+            "the unicorn Python package (Ghost Lab)"
+          ],
+          "note": "the same file and SHA-256 as uv.lock's unicorn 2.1.4 sdist"
+        }
+      ]
     }
   }
 }

@@ -164,7 +164,9 @@ def _native(value):
 
 
 SETUP_CHECK_IDS = ("graphics_plugin", "frame_buffer_emulation", "memory_size", "counter_factor", "cpu_core",
-                   "emulator_build", "rsp_plugin", "audio_plugin", "install_location", "controller_plugin")
+                   "emulator_build", "rsp_plugin", "audio_plugin", "install_location", "controller_plugin", "lab_rom")
+#: Rows a report carries as found or not found only: their text names the player's files (the Ghost Lab's ROM).
+SETUP_CHECK_STATUS_ONLY = frozenset({"lab_rom"})
 
 
 def _setup_folder(value):
@@ -203,6 +205,9 @@ def _setup_check(value):
                 or row.get("importance") not in ("required", "recommended", "noted")):
             continue
         clean = {key: row[key] for key in ("id", "status", "importance")}
+        if row["id"] in SETUP_CHECK_STATUS_ONLY:
+            items.append(clean)
+            continue
         if type(row.get("shared")) is bool:
             clean["shared"] = row["shared"]
         clean.update(pick(row, ("yours", "tested")))

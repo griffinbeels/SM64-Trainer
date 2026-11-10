@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Runs in the simulation program (SM64TrainerSim.exe); licenses/README.md lists its GPL-2.0-or-later code.
 """E4 probe: name each closure byte's source by the game's own segment loads.
 
     uv run python tools/scene_lab/provenance.py <rom.z64> <frame_dir>...

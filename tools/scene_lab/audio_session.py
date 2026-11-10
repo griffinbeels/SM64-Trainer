@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Runs in the simulation program (SM64TrainerSim.exe); licenses/README.md lists its GPL-2.0-or-later code.
 """The audio capture file and the offline join with a scene-tap session (M4 E4-audio).
 
     audio_session.py build <tap session> <audio.cap> <out.audio> [--codec flac|stored] [--offset-ms X]

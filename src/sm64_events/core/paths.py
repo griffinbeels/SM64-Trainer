@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Runs in the simulation program (SM64TrainerSim.exe); licenses/README.md lists its GPL-2.0-or-later code.
 # src/sm64_events/core/paths.py
 """THE single source of truth for where runtime state lives.
 
@@ -20,7 +22,7 @@ import sys
 from pathlib import Path
 
 from sm64_events.core import build_channel
-from sm64_events.core.update_plan import BUNDLED_NATIVES
+from sm64_events.core.update_plan import BUNDLED_NATIVES, LAB_NATIVES
 
 log = logging.getLogger("sm64.paths")
 
@@ -233,6 +235,13 @@ def user_icons_dir() -> Path:
     return data_root() / "data" / "icons"
 
 
+def course_art_dir() -> Path:
+    # Course portraits cut from the player's own ROM (sm64_events/course_art.py),
+    # one folder per ROM. In the DATA dir for user_icons_dir's reason: the
+    # install's ui/assets is read-only when frozen, and ships no Nintendo art.
+    return data_root() / "data" / "course_art"
+
+
 def compilations_dir() -> Path:
     # Generated failure compilations. Lives UNDER replays_root() (== the
     # ReplayService save_root) on purpose: the existing /api/replay/reveal
@@ -301,14 +310,29 @@ def migrate_capture_layer_settings() -> None:
 WRAPPER_DLL_NAME, ENCODER_DLL_NAME = BUNDLED_NATIVES
 
 
+def _bundled(relative: Path) -> Path | None:
+    """A file the installed app carries, by its path inside a program's
+    contents folder. The app is two programs in one folder (sm64_events/
+    scenelab_code.py): the Trainer's `_internal` holds the data, and the
+    simulation program's own contents folder (`_sim`, its ``sys._MEIPASS``)
+    holds only its code, so a lookup from the simulation program falls back
+    to the Trainer's `_internal` beside it."""
+    roots = [Path(getattr(sys, "_MEIPASS", "")), Path(sys.executable).resolve().parent / "_internal"]
+    for root in dict.fromkeys(roots):
+        cand = root / relative
+        if cand.is_file():
+            return cand
+    return None
+
+
 def bundled_plugin_file(name: str) -> Path | None:
     """A native file shipped with this build under ``sm64_events/data/plugin``:
-    beside a frozen exe under ``sys._MEIPASS``, else the package's own data
-    folder; None when this build carries none (a clone that never built it),
-    which the setup screen reports rather than installing nothing."""
+    beside a frozen exe under ``sys._MEIPASS`` (from the simulation program, the
+    Trainer's, `_bundled`), else the package's own data folder; None when this
+    build carries none (a clone that never built it), which the setup screen
+    reports rather than installing nothing."""
     if is_frozen():
-        cand = Path(getattr(sys, "_MEIPASS", "")) / "sm64_events" / "data" / "plugin" / name
-        return cand if cand.exists() else None
+        return _bundled(Path("sm64_events") / "data" / "plugin" / name)
     cand = Path(__file__).resolve().parents[1] / "data" / "plugin" / name
     return cand if cand.exists() else None
 
@@ -323,6 +347,35 @@ def bundled_plugin_dll() -> Path | None:
 def bundled_encoder_dll() -> Path | None:
     """The 64-bit NVENC helper the server's isolated encoder process loads."""
     return bundled_plugin_file(ENCODER_DLL_NAME)
+
+
+#: STROOP's symbol maps for the two Usamune builds (the Ghost Lab's evaluator,
+#: cold boot and stage simulation read them): committed package data under
+#: ``sm64_events/data/maps``, pinned by sha256 (LAB_MAP_SHA256).
+#: Each map's reviewed bytes (STROOP 6771197a): the build refuses another file
+#: (tools/bundle_policy.py) and the installed app's self-check reads them back.
+LAB_MAP_SHA256 = {
+    "MappingUS.map": "d942ba9781aafb500c5bd7a599d15a41a191c6e9fe65b95e6c384429bec2d3b1",
+    "MappingJP.map": "5e51852905862c90173e90cd6b58c591a82d735d63575cf5ffab04c148eec9f2",
+}
+LAB_MAPS = tuple(LAB_MAP_SHA256)
+
+
+def bundled_lab_file(name: str) -> Path | None:
+    """A Ghost Lab file the installed app carries: one of update_plan's
+    LAB_NATIVES under ``sm64_events/data/lab``, or one of LAB_MAPS under
+    ``sm64_events/data/maps``. None from a source checkout, where the lab
+    builds its natives into its build cache and reads the maps its own config
+    names, and None when this build lacks the file."""
+    if name in LAB_NATIVES:
+        relative = Path("sm64_events") / "data" / "lab" / name
+    elif name in LAB_MAPS:
+        relative = Path("sm64_events") / "data" / "maps" / name
+    else:
+        raise ValueError(f"{name} is not a Ghost Lab file this build carries")
+    if not is_frozen():
+        return None
+    return _bundled(relative)
 
 
 def update_state_path() -> Path:
@@ -411,7 +464,8 @@ def bundled_symbol_map(name: str) -> Path:
     a missing map is a packaging bug the first read should name loudly, not a
     None that quietly empties the catalogue."""
     if is_frozen():
-        return Path(getattr(sys, "_MEIPASS", "")) / name
+        # The simulation program reads it from the Trainer's folder (_bundled).
+        return _bundled(Path(name)) or Path(getattr(sys, "_MEIPASS", "")) / name
     return Path(__file__).resolve().parent.parent / "data" / name
 
 

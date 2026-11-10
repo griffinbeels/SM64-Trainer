@@ -1780,6 +1780,46 @@ test("a Library ghost that is one of his opens his own scene of it; one the lab 
   expect([queries("/api/scene-lab/ghost?"), opens()]).toEqual([[], []]);
 });
 
+// His words (2026-11-09): "I want to be able to see all of my past PB ghosts ... I want to be able to open
+// all of these in the Ghost Lab." A Practice log row whose attempt has no recorded take but a ghost: the
+// take is asked for first (quietly), then the lab's ghost row for that attempt (GET /ghost?attempt=), which
+// is watched like any ghost row -- made into the scene from its ghost (POST /open {ghost}) -- and plays.
+const MY_PB = { ref: "mine-77", player: "You", time: "10\"10", strat: "TJ Owlless", attempt: 77, frames: 303,
+  rank: null, more: 0, yours: true };
+const NO_TAKE = "This attempt has no recorded scene.";
+function attemptWithoutTake(answer = { item: MY_PB }) {
+  routes.set("/api/target/strategies", () => respond({ strategies: [{ name: "TJ Owlless" }] }));
+  routes.set("/api/scene-lab/open", (url, options) => (JSON.parse(options.body).attempt != null
+    ? respond({ detail: NO_TAKE }, 404) : respond({ ...opened, session: ++sessionSerial, attempt: null })));
+  routes.set("/api/scene-lab/ghost", () => respond(answer));
+  return render(h(SceneViewer, { t: { view: VIEW, sceneLab: { intent: { attempt: 77 }, clearIntent: () => {} } } }));
+}
+const labAsks = () => fetches.filter(([url]) => url === "/api/scene-lab/open" || url.startsWith("/api/scene-lab/ghost?"))
+  .map(([url, , body]) => (body ? JSON.parse(body) : url));
+
+test("a Practice log attempt with no recorded take is made from its ghost and plays from its first frame", async () => {
+  const page = attemptWithoutTake();
+  const socket = await sceneUp(1);
+  const asks = labAsks();
+  expect(asks.slice(0, 2)).toEqual([{ attempt: 77 }, "/api/scene-lab/ghost?attempt=77"]);
+  expect(asks.at(-1)).toEqual({ ghost: "mine-77" });                               // made from the ghost
+  await until(() => expect(page.getByRole("button", { name: "Pause" })).toBeTruthy());
+  expect(socket.pictures().map((request) => request.frame)).toEqual([0, 0]);       // from its first frame
+  await until(() => expect(watchingWords(page)).toBe("★You10\"10"));
+  expect(selectorWords(page).note).toBeNull();                                       // the quiet take said nothing
+  fireEvent.click(page.getByRole("button", { name: "Pause" }));
+});
+
+test("a Practice log attempt with neither a take nor a ghost shows the lab's reason as a refusal and opens nothing", async () => {
+  const reason = "This run has no ghost recording.";
+  const page = attemptWithoutTake({ item: null, reason });
+  await until(() => expect(page.container.querySelector(".scene-lab-error")?.textContent).toBe(reason));
+  await settled();
+  expect(opens()).toEqual([{ attempt: 77 }]);
+  expect(sockets.length).toBe(0);
+  expect(page.container.querySelector(".scene-lab-player")).toBeNull();
+});
+
 // The lab's lists: 23 of yours (the first is the stage's own run), 12 top ghosts per strategy (All
 // strategies: the fastest twelve happen to be Single Jump's), one player found, and that player's
 // three. Top ghosts carry their strategy and, in turn, a US, a JP and no ROM.

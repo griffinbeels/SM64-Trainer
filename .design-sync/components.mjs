@@ -44,8 +44,10 @@ export declare function DS_ASSET(path: string): string;
 // serves from an absolute /ui/assets path is unreachable inside a design, so
 // what is not listed here renders as a broken image. star_icons/ (1.9 MB) is
 // deliberately out: every component that draws one takes the src as a PROP,
-// so a caller supplies it and the weight never has to ship.
-export const ASSET_DIRS = ["hat", "empty", "course_icons"];
+// so a caller supplies it and the weight never has to ship. Course portraits
+// are not bundled at all: the app cuts them from the player's own ROM
+// (sm64_events/course_art.py), so they never ship to a design either.
+export const ASSET_DIRS = ["hat", "empty"];
 export const ASSET_FILES = [
   "star_1.png", "star_2.png", "star_3.png",
   "star_4.png", "star_5.png", "star_6.png",

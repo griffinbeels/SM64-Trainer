@@ -12,6 +12,8 @@
 #include "decomp/game/rendering_graph_node.h"
 #include "decomp/include/object_fields.h"
 #include "decomp/held/held_cells.h"
+#include "decomp/include/PR/gbi.h" /* Lights1: the same 24 bytes as libsm64's */
+#include "rom_data.h"
 #include <string.h>
 
 #define DECLARE_HELD(name, kind) \
@@ -98,9 +100,18 @@ int sg_held_build(struct sg_model *model)
     {
         unsigned kind;
         memset(model->held_lights, 0, sizeof(model->held_lights));
-#define HELD_LIGHT(kind, ar, ag, ab, r, g, b, x, y, z) add_held_light(model, kind, ar, ag, ab, r, g, b, x, y, z);
-        SG_HELD_LIGHTS(HELD_LIGHT)
-#undef HELD_LIGHT
+        unsigned t, i;
+        /* Each held kind's Lights1 rows, in its lists' order, as the open
+         * filled them from the ROM (rom_data.h). */
+        for (t = 0; t < sg_rom_table_count; ++t)
+            for (i = 0; i < *sg_rom_tables[t].count; ++i) {
+                const sg_rom_object *row = &sg_rom_tables[t].rows[i];
+                const Lights1 *l = (const Lights1 *)row->out;
+                if (row->kind != SG_ROM_LIGHTS || !row->owner || row->owner >= SG_HELD_KINDS) continue;
+                add_held_light(model, row->owner, l->a.l.col[0], l->a.l.col[1], l->a.l.col[2],
+                               l->l[0].l.col[0], l->l[0].l.col[1], l->l[0].l.col[2],
+                               l->l[0].l.dir[0], l->l[0].l.dir[1], l->l[0].l.dir[2]);
+            }
         for (kind = 0; kind < SG_HELD_KINDS; ++kind)
             if (model->held_lights[kind].count == UINT32_MAX) memset(&model->held_lights[kind], 0, sizeof(sg_body_lights));
     }

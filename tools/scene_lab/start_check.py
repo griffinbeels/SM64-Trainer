@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Runs in the simulation program (SM64TrainerSim.exe); licenses/README.md lists its GPL-2.0-or-later code.
 """Is a start someone else made safe to run, and is a save state built from it safe to write? (Ghost Handoff)
 
 A downloaded start becomes game state in the simulation and, through the Save states row, in a Usamune slot of
@@ -41,8 +43,20 @@ FIELD = {"next": 0x60, "prev": 0x64, "graph": 0x14, "behavior": 0x20C, "command"
          "stack_end": 0x1F0, "collision": 0x218}
 USAMUNE_IMAGE_BEGIN = 0x400000             # where Usamune's entry code copies its image (cold_boot.USAMUNE_IMAGE)
 # Not the exception vectors: 0x80000000 is also the float -0.0, which matrices and speeds hold all the time.
+# The US build's; never_ranges() reads each build's own from its map (JP's stacks sit 0x400 higher).
 NEVER = ((0x1FF200, 0x207D00), (0x38F800, 0x400000), (0x500000, 0x800000))
 #        thread stacks          frame buffers       Usamune's slots and above
+
+
+def never_ranges(symbols) -> tuple[tuple[int, int], ...]:
+    """Physical [begin, end) a start's word may never point into: the thread stacks (gUnusedThread2Stack up to
+    gGfxPools), the frame buffers (gFrameBuffer0 up to Usamune's image), Usamune's slots and above. A map without
+    those names (a test's) keeps the US build's."""
+    names = ("gUnusedThread2Stack", "gGfxPools", "gFrameBuffer0")
+    if not all(name in getattr(symbols, "by_name", {}) for name in names):
+        return NEVER
+    return ((sim.phys(symbols["gUnusedThread2Stack"]), sim.phys(symbols["gGfxPools"])),
+            (sim.phys(symbols["gFrameBuffer0"]), USAMUNE_IMAGE_BEGIN), (0x500000, 0x800000))
 BEHAVIOR_TAIL = 0x400                       # past the last bhv* symbol, for its own script
 
 
@@ -186,7 +200,7 @@ def check_words(words: np.ndarray, begin: int, reference: Reference) -> list[str
     for index in np.flatnonzero((words != trusted) & (words >= 0x80000000) & (words < 0x80800000)).tolist():
         value = int(words[index])
         at = value & 0x1FFFFFFF
-        if reference.in_code(value) or any(low <= at < high for low, high in NEVER):
+        if reference.in_code(value) or any(low <= at < high for low, high in never_ranges(reference.symbols)):
             name = reference.symbols.name_of(0x80000000 | (begin + index * 4))
             reasons.append(f"The start points {name} at the game's code or another protected place.")
     return reasons

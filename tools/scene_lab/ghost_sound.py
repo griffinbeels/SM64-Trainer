@@ -55,7 +55,6 @@ tracks follow its samples (the cache key carries the shift).
 """
 from __future__ import annotations
 
-import hashlib
 import importlib
 import importlib.util
 import json
@@ -66,7 +65,6 @@ import re
 import struct
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 from dataclasses import dataclass
@@ -82,9 +80,6 @@ import scene_audio  # noqa: E402
 import stems_check as sc  # noqa: E402
 
 NATIVE = ROOT / "plugin/gfxwrap"
-SOURCES = (HERE / "ghost_sound_host.cpp", NATIVE / "ghost_audio.cpp", NATIVE / "ghost_audio.h",
-           NATIVE / "ghost_assets.cpp", NATIVE / "ghost_assets.h", NATIVE / "ghost_tuning.h",
-           NATIVE / "ghost_playback.h", ROOT / "renderer/model/audio.h")
 ENGINE_RATE = 32000            # SA_RATE
 GAME_FPS = 30
 NEAR = 400.0                   # GP_SOUND_NEAR: full gain this near the stage's Mario
@@ -113,28 +108,21 @@ def _module(name: str, path: Path):
 
 
 def build() -> Path:
-    """ghost_sound_host.exe (x86, the model library's audio engine), built once per input hash
-    into the scene lab's build cache, as viewer_host.exe is."""
-    compiler = _module("ghost_sound_build_plugin", ROOT / "tools/build_plugin.py")
-    model = _module("ghost_sound_build_model", ROOT / "tools/build_model.py")
-    digest = hashlib.sha256(model.component_hash().encode() + b"".join(path.read_bytes() for path in SOURCES))
-    cache = Path(os.environ.get("LOCALAPPDATA", tempfile.gettempdir())) / "SM64Trainer/build-cache"
-    work = cache / "scene-lab" / f"ghost-sound-{digest.hexdigest()[:16]}"
-    target = work / "ghost_sound_host.exe"
-    if target.is_file():
-        return target
-    vcvars = compiler.find_vcvars32()
-    if vcvars is None:
-        raise RuntimeError("Ghost sound needs the x86 MSVC toolchain to build its engine.")
-    work.mkdir(parents=True, exist_ok=True)
-    library = model.build_model(work / "model", cache=cache / "model", vcvars32=vcvars)
-    source = work / "model/source/src"
-    compiler._cl(vcvars, ["/nologo", "/O2", "/W4", "/MT", "/EHsc", "/std:c++17", f"/I{NATIVE}",
-                          f"/I{ROOT / 'renderer/model'}", f"/I{source}", f"/I{source / 'decomp/include'}",
-                          str(SOURCES[0]), str(NATIVE / "ghost_audio.cpp"), str(NATIVE / "ghost_assets.cpp"),
-                          str(library), f"/Fe:{target}", f"/Fo{work}\\", "/link", "winmm.lib", "bcrypt.lib",
-                          *compiler.LIBS], work)
-    return target
+    """ghost_sound_host.exe (x86, the model library's audio engine). The installed app runs its own
+    copy (core/paths.py bundled_lab_file) and never compiles; a checkout compiles the one recipe
+    (tools/build_lab.py) into the scene lab's build cache, as viewer_host.exe is."""
+    if getattr(sys, "frozen", False):
+        from sm64_events.core.paths import bundled_lab_file
+        path = bundled_lab_file("ghost_sound_host.exe")
+        if path is None:
+            raise RuntimeError("This copy of SM64 Trainer is missing ghost_sound_host.exe, the program that "
+                               "makes the ghosts' sound effects. Reinstall SM64 Trainer.")
+        return path
+    recipes = _module("ghost_sound_build_lab", ROOT / "tools/build_lab.py")
+    try:
+        return recipes.cached("ghost_sound_host.exe")
+    except recipes.ToolchainMissing:
+        raise RuntimeError("Ghost sound needs the x86 MSVC toolchain to build its engine.") from None
 
 
 class EngineHost:

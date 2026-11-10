@@ -108,7 +108,7 @@ class LibrarySession(FakeSession):
         self.refreshes.append(resolve)
         return no_session_state()
 
-    def storage(self, scenes=lambda: None):
+    def storage(self, scenes=lambda: None, made=lambda: None):
         """Settings' Ghost files reads GET /api/ghost/storage whenever the drawer mounts, so a
         page test that opens Settings needs an answer, not a 500 (the 2026-11-08 batch-1 merge
         check never ran these pages). This stand-in holds no ghost files; the section itself is

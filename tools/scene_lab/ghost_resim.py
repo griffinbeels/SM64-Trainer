@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Runs in the simulation program (SM64TrainerSim.exe); licenses/README.md lists its GPL-2.0-or-later code.
 """A ghost becomes a scene: its recorded pads re-run the game from a start, in the simulation, and the
 frames become a scene package the Scene viewer opens as its stage (Ghost Handoff re-simulation).
 Simulation only: nothing here touches Project64 or the running game.
@@ -17,6 +19,12 @@ The start, best first (measured on his Whomp's Fortress takes, 2026-11-08):
 For the last two the ghost's own clocks are set; its seed is not known (a ghost carries none). Mario
 stayed exact from both (0 units over 351-403 frames); objects whose phase comes from before a reset
 (the sliding platforms, the Bomps) stood elsewhere, 100-340 units.
+
+Either cartridge re-simulates (2026-11-09): the lab's own ROM runs every ghost, whichever cartridge recorded it.
+A start is the ROM's own: a start file or a downloaded start made on the other cartridge (its rom_sha256 names
+another ROM) is refused, so a JP lab rebuilds a US uploader's ghost from its own simulated reset, and the other
+way round. For a player that means: Mario follows the ghost exactly, but moving platforms and enemies may be at a
+different point in their cycle than in the recording.
 
 Every re-simulated frame's Mario (his object's drawn position and his action) is compared with the
 ghost's recorded pose; the first record where they part is reported (None: they never part). The
@@ -266,23 +274,17 @@ class GhostScenes:
         costs no more scene reads than it took."""
         first = clip.frames[0]
 
-        def base_of(words: dict):
-            """What a scene's first frame lies over: the reset of its own level, area and act, which holds the level's
-            data the game loaded outside the scene's regions and main pool (its textures; over the castle's boot
-            RAM the level drew black, the first real pictures showed, 2026-11-09); the boot where no reset is made."""
-            def base() -> np.ndarray:
-                try:
-                    return self.stages.reset(words["level"], words["area"], words["act"] or 1)
-                except stage_sim.StageError:
-                    return self.stages.boot()[0]
-            return base
+        def base_of(words: dict, detail: dict):
+            return lambda: self._scene_base(words, detail, act)
 
         if self.starts_dir is not None:
             try:
-                saved = start_frame.read_start(self.starts_dir, clip_sha)
+                saved = start_frame.read_start(self.starts_dir, clip_sha, rom=self.stages.rom)
             except start_frame.StartError:
                 saved = None
-            if saved is not None:
+            if saved is not None and saved.rom_sha256 != hashlib.sha256(self.stages.rom).hexdigest():
+                self.refusals.append({"start": GHOST_START, "reason": "This ghost's start was made on another ROM."})
+            elif saved is not None:
                 yield self._from_start_file(saved, clip_sha)
             downloaded = self._downloaded(clip, clip_sha)
             if downloaded is not None:
@@ -290,17 +292,17 @@ class GhostScenes:
         resets = []
         for path, stamp, words in self._scenes():
             if words_match(words, clip):
-                yield Start(OWN_SCENE, lambda path=path, words=words: self._read_start(path, base_of(words)),
-                            f"{OWN_SCENE}:{stamp}", {"scene": path.name})
+                detail = {"scene": path.name}
+                yield Start(OWN_SCENE, lambda path=path, words=words, detail=detail: self._read_start(
+                    path, base_of(words, detail)), f"{OWN_SCENE}:{stamp}", detail)
             elif words_reset(words, first):
                 resets.append((path, stamp, words))
         wanted = act if act is not None else next((words["act"] for _p, _s, words in resets), None)
         for path, stamp, words in resets:
             if wanted is None or words["act"] == wanted:
-                yield Start(ANOTHER_RESET,
-                            lambda path=path, words=words: self._with_clocks(self._read_start(path, base_of(words)), first),
-                            f"{ANOTHER_RESET}:{stamp}",
-                            {"scene": path.name, "act": words["act"], "seed": "the reset's own"})
+                detail = {"scene": path.name, "act": words["act"], "seed": "the reset's own"}
+                yield Start(ANOTHER_RESET, lambda path=path, words=words, detail=detail: self._with_clocks(
+                    self._read_start(path, base_of(words, detail)), first), f"{ANOTHER_RESET}:{stamp}", detail)
         chosen = wanted or 1
         detail = {"level": first.level, "area": first.area, "act": chosen, "seed": "the simulated reset's own"}
         if wanted is None:
@@ -308,13 +310,40 @@ class GhostScenes:
         yield Start(SIMULATED_RESET, lambda: self._with_clocks(self.stages.reset(first.level, first.area, chosen).copy(), first),
                     f"{SIMULATED_RESET}:{self.stages.key(first.level, first.area, chosen)}", detail)
 
+    def _scene_base(self, words: dict, detail: dict, ghost_act: int | None) -> np.ndarray:
+        """What a scene's first frame lies over: the reset of its own level, area and act, which holds the level's
+        data the game loaded outside the scene's regions and main pool (segment 0x09, WF's textures, begins at
+        0x801C1000, just past the main pool's end; over the castle's boot RAM the level drew black, the first real
+        pictures showed, 2026-11-09). The act is the scene's own first-frame gCurrActNum. Where that says nothing in
+        a course with an act selector, the ghost's star act is taken when known (`detail["act_from"]` says so),
+        else the start is refused (StageError: the next start is tried); a course without one uses act 1, the key
+        its reset has. Where no reset can be made (the castle's own levels, scene_warm.py), the boot, and `detail`
+        says why. `detail["base"]` names what it lay over."""
+        level, area, scene_act = words["level"], words["area"], words["act"]
+        if 1 <= self.stages.course_of_level(level) <= stage_sim.LAST_ACT_COURSE:
+            chosen = scene_act or ghost_act
+            if not chosen:
+                raise stage_sim.StageError("This scene names no act, and its course has six, so the level it lies "
+                                           "over cannot be chosen.")
+            if not scene_act:
+                detail["act_from"] = "the ghost's star (the scene names none)"
+        else:
+            chosen = 1
+        try:
+            ram = self.stages.reset(level, area, chosen)
+        except stage_sim.StageError as error:
+            detail.update(base="boot", base_reason=str(error))
+            return self.stages.boot()[0]
+        detail["base"] = f"reset {level}-{area}-{chosen}"
+        return ram
+
     def _downloaded(self, clip, clip_sha: str) -> Start | None:
         """A start that came with someone else's ghost (start_frame.accept_start_blob kept it apart), once it
         passes every check: its format and binding again, this ROM and Usamune build, then start_check over
         the state it would make. Its main-pool changes are never applied (start_check.py says why). A start
         that fails is skipped; its sentence goes to the scene's refused starts."""
         try:
-            saved = start_frame.read_start(self.starts_dir, clip_sha, downloaded=True)
+            saved = start_frame.read_start(self.starts_dir, clip_sha, downloaded=True, rom=self.stages.rom)
             if saved is None:
                 return None
             start_frame.bind(saved, clip.frames[0])
@@ -509,7 +538,7 @@ def capture_start(scene_path: Path, clip_bytes: bytes, starts_dir: Path, stages:
             saved.pool_runs = runs
         except stage_sim.StageError:
             pass                                  # regions alone: Mario and objects exact
-    return start_frame.write_start(starts_dir, saved)
+    return start_frame.write_start(starts_dir, saved, rom)
 
 
 # ---------------------------------------------------------------- the load check
@@ -520,10 +549,8 @@ def check_slot_load(package_path: Path, frame: int, slot: bytes, clip, stages: s
     the next frame, then the ghost's pads for LOAD_CHECK_FRAMES frames. It passes when nothing stops the
     game and Mario stands where the ghost's recorded pose has him on every frame the ghost covers.
     {"ok": bool, "reason": sentence or None, "frames": played, "compared": poses compared}."""
-    import handoff_slot  # noqa: PLC0415 - Usamune's own load at its own site
+    import handoff_slot  # noqa: PLC0415 - Usamune's own load at its own site, the build's own (frame_sim.SimBuild)
     from sm64_events.slotlibrary.usamune import BODY_BYTES, slot_address  # noqa: PLC0415
-    if stages.region() != "us":                    # handoff_slot's call site and frame_sim's frames are the US build's
-        return {"ok": False, "frames": 0, "compared": 0, "reason": stage_sim.JP_SLOTS_NOT_YET}
     reasons = start_check.check_slot(slot, stages.reference_for_slot(slot), BODY_BYTES)
     if reasons:
         return {"ok": False, "reason": reasons[0], "frames": 0, "compared": 0}
@@ -658,4 +685,6 @@ def main(argv=None) -> int:
 
 
 if __name__ == "__main__":
+    import sim_boundary  # a simulation process: no (L)GPL-3.0 library from here on
+    sim_boundary.enter()
     raise SystemExit(main())

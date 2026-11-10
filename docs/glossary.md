@@ -803,7 +803,9 @@ until cleared. A pin may repeat: `10x` asks for ten finishes under it, `10x
 streak` for ten in a row, counted from the current [[session]]'s [[attempt]]s
 since you set the pin, so each sitting starts again. A [[reset]] in the first
 3 s neither counts nor breaks a streak, and you can forgive an [[attempt]]
-that broke one.
+that broke one. An [[attempt]] touched by a [[save-state load]] never counts
+toward any goal, never breaks a streak and never plays a goal
+[[Celebration]] (2026-11-09).
 
 Capless 4 through 1 have finite goal times; Capless 5 is the unbounded floor
 and is not a selectable goal.
@@ -1348,11 +1350,14 @@ Defender's scanner it says so and the build continues.
 
 ### Third-party source archive
 
-One of the two tar files every release attaches beside its installer:
+One of the three tar files every release attaches beside its installer:
 `SM64Trainer-third-party-source-plugin.tar` (the sources our build tools make
 the [[renderer]] plugin from: the pinned GLideN64 tree, Qt, FreeType, libpng
-and zlib) and `SM64Trainer-third-party-source-ffmpeg.tar` (the sources of the
-bundled ffmpeg.exe and of PyAV's FFmpeg). Each carries a `.sha256`. The
+and zlib), `SM64Trainer-third-party-source-ffmpeg.tar` (the sources of the
+bundled ffmpeg.exe and of PyAV's FFmpeg) and
+`SM64Trainer-third-party-source-unicorn.tar` (Unicorn's source release, the
+CPU emulator in which the [[Ghost Lab]] executes the game's own code). Each carries a
+`.sha256`. The
 compiler's own runtime (GCC's, winpthreads, the MinGW-w64 C runtime) stays
 out: the GPL v3 counts it as a System Library, and its notices ship in the
 app instead. The GPL asks that the complete source come
@@ -1546,10 +1551,12 @@ scene makes a save state only before the parting record, and only after the
 slot passes a load check in the simulation (one switch: `SAVE_STATES` in
 `tools/scene_lab/ghost_resim.py`). Another player's [[ghost]] works the same
 way: the act is its [[star]]'s, and the scene names the cartridge its player
-recorded it on beside the one it ran on. The lab plays these scenes on the US
-cartridge only for now. It makes a JP [[reset]] and checks JP starts against it,
-but it cannot play a JP scene or make a JP save state yet, and it says so in
-one sentence when asked. Three of his Whomp's Fortress [[ghost]]s and two
+recorded it on beside the one it ran on. Either cartridge plays these scenes
+(2026-11-09): the lab plays every [[ghost]] on its own ROM, whichever cartridge
+recorded it, and makes JP scenes and JP save states the same way. A start is
+the ROM's own, so the lab refuses a start made on the other cartridge and
+uses the simulated [[reset]] instead: Mario follows the [[ghost]] exactly, but moving
+platforms and enemies may be at another point in their cycle. Three of his Whomp's Fortress [[ghost]]s and two
 other players' (2026-11-08): no parting record from any start. The lab writes
 the scene while it simulates, so the viewer opens it as a growing scene: the
 first picture shows in about a second once the lab has made its stage ahead
@@ -1559,8 +1566,8 @@ under half a second.
 
 - **Lives** -- `tools/scene_lab/ghost_resim.py` (from a ghost),
   `tools/scene_lab/stage_sim.py` (a stage), `tools/scene_lab/sim_scene.py`
-  (the producer feed); `src/sm64_events/server/scene_resim.py` runs them in a
-  child process; lab only
+  (the producer feed); `src/sm64_events/server/scene_resim.py` starts each in a
+  child process
 - **Not** -- an [[attempt scene]], which the cutter cuts from the live recording
 
 ### Scene evaluator
@@ -1578,8 +1585,12 @@ about 4 ms, the next task about 22 ms with the recorded answers (52 ms
 searching, while walkers need their matrices put back), and a jump to any task
 about 60 ms (2026-10-25). A viewer has its two [[state resolver]]s work out
 the next tasks while it draws this one (a second thread until they are ready).
+In the Trainer it works in a [[simulation process]] of its own, which starts as
+a scene opens, never in the server: a view costs the server under 1 ms more
+than when it ran there (2026-11-09).
 
-- **Lives** -- `tools/scene_lab/evaluator.py` (what a viewer calls); the
+- **Lives** -- `tools/scene_lab/evaluator.py` (what a viewer calls); its
+  process (`tools/scene_lab/evaluator_child.py`); the
   game-code sandbox and its proofs (`tools/scene_lab/e2_georender.py`, with
   native hooks in `tools/scene_lab/cpu_hooks.c`)
 - **Not** -- the [[renderer]], which draws a list; the evaluator makes the
@@ -1660,8 +1671,16 @@ which it cannot draw again, keeps him and says so. The page takes the keyboard w
 sidebar or a [[ghost button]]) and after a mouse click on its controls; a field that types keeps its
 keys, and Esc, leaving the window or the page lets go of every key.
 
-It is lab-only and off by default: it exists only when `SM64_SCENE_LAB` names a lab config (the ROM,
-the package folder, Project64's Plugin folder, the symbol map). Nothing starts until someone opens a
+It is on in the installed app, as its own sidebar entry in the Play group: the app needs no lab config.
+Its ROM is the [[Lab ROM]] that setup found, its maps ship with the app, and its Plugin folder is
+the one setup found. While one of these is missing, the empty stage names it in full, and while the
+Trainer has no [[Lab ROM]] it shows the ROM card with **Choose ROM file**. Once the Trainer has a ROM,
+the installed app's server starts the stage warmer by itself, with the [[Practice tab]]'s
+[[target]] first, so a new player's first [[ghost]] opens from a stage already made. The server keeps a
+list of the stages a warm could not make beside the stage cache, and later starts skip them (a click
+still tries one). A source checkout has it only when `SM64_SCENE_LAB` names a developer's lab
+config (the ROM, the package folder, Project64's Plugin folder, the symbol map); there the ROM is the
+config's own file, never copied. Nothing starts until someone opens a
 scene; the hidden [[renderer]] helper and the evaluator start then and stop on Close, after a while
 unused, when no page shows the scene, and when the server stops. The page keeps two pictures in
 flight, asks for the next as soon as one arrives, and a newer step or camera move replaces the one
@@ -1837,6 +1856,22 @@ levels, - and = change the lens while held, and so does Ctrl with the wheel. A
   only the recorded camera shows; the wheel without Ctrl, which moves the free
   camera closer instead of zooming
 
+### Lab ROM
+
+The [[Ghost Lab]]'s private copy of the [[practice ROM]], one for each version of the game: Super
+Mario 64 Usamune v1.93u for US and v1.93j for JP. The Trainer copies it from the game open in
+Project64, else finds it in Project64's ROM folders, else asks the player to choose the file once. It
+knows the ROM by the header's name and country letter and its size, never by the file name. It keeps
+the copy in the lab folder so scenes still open after Project64 closes, and it never uploads it or
+writes to Project64.
+
+- **Lives** -- the store (`src/sm64_events/scenelab/roms.py`), its route
+  (`src/sm64_events/server/lab_roms_api.py`) and the one-time step
+  (`src/sm64_events/ui/components/rompick.js`); the copy from the game reads
+  the cartridge image through `src/sm64_events/memory/pj64.py`
+- **Not** -- the [[game version]] setting, which grades and reads addresses;
+  the Lab ROM only supplies the cartridge whose code the lab plays
+
 ### Camera preset
 
 A camera you saved in the [[Ghost Lab]]'s **Cameras** strip: a name and
@@ -1921,7 +1956,10 @@ is on: one click switches to the [[Ghost Lab]], opens that [[attempt]]'s
 scene and plays it from its first [[frame]] as soon as the viewer draws that
 picture. A row the lab knows nothing about has none; a scene the lab is still
 cutting shows it disabled ("Scene finishing…") until it is ready, and a scene
-that cannot exist shows the lab's reason. [[star]] and [[segment]] rows both
+that cannot exist shows the lab's reason. An [[attempt]] with no scene of its
+own but a [[ghost]] of it opens too: the [[Ghost Lab]] makes the scene from
+that [[ghost]], as it does for a [[ghost]] picked from its own list, and plays
+it from its first [[frame]]. [[star]] and [[segment]] rows both
 have it. The same button sits on each community [[ghost]] in the Library whose
 [[star]] or [[segment]] this Trainer knows: one click turns the
 [[Ghost Lab]] to that [[star]] or [[segment]] and watches that [[ghost]], which becomes
@@ -1988,13 +2026,48 @@ out itself, so every picture is the same bytes. One child goes on [[frame]] afte
 [[frame]] while Play stays ahead; the other takes [[frame]]s further on when the
 first falls behind. Windows gives them below-normal priority; they start the
 first time the free camera moves in a whole scene and stop with it. A [[frame]]
-they cannot do, the server works out as before.
+they cannot do, the evaluator works out itself. They are [[simulation process]]es,
+started by the evaluator's own process, and hand their states to it.
 
 - **Lives** -- `tools/scene_lab/state_resolver.py`; used by the evaluator
-  (`tools/scene_lab/evaluator.py`); started and closed with the scene
+  (`tools/scene_lab/evaluator.py`) in its process
+  (`tools/scene_lab/evaluator_child.py`); started and closed with the scene
   (`tools/scene_lab/scene_session.py`)
 - **Not** -- the [[picture encoder]], which compresses pictures; a resolver
   draws nothing
+
+### Simulation program
+
+SM64TrainerSim.exe: the installed app's second program, beside SM64Trainer.exe in the same folder
+(its own `_sim` folder of parts). It carries Unicorn, numpy and the Trainer code licensed
+GPL-2.0-or-later, and nothing under the GPL-3.0 or LGPL-3.0 (no PyAV, no pystray), no OpenSSL; every
+[[simulation process]] is a process of this program. Players never start it: the Trainer does, one
+process per job.
+
+- **Lives** -- `src/sm64_events/scenelab_code.py` (SIM_PROGRAM, and LAB_CHILDREN: which program
+  each child belongs to), `sim_entry.py` (its entry), `tools/build_exe.py` (sim_args, its build),
+  `tools/bundle_policy.py` (check_programs, what it may hold)
+- **Not** -- the Trainer itself, which never holds Unicorn
+
+### Simulation process
+
+A child process that executes SM64's own code under Unicorn: the [[scene
+evaluator]]'s process, its [[state resolver]]s, the save-state builder, the
+[[ghost]] re-simulation and the US/JP slot [[atlas]] builder. Unicorn is GPL-2.0-only,
+and GPL-2.0-only code cannot share a program with the GPL-3.0 libraries the
+Trainer's own process loads (PyAV's FFmpeg, pystray). So only these processes
+load Unicorn, and they never load those libraries: each refuses them from its
+first line. The Trainer code they execute is the code licensed
+GPL-2.0-or-later. In the installed app they are processes of the
+[[simulation program]], SM64TrainerSim.exe.
+
+- **Lives** -- `src/sm64_events/scenelab_code.py` (LAB_CHILDREN: the children it gives
+  SIM_PROGRAM are these processes); `tools/scene_lab/sim_boundary.py` (ENTRIES, read from that table,
+  what they never load, the Trainer modules they run);
+  `tests/test_sim_boundary.py` holds the running processes to those lists
+- **Not** -- the server or the export child, which load PyAV and ask the
+  evaluator's process for every free-camera view; nor the cutter or the stems
+  child, which execute no game code under Unicorn
 
 ### Attempt scene
 
@@ -2088,6 +2161,30 @@ the rule holds with no trainer open.
   compares over the same headers
 - **Not** -- the [[game version]] setting (US or JP), which picks addresses and
   grading, not whether the tooling is on
+
+### Course portrait
+
+The picture the Trainer shows for a course: the castle painting you jump
+into, or a texture of the course itself where there is no painting (the BBH
+Boo portrait, Peach's and Bowser's portraits for the slide and BitFS). The
+Trainer ships none of the game's own pictures (Griffin, 2026-11-09: "yes,
+let's do that if we can"). Rainbow Ride and Tick Tock Clock keep the pictures
+the Trainer always had, which are Griffin's own in-game screenshots ("we
+should use the icons we already have", `course_art.SHIPPED`). For the other
+eleven, `course_art.py` cuts each one from the player's own
+[[practice ROM]] while the app is open, checks its bytes against a pinned
+fingerprint, and keeps it in a cache folder named by the ROM's hash. Until the
+Trainer finds a ROM, the page shows a stand-in instead: our plain tile with
+the course's short name, the same size, so nothing moves when the picture
+arrives.
+
+- **Lives** -- `src/sm64_events/course_art.py` (cutting, cache, stand-in),
+  `src/sm64_events/server/course_art_api.py` (the listing and the pictures),
+  and `src/sm64_events/ui/entities.js` (the one place that builds a portrait's
+  URL)
+- **Not** -- a [[star]]'s split icon (`ui/assets/star_icons/`), which names one
+  [[star]] rather than the course; HMC, SSL, DDD and SL keep a split icon
+  because their "painting" is a pool, a water ripple or a plain wall
 
 ### Encoder helper
 
@@ -2820,15 +2917,18 @@ The game state a [[ghost]] begins from, saved with its recording. With it, the
 [[re-simulated scene]], even after the [[attempt scene]] it came from is gone:
 the [[scene state]] regions of that first record, and his own copy also keeps
 the main pool's difference from the simulated practice [[reset]] of that level
-and act. About 25 KB on his machine; about 21 KB travels, without the main-pool
-part, which no other machine applies. The trainer saves one when an [[attempt
+and act. About 24 KB on his machine; about 17 KB travels, without the main-pool
+part, which no other machine applies. The trainer keeps and sends its game data
+(.data) as its change from the ROM's boot image: the receiver's own ROM supplies the rest,
+and the lab refuses a start made on another ROM with a plain sentence. The trainer saves one when an [[attempt
 scene]] becomes ready while its recording's clip exists, and when the lab
 re-simulates a [[ghost]] from his own [[attempt scene]]. It uploads a [[community
 ghost]]'s start after the [[ghost]]'s own bytes when the cloud accepts one, at
 most 64 KiB. The cloud keeps the start in the same object as its [[ghost]],
 counts its bytes in every storage budget and deletes it with the [[ghost]]; on
 his machine a purge deletes a start when the last clip of its bytes goes. The
-cloud and the community client never read inside a start. A downloaded start
+cloud checks only a start's header before it keeps one; neither it nor the
+community client unpacks the game state inside. A downloaded start
 came from another player's trainer, so its owner checks its size, shape and
 binding to the [[ghost]]'s first record, keeps it apart from his own, and the
 lab checks every pointer in it against his ROM before it simulates anything. A
@@ -2944,11 +3044,14 @@ the in-game input display; saving it never changes the input comparison.
 
 The Settings section that shows how much space [[ghost]] files use on this
 computer and frees it. One button deletes every [[ghost]] except [[PB ghost]]s
-(each [[personal best]]'s latest save, per [[strategy]] and ROM), [[saved
-ghost]]s, [[template track]] [[run]]s and [[imported ghost]]s; the other deletes
+(every [[personal best]] he ever set, per [[strategy]] and ROM: the current one
+and each one it beat), [[saved ghost]]s, [[template track]] [[run]]s and
+[[imported ghost]]s; the other deletes
 those too. A [[ghost]] counts once however many files it has: an [[attempt scene]],
 the committed recording and its [[playback copy]], the local population's row,
-a downloaded [[community ghost]], an imported one. Neither button deletes a
+a downloaded [[community ghost]], an imported one, and the scene the [[Ghost Lab]]
+made from its recording (about 3 MB; the [[practice log]] makes each [[PB ghost]]'s
+ahead), which "keep PBs" keeps with its [[ghost]]. Neither button deletes a
 file a pending upload names, a [[run]] still owed its admission, or the recording
 that keeps a [[run]] with no [[strategy]] through the startup prune; the purge
 skips and counts a [[ghost]] in use right now (racing, open in the [[Ghost Lab]]).
@@ -2959,7 +3062,8 @@ broadcasts `ghost_files_changed`, and the [[ghost button]]s and the [[lineup]] r
 - **Lives** — the purges and what each keeps (`src/sm64_events/ghost/storage.py`);
   each kind's holdings and delete in its owner (`tools/scene_lab/attempt_scenes.py`,
   `src/sm64_events/replay/service.py`, `src/sm64_events/ghost/population.py`,
-  `src/sm64_events/community/cache.py`, `src/sm64_events/ghost/sharing.py`); the
+  `src/sm64_events/community/cache.py`, `src/sm64_events/ghost/sharing.py`,
+  `src/sm64_events/server/scene_resim.py`); the
   routes (`src/sm64_events/server/ghost_api.py`); the section
   (`src/sm64_events/ui/components/ghoststorage.js`)
 - **Not** — the [[recorder]]'s rolling pose archive, which a PB save reads and
@@ -3782,9 +3886,16 @@ new [[target]] records its first [[attempt]]. A Bowser course's Reds/Pipe pair i
 the worked example: the reds [[star]] is a [[subsection]] of its paired
 pipe-entry [[segment]], so grabbing it draws its own card nested inside the
 movement's rather than beside it — never a toggle hiding either half.
+It hides the [[attempt]]s that ended in a [[reset]] or a [[death]] until you choose
+to show them in its settings. Its **PBs only** switch turns the log to every
+[[session]], keeps every card in its place and lists in each one only the
+[[attempt]]s that set a
+[[personal best]] when they ran, newest first: that [[target]]'s whole
+[[personal best]] history, each with its [[Ghost button]].
 
 - **Lives** — the log
-  (`src/sm64_events/ui/components/practicelog.js`)
+  (`src/sm64_events/ui/components/practicelog.js`); its remembered choices
+  (`src/sm64_events/ui/components/practice.js`)
 
 ### Book mark
 

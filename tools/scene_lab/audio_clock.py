@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Runs in the simulation program (SM64TrainerSim.exe); licenses/README.md lists its GPL-2.0-or-later code.
 """Map each presented picture to a sample of the source's own audio (M4 E4-audio).
 
 Two clocks meet here. The scene tap stamps every present with Project64's

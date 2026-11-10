@@ -10,6 +10,15 @@ export const alice='10000000-0000-4000-8000-000000000001',bob='10000000-0000-400
 export const target={kind:'star',entity_key:'1-0',name:'Fixture star'};
 const entries=[{target,clock:'igt',game_version:'us',strategies:[{name:'Standard',cutoffs:[{step:0,frames:1000},{step:1,frames:200},{step:2,frames:50}]}],overall_cutoffs:[{step:0,frames:1000},{step:1,frames:200},{step:2,frames:50}]}];
 export const catalog={v:1,generation:digest(canonical(entries)),entries};
+// A real ghost start the trainer's encoder wrote (test/starts, from tests/test_ghost_start_frame.py: zeros and
+// a stand-in ROM, no game bytes), named for the ghost whose raw bytes hash to rawSHA256. The name is the same
+// length in the header, so the packed payload after it is unchanged.
+export function startFor(rawSHA256,version=3){
+  const bytes=Buffer.from(readFileSync(new URL('./starts/start-v'+version+'.bin',import.meta.url)));
+  const named=Buffer.from('ab'.repeat(32)),at=bytes.indexOf(named);
+  if(at<0||bytes.indexOf(named,at+1)>=0)throw new Error('the fixture start names its ghost exactly once');
+  Buffer.from(rawSHA256).copy(bytes,at);return bytes;
+}
 export class LocalD1{
   constructor(){this.sqlite=new DatabaseSync(':memory:');for(const migration of ['0001_community.sql','0002_friend_beta.sql','0003_auth_entry_budget.sql','0004_reusable_beta_invitation.sql','0005_library_discovery.sql','0006_player_progress.sql','0007_player_recording_epoch.sql','0008_ghost_start.sql'])this.sqlite.exec(readFileSync(new URL('../migrations/'+migration,import.meta.url),'utf8'));}
   prepare(sql){const db=this.sqlite;let args=[];const query={bind(...v){args=v;return query;},async first(){return db.prepare(sql).get(...args)||null;},async all(){return {results:db.prepare(sql).all(...args)};},execute(){const result=db.prepare(sql).run(...args);return {success:true,meta:{changes:result.changes}};},async run(){return query.execute();}};return query;}

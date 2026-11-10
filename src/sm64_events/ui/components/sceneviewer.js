@@ -109,6 +109,7 @@ import { SceneSound, syncWords } from "./sceneaudio.js";
 import { RecordBar } from "./scenerecord.js";
 import { CameraPresets, CameraSlots, placeKey, placeOf, presetCamera } from "./scenepresets.js";
 import { RecordingSwitch } from "./scenerecording.js";
+import { RomPick } from "./rompick.js";
 import { heardInto, pictureAt, recordedTimes } from "./sceneclock.js";
 import { CinematicBar, CinematicSettings, orbitFolded, orbitPhase, rigChanged, rigHint, rigName, rigRequest, seenOnScreen,
   startRig } from "./scenerigs.js";
@@ -1937,12 +1938,43 @@ function MoreMenu({ link, status, opening, open, tuning, setTuning }) {
   </span>`;
 }
 
-// What the bar says on its one line: an error, why the stage is missing, or how the last scene ended.
+// What the bar says on its one line: an error, why the stage is missing, or how the last scene ended. While the
+// lab cannot open anything yet, the empty stage says why in full (LabSetup), so the bar says nothing: one place
+// says it.
 function barNote(link, status, stageNote) {
   if (link.error) return { text: link.error, bad: true };
-  if (stageNote) return { text: stageNote, bad: false };
+  if (stageNote && !(status?.ready === false && !link.scene)) return { text: stageNote, bad: false };
   if (!link.scene && status?.ended) return { text: status.ended.message, bad: false };
   return null;
+}
+
+// What the empty stage says while the lab cannot open anything yet (D6: the tab shows why, never hides): in the
+// installed app with no ROM found, the ROM card (rompick.js: the store's whole sentence, the file pick, and the
+// found line once the game is open in Project64); otherwise each problem the lab names, in full (the bar's one
+// line cuts a long sentence). Asked only while the lab is not ready (a ready lab never asks for the ROM routes); a
+// developer's lab has no ROM routes (404), so it shows only the problems.
+function useRomCard() {
+  const [needed, setNeeded] = useState(false);
+  useEffect(() => {
+    let live = true;
+    getJSON("/api/scene-lab/roms")
+      .then((answer) => { if (live) setNeeded(!Object.values(answer?.regions || {}).some((region) => region?.found)); })
+      .catch(() => { if (live) setNeeded(false); });
+    return () => { live = false; };
+  }, []);
+  return needed;
+}
+
+function LabSetup({ status, onFound }) {
+  const romCard = useRomCard();
+  const [found, setFound] = useState(false);
+  if (romCard && !found) {
+    return html`<div class="ghost-lab-setup"><${RomPick} region="us"
+      onFound=${() => { setFound(true); onFound(); }} /></div>`;
+  }
+  const problems = status.problems || [];
+  if (!problems.length) return null;
+  return html`<div class="ghost-lab-setup">${problems.map((problem) => html`<p class="ghost-lab-setup-line">${problem}</p>`)}</div>`;
 }
 
 // The Ghost Lab's one bar: the stage picker, the run you watch, a note, the scene recording's sign, More and
@@ -2068,18 +2100,19 @@ function useStageChoice(link, open, close) {
 // while the rest is built). `building` says how far, `stop` ends it (the scene keeps what it has). A newer
 // watch, or any other open, takes over from an older one (the lab cancels the older build). The opened
 // scene carries the run it shows (`watching`) and, made from a ghost, that ghost's ref, which its save
-// states are made from.
+// states are made from. `play`: it plays from its first frame once that picture is drawn (the Practice
+// log's Ghost button).
 function useWatch(link, open) {
   const [pending, setPending] = useState(null);           // {ref, name, serial}: its /open has not answered
   const progress = useBuildProgress(!!pending), stopped = useRef(0), serial = useRef(0);
-  async function watch(item, target) {
+  async function watch(item, target, { play = false } = {}) {
     const mine = ++serial.current, hush = () => stopped.current === mine;
     setPending({ ref: item.ref, name: item.player, serial: mine });
     const watching = sceneGhost(item);
     let scene = item.attempt != null
-      ? await open({ attempt: item.attempt }, { quiet: true, adopt: { watching, ghost: null } }) : null;
+      ? await open({ attempt: item.attempt }, { play, quiet: true, adopt: { watching, ghost: null } }) : null;
     const made = !scene && !hush() && mine === serial.current;
-    if (made) scene = await open({ ghost: item.ref }, { quiet: hush, adopt: { watching, ghost: item.ref } });
+    if (made) scene = await open({ ghost: item.ref }, { play, quiet: hush, adopt: { watching, ghost: item.ref } });
     if (scene) keep(scene, { target, watching: scene.watching, ghost: scene.ghost });
     setPending((now) => (now?.serial === mine ? null : now));
     return scene;
@@ -2126,8 +2159,34 @@ function shareWithParts(link, target, t) {
   link.feed = t?.feed;
 }
 
+// The Practice log's Ghost button: the attempt's recorded take, else the scene made from its ghost
+// recording (GET /ghost?attempt=: the lab's ghost row for it), watched the way a ghost row is; both play
+// from the first frame. With neither, the lab's reason shows as a refused open's does: the ghost row's
+// reason, or (a lab with no ghost rows) the take's own refusal, asked again aloud. `current()` is false
+// once a newer choice of stage or ghost has replaced this one.
+async function showAttempt(attempt, named, { link, open, watch, setTarget, current }) {
+  const take = async (quiet) => {
+    const scene = await open({ attempt }, { play: true, quiet });
+    if (scene) {
+      setTarget(scene.target || named);
+      keep(scene, { target: scene.target || named });
+    }
+    return scene;
+  };
+  if ((await take(true)) || !current()) return null;
+  let answer = null;
+  try {
+    answer = await getJSON(`${ROOT}/ghost?attempt=${encodeURIComponent(attempt)}`);
+  } catch { /* a lab with no ghost rows: the take's refusal below says why */ }
+  if (!current()) return null;
+  if (answer?.item) return watch(answer.item, named, { play: true });
+  if (answer?.reason) return link.fail(answer.reason);
+  return take(false);
+}
+
 // `t.sceneLab.intent` (app.js): the Practice log's Ghost button names an attempt; the Ghost Lab opens
-// that attempt's scene and plays it, once per click. A Library row's Ghost button names a ghost
+// that attempt's scene and plays it, once per click (with no recorded take, the scene made from its
+// ghost recording, watched like a ghost row). A Library row's Ghost button names a ghost
 // ({recording, entity, strat}): the Ghost Lab turns to that star or segment and watches that ghost (it
 // becomes the scene, made from the ghost when he has no scene of it). The stage picker (scenestage.js)
 // starts on the target of the scene on screen, else, with none open, on what the Practice log has
@@ -2175,11 +2234,8 @@ export function SceneViewer({ t }) {
     setStageNote(null);
     const named = stageDefault({ attempt: intent.attempt }, t?.view);
     setTarget(named);
-    open({ attempt: intent.attempt }, { play: true }).then((scene) => {
-      if (!scene) return;
-      setTarget(scene.target || named);
-      keep(scene, { target: scene.target || named });
-    });
+    const mine = asked.current;
+    showAttempt(intent.attempt, named, { link, open, watch, setTarget, current: () => mine === asked.current });
   }, [intent]);
   // A Library row's Ghost button: its star or segment in the picker, then that ghost watched.
   async function showGhost(ghost) {
@@ -2217,6 +2273,8 @@ export function SceneViewer({ t }) {
       ${tuning && html`<${TunePanel} link=${link} />`}`
       : html`<section class="practice-card ghost-lab-empty">
         ${building ? html`<${BuildProgress} build=${building} stop=${stop} />` : html`<${Icon} name="ghost" size=${28} />`}
+        ${!building && status?.ready === false && html`<${LabSetup} status=${status}
+          onFound=${() => refresh.current().then(() => target && choose(target))} />`}
       </section>`}
   </div>`;
 }

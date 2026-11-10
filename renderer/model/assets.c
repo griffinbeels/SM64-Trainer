@@ -1,5 +1,6 @@
 #include "internal.h"
 #include "load_tex_data.h"
+#include "rom_data.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -23,16 +24,28 @@
  * which JP keeps at its decomp address (the Mips shift in HELD_MODELS), so a
  * JP texture offset in that block is 0xF0 lower. The model itself is the same
  * graph and lists on both cartridges. */
-static const struct { uint32_t us, jp; int32_t jp_shift; } jp_blocks[] = {
-    {ANIM_BASE, 0x4e9fa0u, 0},      /* Mario's animation table */
-    {TEXTURE_BASE, 0x112b50u, 0},   /* group0 (segment 4): Mario, his particles */
-    {COMMON1_BASE, 0x1ff740u, 0},   /* common1 (segment 3) */
-    {0x1f2200u, 0x1f0530u, 0},      /* common0 (segment 8): Bob-omb, Chuckya, boxes, shell */
-    {0x160670u, 0x15ea70u, 0},      /* penguin's group */
-    {0x134d20u, 0x133120u, 0},      /* King Bob-omb's group */
-    {0x1d8310u, 0x1d6660u, -0xf0},  /* group 6: Mips */
-    {0x12a7e0u, 0x128be0u, 0},      /* Hoot's group */
-    {0x1521d0u, 0x1505d0u, 0},      /* Ukiki's group */
+/* The raw (uncompressed) geo segments follow each group's MIO0 block, where
+ * the level scripts' LOAD_RAW commands place them in both ROMs (every
+ * LOAD_RAW/LOAD_MIO0 listed in Usamune US and SM64_USAMUNE_v1.93j,
+ * 2026-11-09); span is each one's exact size, the same in both. A row of
+ * the model's data (rom_data.h) names its block by the US offset. */
+static const struct { uint32_t us, jp; int32_t jp_shift; uint32_t span; int raw; } jp_blocks[] = {
+    {ANIM_BASE, 0x4e9fa0u, 0, 0, 0},       /* Mario's animation table */
+    {TEXTURE_BASE, 0x112b50u, 0, TEXTURE_SPAN, 0}, /* group0 (segment 4): Mario, his particles */
+    {COMMON1_BASE, 0x1ff740u, 0, COMMON1_SPAN, 0}, /* common1 (segment 3) */
+    {0x1f2200u, 0x1f0530u, 0, HELD_SEGMENT_SPAN, 0}, /* common0 (segment 8): Bob-omb, Chuckya, boxes, shell */
+    {0x160670u, 0x15ea70u, 0, HELD_SEGMENT_SPAN, 0}, /* penguin's group */
+    {0x134d20u, 0x133120u, 0, HELD_SEGMENT_SPAN, 0}, /* King Bob-omb's group */
+    {0x1d8310u, 0x1d6660u, -0xf0, HELD_SEGMENT_SPAN, 0}, /* group 6: Mips */
+    {0x12a7e0u, 0x128be0u, 0, HELD_SEGMENT_SPAN, 0}, /* Hoot's group */
+    {0x1521d0u, 0x1505d0u, 0, HELD_SEGMENT_SPAN, 0}, /* Ukiki's group */
+    {0x1279b0u, 0x125db0u, 0, 0x2e30u, 1}, /* group0 geo (segment 0x17): Mario */
+    {0x2008d0u, 0x1fec00u, 0, 0xb40u, 1},  /* common0 geo (segment 0x0F) */
+    {0x1656e0u, 0x163ae0u, 0, 0x370u, 1},  /* penguin's group geo (0x0C) */
+    {0x13b5d0u, 0x1399d0u, 0, 0x340u, 1},  /* King Bob-omb's group geo (0x0C) */
+    {0x1e4bf0u, 0x1e2f20u, 0, 0x600u, 1},  /* group 6 geo (0x0D): Mips */
+    {0x132850u, 0x130c50u, 0, 0x410u, 1},  /* Hoot's group geo (0x0C) */
+    {0x1602e0u, 0x15e6e0u, 0, 0x390u, 1},  /* Ukiki's group geo (0x0C) */
 };
 static const struct { unsigned kind, cell; uint32_t segment, offset; } held_textures[] = {
     SG_HELD_TEXTURES
@@ -71,7 +84,7 @@ static int cartridge_block(const uint8_t *rom, size_t bytes, uint32_t us, uint32
  * encoder, filesystem utility, directory enumerator or audio loader is linked.
  * The caller has checked that span bytes from base lie inside the ROM.
  */
-static int mio0(const uint8_t *rom, uint32_t base, uint32_t span, uint8_t **out, uint32_t *out_size)
+int sg_mio0(const uint8_t *rom, uint32_t base, uint32_t span, uint8_t **out, uint32_t *out_size)
 {
     const uint8_t *src = rom + base;
     uint32_t size, compressed, raw, flags = 16, written = 0;
@@ -127,6 +140,25 @@ static int blit(struct sg_model *model, unsigned tile, const uint8_t *decoded, u
     return SG_OK;
 }
 
+/* A block the model's data rows name (rom_data.c), by its US offset: a raw
+ * geo segment in place, or a MIO0 block decoded into *owned (caller frees). */
+int sg_rom_block(const uint8_t *rom, size_t bytes, uint32_t us, const uint8_t **data, uint8_t **owned,
+                 uint32_t *size, int32_t *shift)
+{
+    unsigned i;
+    uint32_t at;
+    *data = NULL; *owned = NULL; *size = 0; *shift = 0;
+    for (i = 0; i < sizeof(jp_blocks) / sizeof(jp_blocks[0]); ++i) {
+        if (jp_blocks[i].us != us || !jp_blocks[i].span) continue;
+        if (!cartridge_block(rom, bytes, us, jp_blocks[i].span, &at, shift)) return SG_INVALID_ROM;
+        if (jp_blocks[i].raw) { *data = rom + at; *size = jp_blocks[i].span; return SG_OK; }
+        if (sg_mio0(rom, at, jp_blocks[i].span, owned, size) != SG_OK) return SG_INVALID_ROM;
+        *data = *owned;
+        return SG_OK;
+    }
+    return SG_INVALID_ROM;
+}
+
 /* Held objects' textures; a kind whose segment or texture fails leaves its
  * cells empty and is marked unavailable rather than refusing Mario. */
 static void held_cells(struct sg_model *model, const uint8_t *rom, size_t bytes)
@@ -142,7 +174,7 @@ static void held_cells(struct sg_model *model, const uint8_t *rom, size_t bytes)
             decoded = NULL;
             segment = held_textures[i].segment;
             if (!cartridge_block(rom, bytes, segment, HELD_SEGMENT_SPAN, &at, &shift)
-                    || mio0(rom, at, HELD_SEGMENT_SPAN, &decoded, &size) != SG_OK) decoded = NULL;
+                    || sg_mio0(rom, at, HELD_SEGMENT_SPAN, &decoded, &size) != SG_OK) decoded = NULL;
         }
         if (!decoded || (int64_t)held_textures[i].offset + shift < 0
                 || blit(model, held_textures[i].cell, decoded, size,
@@ -202,7 +234,7 @@ static int textures(struct sg_model *model, const uint8_t *rom, size_t bytes)
     uint8_t *decoded, *common1;
     int status;
     if (!cartridge_block(rom, bytes, TEXTURE_BASE, TEXTURE_SPAN, &at, &shift)) return SG_INVALID_ROM;
-    status = mio0(rom, at, TEXTURE_SPAN, &decoded, &size);
+    status = sg_mio0(rom, at, TEXTURE_SPAN, &decoded, &size);
     if (status != SG_OK) return status;
     for (tile = 0; tile < SG_MARIO_ATLAS_CELLS; ++tile)
         if (blit(model, tile, decoded, size, (size_t)mario_tex_offsets[tile]) != SG_OK) goto bad;
@@ -212,7 +244,7 @@ static int textures(struct sg_model *model, const uint8_t *rom, size_t bytes)
      * the flame (common1) is added only when its own lists read too. */
     if (sg_particles_load(&model->particles, decoded, size) == SG_OK &&
         cartridge_block(rom, bytes, COMMON1_BASE, COMMON1_SPAN, &common1_at, &shift) &&
-        mio0(rom, common1_at, COMMON1_SPAN, &common1, &common1_size) == SG_OK) {
+        sg_mio0(rom, common1_at, COMMON1_SPAN, &common1, &common1_size) == SG_OK) {
         sg_particles_add_common1(&model->particles, common1, common1_size);
         free(common1);
     }
@@ -271,13 +303,21 @@ static int animations(struct sg_model *model, const uint8_t *rom, size_t bytes)
     return SG_OK;
 }
 
-int sg_assets_load(struct sg_model *model, const uint8_t *rom, size_t bytes)
+/* write: fill the model's data rows (rom_data.h), which only the open runtime
+ * reads; validation (write 0) checks them without touching them. A held kind
+ * whose rows do not read is unavailable, like one whose textures did not. */
+int sg_assets_load(struct sg_model *model, const uint8_t *rom, size_t bytes, int write)
 {
     int status;
+    unsigned held_failed = 0;
     if (!rom || bytes != 8u * 1024u * 1024u || be32(rom) != 0x80371240u) return SG_INVALID_ROM;
     status = textures(model, rom, bytes);
     if (status != SG_OK) return status;
-    return animations(model, rom, bytes);
+    status = animations(model, rom, bytes);
+    if (status != SG_OK) return status;
+    status = sg_rom_data_load(rom, bytes, write, &held_failed);
+    model->held_available &= ~held_failed;
+    return status;
 }
 
 void sg_assets_free(struct sg_model *model)
@@ -306,7 +346,7 @@ int32_t sg_model_validate_rom(const uint8_t *rom, size_t bytes)
 #endif
     temporary = calloc(1, sizeof(*temporary));
     if (!temporary) return SG_OUT_OF_MEMORY;
-    status = sg_assets_load(temporary, rom, bytes);
+    status = sg_assets_load(temporary, rom, bytes, 0);
     sg_assets_free(temporary);
     free(temporary);
     return status;

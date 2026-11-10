@@ -426,6 +426,52 @@ def test_stages_are_warmed_in_his_order_once_each_in_the_background(recording, t
     assert all(background for _key, background in spawned)
 
 
+def test_a_pb_ghosts_scene_is_made_ahead_after_its_stage_and_a_click_waits_for_it(recording, tmp_path, monkeypatch):
+    """His ask, 2026-11-09: "I want to be able to see all of my PBs ready immediately as ghosts when I open the
+    app." A PB ghost's scene is queued after its own stage, built by ghost_resim's build command in the idle
+    background child from a copy of its clip (gone once the child ends); a click on that ghost waits for that
+    build instead of starting a second one; a scene made before is never queued again."""
+    import hashlib
+    from sm64_events.memory import version_probe
+    from sm64_events.server.scene_resim import SceneResim
+    spawned, warmed, built = [], threading.Event(), threading.Event()
+    warmed.set()                                             # stages end at once; the ghost's build waits
+
+    def spawn(args, *, background=False):
+        clip = Path(_value(args, "--clip")) if "--clip" in args else None
+        spawned.append((args[0], background, clip.read_bytes() if clip else None, args))
+        return WarmChild(built if args[0] == "build" else warmed)
+    monkeypatch.setattr(SceneResim, "_spawn", staticmethod(spawn))
+    monkeypatch.setattr(version_probe, "version_from_header", lambda header: "us")
+    runner = Runner(recording["package"])
+    app, lab = _lab(recording, tmp_path, monkeypatch, runner)
+    clip = tmp_path / "pb.ghost"
+    clip.write_bytes(CLIP)
+    sha = hashlib.sha256(CLIP).hexdigest()
+    with TestClient(app) as client:
+        assert lab.resim.prebuild(clip, sha, {"kind": "star", "entity_key": "2-2"}) is True
+        for _ in range(500):
+            if any(kind == "build" for kind, *_rest in spawned):
+                break
+            threading.Event().wait(0.01)
+        (first, *_), build = spawned[0], next(row for row in spawned if row[0] == "build")
+        assert first == "warm" and _value(spawned[0][3], "--level") == "24" and _value(spawned[0][3], "--act") == "3"
+        assert build[1] is True and build[2] == CLIP and _value(build[3], "--act") == "3"
+        copy = Path(_value(build[3], "--clip"))
+        assert copy.parent == tmp_path / "lab" / "resim"
+        threading.Timer(0.3, built.set).start()
+        began = time.monotonic()
+        opened = client.post("/api/scene-lab/open", json={"ghost": "ghost-1"})
+        assert opened.status_code == 200 and time.monotonic() - began >= 0.25    # it waited for the build ahead
+        assert not copy.exists()
+        (lab.resim.cache() / f"ghost-{sha[:16]}-own_scene-1.json").write_text("{}", encoding="utf-8")
+        assert lab.resim.prebuild(clip, sha, {"kind": "star", "entity_key": "2-2"}) is False   # made before
+        client.post("/api/scene-lab/close")
+        lab.resim.warmer.stop()
+    # Its stage, then its scene, and nothing else: the Practice log never starts the Ghost Lab's route and rest.
+    assert [kind for kind, *_rest in spawned] == ["warm", "build"]
+
+
 def test_a_click_joins_the_warm_of_its_own_stage_and_a_slow_game_holds_warming_back():
     """A click on a ghost of a stage being warmed waits for that warm (raised to his priority) instead of making
     the stage again; while his game runs below its pace no warm starts."""

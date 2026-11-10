@@ -404,8 +404,10 @@ function Inspector() {
   });
   const [status, setStatus] = useState(null);
   const [sort, setSort] = useState("newest");
-  const [hideResets, setHideResets] = useState(false);
+  // The app's own defaults (practice.js::usePracticeLogPreferences).
+  const [hideResets, setHideResets] = useState(true);
   const [hideSavestates, setHideSavestates] = useState(true);
+  const [onlyPbs, setOnlyPbs] = useState(false);
 
   useEffect(() => { localStorage.setItem(STORE_KEY, encodeTuning(values)); }, [values]);
   // Commit to the active slot SYNCHRONOUSLY, in the render body -- not in a
@@ -425,8 +427,8 @@ function Inspector() {
   const tuningKey = encodeTuning(values);
 
   const ui = useMemo(() => ({
-    sort, hideResets, hideSavestates, setSort, setHideResets, setHideSavestates,
-  }), [sort, hideResets, hideSavestates]);
+    sort, hideResets, hideSavestates, onlyPbs, setSort, setHideResets, setHideSavestates, setOnlyPbs,
+  }), [sort, hideResets, hideSavestates, onlyPbs]);
   const pbDemo = usePbDemo();
   const view = useMemo(() => fixtureView(pbDemo.demo),
     [pbDemo.demo.extra, pbDemo.demo.crowns]);

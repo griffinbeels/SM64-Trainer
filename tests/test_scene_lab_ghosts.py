@@ -287,7 +287,8 @@ def test_the_stage_is_his_fastest_finished_attempt_of_the_strategy_with_a_scene(
         assert (anyone["attempt"], anyone["target"]["strat"], len(anyone["scenes"])) == (14, "Single Jump", 4)
         nothing = client.get("/api/scene-lab/stage", params={"course": 2, "star": 3}).json()
         assert (nothing["attempt"], nothing["time"], nothing["scenes"]) == (None, None, [])
-        assert nothing["reason"] == "No saved scene for this strategy yet: play it with the scene lab on."
+        assert nothing["reason"] == ("No saved scene for this strategy yet. Play it with scene recording on, and its scene "
+                                 "appears here.")
 
 
 def test_a_stage_with_no_finished_attempt_is_the_newest_scene_and_segments_name_themselves(lab, world):
@@ -536,6 +537,45 @@ def test_the_library_ghost_button_finds_one_recording_by_its_id_and_it_plays(lab
         assert ask("not-an-id") == {"item": None, "reason": scene_ghosts.NOT_HELD}
         assert client.get("/api/scene-lab/ghost", params={"recording": kim, "course": 2}).status_code == 422
     assert server.ghosts.load_ghost(item["ref"])["player"] == "Kim"
+
+
+def test_every_practice_log_row_with_a_ghost_offers_it_with_or_without_a_take(lab, world):
+    """His ask, 2026-11-09: "I can't see my ghost for my most recent PB ... I should be able to see all of my
+    PB ghosts." A run with a recorded take answers its take; a run with no take but a perfect ghost answers
+    "ghost" (the Ghost Lab makes its scene from that ghost), and a PB among them gets its scene made ahead; a
+    run whose poses are not saved, or not all known, or a reset, answers nothing."""
+    old_pb, taken, no_poses, unknown_pads, reset = (run(120, igt=303), run(121, igt=312, minutes=1),
+                                                    run(122, igt=320, minutes=2), run(123, igt=330, minutes=3),
+                                                    run(124, outcome="reset", minutes=4))
+    plain = run(125, igt=340, minutes=5)
+    world.journal.rows.update({row.id: row for row in (old_pb, taken, no_poses, unknown_pads, reset, plain)})
+    world.journal.pb_attempt_ids = lambda: {120, 121}                  # his PB progression on this star
+    clip = world.replay.commit(120)
+    world.replay.commit(121)
+    world.replay.commit(123, pads=False)
+    world.replay.commit(125)
+    app, server, cutters = _app(lab, world)
+    warmed, made = [], []
+    server.resim.warm = lambda course, star, tier=None: warmed.append((course, star, tier))
+    server.resim.prebuild = lambda path, sha256, target: made.append((Path(path).name, sha256, target))
+    with TestClient(app) as client:
+        _scenes(server, cutters, taken)
+        answer = client.get("/api/scene-lab/attempt-scenes", params={"ids": "120,121,122,123,124,125"}).json()["scenes"]
+        assert answer == {"120": {"state": "ghost"}, "121": {"state": "ready", "seconds": 9.7, "growing": False},
+                          "125": {"state": "ghost"}}
+        assert warmed == []                    # the Practice log starts no Ghost Lab warming of its own
+        # Only a PB with no take gets its stage and scene made ahead (121 has its take; 125 set no PB).
+        assert made == [(clip.name, json.loads(clip.with_suffix(".json").read_text())["sha256"],
+                         {"kind": "star", "entity_key": "2-2"})]
+        item = client.get("/api/scene-lab/ghost", params={"attempt": 120}).json()["item"]
+        assert (item["attempt"], item["time"], item["strat"]) == (120, '10"10', "Standard")
+        assert server.ghosts.load_ghost(item["ref"])["player"] == item["player"]
+        refused = client.get("/api/scene-lab/ghost", params={"attempt": 122}).json()
+        assert refused == {"item": None, "reason": scene_ghosts.NOT_SAVED}
+        assert client.get("/api/scene-lab/ghost", params={"attempt": 999}).json() == {
+            "item": None, "reason": scene_ghosts.NO_RUN}
+        assert client.get("/api/scene-lab/ghost", params={"attempt": 120, "recording": "x"}).status_code == 422
+        assert client.get("/api/scene-lab/ghost").status_code == 422
 
 
 # ---------------------------------------------------------------- the renderer's recordings

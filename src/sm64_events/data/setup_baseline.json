@@ -100,6 +100,15 @@
       "fix": "You use a different controller plugin. That is fine. We only keep a note of it.",
       "unknown": "We could not read which controller plugin Project64 uses. That is fine.",
       "link": "https://wermi.neocities.org/emuguide/raphnetraw/#raphnetraw-for-project64"
+    },
+    {
+      "id": "lab_rom",
+      "importance": "recommended",
+      "label": "Usamune ROM for the Ghost Lab",
+      "tested": "Found: v1.93u (US)",
+      "fix": "The Ghost Lab needs Super Mario 64 Usamune v1.93u: start that game once in Project64 while the Trainer is open, or choose its ROM file.",
+      "unknown": "We could not check for the Ghost Lab's copy of your Usamune ROM.",
+      "link": "https://wermi.neocities.org/emuguide/getting_game/"
     }
   ],
   "links_read": "Links and downloads are the ones the Wermi guide itself gives, read 2026-10-30; the trainer never downloads or bundles them."

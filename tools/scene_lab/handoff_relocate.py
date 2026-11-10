@@ -159,7 +159,7 @@ def ride(session: Path, k: int, j: int, follow_frames: int, slot: int, reset_at:
             if reset_at == frame.index:
                 before_reset = cpu.u32(slots.MARIO_OBJECT)
             ok = cpu.run_frame(replay.begin)
-            replay.begin = sim.RESUME
+            replay.begin = cpu.resume
             if not ok:
                 raise SystemExit(f"frame {frame.index}: {cpu.violations[:3]}")
             cpu.scheduler_model()
@@ -202,7 +202,7 @@ def press_load(trip: Trip, slot_data: bytes | None, at_load=None, before_frame=N
         trip.press.press(PRESS_LOAD, 0, done)
     cpu.pending = at_site
     replay.feed(trip.frame_j)
-    seen["ran"] = cpu.run_frame(sim.RESUME)
+    seen["ran"] = cpu.run_frame()
     seen["violations"] = list(cpu.violations)
     if seen["ran"]:
         cpu.scheduler_model()
@@ -256,7 +256,7 @@ def follow_mapped(trip: Trip, place: np.ndarray, writes: dict | None = None, sti
         replay.feed(frame)
         if stick and count == 0:
             cpu.perturb("stick", 0x7F)
-        if not cpu.run_frame(sim.RESUME):
+        if not cpu.run_frame():
             return {"crashed_at": frame.index, "violations": cpu.violations[:3], "frames_ok": count, "first": first}
         cpu.scheduler_model()
         away, same = slots.mario_gap(cpu, frame)
@@ -485,7 +485,7 @@ def address(args) -> int:
                 _move_everything(cpu, place)
             replay.feed(frame)
             ok = cpu.run_frame(replay.begin)
-            replay.begin = sim.RESUME
+            replay.begin = cpu.resume
             if not ok:
                 report[name] = {"crashed_at": frame.index, "violations": cpu.violations[:3]}
                 print(f"{name}: CRASHED at {frame.index} {cpu.violations[:2]}")
@@ -582,7 +582,7 @@ def fixed_rng(args) -> int:
             cpu.pending = do_load
         replay.feed(frame)
         ok = cpu.run_frame(replay.begin)
-        replay.begin = sim.RESUME
+        replay.begin = cpu.resume
         if not ok:
             results["stopped"] = (frame.index, cpu.violations[:2])
             break

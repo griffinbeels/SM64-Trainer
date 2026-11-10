@@ -35,6 +35,7 @@ the child starts, and the rest follows at ~30 frames a second.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import logging
 import os
@@ -99,6 +100,16 @@ class Build:
                 "save_states": latest.get("save_states") or {"allowed": False, "reason": BUILDING}}
 
 
+def prebuild_key(sha256: str) -> tuple:
+    """The warmer's key for one ghost's scene made ahead: its clip's hash, as the scene cache names it."""
+    return ("ghost", sha256[:16])
+
+
+def _list_tier() -> int:
+    from sm64_events.server.scene_warm import LIST
+    return LIST
+
+
 def act_of_target(target) -> int | None:
     """The act a star ghost was played in: a course's stars 1-6 (entity_key "course-star", star from 0) are
     its acts. None for the 100-coin star, a castle star and a segment, which name no act (the build then
@@ -144,7 +155,9 @@ class SceneResim:
         self.child_lock = threading.Lock()
         self.stopped = threading.Event()
         self.building: Build | None = None            # the newest progressive build (one runs at a time)
-        self.warmer = StageWarmer(self._spawn_warm, pace=pace, route=self._route_stars)
+        self._recipe: tuple | None = None             # ((rom path, size, mtime), stage_sim.recipe): the cache's names
+        self.warmer = StageWarmer(self._spawn_warm, pace=pace, route=self._route_stars, answered=self._warm_answered,
+                                  spawn_ghost=self._spawn_prebuild, finished=self._prebuilt)
 
     # ---------------------------------------------------------------- where things live
     def starts_root(self) -> Path:
@@ -157,9 +170,15 @@ class SceneResim:
         return self.lab._lab_root() / "resim"
 
     def _config(self):
-        from sm64_events.server.scene_lab_api import LabConfig
-        config = LabConfig.load(self.lab.config_path)
+        """The lab's config with the ROM and the map a simulation needs, else ResimRefused with the sentence why (the
+        installed app's config says it in the player's words: core/lab_inputs.py)."""
+        config = self.lab.config()
+        if config.rom is None:                        # the installed app before its ROM store found one
+            raise ResimRefused(config.rom_problem)
         if config.map is None:
+            if config.in_app:
+                from sm64_events.core.lab_inputs import NO_MAP
+                raise ResimRefused(NO_MAP)
             raise ResimRefused("The lab config does not name the symbol map, which the simulation needs.")
         return config
 
@@ -306,6 +325,7 @@ class SceneResim:
         else:
             self.cancel()
             self.warmer.join(stage)                   # a warm of its own stage: wait for it rather than race it
+            self.warmer.join(prebuild_key(hashlib.sha256(clip).hexdigest()))   # its scene made ahead, the same way
             build = Build(ref, clip)
 
             def work() -> None:
@@ -426,16 +446,137 @@ class SceneResim:
         from sm64_events.server import scene_warm
         self.warmer.ask(scene_warm.stage_of(course, star), scene_warm.CURRENT if tier is None else tier)
 
-    def _spawn_warm(self, level: int, area: int, act: int) -> subprocess.Popen:
+    def prebuild(self, path: Path, sha256: str, target) -> bool:
+        """One of his PB ghosts' scene made ahead, after its stage, at the warmer's idle pace (scene_warm.ask_ghost),
+        unless that scene was made before. `path` is the clip the race plays and `sha256` its hash (run_clip's
+        manifest); a click on that ghost then joins it or reads the made scene. True when queued. Never waits."""
+        if self.stopped.is_set() or not isinstance(sha256, str) or len(sha256) != 64 or self.scene_made(sha256):
+            return False
+        stage = stage_of_target(target)
+        if stage is not None:
+            self.warmer.ask(stage, _list_tier(), then_rest=False)
+        self.warmer.ask_ghost(prebuild_key(sha256), (Path(path), sha256, act_of_target(target)), _list_tier())
+        return True
+
+    def scene_made(self, sha256: str) -> bool:
+        """Whether a scene of the ghost with this clip hash is in the cache (ghost_resim names it by that hash)."""
+        return any(self.cache().glob(f"ghost-{sha256[:16]}-*.json"))
+
+    def made_holdings(self) -> list[dict]:
+        """Every finished ghost scene in the cache, for Settings -> Ghost files (`ghost/storage.py`): {"ref" (its
+        note's name), "sha16" (its clip's hash, as ghost_resim names it), "bytes", "paths", "in_use"}. A scene
+        still growing (its .grow sidecar beside it) is not one yet and is never listed; the scene open in the
+        Ghost Lab is in use. His call, 2026-11-09: a made scene counts in its ghost and goes with it."""
+        root = self.cache()
+        if not root.is_dir():
+            return []
+        open_path = getattr(self.lab, "open_path", None)
+        found = []
+        for note in sorted(root.glob("ghost-*.json")):
+            scene = note.with_suffix(".sm64scene")
+            parts = note.stem.split("-")
+            if len(parts) < 3 or not scene.is_file() or note.with_suffix(".grow").exists():
+                continue
+            try:
+                size = note.stat().st_size + scene.stat().st_size
+            except OSError:
+                continue
+            busy = open_path is not None and Path(open_path).resolve() == scene.resolve()
+            found.append({"ref": note.name, "sha16": parts[1], "bytes": size, "paths": (str(scene), str(note)),
+                          "in_use": busy})
+        return found
+
+    def remove_made(self, refs) -> dict:
+        """Deletes these made scenes (made_holdings' refs): {"deleted": [refs], "bytes", "skipped": [refs]}. One in
+        use, or one Windows will not let go of, is skipped. A scene the warmer made ahead is not made again
+        this server run (its key stays done)."""
+        held = {row["ref"]: row for row in self.made_holdings()}
+        deleted, skipped, freed = [], [], 0
+        for ref in refs:
+            row = held.get(ref)
+            if row is None or row["in_use"]:
+                skipped.append(ref)
+                continue
+            try:
+                for path in row["paths"]:          # the scene first: a note with no scene is never read as made
+                    Path(path).unlink(missing_ok=True)
+            except OSError:
+                skipped.append(ref)
+                continue
+            deleted.append(ref)
+            freed += row["bytes"]
+        return {"deleted": deleted, "bytes": freed, "skipped": skipped}
+
+    def _spawn_prebuild(self, payload) -> subprocess.Popen:
+        """ghost_resim's `build` of one PB ghost, in the warmer's idle background child; its clip copied beside the
+        cache first (the race's file may change under it), removed again once the child ends (_prebuilt)."""
+        path, sha256, act = payload
+        config = self._config()
+        clip = self.cache() / f"prebuild-{sha256[:16]}.clip"
+        clip.parent.mkdir(parents=True, exist_ok=True)
+        data = Path(path).read_bytes()
+        if hashlib.sha256(data).hexdigest() != sha256:
+            raise ResimRefused("This ghost's recording changed after it was listed.")
+        clip.write_bytes(data)
+        args = ["build", *self._common(config), "--clip", str(clip), *self._scene_args(),
+                "--starts", str(self.starts_root())]
+        return self._spawn(args + (["--act", str(act)] if act is not None else []), background=True)
+
+    def _prebuilt(self, key: tuple) -> None:
+        if key[0] == "ghost":
+            (self.cache() / f"prebuild-{key[1]}.clip").unlink(missing_ok=True)
+
+    def _spawn_warm(self, level: int, area: int, act: int) -> subprocess.Popen | None:
+        """The warm child for that stage, or None when the stage cache already holds what it would make: each stage
+        is asked once per server run, and before 2026-11-09 every one of the 102 started a child (an app start, in
+        the installed app) only to find its files made. A stage a warm could not make on an earlier run is skipped
+        too (stage_cache.failed): a build he clicks still tries it."""
         config = self._config()
         with Path(config.rom).open("rb") as handle:
             header = handle.read(0x40)
         from sm64_events.memory.version_probe import version_from_header
         if version_from_header(header) is None:
             raise ResimRefused("The lab's ROM is not a cartridge a stage can be made from.")
+        if self._stage_made(Path(config.rom), level, area, act) or self._stage_failed(level, area, act):
+            return None
         args = ["warm", *self._common(config), "--level", str(level), "--area", str(area), "--act", str(act),
                 *self._scene_args()]
         return self._spawn(args, background=True)             # the warmer owns it: it ends it at shutdown
+
+    def _stage_made(self, rom: Path, level: int, area: int, act: int) -> bool:
+        """Whether the stage cache holds that stage's boot and reset already (tools/scene_lab/stage_sim.py `made`, the
+        names a warm writes). The ROM's recipe is read once per file version: it hashes the whole cartridge."""
+        recipe = self._recipe_of(rom)
+        return recipe is not None and self._stage_cache().made(self.cache() / "stages", recipe, level, area, act)
+
+    @staticmethod
+    def _stage_cache():
+        """tools/scene_lab/stage_cache.py: the cache's names without the simulation (the server never imports it)."""
+        from sm64_events.server.scene_lab_api import _lab_module
+        return _lab_module("stage_cache")
+
+    def _recipe_of(self, rom: Path) -> str | None:
+        stat = rom.stat()
+        key = (str(rom), stat.st_size, stat.st_mtime_ns)
+        if self._recipe is None or self._recipe[0] != key:
+            self._recipe = (key, self._stage_cache().recipe(rom.read_bytes()))
+        return self._recipe[1]
+
+    def _stage_failed(self, level: int, area: int, act: int) -> bool:
+        config = self.lab.config()
+        recipe = self._recipe_of(Path(config.rom)) if config.rom is not None else None
+        return recipe is not None and (level, area, act) in self._stage_cache().failed(self.cache() / "stages", recipe)
+
+    def _warm_answered(self, stage: tuple[int, int, int], answer: dict) -> None:
+        """A warm child's answer: a stage it refused, and did not make, is kept off later runs' warms."""
+        if "error" not in answer:
+            return
+        config = self.lab.config()
+        if config.rom is None or self._stage_made(Path(config.rom), *stage):
+            return
+        recipe = self._recipe_of(Path(config.rom))
+        if recipe is not None:
+            self._stage_cache().fail(self.cache() / "stages", recipe, *stage)
 
     def _route_stars(self) -> list[str]:
         """His practice route's "course:star" keys (the tracker's active route), for the warmer's route tier."""

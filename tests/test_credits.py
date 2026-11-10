@@ -58,6 +58,9 @@ def shipped() -> list[str]:
               if p.suffix.lower() in FONT_SUFFIXES]
     natives = (ROOT / "tools" / "build_natives.py").read_text(encoding="utf-8")
     found += [f"native:{dll}" for dll in re.findall(r'Native\("([^"]+\.dll)"', natives)]
+    # The Ghost Lab's natives (tools/build_lab.py builds them by these names); its exes are our own code.
+    from sm64_events.core.update_plan import LAB_NATIVES
+    found += [f"native:{name}" for name in LAB_NATIVES if name.endswith(".dll")]
     return found
 
 

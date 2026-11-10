@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Runs in the simulation program (SM64TrainerSim.exe); licenses/README.md lists its GPL-2.0-or-later code.
 """Music and effects stems from SM64's own audio command lists (M4 probe; CPU only, private data).
 
     uv run --with unicorn==2.1.4 python tools/scene_lab/stems_probe.py run <savestate.pj.zip>

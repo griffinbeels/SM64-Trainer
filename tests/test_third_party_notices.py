@@ -51,6 +51,21 @@ def test_a_bundled_package_with_no_license_file_refuses_the_build(tmp_path):
     assert (out / "python" / "proxy-tools" / "LICENSE.txt").is_file()
 
 
+def test_the_simulation_programs_unicorn_ships_its_tracked_texts(tmp_path):
+    """The unicorn wheel installs no license file, so SM64TrainerSim.exe's
+    Unicorn ships only because licenses/python/unicorn/ (L0) stands in; the
+    install's one licenses folder carries all nine of its texts."""
+    assert not notices.license_files(metadata.distribution("unicorn"))
+    without = tmp_path / "licenses"
+    shutil.copytree(ROOT / "licenses", without)
+    shutil.rmtree(without / "python" / "unicorn")
+    with pytest.raises(RuntimeError, match="unicorn 2.1.4"):
+        notices.stage(tmp_path / "bare", {"unicorn"}, ffmpeg=None, licenses=without)
+    out = notices.stage(tmp_path / "tracked", {"unicorn", "numpy"}, ffmpeg=None)
+    texts = _texts(out / "python" / "unicorn")
+    assert len(texts) == 9 and {"COPYING", "README.md", "THIRD-PARTY-NOTICES.txt"} <= set(texts), texts
+
+
 def test_an_ffmpeg_the_notices_do_not_describe_refuses_the_build(tmp_path, monkeypatch):
     described = notices.recorded_version(ROOT / "licenses" / "ffmpeg", "BUILD-README.txt")
     monkeypatch.setattr(notices, "ffmpeg_version", lambda _exe: described)

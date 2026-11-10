@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Runs in the simulation program (SM64TrainerSim.exe); licenses/README.md lists its GPL-2.0-or-later code.
 """Typed semantic configuration for the native ghost reader; no RAM reads.
 
 The native reader owns the reviewed N64 pointer paths. These bytes configure

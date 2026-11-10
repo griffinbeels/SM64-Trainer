@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Runs in the simulation program (SM64TrainerSim.exe); licenses/README.md lists its GPL-2.0-or-later code.
 # src/sm64_events/core/update_plan.py
 """Manifest schema + update planning (pure, stdlib-only).
 
@@ -49,6 +51,14 @@ JOURNAL_NAME = "update_journal.json"
 #: The builders, the beta installer and the beta self-check read it from here.
 NATIVE_FOLDER = "_internal/sm64_events/data/plugin"
 BUNDLED_NATIVES = ("sm64_trainer_gfx.dll", "SM64GpuEncoderV1.dll")
+#: The Ghost Lab's natives (core/paths.py::bundled_lab_file finds them in this
+#: folder): the picture host, the offline tap host and the ghost sound host
+#: (x86 exes beside the plugin they load), and the free camera's CPU hooks and
+#: the music-and-effects split (x64 DLLs the server's children load). A list of
+#: its own: BUNDLED_NATIVES has fixed readers that expect exactly its two names.
+LAB_NATIVE_FOLDER = "_internal/sm64_events/data/lab"
+LAB_NATIVES = ("viewer_host.exe", "tap_offline_host.exe", "ghost_sound_host.exe",
+               "scene_cpu_hooks.dll", "scene_cxd4.dll")
 #: THE PLACEHOLDER: native names a release must still carry although no native
 #: ships under them.
 #:

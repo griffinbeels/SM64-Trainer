@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Runs in the simulation program (SM64TrainerSim.exe); licenses/README.md lists its GPL-2.0-or-later code.
 """Simulated frames into a scene package through the real producer (Ghost Handoff re-simulation).
 
     writer = SimScene(out_package, work_folder, rom_path, symbols, vi, sidecar=..., on_publish=...)
@@ -247,7 +249,7 @@ class Packer(threading.Thread):
 
 
 class SimScene:
-    def __init__(self, out: Path, work: Path, rom_path: Path, symbols: sim.Symbols, vi: dict, version: str = "us", *,
+    def __init__(self, out: Path, work: Path, rom_path: Path, symbols: sim.Symbols, vi: dict, version: str | None = None, *,
                  sidecar: Path | None = None, on_publish=None, seeds: Path | None = None):
         self.out, self.work, self.rom_path, self.symbols = Path(out), Path(work), Path(rom_path), symbols
         self.sidecar, self.on_publish = sidecar, on_publish
@@ -255,6 +257,12 @@ class SimScene:
         offset = (vi["origin"] - min(buffers)) % (buffers[1] - buffers[0])    # the line the VI starts at
         self.vi, self.origins = dict(vi), [buffer + offset for buffer in buffers]
         self.rom = self.rom_path.read_bytes()
+        # The arming (scene spans, identity extras) is the ROM's own build: US spans over JP RAM would be wrong bytes
+        # with nothing to say so, so the build comes from the header and a caller's word must agree with it.
+        built = sim.version_of(self.rom)
+        if built is None or version not in (None, built):
+            raise SimSceneError(f"the ROM's build is {built}, not {version}")
+        version = built
         self.header = rom_header_hex(self.rom)
         # Before the first frame: made while the packer runs, it would take the GIL from the simulation.
         self.seed = Seed(seeds, self.rom)

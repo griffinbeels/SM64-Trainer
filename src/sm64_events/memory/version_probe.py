@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Runs in the simulation program (SM64TrainerSim.exe); licenses/README.md lists its GPL-2.0-or-later code.
 """WHICH ROM is loaded — read off the cartridge header PJ64 holds in memory.
 
 An N64 ROM begins with a 0x40-byte header: the PI-domain magic `80 37 12 40`,

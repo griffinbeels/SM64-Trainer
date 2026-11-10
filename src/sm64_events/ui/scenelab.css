@@ -351,3 +351,5 @@
   .ghost-lab-row { grid-template-columns: minmax(0, 1fr); }
   .ghost-lab-row-name { padding-top: 0; }
 }
+.ghost-lab-empty .ghost-lab-setup { display: grid; gap: 8px; justify-items: center; width: min(640px, 92%); }
+.ghost-lab-setup-line { margin: 0; color: var(--text); line-height: 1.45; text-align: center; overflow-wrap: anywhere; }

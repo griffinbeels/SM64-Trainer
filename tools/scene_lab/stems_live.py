@@ -54,7 +54,6 @@ import queue
 import struct
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 from concurrent.futures import Future
@@ -430,12 +429,24 @@ class StemRenderer:
 # ---------------------------------------------------------------- the child
 
 def build_dll() -> tuple[Path | None, str | None]:
-    """(the cxd4 harness DLL, None), compiled once per input hash from the vendored source
-    (tools/scene_lab/cxd4, stems_probe.build_lle) into the scene lab's build cache, or (None, why)."""
-    cache = Path(os.environ.get("LOCALAPPDATA", tempfile.gettempdir())) / "SM64Trainer/build-cache/scene-lab"
+    """(the cxd4 harness DLL scene_cxd4.dll, None), or (None, why). The installed app runs its own
+    copy (core/paths.py bundled_lab_file) and never compiles; a checkout compiles the one recipe
+    (tools/build_lab.py: stems_lle.c over the vendored tools/scene_lab/cxd4, as
+    stems_probe.build_lle) into the scene lab's build cache, keyed by the build id it carries."""
+    if getattr(sys, "frozen", False):
+        from sm64_events.core.paths import bundled_lab_file
+        path = bundled_lab_file("scene_cxd4.dll")
+        if path is None:
+            return None, ("This copy of SM64 Trainer is missing scene_cxd4.dll, the program that splits music "
+                          "from sound effects. Reinstall SM64 Trainer.")
+        return path, None
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("scene_lab_build", HERE.parents[1] / "tools/build_lab.py")
+    recipes = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(recipes)
     try:
-        return sp.build_lle(HERE / "cxd4", cache), None
-    except SystemExit:
+        return recipes.cached("scene_cxd4.dll"), None
+    except recipes.ToolchainMissing:
         return None, "Splitting music from sound effects needs the x64 MSVC toolchain to build its sound program runner."
     except Exception as error:  # noqa: BLE001 - a failed build is a reason, never a dead child
         return None, f"The sound program runner could not be built: {error}"

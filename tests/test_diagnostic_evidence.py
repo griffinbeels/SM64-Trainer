@@ -326,3 +326,14 @@ def test_silent_native_playback_fault_reports_once_and_normal_waits_do_not(monke
     for reason in GIPC_ROM_REASONS:
         capture._report_native_fault(5, reason)
     assert [kwargs["context"]["native_reason"] for _, kwargs in errors[1:]] == list(GIPC_ROM_REASONS)
+
+
+def test_an_automatic_report_carries_the_ghost_lab_rom_row_as_found_or_not_only():
+    """The setup check's lab_rom row (core/setup_profile.py) says which ROM the Ghost Lab keeps: an automatic report
+    carries its status alone, never its words, and flags it like any other row."""
+    check = {"flagged": ["lab_rom"], "items": [
+        {"id": "lab_rom", "importance": "recommended", "status": "differs", "yours": "Only v1.93j (JP)",
+         "tested": "Found", "yours_sha256": "a" * 64, "shared": True}]}
+    projected = safe_snapshot({"setup": {"check": check}})["setup"]["check"]
+    assert projected["flagged"] == ["lab_rom"]
+    assert projected["items"] == [{"id": "lab_rom", "status": "differs", "importance": "recommended"}]

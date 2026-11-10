@@ -71,15 +71,27 @@ CAVEAT_SEVERITY = VALIDITY_CAVEATS + ("grab_timed", "old_clock", "unattributed")
 def save_state_run(attempt) -> bool:
     """Whether the journal proves this attempt used a save state.
 
+    THE one answer to "was this save-state practice": PBs, stats, averages,
+    ghosts and goals all ask it, and `views._attempt_json` ships it to the
+    browser as `save_state` so no JS restates it. Griffin, 2026-11-09: "If
+    the attempt was save stated, then this should NEVER count towards your
+    goals."
+
     The opening load is proof even in legacy history whose validity was never
     judged. A separate segment starting AFTER a load has none of these marks
-    and remains comparable. Storage's PB SQL uses the same three facts; its
-    parity test exercises the real SQL against this predicate.
+    and remains comparable. An attempt a load ENDED (outcome `loaded`,
+    segments under attempt rules 2) is one too: the same play on a star
+    stays one attempt that counts the load in `state_loads`, so leaving the
+    segment's half out made the two kinds disagree about one sequence of
+    play (and the practice log's save-state filter always hid these rows).
+    Storage's PB SQL uses the same four facts; its parity test exercises the
+    real SQL against this predicate.
     """
     return attempt is not None and (
         getattr(attempt, "anchor_type", None) == "state_loaded"
         or getattr(attempt, "state_loads", 0) > 0
-        or getattr(attempt, "invalid_reason", None) == "save_state")
+        or getattr(attempt, "invalid_reason", None) == "save_state"
+        or getattr(attempt, "outcome", None) == "loaded")
 
 
 def igt_seen_in(history) -> bool:

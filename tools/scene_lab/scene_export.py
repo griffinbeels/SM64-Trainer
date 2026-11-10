@@ -8,7 +8,10 @@ recording". The page records what it showed, one entry per display frame (interf
 glossary's "scene recording"); this child draws that timeline again, picture by picture, through a
 scene session of its own (same package, same ghosts, same HUD switch, same camera), at the
 renderer's full size, and mixes the sound as the page played it (export_sound.py). A hitch while
-recording never reaches the file: every output frame is drawn from its entry, not captured.
+recording never reaches the file: every output frame is drawn from its entry, not captured. This
+child decodes the scene's sound with PyAV, so it never loads Unicorn: its session's free camera
+runs in the evaluator's own process (evaluator_child.py, sim_boundary.py), and the video goes to
+FFmpeg's own program over a pipe.
 
 The folder holds job.json (written by the server: the lab config's paths, the package, the
 timeline, the ghosts' clips as files beside it, their look, the output path and the encoder), and
@@ -215,14 +218,17 @@ def _session(job: dict, folder: Path):
     config = SimpleNamespace(rom=Path(job["config"]["rom"]), pj64_plugin=Path(job["config"]["pj64_plugin"]),
                              renderer=job["config"].get("renderer", "trainer"),
                              resolution=tuple(job["config"]["resolution"]) if job["config"].get("resolution") else None,
-                             map=Path(job["config"]["map"]) if job["config"].get("map") else None)
+                             map=Path(job["config"]["map"]) if job["config"].get("map") else None,
+                             roms={k: Path(v) for k, v in (job["config"].get("roms") or {}).items()},
+                             maps={k: Path(v) for k, v in (job["config"].get("maps") or {}).items()})
     options = {"encoder_factory": lambda: None}
     if job.get("host") == "fake":                      # tests: the protocol double, no renderer and no GPU
         import fake_viewer_host
         import gpu_gate
         gpu_gate.HOLD = folder / "no-hold.txt"
         options["host_factory"] = scene_session.command_host(fake_viewer_host.command(**job.get("fake_host", {})))
-        options["evaluator_factory"] = lambda package, rom: fake_viewer_host.FakeEvaluator()
+        if job.get("evaluator") != "game":             # "game": the real evaluator, in its own process
+            options["evaluator_factory"] = lambda package, rom: fake_viewer_host.FakeEvaluator()
     sidecar = Path(job["sidecar"]) if job.get("sidecar") else None
     try:
         session = scene_session.SceneSession.open(config, Path(job["package"]), sidecar=sidecar, **options)

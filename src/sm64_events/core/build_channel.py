@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Runs in the simulation program (SM64TrainerSim.exe); licenses/README.md lists its GPL-2.0-or-later code.
 """Public packaged build identity, independent of environment and release feeds.
 
 Only a frozen application's fixed bundle file selects installation behavior. An absent

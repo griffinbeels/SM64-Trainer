@@ -1,7 +1,9 @@
-"""The scene viewer's routes (M4 E3, lab only): one recording in its reconstructed stage, in the Trainer.
+"""The scene viewer's routes (M4 E3; the Ghost Lab): one recording in its reconstructed stage, in the Trainer.
 
-None of this exists unless SM64_SCENE_LAB names a lab config: main.py::_mount_scene_lab is the
-one reader, and without it this module is never imported and no route is added. With it:
+None of this exists unless SM64_SCENE_LAB names a lab config (a developer's), or this is the installed app with
+the Ghost Lab on (core/lab_inputs.py IN_APP, which then builds the config from the app's own inputs, no lab.json):
+main.py::_mount_scene_lab is the one reader, and otherwise this module is never imported and no route is added.
+With it:
 
     GET  /api/scene-lab           the probe the shell waits for before it shows the Lab entry, and
                                   "live": whether the scene recording runs ({recording, on, switch, reason})
@@ -36,11 +38,15 @@ one reader, and without it this module is never imported and no route is added. 
 The lab config is a private JSON file of absolute paths: {"rom", "packages" (a folder of
 .sm64scene files), "pj64_plugin", "map" (the free camera's MappingUS.map), and optionally
 "renderer", "resolution" ("WxH"), "idle_seconds", "lab_root" (where the live scene recording
-and the attempt scenes live; %LOCALAPPDATA%\\SM64Trainer\\scene-lab when absent)}. The page names a
+and the attempt scenes live; %LOCALAPPDATA%\\SM64Trainer\\scene-lab when absent)}. The installed app
+has none: LabConfig.from_app takes the same fields from core/lab_inputs.py (the ROM store, the bundled
+maps, the Plugin folder setup found), read again on every use, so a ROM found while the app runs counts
+at once; until then each door answers with the sentence why (LabConfig.problems). The page names a
 package only by a name the server listed from that folder, or an attempt by its id; no path or
 URL ever comes from the page. Packages stay untrusted: package.py's reader checks every record,
 and the evaluator executes code only from the configured ROM. The scene lab's code
-(tools/scene_lab) runs from a source checkout.
+(tools/scene_lab) runs from a source checkout, and in the installed app from its bundle
+(sm64_events/scenelab_code.py, interface I1).
 
 Attempt scenes (round 2, "IMMEDIATELY AFTER FINISHING AN ATTEMPT"): while the server runs and the
 Scene viewer's recording switch is on (it shows that the recording runs; off is kept for the next
@@ -120,13 +126,15 @@ import time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, WebSocket, WebSocketDisconnect
 from fastapi import Path as FastPath
 from pydantic import BaseModel, Field, model_validator
+
+from sm64_events.core import lab_inputs
 
 log = logging.getLogger("sm64.scene_lab")
 
@@ -188,7 +196,7 @@ def _absolute(raw: dict, key: str, required: bool) -> Path | None:
 
 @dataclass(frozen=True)
 class LabConfig:
-    rom: Path
+    rom: Path | None                   # None only from_app, until the ROM store holds one (rom_problem says why)
     packages: Path
     pj64_plugin: Path | None = None
     map: Path | None = None
@@ -196,6 +204,34 @@ class LabConfig:
     resolution: tuple[int, int] | None = None
     idle_seconds: float = DEFAULT_IDLE_SECONDS
     lab_root: Path | None = None
+    in_app: bool = False               # from_app: the installed app's own inputs, no lab.json
+    app_problems: tuple[str, ...] = ()   # from_app: what stops any scene, in the words the page shows
+    rom_problem: str | None = None     # from_app: why there is no ROM yet
+    roms: dict = field(default_factory=dict)   # from_app: each region's ROM ({"us", "jp"}: Path or None)
+    maps: dict = field(default_factory=dict)   # from_app: each region's map; a scene opens with its own pair
+
+    @classmethod
+    def from_app(cls, inputs: dict) -> "LabConfig":
+        """The installed app's lab, from core/lab_inputs.py::app_inputs' dict: the ROM the lab runs (None until the
+        ROM store holds one), its bundled map, the Plugin folder setup found; the packages folder is the lab
+        root's own (a developer's list; the app's lab works without it)."""
+        from sm64_events.core.paths import scene_lab_root
+        root = Path(inputs["lab_root"]) if inputs.get("lab_root") else None
+        rom = Path(inputs["rom"]) if inputs.get("rom") else None
+        rom_problem = None if rom is not None else ((inputs.get("rom_problems") or {}).get("us") or lab_inputs.NO_ROM)
+        return cls(rom, (root or scene_lab_root()) / "packages",
+                   Path(inputs["pj64_plugin"]) if inputs.get("pj64_plugin") else None,
+                   Path(inputs["map"]) if inputs.get("map") else None, lab_root=root, in_app=True,
+                   app_problems=tuple(inputs.get("problems") or ()), rom_problem=rom_problem,
+                   roms={region: Path(found) if found else None for region, found in (inputs.get("roms") or {}).items()},
+                   maps={region: Path(found) if found else None for region, found in (inputs.get("maps") or {}).items()})
+
+    def require_rom(self) -> Path:
+        """The ROM; ConfigError with the sentence why when there is none yet (the installed app before its ROM
+        store found one)."""
+        if self.rom is None:
+            raise ConfigError(self.rom_problem or lab_inputs.NO_ROM)
+        return self.rom
 
     @classmethod
     def load(cls, path: Path) -> "LabConfig":
@@ -226,6 +262,8 @@ class LabConfig:
 
     def problems(self) -> list[str]:
         """What stops any scene from opening, in words the page shows."""
+        if self.in_app:
+            return list(self.app_problems)
         found = []
         if not self.rom.is_file():
             found.append("The ROM named in the lab config is missing.")
@@ -254,12 +292,123 @@ class LabConfig:
 
 
 def _lab_module(name: str):
-    """A tools/scene_lab module, imported from this checkout only when a page needs it."""
-    if getattr(sys, "frozen", False) or not (TOOLS / f"{name}.py").is_file():
+    """A tools/scene_lab module, imported only when a page needs it: from this checkout, or, in the installed app,
+    the one its bundle carries (sm64_events/scenelab_code.py, interface I1)."""
+    if getattr(sys, "frozen", False):
+        try:
+            from sm64_events.scenelab_code import lab_module
+            return lab_module(name)
+        except ImportError:
+            log.warning("The Ghost Lab's %s did not load from the bundle.", name, exc_info=True)
+            raise ConfigError("This copy of the Trainer is missing part of the Ghost Lab. "
+                              "Reinstall the Trainer to get it back.") from None
+    if not (TOOLS / f"{name}.py").is_file():
         raise ConfigError("The scene lab runs from a source checkout, and this one has no tools/scene_lab.")
     if str(TOOLS) not in sys.path:
         sys.path.insert(0, str(TOOLS))
     return __import__(name)
+
+
+class RomWait:
+    """The attempt scenes' cutter in an installed app whose ROM store has no ROM yet (attempt_scenes takes anything
+    with send and close). The recording reads the ROM's sentence; notes wait, the newest KEPT of them; every
+    POLL_SECONDS start() is asked again on a thread of its own (never the poll loop, which only calls send), and the
+    first cutter it returns gets the waiting notes in order and every later one. The spool records all along (its
+    lease needs no ROM), so the attempts played before the ROM turned up are cut too while the spool still holds them."""
+
+    POLL_SECONDS = 5.0
+    KEPT = 256
+
+    def __init__(self, start, reason, on_event, *, poll_seconds: float | None = None):
+        self.start, self.cutter = start, None
+        self.notes: deque = deque(maxlen=self.KEPT)
+        self.lock = threading.Lock()
+        self.stopped = threading.Event()
+        self.poll_seconds = self.POLL_SECONDS if poll_seconds is None else poll_seconds
+        on_event({"live": {"recording": False, "reason": reason() or lab_inputs.NO_ROM}})
+        threading.Thread(target=self._wait, name="scene-cutter-rom-wait", daemon=True).start()
+
+    def send(self, note: dict) -> None:
+        with self.lock:
+            cutter = self.cutter
+            if cutter is None:
+                self.notes.append(note)
+        if cutter is not None:
+            cutter.send(note)
+
+    def close(self, timeout: float = 10.0):
+        self.stopped.set()
+        with self.lock:
+            cutter = self.cutter
+        return cutter.close(timeout) if cutter is not None else None
+
+    def _wait(self) -> None:
+        while not self.stopped.wait(self.poll_seconds):
+            try:
+                cutter = self.start()
+            except Exception:  # noqa: BLE001 - asked again at the next poll; the log keeps why
+                log.warning("The scene cutter could not start after the ROM turned up.", exc_info=True)
+                continue
+            if cutter is None:
+                continue
+            with self.lock:                                # a cutter's send only queues, so the order holds
+                if not self.stopped.is_set():
+                    for note in self.notes:
+                        cutter.send(note)
+                    self.notes.clear()
+                    self.cutter = cutter
+            if self.stopped.is_set() and self.cutter is not cutter:
+                cutter.close()
+            return
+
+
+class RegionCutter:
+    """The installed app's cutter, on the ROM of the cartridge Project64 runs. `start(region)` makes a cutter for that
+    region's ROM (None while the store has none: RomWait waits for it); `game_region()` is the running cartridge's
+    region, or None while no game is read (then the lab's own ROM, US first). An attempt that starts on the other
+    cartridge ends this cutter (on a thread of its own: send runs on the poll loop) and starts that region's; the
+    notes wait in order meanwhile, and the spool keeps the recording, so nothing played is lost."""
+
+    def __init__(self, start, game_region, reason, on_event, *, poll_seconds: float | None = None):
+        self.start, self.game_region, self.reason, self.on_event = start, game_region, reason, on_event
+        self.poll_seconds = poll_seconds
+        self.lock = threading.Lock()
+        self.region = self._region()
+        self.inner = self._make(self.region, announce=True)
+
+    def _region(self) -> str | None:
+        try:
+            region = self.game_region()
+        except Exception:  # noqa: BLE001 - an unread game reads as "no game"
+            region = None
+        return region if region in ("us", "jp") else None
+
+    def _make(self, region, *, announce: bool):
+        cutter = self.start(region)
+        if cutter is not None:
+            return cutter
+        return RomWait(lambda: self.start(region), self.reason, self.on_event if announce else (lambda event: None),
+                       poll_seconds=self.poll_seconds)
+
+    def send(self, note: dict) -> None:
+        old = None
+        if note.get("op") == "start":
+            region = self._region()
+            with self.lock:
+                if region is not None and region != self.region:
+                    old, self.region = self.inner, region
+                    self.inner = RomWait(lambda: self.start(region), self.reason, lambda event: None,
+                                         poll_seconds=0.05 if self.poll_seconds is None else self.poll_seconds)
+        if old is not None:
+            threading.Thread(target=old.close, name="scene-cutter-region", daemon=True).start()
+        with self.lock:
+            inner = self.inner
+        inner.send(note)
+
+    def close(self, timeout: float = 10.0):
+        with self.lock:
+            inner = self.inner
+        return inner.close(timeout)
 
 
 class LoopProbe:
@@ -298,18 +447,25 @@ class SceneLab:
     _slot_loop = None              # the app's event loop, for the star sets' broadcasts from the slot worker
     heading = {"title": "Lab recording", "target": None}     # the open scene's, as _heading says it
 
-    def __init__(self, config_path: Path, *, session_options: dict | None = None,
+    def __init__(self, config_path: Path | None, *, session_options: dict | None = None,
                  page_gone_seconds: float = PAGE_GONE_SECONDS, watch_seconds: float = WATCH_SECONDS,
                  idle_seconds: float | None = None, measure_loop: bool = False, live: bool = False,
                  lease_factory=None, cutter_factory=None, cutter_options: dict | None = None,
-                 grow_seconds: float = GROW_SECONDS, live_audio=None, ghost_loader=None):
-        """live: hold the recording's lease and cut attempt scenes (main.py's server only; a test,
+                 grow_seconds: float = GROW_SECONDS, live_audio=None, ghost_loader=None, app_inputs=None,
+                 game_region=None):
+        """config_path: a developer's lab.json; None: the installed app's own inputs, app_inputs() ->
+        core/lab_inputs.py::app_inputs' dict, read on every config() (LabConfig.from_app).
+        live: hold the recording's lease and cut attempt scenes (main.py's server only; a test,
         the UI fixture or e3_measure.py never arms the wrapper's tap). Tests replace the lease
         (lease_factory(lab_root)), the cutter (cutter_factory(folder, on_event)) or the cutter
         child's spool (cutter_options: attempt_cutter.CutterProcess's spool_factory, extra_path).
         ghost_loader(ref) loads a ghost's clip in place of the ghost catalog's (interface C's
         shape; without either, the player's own runs in the replay store, stage_ghosts.LocalGhosts)."""
-        self.config_path = Path(config_path)
+        self.config_path = Path(config_path) if config_path is not None else None
+        self.app_inputs = app_inputs or lab_inputs.app_inputs
+        # The region ("us"/"jp") of the cartridge Project64 runs now, or None (main.py: the poller's header read): the
+        # installed app's cutter cuts with that region's ROM (RegionCutter).
+        self.game_region = game_region or (lambda: None)
         self.session_options = session_options or {}
         self.live_on, self.lease_factory, self.cutter_options = live, lease_factory, cutter_options or {}
         self.cutter_factory = cutter_factory
@@ -376,11 +532,18 @@ class SceneLab:
             log.warning("The scene's title could not be read.", exc_info=True)
         return {"title": "Lab recording" if attempt is None else f"Attempt {attempt}", "target": None}
 
+    def config(self) -> LabConfig:
+        """The lab config as it stands now (blocking: a file read): the developer's lab.json, read again on every
+        use as it always was, or the installed app's own inputs (LabConfig.from_app). ConfigError says why it
+        cannot be read."""
+        if self.config_path is not None:
+            return LabConfig.load(self.config_path)
+        return LabConfig.from_app(self.app_inputs())
+
     # ------------------------------------------------------------ attempt scenes (live recording)
 
     def _lab_root(self) -> Path:
-        config = LabConfig.load(self.config_path)
-        return config.lab_root or _lab_module("attempt_scenes").default_lab_root()
+        return self.config().lab_root or _lab_module("attempt_scenes").default_lab_root()
 
     def _journal(self):
         """The journal the attempt ids belong to: the followed tracker's database, else the one the
@@ -404,21 +567,40 @@ class SceneLab:
                 except Exception:  # noqa: BLE001 - a start not kept never costs a scene
                     log.warning("A ready scene's ghost start was not queued.", exc_info=True)
         on_event = observed
+        if self.config_path is None:
+            return self._app_cutter(folder, on_event)
         if self.cutter_factory is not None:
             return self.cutter_factory(folder, on_event)
         config = LabConfig.load(self.config_path)
         return _lab_module("attempt_cutter").CutterProcess(config.rom, folder, on_event, lab_root=config.lab_root,
                                                            symbol_map=config.map, **self.cutter_options)
 
+    def _app_cutter(self, folder: Path, on_event):
+        """The installed app's cutter: the child at once when the ROM store holds a ROM, else RomWait, which starts it
+        the moment one turns up (D1: the store copies it from Project64 the first time he plays), so a new player's
+        first session still gets its attempt scenes without a restart. It cuts with the ROM of the game being played
+        (RegionCutter): a player who keeps both ROMs and plays JP gets JP scenes, not JP play read against US code."""
+        def start(region: str | None):
+            config = self.config()
+            rom = config.roms.get(region) if region in config.roms else config.rom
+            if rom is None:
+                return None
+            symbol_map = config.maps.get(region) if region in config.maps else config.map
+            if self.cutter_factory is not None:
+                return self.cutter_factory(folder, on_event)
+            return _lab_module("attempt_cutter").CutterProcess(rom, folder, on_event, lab_root=config.lab_root,
+                                                               symbol_map=symbol_map, **self.cutter_options)
+        return RegionCutter(start, self.game_region, lambda: self.config().rom_problem, on_event)
+
     def _start_live_blocking(self) -> None:
         if self.scenes is None or not self.live_on:
             return
         try:
-            lab_root = LabConfig.load(self.config_path).lab_root
+            lab_root = self.config().lab_root
             self.recording_on = _read_switch(self._lab_root())
             if self.lease_factory is not None:
                 self.lease = self.lease_factory(lab_root)
-            elif (TOOLS / "live_spool.py").is_file():
+            elif getattr(sys, "frozen", False) or (TOOLS / "live_spool.py").is_file():
                 self.lease = _lab_module("live_spool").Lease(lab_root)
             else:
                 self.live_problem = "This checkout has no live scene recording (tools/scene_lab/live_spool.py)."
@@ -461,6 +643,39 @@ class SceneLab:
         self._slot_loop = asyncio.get_running_loop()
         if self.refitter is not None:
             self.refitter.start()
+
+    def attempt_states(self, ids) -> dict:
+        """Each attempt's answer for the Practice log's Ghost button (GET /attempt-scenes): its recorded take
+        (ready, cutting, unavailable: attempt_scenes.AttemptScenes.states), else {"state": "ghost"} when the race
+        could play it as a ghost and the lab can re-simulate one (scene_ghosts.ghost_attempts): the viewer then
+        watches it made from that ghost (scene_resim's fast load). His PB ghosts among them get their scenes made
+        ahead (_prebuild_pbs), so the Practice log opening is what readies them. Blocking (stats, a clip's first
+        check): a threadpool route. His ask, 2026-11-09: "I should be able to see all of my PB ghosts.\""""
+        found = self.scenes.states(ids) if self.scenes is not None else {}
+        rest = [attempt_id for attempt_id in ids if found.get(str(attempt_id), {}).get("state") not in ("ready", "cutting")]
+        if not rest or self.ghosts is None or self.resim is None:
+            return found
+        ghosts = self.ghosts.ghost_attempts(rest)
+        for attempt_id in ghosts:
+            found[str(attempt_id)] = {"state": "ghost"}
+        self._prebuild_pbs(ghosts)
+        return found
+
+    def _prebuild_pbs(self, ghosts: dict) -> None:
+        """His PB ghosts among them (every saved PB, current or beaten) get their scenes made ahead, each after its
+        stage, at the warmer's idle pace (scene_resim.prebuild): a click then plays at once."""
+        db = getattr(self.ghosts, "db", None)
+        pbs = db.pb_attempt_ids() if db is not None and hasattr(db, "pb_attempt_ids") else set()
+        for attempt_id, attempt in ghosts.items():
+            if attempt_id not in pbs:
+                continue
+            found = self.ghosts.run_clip(attempt)
+            if isinstance(found, str):
+                continue
+            target = {"kind": "segment" if attempt.segment_id is not None else "star",
+                      "entity_key": (str(attempt.segment_id) if attempt.segment_id is not None
+                                     else f"{attempt.course_id}-{attempt.star_id}")}
+            self.resim.prebuild(found[0], found[1].get("sha256"), target)
 
     def live(self) -> dict:
         """{recording, on, switch, reason} for the probe; no I/O (the cutter reports the recording's
@@ -570,7 +785,7 @@ class SceneLab:
 
     def _status_blocking(self) -> dict:
         try:
-            config = LabConfig.load(self.config_path)
+            config = self.config()
         except ConfigError as error:
             return {"ready": False, "problems": [str(error)], "packages": [], "hold": None}
         problems = config.problems()
@@ -605,7 +820,8 @@ class SceneLab:
         """A listed package by name, or an attempt's scene by its id (LookupError: none known;
         SceneRefused: still being cut, or never, with the reason); or a listed ghost, or a course and act,
         re-simulated into a scene (scene_resim.py; the build runs before the open scene is replaced)."""
-        config = await asyncio.to_thread(LabConfig.load, self.config_path)
+        config = await asyncio.to_thread(self.config)
+        config.require_rom()                               # the installed app before it found a ROM: the sentence why
         sidecar = resim = None
         if ghost is None and self.resim is not None:      # one build at a time: a newer open ends an older one
             await asyncio.to_thread(self.resim.cancel)     # (a ghost's own open joins or ends it, scene_resim.py)
@@ -1267,7 +1483,7 @@ def _mount_ghost_routes(router: APIRouter, lab: SceneLab) -> None:
               ghost: str | None = Query(default=None, min_length=1, max_length=512)):
         found = lab.ghosts.stage(target_of(course, star, segment), strat or None, every=strategies == "all")
         _warm_target(lab, course, star, "current")          # its ghosts then start from a stage made ahead
-        return _stage_open(found, ghost)
+        return _app_blocked(lab, _stage_open(found, ghost))
 
     @router.get("/ghosts")
     async def ghosts(section: str = "yours", course: int | None = None, star: int | None = None,
@@ -1286,14 +1502,79 @@ def _mount_ghost_routes(router: APIRouter, lab: SceneLab) -> None:
         except TargetError as error:
             raise HTTPException(422, str(error)) from None
 
-    # The Library's ghost button: one recording by its id, as a row of this target's list.
+    # The Library's ghost button: one recording by its id, as a row of this target's list. The Practice log's
+    # Ghost button on a run with no recorded take: that attempt of his, as a row of its own target's list.
     @router.get("/ghost")
-    async def ghost(recording: str = Query(min_length=1, max_length=128), course: int | None = None,
+    async def ghost(recording: str | None = Query(default=None, min_length=1, max_length=128),
+                    attempt: int | None = None, course: int | None = None,
                     star: int | None = None, segment: int | None = None):
+        if (recording is None) == (attempt is None):
+            raise HTTPException(422, "Name a recording or an attempt.")
+        if attempt is not None:
+            return await asyncio.to_thread(lab.ghosts.attempt_item, attempt)
         target = await asyncio.to_thread(target_of, course, star, segment)
         _warm_target(lab, course, star, "list")
         await lab.ghosts.fill_recording(recording)
         return await asyncio.to_thread(lab.ghosts.recording_item, target, recording)
+
+
+class _AppBackground:
+    """The installed app's lab work that needs no visit to the Ghost Lab (Griffin, 2026-11-09: "just be able to
+    immediately jump into all the functionality"): the ROM copied from the running game in the background
+    (scenelab/roms.py follow_game), and the stage warmer started as soon as a ROM is known, so a new player's first
+    ghost opens from a made stage. The warm begins with the star the Practice tab targets, then his route, then
+    every stage (scene_warm.StageWarmer's order: one idle child on one core, paused while his game runs slow).
+    A developer's lab (SM64_SCENE_LAB) runs none of this: its warm still starts on the first stage he opens."""
+
+    POLL_SECONDS = 5.0
+
+    def __init__(self, lab: SceneLab, follow=None):
+        self.lab, self.stopped = lab, threading.Event()
+        self.stop_follow = follow() if follow is not None else None
+        self.thread = threading.Thread(target=self._wait_for_rom, name="lab-first-warm", daemon=True)
+
+    @classmethod
+    def start(cls, lab: SceneLab) -> "_AppBackground":
+        from sm64_events.scenelab.roms import follow_game
+        background = cls(lab, follow=follow_game)
+        background.thread.start()
+        return background
+
+    def _wait_for_rom(self) -> None:
+        while not self.stopped.is_set():
+            if self.kick():
+                return
+            self.stopped.wait(self.POLL_SECONDS)
+
+    def kick(self) -> bool:
+        """Starts the warmer once the lab has a ROM and a map; True once started."""
+        try:
+            config = self.lab.config()
+        except Exception:  # noqa: BLE001 - a config that cannot be read yet is asked again
+            return False
+        if config.rom is None or config.map is None or self.lab.resim is None:
+            return False
+        from sm64_events.server import scene_warm
+        stage = scene_warm.stage_of(*self._target())
+        self.lab.resim.warmer.ask_many([stage] if stage is not None else [], scene_warm.CURRENT)
+        return True
+
+    def _target(self) -> tuple[int | None, int | None]:
+        """The star the Practice tab targets now (course, star), or (None, None)."""
+        tracker = self.lab.tracker
+        try:
+            target = tracker.target_payload() if tracker is not None else {}
+        except Exception:  # noqa: BLE001 - no target: the warm starts with his route
+            target = {}
+        if target.get("kind") != "star":
+            return None, None
+        return target.get("course_id"), target.get("star_id")
+
+    def stop(self) -> None:
+        self.stopped.set()
+        self.thread.join(timeout=5.0)
+        if self.stop_follow is not None:
+            self.stop_follow()
 
 
 def _warm_target(lab: SceneLab, course: int | None, star: int | None, tier: str) -> None:
@@ -1303,6 +1584,16 @@ def _warm_target(lab: SceneLab, course: int | None, star: int | None, tier: str)
         return
     from sm64_events.server import scene_warm
     lab.resim.warm(course, star, scene_warm.CURRENT if tier == "current" else scene_warm.LIST)
+
+
+def _app_blocked(lab: SceneLab, answer: dict) -> dict:
+    """The installed app's lab before it can open anything (no ROM found yet, Project64 not set up): the stage
+    names that sentence where it names why there is no stage, and opens nothing (D6: the page says why). A
+    developer's lab answers as before."""
+    if lab.config_path is not None:
+        return answer
+    problems = lab.config().problems()
+    return answer if not problems else {**answer, "open": None, "resim": False, "reason": problems[0]}
 
 
 def _stage_open(found: dict, ghost: str | None) -> dict:
@@ -1480,13 +1771,16 @@ def _mount_live_routes(router: APIRouter, lab: SceneLab) -> None:
 
 def mount_scene_lab(app, config_path, **options) -> SceneLab:
     """Adds the scene viewer's routes to `app`, starts the live recording's lease and the attempt
-    scenes when the app starts, and ends both and the open scene when it stops. `options` are
-    SceneLab's (tests and e3_measure.py inject doubles and short timers), and `ghost_sources`,
+    scenes when the app starts, and ends both and the open scene when it stops. `config_path` is a
+    developer's lab.json, or None for the installed app's own inputs (`app_inputs`, LabConfig.from_app).
+    `options` are SceneLab's (tests and e3_measure.py inject doubles and short timers), and `ghost_sources`,
     what the stage and the ghost catalog read: {"tracker", "replay", "ghost", "community"} (scene_ghosts.py)."""
     sources = options.pop("ghost_sources", None) or {}
+    # The installed server's background (_AppBackground): main.py asks for it; tests and the UI fixture do not.
+    app_background = options.pop("app_background", False)
     export_options, moment_options, resim_options = (options.pop(name, None) or {} for name in (
         "export_options", "moment_options", "resim_options"))
-    lab = SceneLab(Path(config_path), **options)
+    lab = SceneLab(Path(config_path) if config_path is not None else None, **options)
     from sm64_events.server.scene_ghosts import SceneGhosts
     lab.ghosts = SceneGhosts(sources.get("tracker"), scenes=lambda: lab.scenes, replay=sources.get("replay"),
                              ghost=sources.get("ghost"), community=sources.get("community"))
@@ -1505,7 +1799,7 @@ def mount_scene_lab(app, config_path, **options) -> SceneLab:
     @router.get("/attempt-scenes")
     def attempt_scenes(ids: str = ""):
         wanted = _attempt_ids(ids)
-        return {"scenes": lab.scenes.states(wanted) if lab.scenes is not None else {}}
+        return {"scenes": lab.attempt_states(wanted)}
 
     @router.post("/open")
     async def open_scene(body: OpenBody):
@@ -1538,20 +1832,33 @@ def mount_scene_lab(app, config_path, **options) -> SceneLab:
             raise HTTPException(422, f"This part of the recording's sound is damaged: {damaged}") from None
         return Response(data, media_type=media_type, headers={"Cache-Control": "no-store"})
 
+    if config_path is None:
+        # The installed app finds its own ROM (scenelab/roms.py): the no-ROM card's routes (ui/components/rompick.js).
+        from sm64_events.server.lab_roms_api import create_rom_router
+        app.include_router(create_rom_router())
     app.include_router(router)
+    _wrap_lifespan(app, lab, app_background=config_path is None and app_background)
+    app.state.scene_lab = lab
+    return lab
+
+
+def _wrap_lifespan(app, lab: SceneLab, *, app_background: bool) -> None:
+    """The lab's live work runs while the app serves: the recording's lease and the attempt scenes, and (the
+    installed server) _AppBackground; all of it ends, with the open scene, when the app stops."""
     serving = app.router.lifespan_context
 
     @asynccontextmanager
     async def lifespan(application):
         async with serving(application) as state:
             await lab.start_live()
+            background = _AppBackground.start(lab) if app_background else None
             try:
                 yield state
             finally:
+                if background is not None:
+                    await asyncio.to_thread(background.stop)
                 await asyncio.to_thread(lab.exports.shutdown)
                 lab.moments.shutdown()
                 await lab.shutdown()
 
     app.router.lifespan_context = lifespan
-    app.state.scene_lab = lab
-    return lab

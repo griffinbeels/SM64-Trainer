@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Runs in the simulation program (SM64TrainerSim.exe); licenses/README.md lists its GPL-2.0-or-later code.
 """The free-camera evaluator: a recorded scene re-rendered by SM64's own code (M4 E3/E5 lab).
 
     evaluator = Evaluator.open(package.sm64scene, rom.z64, MappingUS.map)
@@ -30,6 +32,10 @@ next frame reuses the previous one. A viewer may attach state resolvers (state_r
 child processes with their own Evaluator over the same package, which resolve the frames it
 hands them (ahead) and deliver each state into this cache; state() then waits for a frame a
 child has rather than resolving it again, and resolves here what no child can.
+
+The Trainer runs this evaluator in a simulation process of its own (evaluator_child.py: Unicorn is
+GPL-2.0-only and never loads in the server, sim_boundary.py); the proof commands (e2_georender.py,
+this file's resolve) run it in the process they are started in.
 
 Imported packages stay untrusted: the package reader checks every record, and code runs only
 from this ROM (the package's code loads are rebuilt from it and refused on mismatch). A recorded
@@ -135,8 +141,8 @@ class Evaluator:
     @classmethod
     def open(cls, package_path: Path, rom_path: Path, map_path: Path, **options) -> Evaluator:
         import e2_georender as e2
-        symbols = e2.load_map(map_path)
         rom = rom_path.read_bytes()
+        symbols = e2.load_map(map_path, rom=rom)
         package = scene_package.open_package(package_path, rom_path)
         return cls(package, rom, symbols, source=package_path, **options)
 

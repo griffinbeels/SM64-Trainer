@@ -2239,47 +2239,8 @@ def test_icon_upload_roundtrip_and_validation(tmp_path, monkeypatch):
                            content=b"\x89" * (2_000_001)).status_code == 413
 
 
-def test_course_icons_endpoint_maps_stems_to_real_filenames(tmp_path):
-    # The extensions are mixed (.webp and .png), so the client must never
-    # guess: it asks for the directory listing, exactly as /api/icons does for
-    # star_icons. Dropping new art in the folder then needs no code change.
-    client, service, db = make_client(tmp_path)
-    with client:
-        courses = client.get("/api/icons/courses").json()["courses"]
-        assert courses["bob"].startswith("bob.")
-        assert courses["rr"].startswith("rr.")
-        # every value is a real file in the bundled directory
-        from pathlib import Path
-        import sm64_events
-        asset_dir = (Path(sm64_events.__file__).parent / "ui" / "assets"
-                     / "course_icons")
-        for stem, filename in courses.items():
-            assert (asset_dir / filename).exists(), stem
-
-
-def test_course_icon_map_lists_images_only(tmp_path):
-    # Windows writes Thumbs.db into any previewed folder — the staging copy of
-    # this art has one — and listing it would invent a "Thumbs" course whose
-    # portrait 404s. Probed both ways so the filter cannot silently stop
-    # filtering: the real art still lists, the shell droppings do not.
-    from sm64_events.server.api import _course_icon_map
-    (tmp_path / "bob.webp").write_bytes(b"art")
-    (tmp_path / "rr.png").write_bytes(b"art")
-    (tmp_path / "Thumbs.db").write_bytes(b"not art")
-    (tmp_path / "desktop.ini").write_text("not art")
-    assert _course_icon_map(tmp_path) == {"bob": "bob.webp", "rr": "rr.png"}
-    assert _course_icon_map(tmp_path / "missing") == {}
-
-
-def test_course_icons_omit_the_four_courses_the_game_has_no_painting_for(tmp_path):
-    # HMC, SSL, DDD and SL are not entered through a painting, so no portrait
-    # exists. The picker falls back to star-1 art for them; this asserts we
-    # aren't silently shipping a wrong file under those names.
-    client, service, db = make_client(tmp_path)
-    with client:
-        courses = client.get("/api/icons/courses").json()["courses"]
-        for stem in ("hmc", "ssl", "ddd", "sl"):
-            assert stem not in courses, stem
+# The course portrait listing and pictures moved to server/course_art_api.py;
+# tests/test_course_art.py holds them.
 
 
 def test_segment_targets_include_locationless_defs(tmp_path):

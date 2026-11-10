@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Runs in the simulation program (SM64TrainerSim.exe); licenses/README.md lists its GPL-2.0-or-later code.
 """WHERE each version of the ROM keeps the globals the tracker reads.
 
 `addresses.py` holds what is TRUE OF THE GAME whatever ROM is running: action
@@ -466,6 +468,30 @@ JP = Layout(
     usamune_slots_start=0x80500000,  # every occupied slot word points past the object pool's start
     segment_table=0x8033A090,        # its behaviour segment equals the verified behaviour base
     second_camera_focus=0x8032CFD0,  # holds zero or an object's start
+    # VERIFY until his JP game passes their address.* gates (read-only; the sync run the lead holds). The JP
+    # re-simulation and its scene packages read them (P15, 2026-11-09). Derived as US's were: STROOP MappingJP.map's
+    # section layout (.data main.o 0x...C620 .. moving_texture.o end; .bss game_init.o .. object_list_processor.o
+    # end; engine .bss geo_layout.o .. surface_load.o end); the pool bounds sPoolStart/sPoolEnd hold in the
+    # cold-booted JP game (the same as US); gSaveBuffer up to the next symbol (gGfxSPTaskStack), 0x200 bytes as on
+    # US. Read off the JP save routine (0x80403930): its body copy starts at gMarioStates for 0x26320 bytes, so the
+    # tail past the .bss span ends at 0x80360120; it loads the power meter HUD words 0x803314E0-EC (US
+    # 0x803325F0-FC) and random_u16 reads gRandomSeed16 at 0x8038EEE0, which the JP map does not name.
+    scene_data_start=0x8032C620,
+    scene_data_end=0x80330390,
+    scene_bss_start=0x80339C20,
+    scene_bss_end=0x8035FF00,
+    scene_engine_bss_start=0x8038BCA0,
+    scene_engine_bss_end=0x8038EEE0,
+    main_pool_start=0x8005C010,
+    main_pool_end=0x801C0FF0,
+    save_buffer_start=0x80207B00,
+    save_buffer_end=0x80207D00,
+    slot_tail_start=0x8035FF00,
+    slot_tail_end=0x80360120,
+    power_meter_hud_start=0x803314E0,
+    power_meter_hud_end=0x803314F0,
+    random_seed_start=0x8038EEE0,
+    random_seed_end=0x8038EEE4,
 )
 
 VERSIONS = ("us", "jp")

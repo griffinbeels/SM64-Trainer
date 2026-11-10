@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Runs in the simulation program (SM64TrainerSim.exe); licenses/README.md lists its GPL-2.0-or-later code.
 """A simulated frame as a Usamune save-state slot: Usamune's own routines write and load it (Ghost Handoff).
 
     uv run --with unicorn==2.1.4 --with capstone python tools/scene_lab/handoff_slot.py candidates <session>
@@ -33,22 +35,27 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import frame_sim as sim  # noqa: E402
 from sm64_events.slotlibrary.usamune import (  # noqa: E402
     FINGERPRINT_BYTES,
+    LOAD_SLOT,
     SLOT_BYTES,
     TRAILER_AREA,
     TRAILER_LEVEL,
     TRAILER_MARIO,
     US,
+    build_for,
     slot_address,
 )
 
-# This simulator replays US recordings (frame_sim), so its game is Usamune US.
+# SlotCpu reads its build's own call site, routines and settings (frame_sim.SimBuild, usamune.build_for). These
+# are Usamune US's, for this module's commands, which replay his US tap sessions (and handoff_try's, the same).
 CURR_AREA, CURR_LEVEL, CURRENT_AREA_POINTER = US.curr_area, US.curr_level, US.current_area_pointer
 LOAD, MARIO_OBJECT, SAVE = US.load, US.mario_object, US.save
 
 SITE = 0x802CB248                    # the jal into Usamune's save and load dispatcher
 SETTINGS = 0x80417B4C
-SAVE_INDEX, LOAD_INDEX = SETTINGS + 0x119, SETTINGS + 0x118
+SAVE_SLOT = 0x119                    # the slot index Usamune's save reads from its state block (load: LOAD_SLOT)
+SAVE_INDEX, LOAD_INDEX = SETTINGS + SAVE_SLOT, SETTINGS + LOAD_SLOT
 GLOBAL_TIMER, AREA_UPDATE_COUNTER, RANDOM_SEED = 0x8032D5D4, 0x8032DF08, 0x8038EEE0
+US_SCENE_BSS = 0x8033AF90            # the US build's captured .bss span (frame_sim.SimBuild.scene_bss)
 CAMERA_BYTES = 0x6C                  # what Usamune copies from the current area's camera pointer
 GROUP_MASK, GROUP_AIRBORNE = 0x1C0, 0x080
 ACTION_NAMES = {0x03000880: "single jump", 0x03000881: "double jump", 0x01000882: "triple jump",
@@ -61,12 +68,18 @@ PRESENTATION = (("frame buffers and z buffer", 0x000400, 0x05C010), ("gfx pools"
 
 
 class SlotCpu(sim.GameCpu):
-    """GameCpu that can stop at Usamune's call site once and run one thing there."""
+    """GameCpu that can stop at Usamune's call site once and run one thing there: that build's own site,
+    routines and slot index bytes."""
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.pending = None
-        self.uc.hook_add(self.unicorn.UC_HOOK_CODE, self._on_site, begin=sim.sext(SITE), end=sim.sext(SITE))
+        if self.build.site is None:
+            raise SystemExit("no call into Usamune in try_print_debug_mario_level_info")
+        self.usamune = build_for(self.build.version)
+        self.save_index, self.load_index = self.usamune.settings + SAVE_SLOT, self.usamune.settings + LOAD_SLOT
+        site = sim.sext(self.build.site)
+        self.uc.hook_add(self.unicorn.UC_HOOK_CODE, self._on_site, begin=site, end=site)
 
     def _on_site(self, uc, _address, _size, _user):
         if self.pending is not None:
@@ -75,15 +88,16 @@ class SlotCpu(sim.GameCpu):
     def _pc(self) -> int:
         return self.uc.reg_read(self.mips.UC_MIPS_REG_PC) & 0xFFFFFFFF
 
-    def run_frame(self, begin: int = sim.RESUME) -> bool:
-        self.armed = begin != sim.RESUME
+    def run_frame(self, begin: int | None = None) -> bool:
+        begin = self.build.resume if begin is None else begin
+        self.armed = begin != self.build.resume
         had_action = self.pending is not None
         try:
             self.uc.emu_start(sim.sext(begin), sim.sext(sim.NEVER), timeout=sim.BUDGET_US)
-            if self.pending is not None and self._pc() == SITE:
+            if self.pending is not None and self._pc() == self.build.site:
                 action, self.pending = self.pending, None
                 action()
-                self.uc.emu_start(sim.sext(SITE), sim.sext(sim.NEVER), timeout=sim.BUDGET_US)
+                self.uc.emu_start(sim.sext(self.build.site), sim.sext(sim.NEVER), timeout=sim.BUDGET_US)
         except self.unicorn.UcError as error:
             pc = self._pc()
             self.violations.append(f"unicorn {error} at {pc:08x} in {self.symbols.name_of(pc)}")
@@ -91,7 +105,7 @@ class SlotCpu(sim.GameCpu):
         if had_action and self.pending is not None:
             self.pending = None
             self.violations.append("this frame never reached Usamune's call site")
-        if self._pc() != sim.RESUME:
+        if self._pc() != self.build.resume:
             self.violations.append(f"stopped at {self._pc():08x} in {self.symbols.name_of(self._pc())}")
             return False
         if self.flush_due:
@@ -124,12 +138,12 @@ class SlotCpu(sim.GameCpu):
         """Usamune writes slot `index`; its settings come back as they were. Anything the routine
         writes outside the slot's range stops the run: that would make the slot a lie."""
         before = self.ram.copy()
-        kept = self.u8(SAVE_INDEX)
-        self.put_u8(SAVE_INDEX, index)
-        before[sim.phys(SAVE_INDEX)] = index
-        self.call(SAVE)
-        self.put_u8(SAVE_INDEX, kept)
-        before[sim.phys(SAVE_INDEX)] = kept
+        kept = self.u8(self.save_index)
+        self.put_u8(self.save_index, index)
+        before[sim.phys(self.save_index)] = index
+        self.call(self.usamune.save)
+        self.put_u8(self.save_index, kept)
+        before[sim.phys(self.save_index)] = kept
         low, high = sim.phys(slot_address(index)), sim.phys(slot_address(index)) + SLOT_BYTES
         changed = np.flatnonzero(self.ram != before)
         strays = changed[(changed < low) | (changed >= high)]
@@ -138,10 +152,10 @@ class SlotCpu(sim.GameCpu):
         return self.ram[low:high].tobytes()
 
     def load_slot(self, index: int) -> None:
-        kept = self.u8(LOAD_INDEX)
-        self.put_u8(LOAD_INDEX, index)
-        self.call(LOAD)
-        self.put_u8(LOAD_INDEX, kept)
+        kept = self.u8(self.load_index)
+        self.put_u8(self.load_index, index)
+        self.call(self.usamune.load)
+        self.put_u8(self.load_index, kept)
 
 
 @dataclass
@@ -161,33 +175,36 @@ class Replay:
 
     def feed(self, frame) -> None:
         """This frame's pads, and the captured VI count: a slot's trailer carries Usamune's lag fields."""
-        pads = next(data for start, data in frame.spans if start == sim.phys(sim.SCENE_BSS))
+        pads = next(data for start, data in frame.spans if start == sim.phys(self.cpu.build.scene_bss))
         self.cpu.pads = pads[self.pad_at:self.pad_at + 24].tobytes()
         self.last_vi = sim.inject_vi(self.cpu, frame, self.last_vi)
 
     def step(self, frame) -> None:
         self.feed(frame)
         ok = self.cpu.run_frame(self.begin)
-        self.begin = sim.RESUME
+        self.begin = self.cpu.resume
         if not ok:
             raise SystemExit(f"frame {frame.index}: {self.cpu.violations[:3]}")
         self.cpu.scheduler_model()
 
 
-def start_replay(session: Path) -> Replay:
-    config = json.loads((sim.lab_root() / "lab.json").read_text(encoding="utf-8"))
+def start_replay(session: Path, config: dict | None = None) -> Replay:
+    """config: the lab's {"rom", "map"}; None reads them where core/lab_inputs.py::tool_config says (the lab root's
+    lab.json from a source checkout)."""
+    from sm64_events.core.lab_inputs import tool_config  # noqa: PLC0415
+    config = config or tool_config()
     rom = Path(config["rom"]).read_bytes()
     symbols = sim.Symbols(Path(config["map"]))
     ram, stream = sim.boot_state(session)
     frame0 = next(stream)
-    sim.check_frame(ram, symbols, frame0)
     fcsr = struct.unpack_from(">I", ram, sim.phys(symbols["gGameLoopThread"]) + sim.THREAD_FPCSR)[0]
     cpu = SlotCpu(ram, rom, symbols, fcsr)
+    sim.check_frame(ram, symbols, frame0, cpu.build)
     pool = np.zeros(sim.POOL_BYTES, np.uint8)
     begin = sim.first_entry(cpu, symbols, frame0)
     cpu.scheduler_model()
     replay = Replay(cpu, stream, pool, begin, cpu.u32(symbols["sNumVblanks"]),
-                    sim.phys(symbols["gControllerPads"]) - sim.phys(sim.SCENE_BSS))
+                    sim.phys(symbols["gControllerPads"]) - sim.phys(cpu.build.scene_bss))
     replay.absorb(frame0)
     return replay
 
@@ -208,7 +225,7 @@ class BuiltSlot:
 def routine_fingerprint(cpu: SlotCpu) -> str:
     """The same hash the writer takes of the running game (handoff_try.routine_fingerprint)."""
     digest = hashlib.sha256()
-    for start in (SAVE, LOAD):
+    for start in (cpu.usamune.save, cpu.usamune.load):
         digest.update(cpu.ram[sim.phys(start):sim.phys(start) + FINGERPRINT_BYTES].tobytes())
     return digest.hexdigest()
 
@@ -220,7 +237,8 @@ def build_slot(session: Path, frame_index: int, index: int) -> BuiltSlot:
 
     def save() -> None:
         table = cpu.symbols["sSegmentTable"]
-        found.update(data=cpu.save_slot(index), seed=cpu.u16(RANDOM_SEED), current_area=cpu.u32(CURRENT_AREA_POINTER),
+        found.update(data=cpu.save_slot(index), seed=cpu.u16(cpu.symbols["gRandomSeed16"]),
+                     current_area=cpu.u32(cpu.usamune.current_area_pointer),
                      segments=cpu.ram[sim.phys(table):sim.phys(table) + 64].tobytes(),
                      fingerprint=routine_fingerprint(cpu))
 
@@ -294,11 +312,12 @@ class Snapshot:
 
 def mario_gap(cpu: SlotCpu, frame) -> tuple[float, bool]:
     """How far the simulated Mario stands from the true one, and whether they share an action."""
-    span = next(data for start, data in frame.spans if start == sim.phys(sim.SCENE_BSS))
-    at = 0x8033B170 - sim.SCENE_BSS
+    scene_bss, mario = cpu.build.scene_bss, cpu.usamune.body_start
+    span = next(data for start, data in frame.spans if start == sim.phys(scene_bss))
+    at = mario - scene_bss
     real = np.array(struct.unpack(">3f", span[at + 0x3C:at + 0x48].tobytes()))
-    ours = np.array(struct.unpack_from(">3f", cpu.ram, sim.phys(0x8033B170) + 0x3C))
-    same = span[at + 0x0C:at + 0x10].tobytes() == cpu.ram[sim.phys(0x8033B170) + 0x0C:sim.phys(0x8033B170) + 0x10].tobytes()
+    ours = np.array(struct.unpack_from(">3f", cpu.ram, sim.phys(mario) + 0x3C))
+    same = span[at + 0x0C:at + 0x10].tobytes() == cpu.ram[sim.phys(mario) + 0x0C:sim.phys(mario) + 0x10].tobytes()
     return float(np.linalg.norm(real - ours)), same
 
 
@@ -316,7 +335,7 @@ def follow(replay: Replay, frames: list, pool_k: np.ndarray, stick: bool = False
         replay.feed(frame)
         if stick and frame is frames[0]:
             cpu.perturb("stick", 0x7F)
-        if not cpu.run_frame(sim.RESUME):
+        if not cpu.run_frame():
             return {"crashed_at": frame.index, "violations": cpu.violations[:3], "first": first, "frames_ok": len(per_frame)}
         cpu.scheduler_model()
         away, action_same = mario_gap(cpu, frame)
@@ -401,7 +420,7 @@ def run_ending(trip: Trip, name: str, spans=(), stick: bool = False) -> dict:
             cpu.ram[low:high] = saved["natural"][low:high]
     cpu.pending = at_site
     replay.feed(trip.frame_j)
-    if not cpu.run_frame(sim.RESUME):
+    if not cpu.run_frame():
         raise SystemExit(f"{name}: frame {trip.j}: {cpu.violations[:3]}")
     cpu.scheduler_model()
     checks["after_draw"] = group_diff(cpu.ram, saved["tap"], cpu.symbols)
@@ -429,7 +448,7 @@ def roundtrip(args) -> int:
     seed = (sim.phys(RANDOM_SEED), sim.phys(RANDOM_SEED) + 2)
     clocks = ((sim.phys(GLOBAL_TIMER), sim.phys(GLOBAL_TIMER) + 4),
               (sim.phys(AREA_UPDATE_COUNTER), sim.phys(AREA_UPDATE_COUNTER) + 4))
-    pads = (sim.phys(sim.SCENE_BSS), sim.phys(0x8033B010))
+    pads = (sim.phys(trip.replay.cpu.build.scene_bss), sim.phys(trip.replay.cpu.symbols["gControllerPads"]) + 24)
     main_pool = (sim.POOL_BEGIN, sim.POOL_BEGIN + sim.POOL_BYTES)
     site_stack(trip.replay, trip.pause, trip.frame_j)
     plain = run_ending(trip, "load")
@@ -470,7 +489,7 @@ def site_stack(replay: Replay, pause: Snapshot, frame_j) -> None:
     cpu.pending = at_site
     replay.feed(frame_j)
     try:
-        cpu.run_frame(sim.RESUME)
+        cpu.run_frame()
     except StopFrame:
         pass
     print("the site's callers, innermost first:", chain[:14])
@@ -484,17 +503,19 @@ def run_refusals(replay: Replay, pause: Snapshot, frame_j, index: int) -> dict:
     cpu = replay.cpu
     outcome: dict = {}
 
+    level, area, mario = cpu.usamune.curr_level, cpu.usamune.curr_area, cpu.usamune.mario_object
+
     def wrong_level() -> None:
-        cpu.put_u16(CURR_LEVEL, cpu.u16(CURR_LEVEL) + 1)
+        cpu.put_u16(level, cpu.u16(level) + 1)
 
     def wrong_area() -> None:
-        cpu.put_u16(CURR_AREA, cpu.u16(CURR_AREA) + 1)
+        cpu.put_u16(area, cpu.u16(area) + 1)
 
     def wrong_mario() -> None:
-        cpu.put_u32(MARIO_OBJECT, cpu.u32(MARIO_OBJECT) + sim.OBJECT_BYTES)
+        cpu.put_u32(mario, cpu.u32(mario) + sim.OBJECT_BYTES)
 
     def no_mario() -> None:
-        cpu.put_u32(MARIO_OBJECT, 0)
+        cpu.put_u32(mario, 0)
 
     def empty_slot() -> None:
         cpu.put_u32(slot_address(index) + TRAILER_MARIO, 0)
@@ -509,17 +530,17 @@ def run_refusals(replay: Replay, pause: Snapshot, frame_j, index: int) -> dict:
 
         def at_site(name=name, change=change) -> None:
             change()
-            kept_flag = cpu.u8(LOAD_INDEX)
+            kept_flag = cpu.u8(cpu.load_index)
             before = cpu.ram.copy()
             cpu.load_slot(index)
             changed = np.flatnonzero(cpu.ram != before)
             outcome[name] = "refused" if changed.size == 0 else f"loaded, {changed.size} bytes changed"
-            cpu.put_u8(LOAD_INDEX, kept_flag)
+            cpu.put_u8(cpu.load_index, kept_flag)
             raise StopFrame
         cpu.pending = at_site
         replay.feed(frame_j)
         try:
-            cpu.run_frame(sim.RESUME)
+            cpu.run_frame()
         except StopFrame:
             pass
     return outcome
@@ -540,13 +561,13 @@ def candidates(args) -> int:
     for frame in stream:
         if frame.level != args.level or frame.area != args.area:
             continue
-        span = next(data for start, data in frame.spans if start == sim.phys(sim.SCENE_BSS))
-        at = 0x8033B170 - sim.SCENE_BSS
+        span = next(data for start, data in frame.spans if start == sim.phys(US_SCENE_BSS))
+        at = US.body_start - US_SCENE_BSS
         action = int.from_bytes(span[at + 0x0C:at + 0x10].tobytes(), "big")
         pos_y = struct.unpack(">f", span[at + 0x40:at + 0x44].tobytes())[0]
         floor_y = struct.unpack(">f", span[at + 0x70:at + 0x74].tobytes())[0]
         speed = struct.unpack(">f", span[at + 0x54:at + 0x58].tobytes())[0]
-        mario_at = MARIO_OBJECT - sim.SCENE_BSS
+        mario_at = MARIO_OBJECT - US_SCENE_BSS
         mario = int.from_bytes(span[mario_at:mario_at + 4].tobytes(), "big")
         if action & GROUP_MASK != GROUP_AIRBORNE or pos_y - floor_y < args.height or abs(speed) < args.speed:
             continue

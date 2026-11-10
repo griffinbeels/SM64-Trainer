@@ -16,6 +16,13 @@ has none and the game stops, the grounds drop him into the moat) and Usamune's p
 in a hub, so a castle secret star's or a castle movement's ghost starts from his own scene, a start file or another
 take of his (measured 2026-11-08).
 
+His PB ghosts with no recorded take go in the same queue, each after its own stage (ask_ghost; 2026-11-09, his
+words: "I want to be able to see all of my PBs ready immediately as ghosts when I open the app"): the Practice log's
+ask (scene_lab_api.SceneLab.attempt_states) queues the ghost's whole scene, built by ghost_resim's `build` command at
+this same idle pace, so a click then reads the made scene. Measured 2026-11-09 on his 10"10 Wild Blue PB (303
+frames, his US ROM, the fake renderer host), click to the first picture: 11.2 s with nothing made ahead, 1.9 s with
+its stage made ahead, 0.6 s with its scene made ahead; ~3 MB per scene under the lab's resim folder.
+
 Each stage once per server run. One child at a time (ghost_resim's `warm` command), at idle priority pinned to one
 core, and suspended while his game runs slow (GamePace: the poller's own reads of the game clock, in process). A
 build he clicked joins a warm of its own stage (join) instead of making it again. Disk: ~1.2 MB per stage (~125 MB
@@ -121,10 +128,17 @@ def _priority(child: subprocess.Popen, below_normal: bool) -> None:
 
 class StageWarmer:
     """The ordered queue and its one background child. `spawn(level, area, act)` starts the child (scene_resim builds
-    its arguments); `pace` is a GamePace or None; `route()` gives his route's "course:star" keys."""
+    its arguments); `pace` is a GamePace or None; `route()` gives his route's "course:star" keys; `answered(stage,
+    answer)` hears each warm child's own last line when it ended by itself (not ended by a stop or the time limit),
+    so a stage it could not make can be remembered past this run."""
 
-    def __init__(self, spawn, *, pace: GamePace | None = None, route=None):
-        self.spawn, self.pace, self.route = spawn, pace, route
+    def __init__(self, spawn, *, pace: GamePace | None = None, route=None, answered=None, spawn_ghost=None,
+                 finished=None):
+        """`spawn_ghost(payload)` starts a ghost's scene made ahead (ask_ghost; scene_resim.py builds it) and
+        `finished(key)` hears each item end, so its owner can clean up after it."""
+        self.spawn, self.pace, self.route, self.answered = spawn, pace, route, answered
+        self.spawn_ghost, self.on_finished = spawn_ghost, finished
+        self.payloads: dict[tuple, object] = {}                          # ("ghost", sha16) -> what spawn_ghost takes
         self.lock = threading.Lock()
         self.queued: dict[tuple[int, int, int], tuple[int, int]] = {}   # stage -> (tier, order)
         self.done: set[tuple[int, int, int]] = set()                    # warmed or tried this run (or a build's)
@@ -138,12 +152,13 @@ class StageWarmer:
         self.started_rest = False
         self.log: list[tuple[int, int, int]] = []                       # the order warms ran in (tests, the report)
 
-    def ask(self, stage: tuple[int, int, int] | None, tier: int = CURRENT) -> None:
-        """Queues that stage at `tier` (a better tier moves it forward); starts the worker."""
+    def ask(self, stage: tuple[int, int, int] | None, tier: int = CURRENT, *, then_rest: bool = True) -> None:
+        """Queues that stage at `tier` (a better tier moves it forward); starts the worker. `then_rest`: the
+        first such ask also queues his route and every other stage (the Ghost Lab's own asks)."""
         if stage is not None:
-            self.ask_many([stage], tier)
+            self.ask_many([stage], tier, then_rest=then_rest)
 
-    def ask_many(self, stages, tier: int) -> None:
+    def ask_many(self, stages, tier: int, *, then_rest: bool = True) -> None:
         with self.lock:
             for key in stages:
                 if key in self.done or key == self.running:
@@ -151,7 +166,7 @@ class StageWarmer:
                 known = self.queued.get(key)
                 if known is None or tier < known[0]:
                     self.queued[key] = (tier, next(self.order))
-            if not self.started_rest:          # the first ask also queues his route's stars, then everything else
+            if then_rest and not self.started_rest:     # the first ask also queues his route, then everything else
                 self.started_rest = True
                 for key in self._route():
                     self.queued.setdefault(key, (ROUTE, next(self.order)))
@@ -162,6 +177,17 @@ class StageWarmer:
             if self.queued and (self.worker is None or not self.worker.is_alive()) and not self.stopped.is_set():
                 self.worker = threading.Thread(target=self._work, name="resim-warm", daemon=True)
                 self.worker.start()
+
+    def ask_ghost(self, key: tuple, payload, tier: int = LIST) -> None:
+        """Queues one ghost's scene, made ahead at the same idle pace (his PB ghosts on the Practice log, 2026-11-09:
+        "I want to be able to see all of my PBs ready immediately as ghosts"). Asked after its stage, at the same
+        tier, so the stage is made first. `key` is ("ghost", the clip's sha256[:16]); once per server run. It never
+        starts the route and the rest (the Practice log opening is not a visit to the Ghost Lab)."""
+        with self.lock:
+            if key in self.done or key == self.running:
+                return
+            self.payloads[key] = payload
+        self.ask_many([key], tier, then_rest=False)
 
     def _route(self) -> list[tuple[int, int, int]]:
         try:
@@ -233,14 +259,24 @@ class StageWarmer:
                 return
             self.log.append(key)
             try:
-                child = self.spawn(*key)
+                if key[0] == "ghost":
+                    with self.lock:
+                        payload = self.payloads.pop(key, None)
+                    child = self.spawn_ghost(payload) if self.spawn_ghost is not None and payload is not None else None
+                else:
+                    child = self.spawn(*key)
             except Exception as error:  # noqa: BLE001 - a warm that cannot start is skipped
-                log.info("The stage of level %s area %s act %s could not be warmed: %s", *key, error)
+                log.info("%s could not be made ahead: %s", _named(key), error)
                 child = None
             with self.lock:
                 self.child = child
             if child is not None:
                 self._watch(child, key)
+            if self.on_finished is not None:
+                try:
+                    self.on_finished(key)
+                except Exception:  # noqa: BLE001 - clean-up never stops the queue
+                    log.warning("Cleaning up after %s failed.", _named(key), exc_info=True)
             with self.lock:
                 self.child, self.running = None, None
                 self.finished.notify_all()
@@ -251,10 +287,11 @@ class StageWarmer:
         said: list = []
         reader = threading.Thread(target=lambda: said.append(child.communicate()), daemon=True)
         reader.start()
-        began, suspended = time.monotonic(), False
+        began, suspended, ended = time.monotonic(), False, False
         while reader.is_alive():
             if time.monotonic() - began > WARM_SECONDS or self.stopped.is_set():
                 child.kill()
+                ended = True
                 break
             slow = self.pace is not None and not self.joined.is_set() and self.pace.hurts()
             if slow != suspended:
@@ -269,4 +306,14 @@ class StageWarmer:
             answer = json.loads(line[0]) if line[0].startswith("{") else {"error": line[0]}
         except ValueError:
             answer = {"error": line[0]}
-        log.info("stage warmed (level %s area %s act %s): %s", *key, answer)
+        log.info("%s made ahead: %s", _named(key), answer)
+        if not ended and self.answered is not None and key[0] != "ghost":     # a stage's own result
+            try:
+                self.answered(key, answer)
+            except Exception:  # noqa: BLE001 - remembering a result never stops the warm
+                log.warning("could not keep the result of warming level %s area %s act %s", *key, exc_info=True)
+
+
+def _named(key: tuple) -> str:
+    """A queue item as the log names it: a stage by level, area and act, a ghost's scene by its clip's hash."""
+    return f"ghost scene {key[1]}" if key[0] == "ghost" else "stage (level {} area {} act {})".format(*key)

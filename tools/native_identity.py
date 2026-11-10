@@ -82,6 +82,8 @@ def path_maps(*folders: tuple[Path, str]) -> list[str]:
 
 
 OURS_GPL3 = "Copyright (C) SM64 Trainer contributors. GNU GPL v3 or later."
+# The Ghost Lab's helpers built from the graphics plugin's code, or loaded beside Unicorn: licenses/README.md.
+OURS_GPL2_OR_LATER = "Copyright (C) SM64 Trainer contributors. GNU GPL v2 or later."
 
 
 class Identity(NamedTuple):
@@ -101,12 +103,21 @@ IDENTITIES = {
     "SM64GpuEncoderV1.dll": Identity(
         "SM64 Trainer hardware video encoder for practice replays (loaded by the trainer's own helper process)",
         "Copyright (C) SM64 Trainer contributors. GNU GPL v3 or later. Includes NVIDIA's nvEncodeAPI.h (MIT)."),
-    "viewer_host.exe": Identity("SM64 Trainer scene viewer helper (developer tool): draws saved scenes", OURS_GPL3),
+    # The Ghost Lab's five natives ship in the app (core/update_plan.py LAB_NATIVES), so each says what it does.
+    "viewer_host.exe": Identity("SM64 Trainer Ghost Lab picture helper: draws a saved scene with the graphics "
+                                "plugin, so you can watch a ghost from any camera", OURS_GPL2_OR_LATER),
     "replay_host.exe": Identity("SM64 Trainer scene lab replay host (developer tool)", OURS_GPL3),
-    "scene_cpu_hooks.dll": Identity("SM64 Trainer scene lab CPU hooks (developer tool)", OURS_GPL3),
+    "scene_cpu_hooks.dll": Identity("SM64 Trainer Ghost Lab speed-up for the game simulation: makes the free "
+                                    "camera fast (runs inside SM64TrainerSim.exe)", OURS_GPL2_OR_LATER),
     "closure_probe.exe": Identity("SM64 Trainer scene lab closure probe (developer tool)", OURS_GPL3),
-    "ghost_sound_host.exe": Identity("SM64 Trainer scene lab ghost sound helper (developer tool)", OURS_GPL3),
-    "tap_offline_host.exe": Identity("SM64 Trainer scene tap test host (developer tool)", OURS_GPL3),
+    "ghost_sound_host.exe": Identity("SM64 Trainer Ghost Lab ghost sound helper: makes the sound effects of a "
+                                     "ghost's own moves", OURS_GPL2_OR_LATER),
+    "tap_offline_host.exe": Identity("SM64 Trainer Ghost Lab scene builder: turns a rebuilt ghost's game frames "
+                                     "into a scene the Ghost Lab can show", OURS_GPL2_OR_LATER),
+    "scene_cxd4.dll": Identity("SM64 Trainer Ghost Lab sound splitter: runs the game's sound program again so "
+                               "music and sound effects play apart (cxd4 RSP interpreter, public domain)",
+                               "cxd4: public domain (CC0 1.0), by Iconoclast and the mupen64plus team. SM64 "
+                               "Trainer additions: Copyright (C) SM64 Trainer contributors. GNU GPL v3 or later."),
     "gfxwrap_host.exe": Identity("SM64 Trainer graphics plugin test host (developer tool)", OURS_GPL3),
     "eos-transport.exe": Identity("SM64 Trainer online transport helper (EOS)",
                                   "Copyright (C) SM64 Trainer contributors. MIT License."),

@@ -110,31 +110,82 @@ def test_a_byte_exact_scene_already_made_is_the_answer(tmp_path):
     assert lab._cached_exact(sha) is None                     # another version's scene is not this one's
 
 
-def test_a_scene_start_lies_over_its_levels_reset_so_the_level_draws(tmp_path, monkeypatch):
-    """The first real pictures (2026-11-09): a scene's start laid over the castle's boot RAM drew the level black (its
-    textures load outside the scene's regions and main pool; 0 of 396 frames drew his recording's bytes, 28 with
-    the reset under it and 4,787 bytes off in all). His own scene and another take lie over the reset of their
-    level, area and act; the boot only where no reset is made."""
-    words = {"timer": 3489, "counter": 2194, "level": 24, "area": 1, "action": 0x1924, "buttons": 0x20, "act": 2}
+RESET_RAM, BOOT_RAM = np.full(16, 7, np.uint8), np.zeros(16, np.uint8)
+
+
+class ResetStages(SimpleNamespace):
+    """Stages as a scene's start sees them: a reset per level (refused for the castle's own levels), the boot."""
+
+    def reset(self, level, area, act):
+        self.asked.append((level, area, act))
+        if level == 6:
+            raise stage_sim.StageError("The simulated game never reached level 6 area 1 act 1.")
+        return RESET_RAM
+
+    def boot(self):
+        return BOOT_RAM, 0
+
+    def course_of_level(self, level):
+        return {24: 2, 17: 16, 6: 0}[level]
+
+
+def _own_scene(tmp_path, monkeypatch, *, ghost_act: int | None = None, scene_act: int | None = 2, level: int = 24):
+    """His own scene's start for the test clip: its first frame names `scene_act` in `level`; the ghost's star
+    names `ghost_act`."""
+    words = {"timer": 3489, "counter": 2194, "level": level, "area": 1, "action": 0x1924, "buttons": 0x20,
+             "act": scene_act}
     (tmp_path / "take-1.sm64scene").write_bytes(b"scene")
     monkeypatch.setattr(gr.package, "open_package", lambda path, rom: None)
     monkeypatch.setattr(gr, "first_state", lambda pkg: ([], None))
     monkeypatch.setattr(gr, "probe", lambda regions, symbols: dict(words))
-    asked = []
-    reset = np.full(16, 7, np.uint8)
+    stages = ResetStages(symbols=SYMBOLS, rom_path=tmp_path / "rom", map_path=tmp_path / "map", asked=[])
+    scenes = gr.GhostScenes(tmp_path, tmp_path / "cache", scenes_dir=[tmp_path], starts_dir=None, stages=stages)
+    own = next(scenes.starts(clip(level=level), "ab" * 32, ghost_act))
+    assert own.kind == gr.OWN_SCENE
+    return own, stages
 
-    class Stages(SimpleNamespace):
-        def reset(self, level, area, act):
-            asked.append((level, area, act))
-            return reset
 
-        def boot(self):
-            return np.zeros(16, np.uint8), 0
+def test_a_scene_start_lies_over_its_levels_reset_so_the_level_draws(tmp_path, monkeypatch):
+    """The first real pictures (2026-11-09): a scene's start laid over the castle's boot RAM drew the level black (its
+    textures load outside the scene's regions and main pool; 0 of 396 frames drew his recording's bytes, 28 with
+    the reset under it and 4,787 bytes off in all). His own scene and another take lie over the reset of their
+    level, area and the act their first frame names."""
+    own, stages = _own_scene(tmp_path, monkeypatch)
+    assert own.ram.tolist() == RESET_RAM.tolist() and stages.asked == [(24, 1, 2)]
+    assert own.detail["base"] == "reset 24-1-2"
 
-    scenes = gr.GhostScenes(tmp_path, tmp_path / "cache", scenes_dir=[tmp_path], starts_dir=None,
-                            stages=Stages(symbols=SYMBOLS, rom_path=tmp_path / "rom", map_path=tmp_path / "map"))
-    own = next(scenes.starts(clip(), "ab" * 32))
-    assert own.kind == gr.OWN_SCENE and own.ram.tolist() == reset.tolist() and asked == [(24, 1, 2)]
+
+def test_a_scene_naming_no_act_takes_the_ghosts_star_act_or_is_refused(tmp_path, monkeypatch):
+    """No silent guess: a course with an act selector whose scene names no act takes the ghost's star act (and says
+    so), else the start is refused and the next one is tried; a course without acts uses act 1, its reset's key;
+    the castle's own levels, which make no reset, lie over the boot and say why."""
+    own, stages = _own_scene(tmp_path, monkeypatch, ghost_act=3, scene_act=None)
+    assert own.ram.tolist() == RESET_RAM.tolist() and stages.asked == [(24, 1, 3)]
+    assert own.detail["act_from"].startswith("the ghost's star")
+    own, stages = _own_scene(tmp_path, monkeypatch, scene_act=0)
+    with pytest.raises(stage_sim.StageError, match="names no act"):
+        _ram = own.ram
+    own, stages = _own_scene(tmp_path, monkeypatch, level=17, scene_act=0)
+    assert own.ram.tolist() == RESET_RAM.tolist() and stages.asked == [(17, 1, 1)]
+    own, stages = _own_scene(tmp_path, monkeypatch, level=6, scene_act=0)
+    assert own.ram.tolist() == BOOT_RAM.tolist() and own.detail["base"] == "boot" and "level 6" in own.detail["base_reason"]
+
+
+def test_a_start_is_the_roms_own_so_the_other_cartridges_start_gives_way_to_the_simulated_reset(tmp_path, monkeypatch):
+    """Either cartridge re-simulates (2026-11-09), but a start's bytes belong to the ROM that made it: a start file
+    made on the other cartridge is refused with a sentence, and the lab's own simulated reset is the start."""
+    import hashlib
+    rom = b"the lab's own ROM"
+    stages = ResetStages(symbols=SYMBOLS, rom=rom, rom_path=tmp_path / "rom", asked=[],
+                         key=lambda level, area, act: f"{level}-{area}-{act}")
+    scenes = gr.GhostScenes(tmp_path, tmp_path / "cache", scenes_dir=None, starts_dir=tmp_path, stages=stages)
+    scenes.refusals = []
+    for maker, first_kind in ((b"another cartridge", gr.SIMULATED_RESET), (rom, gr.GHOST_START)):
+        saved = SimpleNamespace(rom_sha256=hashlib.sha256(maker).hexdigest(), pool_base=None, level=24, area=1, act=1)
+        monkeypatch.setattr(gr.start_frame, "read_start",
+                            lambda folder, sha, downloaded=False, rom=None, saved=saved: None if downloaded else saved)
+        assert next(scenes.starts(clip(), "ab" * 32)).kind == first_kind
+    assert scenes.refusals == [{"start": gr.GHOST_START, "reason": "This ghost's start was made on another ROM."}]
 
 
 def test_every_start_has_a_switch_row_and_an_exactness():

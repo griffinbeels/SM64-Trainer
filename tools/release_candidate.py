@@ -13,8 +13,9 @@ sys.path.insert(0, str(REPO / "src"))
 from sm64_events.bootstrap.beta_payload import checked_members  # noqa: E402
 from sm64_events.core.build_channel import CONFIG_FILENAME, STABLE_PORT, parse_metadata  # noqa: E402
 from sm64_events.core.release_contract import version_key  # noqa: E402
-from sm64_events.core.update_plan import (BUNDLED_NATIVES, NATIVE_FOLDER, RETIRED_NATIVE_TEXT,  # noqa: E402
-                                          RETIRED_NATIVES, parse_manifest, validate_release_manifest)
+from sm64_events.core.update_plan import (BUNDLED_NATIVES, LAB_NATIVES, NATIVE_FOLDER,  # noqa: E402
+                                          RETIRED_NATIVE_TEXT, RETIRED_NATIVES, parse_manifest,
+                                          validate_release_manifest)
 from bundle_policy import (check_bundle_path, tracked_ui_paths, COLLECTION_NAME,
                            SEED_DESCRIPTOR)  # noqa: E402
 
@@ -25,6 +26,13 @@ PUBLIC_FIELDS = ("community_url", "supabase_url", "supabase_publishable_key", "o
 #: (core/update_plan.py RETIRED_NATIVES) is no native: _verify_identity checks
 #: that it is exactly RETIRED_NATIVE_TEXT.
 NATIVES = BUNDLED_NATIVES
+#: The Ghost Lab's natives (core/update_plan.py LAB_NATIVES), recorded the
+#: same way under lab_native_sha256: the installed app runs them, never
+#: compiles them, so their bytes are as much the candidate as the plugin's.
+LAB_FOLDER = "_internal/sm64_events/data/lab"
+#: The Ghost Lab's simulation program (sm64_events/scenelab_code.py SIM_PROGRAM), recorded as sim_program_sha256:
+#: it is the only program that runs Unicorn, so its bytes are recorded like the natives'.
+SIM_PROGRAM = "SM64TrainerSim.exe"
 
 
 def digest(path: Path) -> str:
@@ -81,6 +89,8 @@ def record_candidate(directory: Path, *, version: str, build, artifacts: list[Pa
              "public_config_sha256": public_fingerprint(build), "service": provenance,
              "native_sha256": {name: digest(app / "_internal" / "sm64_events" / "data" / "plugin" / name)
                                for name in NATIVES},
+             "lab_native_sha256": {name: digest(app / LAB_FOLDER / name) for name in LAB_NATIVES},
+             "sim_program_sha256": digest(app / SIM_PROGRAM),
              "artifacts": {p.name: {"sha256": digest(p), "size": p.stat().st_size} for p in artifacts}}
     if promoted_from:
         if len(promoted_from) != 64 or any(c not in "0123456789abcdef" for c in promoted_from):
@@ -120,6 +130,24 @@ def _verify_identity(archive, record):
         with archive.open("_internal/sm64_events/data/plugin/" + name) as stream:
             if hashlib.file_digest(stream, "sha256").hexdigest() != record["native_sha256"][name]:
                 raise ValueError("candidate native provenance disagrees")
+    recorded = record.get("lab_native_sha256")
+    if not isinstance(recorded, dict) or set(recorded) != set(LAB_NATIVES):
+        raise ValueError("candidate lab native provenance is incomplete")
+    for name in LAB_NATIVES:
+        try:
+            with archive.open(f"{LAB_FOLDER}/{name}") as stream:
+                found = hashlib.file_digest(stream, "sha256").hexdigest()
+        except KeyError:
+            found = None
+        if found != recorded[name]:
+            raise ValueError("candidate lab native provenance disagrees")
+    try:
+        with archive.open(SIM_PROGRAM) as stream:
+            program = hashlib.file_digest(stream, "sha256").hexdigest()
+    except KeyError:
+        program = None
+    if program is None or program != record.get("sim_program_sha256"):
+        raise ValueError("candidate simulation program provenance disagrees")
     for name in RETIRED_NATIVES:
         try:
             placeholder = archive.read(f"{NATIVE_FOLDER}/{name}")

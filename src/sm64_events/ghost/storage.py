@@ -16,17 +16,24 @@ handed, skipping what Windows will not let go of.
 | downloaded community ghosts (packaged builds) | `community/cache.py` `CachedPopulation.cached_holdings` / `drop_cached` | the recording |
 | imported ghosts (`shared-ghosts/`) | `ghost/sharing.py` `GhostSharing.holdings` / `remove` | the import |
 | ghost starts (`starts/` beside the population) | `ghost/start_frame.py` `holdings` / `remove_holdings` | its clip's ghost |
+| made scenes (lab only: a ghost's scene the lab made from its recording, the lab's `resim` folder) | `server/scene_resim.py` `SceneResim.made_holdings` / `remove_made` | its clip's ghost |
+
+A made scene (about 3 MB; the Practice log makes every PB ghost's ahead, so it opens at once) counts in the
+ghost its clip counts in and is kept with it by "keep PBs" (decided 2026-11-09). Unlike a start it is only a
+copy the lab can make again, so it goes whenever its button's rule says, and one whose clip is gone is bytes,
+not a ghost.
 
 A ghost start (the game state a ghost begins from, kept so the lab can re-simulate it) follows its clip: it
 counts in the ghost that clip counts in, is kept and pinned with it, and goes only when every clip of its
 sha goes (a population row and his recorded run may share the bytes).
 
-"Keep PBs" keeps, besides every kept attempt's files: each PB (the latest visible save of every
-star and segment, per strategy and per ROM, so whichever ROM runs and whichever slot grades, the
-current PB keeps its ghost), every ghost he saved by hand (`ghost/saved.py`), the runs his input
-templates were marked from, and every imported ghost (an import is a choice, like a save). The
-other button deletes those too. A superseded PB loses its ghost to "keep PBs": an Undo then
-brings back a PB that ranks but races no ghost.
+"Keep PBs" keeps, besides every kept attempt's files: every PB he ever set (each saved pb row's run:
+the current PB of every star and segment, per strategy, timer and ROM, and every earlier PB it beat;
+his words, 2026-11-09: "I want to be able to see all of my past PB ghosts. That is, every time I broke
+my own record."), every ghost he saved by hand (`ghost/saved.py`), the runs his input templates were
+marked from, and every imported ghost (an import is a choice, like a save). The other button deletes
+those too. Measured on his test-server journal, 2026-11-09: 26 pb rows, 24 with a committed clip,
+22.8 MB, 14 of them (about 13 MB) earlier PBs that "keep PBs" deleted before; a new PB adds ~0.5-2 MB.
 
 Neither button ever deletes (counted in `total`, never in a button's number):
 - a file a pending community upload names (`CommunitySync.pending_upload_paths`): his uploads;
@@ -83,21 +90,16 @@ def _normal(path) -> str:
 
 
 def kept_attempts(database) -> set[int]:
-    """The attempts "keep PBs" keeps: each PB slot's latest visible save, hand-saved ghosts and
-    template runs. A slot is (star or segment, timer, strategy, ROM): every answer the practice
-    lookup (`tracking/views.py::current_pbs_by_strat`, `ghost/pb.py::current_pb_ghost`) can give
-    under any running ROM or region scope is the latest save of one of these slots."""
+    """The attempts "keep PBs" keeps: every PB he ever set (each saved pb row's run, the current one and
+    every one it beat, per star or segment, strategy, timer and ROM: his PB progression), hand-saved
+    ghosts and template runs. His words, 2026-11-09: "I want to be able to see all of my past PB ghosts.
+    That is, every time I broke my own record." A pb row on a hidden run (a save state, a cleared
+    attempt) is kept too: the row is still his (`db.pb_attempt_ids`, the startup prune's own set)."""
     from sm64_events.ghost.pb import attempt_id_of
     from sm64_events.ghost.saved import saved_ids
-    from sm64_events.tracking.views import pb_rom
     if database is None:
         return set()
-    latest = {}
-    for row in database.pbs():   # id order: later saves win
-        if row.get("attempt_id"):
-            latest[(row["course_id"], row["star_id"], row.get("segment_id"), row["timer_mode"],
-                    row.get("strat_tag"), pb_rom(row))] = row["attempt_id"]
-    kept = set(latest.values()) | set(saved_ids(database))
+    kept = set(database.pb_attempt_ids()) | set(saved_ids(database))
     templates = getattr(database, "input_templates", None)
     if templates is not None:
         for template in templates().all():
@@ -121,10 +123,11 @@ class GhostStorage:
     file deletes): call it off the event loop. One purge runs at a time."""
 
     def __init__(self, *, database, replay=None, population=None, sharing=None, scenes=None,
-                 community=None, in_use=lambda: ()):
+                 community=None, in_use=lambda: (), made=None):
         """Each source a callable (a late database or a lab that is off answers None)."""
         self.database, self.replay, self.population = database, replay, population
         self.sharing, self.scenes, self.community, self.in_use = sharing, scenes, community, in_use
+        self.made = made
         self.lock = _PURGING                    # one purge at a time, whichever request made this
 
     @staticmethod
@@ -163,7 +166,28 @@ class GhostStorage:
             found += self._starts(found)
         except Exception:  # noqa: BLE001 - starts that cannot be listed are neither shown nor deleted
             log.warning("Ghost starts could not be listed.", exc_info=True)
+        try:
+            found += self._made(found)
+        except Exception:  # noqa: BLE001 - made scenes that cannot be listed are neither shown nor deleted
+            log.warning("Made ghost scenes could not be listed.", exc_info=True)
         return found
+
+    def _made(self, found: list[Holding]) -> list[Holding]:
+        """The lab's made scenes, each counted in (and kept with) the ghost of its clip's sha."""
+        made = self._call(self.made)
+        rows = made.made_holdings() if made is not None and hasattr(made, "made_holdings") else []
+        if not rows:
+            return []
+        owners = defaultdict(list)
+        for holding in found:
+            if holding.kind in ("recorded", "population", "community", "import"):
+                for digest in self._clip_shas(holding):
+                    owners[digest[:16]].append(holding)
+        return [Holding("made", row["ref"], mine[0].ghost if mine else ("made", row["ref"]), row["bytes"],
+                        tuple(row["paths"]), attempt=mine[0].attempt if mine else None,
+                        keep=any(h.keep for h in mine), busy=bool(row["in_use"]),
+                        owners=tuple(id(h) for h in mine))
+                for row in rows for mine in [owners.get(row["sha16"], [])]]
 
     def _starts_root(self):
         store = self._local_store()
@@ -341,8 +365,9 @@ class GhostStorage:
                 if not staying[key] and key not in counted:
                     counted.add(key)
                     total += holding.bytes
-        # A start counts in its clip's ghost; one whose clips are all gone already is bytes, not a ghost.
-        return {"ghosts": len({holding.ghost for holding in chosen if holding.kind != "start" or holding.owners}),
+        # A start or made scene counts in its clip's ghost; one whose clips are all gone is bytes, not a ghost.
+        return {"ghosts": len({holding.ghost for holding in chosen
+                               if holding.kind not in ("start", "made") or holding.owners}),
                 "bytes": total}
 
     def usage(self) -> dict:
@@ -376,6 +401,8 @@ class GhostStorage:
                 freed += result["bytes"]
                 gone = set(result["deleted"])
                 for holding in rows:
+                    if holding.kind == "made" and not holding.owners:
+                        continue                    # bytes with no ghost left: never counted as one
                     (deleted if holding.ref in gone else skipped).add(holding.ghost)
                     if holding.ref in gone:
                         gone_ids.add(id(holding))
@@ -412,6 +439,8 @@ class GhostStorage:
                 return cache.drop_cached(refs)
             if kind == "import":
                 return self._call(self.sharing).remove(refs)
+            if kind == "made":
+                return self._call(self.made).remove_made(refs)
             if kind == "start":
                 from sm64_events.ghost import start_frame
                 return start_frame.remove_holdings(self._starts_root(), refs)

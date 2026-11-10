@@ -94,6 +94,24 @@ test.each(KINDS)("%s: a goal picked by hand retires the one it replaced", (key, 
   expect(plateView.party()).toBeNull();
 });
 
+// Griffin, 2026-11-09, WF "Shoot into the Wild Blue", goal 10"00: a loaded
+// save state's 10"00 played GOAL!. "If the attempt was save stated, then this
+// should NEVER count towards your goals. That's very very important." The
+// server's `save_state` verdict is the whole rule; the plate never restates it.
+test.each(KINDS)("%s: a fresh save-stated finish under the goal never celebrates; a clean one does",
+    (key, clock) => {
+  const plateView = mount(key);
+  const goal = goalOf(key, clock, 1000, "2026-11-09T19:14:00Z", AUTO);
+  const before = [run(1, 400, "2026-11-09T19:13:00Z")];
+  plateView.show(goal, before);
+  const loaded = [...before, { ...run(2, 300, "2026-11-09T19:15:46Z"), save_state: true }];
+  plateView.show(goal, loaded);
+  expect(plateView.party()).toBeNull();
+  const clean = [...loaded, { ...run(3, 300, "2026-11-09T19:16:30Z"), save_state: false }];
+  plateView.show(goal, clean);
+  expect(plateView.party()).toEqual({ time: `10"00 10"00`, beaten: `10"00` });
+});
+
 test("a run that ended before the plate showed any goal is history, not news", () => {
   const plateView = mount("star:8:1");
   plateView.show(goalOf("star:8:1", "igt", 753, "2026-09-28T21:14:13.20Z", AUTO), []);

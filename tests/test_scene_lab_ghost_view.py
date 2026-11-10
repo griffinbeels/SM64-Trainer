@@ -153,7 +153,7 @@ def test_without_the_free_camera_a_ghosts_view_is_the_recorded_picture_with_its_
         session.set_ghosts([{"ref": "a", "label": "Sully"}], Loader({"a": (GHOST, "Sully")}))
         header, _ = session.picture(1, {"ghost": "a"}, "raw")
         assert header["camera"] == "recorded" and header["view"] == {"ghost": "a", "camera": None}
-        assert header["reason"] == session.free_reason and "symbol map" in header["reason"]
+        assert header["reason"] == session.free_reason and "address map" in header["reason"]
     finally:
         session.close()
 

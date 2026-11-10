@@ -1,17 +1,19 @@
-// A ghost's start: optional opaque bytes a trainer uploads after the ghost's
-// GHC1 bytes. The service stores both in one R2 object, never reads the start,
-// and serves it beside the unchanged ghost. Griffin, 2026-11-08: "Yes, 5% more
-// per ghost is fine, and go ahead and update.."
+// A ghost's start: optional bytes a trainer uploads after the ghost's GHC1
+// bytes. The service checks the start's header (start-header.js), stores both
+// in one R2 object, never unpacks the start's game state, and serves it beside
+// the unchanged ghost. Griffin, 2026-11-08: "Yes, 5% more per ghost is fine,
+// and go ahead and update.."; 2026-11-09, on checking the header and sending
+// only the game data that changed: "Sure".
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {randomBytes} from 'node:crypto';
 import {createService} from '../src/service.js';
 import {reconcile} from '../src/reconcile.js';
 import {regrade} from '../src/regrade.js';
 import {deleteIdentities} from '../src/identity-deletion.js';
 import {config,LIMITS} from '../src/config.js';
 import {canonical} from '../src/errors.js';
-import {environment,alice,catalog,nativeClip,upload,digest} from './fixtures.js';
+import SPANS from '../src/start-spans.json' with {type:'json'};
+import {environment,alice,catalog,nativeClip,upload,digest,startFor} from './fixtures.js';
 
 // The strict v1 metadata row every released trainer checks key for key.
 const METADATA=['id','player_id','player_name','target','strategy','clock','game_version','frames','raw_sha256','raw_bytes',
@@ -36,9 +38,8 @@ function harness(env,{cached=true,model=catalog}={}){
   }};
 }
 
-// A start the trainer would send: incompressible bytes of a measured size.
-function withStart(fixture,size=26132){
-  const start=randomBytes(size);
+// A start the trainer would send for this ghost (format version 3 unless named).
+function withStart(fixture,{version=3,start=startFor(fixture.body.raw_sha256,version)}={}){
   return {...fixture,start,body:{...fixture.body,start_sha256:digest(start),start_bytes:start.length}};
 }
 
@@ -86,6 +87,96 @@ test(`a start uploads with its ghost and downloads beside the unchanged ghost by
     if(cached)assert.deepEqual(h.props.map(p=>p.range),[{offset:0,length:fixture.bytes.length},{offset:fixture.bytes.length,length:fixture.start.length}]);
     // Each download spends one Class B ticket, the start's like the ghost's.
     assert.equal((await store.one("SELECT class_b FROM quotas WHERE owner='*'")).class_b,2);
+  }finally{env.DB.close();}
+});
+
+// The start's header, rewritten: version, then a change to its JSON. The packed
+// payload after it is kept, as a hostile client could send it.
+function rewritten(start,change,version){
+  const length=start.readUInt32LE(12),meta=JSON.parse(start.subarray(16,16+length));change(meta);
+  const text=Buffer.from(JSON.stringify(meta)),head=Buffer.alloc(16);
+  start.copy(head,0,0,8);head.writeUInt32LE(version??start.readUInt32LE(8),8);head.writeUInt32LE(text.length,12);
+  return Buffer.concat([head,text,start.subarray(16+length)]);
+}
+
+test('both start formats the trainer writes are taken: version 3 (game data as its difference) and version 2 (whole)',async()=>{
+  const {env}=await environment(),h=harness(env);
+  try{
+    for(const [version,marker,count] of [[3,1,100],[2,2,90]]){    // each faster, so each publishes
+      const fixture=withStart(upload(nativeClip({marker,count})),{version});
+      const id=await publish(h,fixture);
+      assert.deepEqual(await bytesOf((await h.call('/v1/recordings/'+id+'/start',{user:'bob'})).response),fixture.start,String(version));
+    }
+  }finally{env.DB.close();}
+});
+
+// The trainer's US spans (tests/test_ghost_start_frame.py keeps this file equal to its own).
+const SPANS_US=SPANS.us.regions;
+// A JP start as the trainer writes one: the same header over the JP spans.
+const asJP=s=>rewritten(s,m=>{m.game_version='jp';m.regions=structuredClone(SPANS.jp.regions);m.boot[0].begin=SPANS.jp.boot[0];});
+
+test('a JP start is taken over the JP spans, and neither cartridge takes the other one\'s',async()=>{
+  const {env}=await environment(),h=harness(env);
+  try{
+    const us=withStart(upload()),jp=asJP(us.start);
+    // JP's spans differ from US's: its .data begins elsewhere.
+    assert.notDeepEqual(SPANS.jp.regions,SPANS.us.regions);assert.notEqual(SPANS.jp.boot[0],SPANS.us.boot[0]);
+    for(const [name,start,status] of [['US regions named JP',rewritten(us.start,m=>{m.game_version='jp';m.boot[0].begin=SPANS.jp.boot[0];}),422],
+      ['JP regions named US',rewritten(jp,m=>{m.game_version='us';m.boot[0].begin=SPANS.us.boot[0];}),422],
+      ['JP with the US boot span',rewritten(jp,m=>{m.boot[0].begin=SPANS.us.boot[0];}),422]]){
+      const body={...us.body,start_sha256:digest(start),start_bytes:start.length};
+      const admission=await h.call('/v1/uploads',{method:'POST',body});
+      const refused=await h.call('/v1/uploads/'+admission.json.upload_id,{method:'PUT',bytes:Buffer.concat([us.bytes,start])});
+      assert.equal(refused.response.status,status,name);assert.equal(refused.json.error.code,'start_invalid',name);
+    }
+    const id=await publish(h,withStart(upload(),{start:jp}));
+    assert.deepEqual(await bytesOf((await h.call('/v1/recordings/'+id+'/start',{user:'bob'})).response),jp);
+  }finally{env.DB.close();}
+});
+const refusals={
+  'random bytes':()=>Buffer.from('not a ghost start, only bytes that a client claims are one'),
+  'another magic':s=>Buffer.concat([Buffer.from('SM64STRX'),s.subarray(8)]),
+  'version 1':s=>rewritten(s,m=>{m.version=1;},1),
+  'version 4':s=>rewritten(s,m=>{m.version=4;},4),
+  'a header longer than the start':s=>{const b=Buffer.from(s);b.writeUInt32LE(s.length,12);return b;},
+  'a header that is not JSON':s=>{const b=Buffer.from(s);b[16]=0x7b^0xff;return b;},
+  'a field the trainer does not write':s=>rewritten(s,m=>{m.code='x';}),
+  'a missing field':s=>rewritten(s,m=>{delete m.made_utc;}),
+  'a header version unlike its own':s=>rewritten(s,m=>{m.version=2;}),
+  'a version 2 header with differences':s=>rewritten(s,m=>{m.version=2;},2),
+  'an unknown game version':s=>rewritten(s,m=>{m.game_version='pal';}),
+  'a span table key as a game version':s=>rewritten(s,m=>{m.game_version='_versions';}),
+  'another ghost':s=>rewritten(s,m=>{m.clip_sha256='0'.repeat(64);}),
+  'the game code as a region':s=>rewritten(s,m=>{m.regions[0]=[0x246000,512];}),
+  'one region short':s=>rewritten(s,m=>{m.regions.pop();}),
+  'a region spilling past its span':s=>rewritten(s,m=>{m.regions[1][1]+=4;}),
+  'main-pool changes':s=>rewritten(s,m=>{m.pool={base:'cold-reset-v1-24-1-1',base_sha256:'1'.repeat(64),runs:2};}),
+  'bss as a difference':s=>rewritten(s,m=>{m.boot[0].begin=SPANS_US[3][0];}),
+  'one difference twice':s=>rewritten(s,m=>{m.boot.push({...m.boot[0]});}),
+  'too many difference runs':s=>rewritten(s,m=>{m.boot[0].runs=4097;}),
+  'a ROM reference that is not a sha256':s=>rewritten(s,m=>{m.boot[0].base_sha256='zz';}),
+  'a negative clock':s=>rewritten(s,m=>{m.global_timer=-1;}),
+  'a fractional level':s=>rewritten(s,m=>{m.level=24.5;}),
+};
+
+test('a start whose header is not one the trainer writes is refused before any storage, with its reservation refunded',async()=>{
+  const {env,store}=await environment(),h=harness(env);
+  try{
+    const fixture=withStart(upload());
+    // The fixture's own regions are the US spans the trainer allows.
+    assert.deepEqual(JSON.parse(fixture.start.subarray(16,16+fixture.start.readUInt32LE(12))).regions,SPANS_US);
+    for(const [name,make] of Object.entries(refusals)){
+      const start=make(fixture.start),body={...fixture.body,start_sha256:digest(start),start_bytes:start.length};
+      const admission=await h.call('/v1/uploads',{method:'POST',body});
+      assert.equal(admission.json.disposition,'upload',name);
+      const refused=await h.call('/v1/uploads/'+admission.json.upload_id,{method:'PUT',bytes:Buffer.concat([fixture.bytes,start])});
+      assert.equal(refused.response.status,422,name);assert.equal(refused.json.error.code,'start_invalid',name);
+      assert.match(refused.json.error.message,/^The ghost start/,name);
+      assert.equal(env.GHOSTS.objects.size,0,name);assert.equal(env.GHOSTS.multipart.size,0,name);
+      assert.deepEqual(await used(store),{bytes_used:0,bytes_reserved:0},name);
+    }
+    // The untouched start still publishes after all of them.
+    await publish(h,fixture);
   }finally{env.DB.close();}
 });
 

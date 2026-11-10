@@ -147,9 +147,20 @@ class SceneMoments:
             if child is not None and child.poll() is None:
                 child.kill()
 
+    async def _config(self):
+        """The lab's config with the ROM and the map a build needs, else ConfigError with the sentence why (the
+        installed app's in the player's words, core/lab_inputs.py)."""
+        api = importlib.import_module("sm64_events.server.scene_lab_api")   # the module in sys.modules, as the routes catch
+        config = await asyncio.to_thread(self.lab.config)
+        config.require_rom()
+        if config.map is None:
+            from sm64_events.core.lab_inputs import NO_MAP as APP_NO_MAP
+            raise api.ConfigError(APP_NO_MAP if config.in_app else NO_MAP)
+        return config
+
     async def _source(self, body: MomentBody) -> tuple[Path, str]:
         api = importlib.import_module("sm64_events.server.scene_lab_api")   # the module in sys.modules, as the routes catch
-        config = await asyncio.to_thread(api.LabConfig.load, self.lab.config_path)
+        config = await asyncio.to_thread(self.lab.config)
         if body.ghost is not None:
             return await self._ghost_source(body)
         if body.attempt is None:
@@ -184,9 +195,7 @@ class SceneMoments:
         api = importlib.import_module("sm64_events.server.scene_lab_api")   # the module in sys.modules, as the routes catch
         resim = getattr(self.lab, "resim", None)
         if body.ghost is not None and resim is not None and resim.is_building(body.ghost):
-            config = await asyncio.to_thread(api.LabConfig.load, self.lab.config_path)
-            if config.map is None:
-                raise api.ConfigError(NO_MAP)
+            config = await self._config()
             async with self.turn:
                 done = await asyncio.to_thread(self._built_part_blocking, body, config, resim, api)
             if done is not None:
@@ -194,9 +203,7 @@ class SceneMoments:
                 return answer if data is None else self._keep(answer, data, f"Ghost frame {body.frame}", None,
                                                                (part, body.frame))
         path, title = await self._source(body)
-        config = await asyncio.to_thread(api.LabConfig.load, self.lab.config_path)
-        if config.map is None:
-            raise api.ConfigError(NO_MAP)
+        config = await self._config()
         stat = await asyncio.to_thread(path.stat)
         key = (str(path), stat.st_mtime_ns, stat.st_size, body.frame)
         async with self.turn:

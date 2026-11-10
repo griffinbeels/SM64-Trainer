@@ -25,8 +25,9 @@ sys.path.insert(0, str(REPO / "src"))
 from sm64_events.core.build_channel import (BETA_APP_DIR, BuildChannel, CONFIG_FILENAME,
                                            read_metadata)  # noqa: E402
 from sm64_events.core.reporting_setup import CONFIG_FILE as REPORTING_CONFIG, read_config_dsn  # noqa: E402
-from build_exe import (COLLECT, SEP, _source_date_epoch, app_args, needs_reexec, pinned_ffmpeg,  # noqa: E402
-                       scan_built, stage_reporting, write_retired_natives)
+from build_exe import (COLLECT, SEP, _source_date_epoch, app_args, merge_sim, needs_reexec,  # noqa: E402
+                       pinned_ffmpeg, scan_built, sim_args, stage_reporting, write_retired_natives)
+from bundle_policy import SIM_CONTENTS, SIM_EXE  # noqa: E402
 from sm64_events.core.update_plan import BUNDLED_NATIVES, NATIVE_FOLDER, RETIRED_NATIVES  # noqa: E402
 from make_manifest import build_zip  # noqa: E402
 from beta_ghosts import (ApprovedCollection, COLLECTION_NAME, matches, review_collection,
@@ -74,10 +75,9 @@ def check_prerequisites(ffmpeg: str | None) -> str:
         raise RuntimeError("build environment is missing: " + ", ".join(missing))
     import build_natives
     import defender_scan
-    build_natives.ensure(build=False, strict=True)
+    build_natives.ensure(build=False, strict=True, lab=True)
     # A Defender verdict can arrive long after a build (2026-11-06): refuse a flagged native.
-    defender_scan.require_clean([build_natives.BUNDLE / native.name for native in build_natives.natives()],
-                                strict=True)
+    defender_scan.require_clean(build_natives.bundle_files(lab=True), strict=True)
     from build_defaults_seed import main as check_defaults
     if check_defaults(["--check"]):
         raise RuntimeError("defaults seed is stale; regenerate it before packaging")
@@ -243,11 +243,16 @@ def main(argv: list[str] | None = None) -> int:
         metadata.write_text(json.dumps(build.metadata(), sort_keys=True, indent=2) + "\n", encoding="utf-8")
         import PyInstaller.__main__ as pyi
         pyi.run(beta_args(ffmpeg, metadata))
+        # The Ghost Lab's simulation program, as every normal build carries it (build_exe.build_app).
+        pyi.run(sim_args(metadata_path=metadata, distpath=WORK / "sim-dist", workpath=WORK / "sim",
+                         specpath=WORK / "spec"))
+        merge_sim(WORK / "sim-dist" / SIM_EXE.removesuffix(".exe"), DIST / BETA_APP_DIR)
         write_retired_natives(DIST / BETA_APP_DIR)
         import third_party_notices    # the same license notices a public build carries
-        third_party_notices.stage(DIST / BETA_APP_DIR / "_internal",
-                                  third_party_notices.bundled_import_names(DIST / BETA_APP_DIR, BETA_APP_DIR),
-                                  Path(ffmpeg))
+        names = third_party_notices.bundled_import_names(DIST / BETA_APP_DIR, BETA_APP_DIR)
+        names |= third_party_notices.bundled_import_names(DIST / BETA_APP_DIR, SIM_EXE.removesuffix(".exe"),
+                                                          SIM_CONTENTS)
+        third_party_notices.stage(DIST / BETA_APP_DIR / "_internal", names, Path(ffmpeg))
         scan_built(DIST / BETA_APP_DIR, BETA_APP_DIR)  # before the ZIP carries the bytes
         archive = package_beta(DIST / BETA_APP_DIR, build, DIST, ghosts=ghosts, ghost_author=author)
         pyi.run(installer_args())

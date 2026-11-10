@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Runs in the simulation program (SM64TrainerSim.exe); licenses/README.md lists its GPL-2.0-or-later code.
 """A stage for a course and act he never recorded, made by the game's own code in the simulation (Ghost
 Handoff re-simulation). Simulation only: nothing here touches Project64 or the running game.
 
@@ -25,14 +27,13 @@ scenes, every frame, Mario 0.000 units, the same single differing word), so the 
 start lies over (boot()).
 
 Every reset is cached under the cache folder by its recipe (STAGE_VERSION, build, ROM, level, area, act),
-so a second ask costs a file read. Scenes on the JP cartridge are not made yet: the slot tools and frame_sim's
-fixed thread frames are the US build's, so machine() refuses JP with a sentence; a JP reset and its
-reference are made all the same (start files captured there need them).
+so a second ask costs a file read. Both cartridges simulate (2026-11-09): each build's own frame facts are
+read off its code (frame_sim.SimBuild), so a JP lab rebuilds a ghost on the JP cartridge, whichever cartridge
+recorded it (the same seven levels' ghosts part, or never part, at the same record on both).
 """
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import struct
 import sys
@@ -44,8 +45,9 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import frame_sim as sim  # noqa: E402
+# The cache's names live outside the simulation, so the server can read them without importing it.
+from stage_cache import STAGE_VERSION, boot_file, made, recipe, reset_file  # noqa: E402,F401
 
-STAGE_VERSION = 2                # the reset's recipe: a change makes every reset (and start-file base) anew
 PACKAGE_VERSION = 2              # a stage scene's own form: 2 shows every frame at the game's 30 fps
 RESET_BUTTON = 0x0020            # L: Usamune's practice reset
 ENTRY_NODE = 0x0A                # a course's painting entry
@@ -76,8 +78,7 @@ VI_MODE_BYTES = 0x50             # sizeof(OSViMode): type, 9 common registers, 2
 VI_GAMMA, VI_ANTIALIAS, VI_DITHER_FILTER = 0x0008, 0x0300, 0x10000
 
 
-JP_NOT_YET = "The lab cannot play scenes on the JP cartridge yet, only on the US one."
-JP_SLOTS_NOT_YET = "The lab cannot make or check save states for the JP cartridge yet, only for the US one."
+SLOTS_UNKNOWN = "This Trainer does not know where this cartridge keeps its save states, so it cannot make them."
 
 
 class StageError(RuntimeError):
@@ -85,12 +86,16 @@ class StageError(RuntimeError):
 
 
 def lab_config() -> dict:
-    return json.loads((sim.lab_root() / "lab.json").read_text(encoding="utf-8"))
+    """The lab's ROM and map when a caller named none: the lab root's lab.json from a source checkout, the installed
+    app's own inputs otherwise (core/lab_inputs.py::tool_config)."""
+    from sm64_events.core.lab_inputs import tool_config  # noqa: PLC0415
+    return tool_config()
 
 
 class Machine:
     """frame_sim's thread 5 over one RAM image; step(pads) runs a game frame to the scene tap's moment,
-    two VIs a frame (a ghost records no VI count; only Usamune's lag counter can tell). The US build's."""
+    two VIs a frame (a ghost records no VI count; only Usamune's lag counter can tell). Either build: the
+    cartridge's own frame facts come from its code (frame_sim.SimBuild)."""
 
     def __init__(self, ram: np.ndarray, rom: bytes, symbols: sim.Symbols, fcsr: int, cpu_class=None):
         self.cpu = (cpu_class or sim.GameCpu)(ram, rom, symbols, fcsr)
@@ -102,8 +107,9 @@ class Machine:
         cpu = self.cpu
         cpu.pads = pads
         cpu.put_u32(self.symbols["sNumVblanks"], cpu.u32(self.symbols["sNumVblanks"]) + 2)
-        cpu.put_u32(sim.USAMUNE_VI_COUNT, cpu.u32(sim.USAMUNE_VI_COUNT) + 2)
-        if not cpu.run_frame(sim.RESUME):
+        counter = cpu.build.usamune_vi_count
+        cpu.put_u32(counter, cpu.u32(counter) + 2)
+        if not cpu.run_frame():
             raise StageError(f"The simulated game stopped: {cpu.violations[:2]}")
         cpu.scheduler_model()
 
@@ -168,6 +174,8 @@ class Stages:
     def __init__(self, lab_root: Path, cache: Path, *, rom_path: Path | None = None, symbols: sim.Symbols | None = None,
                  map_path: Path | None = None):
         config = lab_config() if rom_path is None or symbols is None or map_path is None else {}
+        if (map_path or config.get("map")) is None or (rom_path or config.get("rom")) is None:
+            raise StageError(next(iter(config.get("problems") or ()), "The lab has no ROM or map to simulate."))
         self.map_path = Path(map_path or config["map"])
         self.lab_root, self.cache = Path(lab_root), Path(cache)
         self.rom_path = Path(rom_path or config["rom"])
@@ -195,8 +203,9 @@ class Stages:
         """The cold boot in the castle grounds: (game, its snapshot). Booted once (~3 s), then restored."""
         if self._game is None:
             import cold_boot  # noqa: PLC0415
-            try:
-                game, _frames = cold_boot.boot_into_castle(self.version(), {"rom": str(self.rom_path)})
+            try:                                             # this lab's own ROM and map, never a lab.json's
+                game, _frames = cold_boot.boot_into_castle(self.version(), {
+                    "rom": str(self.rom_path), "maps": {self.version(): str(self.map_path)}})
             except SystemExit as stopped:                    # cold_boot's own sentences
                 raise StageError(f"The simulated cartridge did not boot: {stopped}") from None
             self._game, self._castle_snap = game, game.snapshot()
@@ -206,7 +215,7 @@ class Stages:
         """The RAM a start lies over (code, threads, everything a scene's regions do not hold): the cold boot's
         castle grounds, cached on disk by build and ROM; and thread 5's FCSR."""
         if self._boot is None:
-            path = self.cache / f"boot-{self._recipe()}.npz"
+            path = boot_file(self.cache, self._recipe())
             if path.is_file():
                 self._boot = np.load(path)["ram"]
             else:
@@ -219,10 +228,10 @@ class Stages:
         return vi_of_mode(self.boot()[0], self.symbols)
 
     def simulates(self) -> None:
-        """StageError unless this build's scenes can be simulated: the US one only, this round (frame_sim's fixed
-        thread frames and handoff_slot's call site are the US build's; the JP map lacks sCurrentCmd)."""
-        if self.version() != "us":
-            raise StageError(JP_NOT_YET)
+        """StageError unless this cartridge's scenes can be simulated: Usamune US or JP. Each build's own frame
+        facts are read off its code (frame_sim.SimBuild), and the names STROOP's JP map lacks off the same code
+        (frame_sim.complete_symbols)."""
+        self.version()
 
     def machine(self, ram: np.ndarray):
         """A machine that steps this build's thread 5 from `ram`."""
@@ -245,7 +254,8 @@ class Stages:
         return int(ram[sim.phys(self.symbols[LEVEL_TO_COURSE]) + level - 1])
 
     def _recipe(self) -> str:
-        return f"v{STAGE_VERSION}-{self.version()}-{hashlib.sha256(self.rom).hexdigest()[:12]}"
+        self.version()                                       # StageError for a ROM that is neither build
+        return recipe(self.rom)
 
     def key(self, level: int, area: int, act: int) -> str:
         return f"{self._recipe()}-{level}-{area}-{act}"
@@ -278,14 +288,14 @@ class Stages:
             return ram[sim.phys(address):sim.phys(address) + size].tobytes()
         try:
             build = usamune.build_for(self.version())
-        except LayoutIncomplete:                          # memory/layout.py: JP's slot addresses are not verified yet
-            raise StageError(JP_SLOTS_NOT_YET) from None
+        except LayoutIncomplete:                          # memory/layout.py names no slot addresses for this build
+            raise StageError(SLOTS_UNKNOWN) from None
         return usamune.routine_fingerprint(read, build)
 
     def reset(self, level: int, area: int, act: int) -> np.ndarray:
         """The practice-reset state of that level, area and act (cached)."""
         with self.lock:
-            path = self.cache / f"reset-{self.key(level, area, act)}.npz"
+            path = reset_file(self.cache, self._recipe(), level, area, act)
             if path.is_file():
                 return np.load(path)["ram"]
             ram = self._make_reset(level, area, act)
@@ -353,7 +363,7 @@ class Stages:
         template = start[sim.phys(self.symbols["gControllerPads"]):sim.phys(self.symbols["gControllerPads"]) + 24].tobytes()
         machine = self.machine(start.copy())
         writer = sim_scene.SimScene(out, self.cache / f"work-{time.monotonic_ns()}", self.rom_path, self.symbols, self.vi(),
-                                    seeds=self.cache)
+                                    self.version(), seeds=self.cache)
         try:
             for _ in range(frames):
                 machine.step(pads(0, 0, 0, template))

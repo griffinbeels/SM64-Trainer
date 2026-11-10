@@ -427,7 +427,11 @@ def _build_capture_layer(poller, replay):
         auto_refresh=current_build().channel == 'stable',
         installer=installer_identity())
     from sm64_events.core.setup_runtime import SetupRuntime
-    setup_observer = SetupRuntime(WinProcesses(), Pj64Memory, poller, replay)
+    from sm64_events.scenelab.roms import dev_lab_roms
+    from sm64_events.scenelab.roms import default_store as lab_rom_store   # setup copies the practice ROM too
+    # A developer's lab (SM64_SCENE_LAB) reads its own ROM files and never fills the store.
+    setup_observer = SetupRuntime(WinProcesses(), Pj64Memory, poller, replay,
+                                  rom_store=None if dev_lab_roms() is not None else lab_rom_store())
     if not capture_layer.auto_refresh:
         return capture_layer, setup_observer
     try:
@@ -677,19 +681,51 @@ def build(*, recorder_lock=None):
         refresh_library_on_start=True, community_account=community_account,
         community_sync=community_sync,
         multiplayer=_build_multiplayer(replay, community_account, appearance=ghost.live_appearance),
+        course_art=_course_art(),
         protect_local_api=True, local_port=server_port()), tracker=service, live_audio=_scene_lab_live_audio(),
         ghost_sources={"tracker": service, "replay": replay, "ghost": ghost, "community": community_sync},
-        game_timer=lambda: poller.latest.global_timer if poller.latest is not None else None)
+        game_timer=lambda: poller.latest.global_timer if poller.latest is not None else None,
+        game_region=lambda: poller.observed_game_version,
+        plugin_dir=_plugin_dir_of(capture_layer), app_background=True)
+
+
+def _course_art():
+    """Course portraits cut from the player's own ROM (interface I3), cached in the data folder."""
+    from sm64_events.core import paths
+    from sm64_events.course_art import CourseArt
+    return CourseArt(paths.course_art_dir())
 
 
 _LIVE_SOUND: list = []          # the one LiveAudio of this process, once asked for
 
 
+def _scene_lab_on() -> bool:
+    """The Ghost Lab's one switch: SM64_SCENE_LAB names a developer's lab config, or this is the installed app with
+    the Ghost Lab on (core/lab_inputs.py IN_APP, Griffin's D2). A source checkout without the variable has none."""
+    from sm64_events.core.lab_inputs import app_lab_on
+    return bool(os.environ.get("SM64_SCENE_LAB")) or app_lab_on()
+
+
+def _plugin_dir_of(capture_layer, keep_seconds: float = 10.0):
+    """The Ghost Lab's view of Project64's Plugin folder: the setup screen's own answer (the capture layer's status,
+    which also reads a custom Plugin Directory), kept `keep_seconds` so the lab's status polls never rescan it."""
+    import time
+    kept = {"at": None, "folder": None}
+
+    def plugin_dir():
+        now = time.monotonic()
+        if kept["at"] is None or now - kept["at"] > keep_seconds:
+            kept["at"] = now
+            kept["folder"] = getattr(capture_layer.status(), "plugin_dir", None) if capture_layer is not None else None
+        return kept["folder"]
+    return plugin_dir
+
+
 def _scene_lab_live_audio():
     """The scene lab's copy of the recorder's game sound (live_audio.LiveAudio, the last 300 s),
-    or None: the lab is off, or this app is frozen (the scene lab runs from a source checkout).
-    One per process: the recorder's factories and the lab share it."""
-    if not os.environ.get("SM64_SCENE_LAB"):
+    or None: the lab is off, or its code did not load. One per process: the recorder's factories
+    and the lab share it."""
+    if not _scene_lab_on():
         return None
     if not _LIVE_SOUND:
         from sm64_events.server.scene_lab_api import ConfigError, _lab_module
@@ -700,11 +736,16 @@ def _scene_lab_live_audio():
     return _LIVE_SOUND[0]
 
 
-def _mount_scene_lab(app, tracker=None, live_audio=None, ghost_sources=None, game_timer=None):
-    """M4's scene viewer is a lab-only surface (server/scene_lab_api.py). This is the one
-    reader of its switch: unless SM64_SCENE_LAB names a lab config, nothing is imported and
-    the shell never shows its entry. The shell's one probe (GET /api/scene-lab) then answers
-    {"lab": null}: a 404 there put an HTTP error on every page load of every install.
+def _mount_scene_lab(app, tracker=None, live_audio=None, ghost_sources=None, game_timer=None, plugin_dir=None,
+                     app_background=False, game_region=None):
+    """M4's scene viewer, the Ghost Lab (server/scene_lab_api.py). This is the one reader of its
+    switch (_scene_lab_on): SM64_SCENE_LAB names a developer's lab config, read exactly as before;
+    the installed app (frozen) mounts it with no lab config at all, from its own inputs
+    (core/lab_inputs.py: the ROM store, the bundled maps, and `plugin_dir()`, Project64's Plugin
+    folder as setup found it), and says in the page why nothing can open yet when one is missing.
+    Otherwise nothing is imported and the shell never shows its entry. The shell's one probe
+    (GET /api/scene-lab) then answers {"lab": null}: a 404 there put an HTTP error on every page
+    load of every install.
     Mounting twice (a lab script that wraps an app the UI fixture already mounted) is a no-op.
     With the switch on, the server's own `tracker` also feeds the lab's attempt scenes (the
     live recording's lease, a cut per completed attempt); a caller without one (the UI fixture)
@@ -712,16 +753,27 @@ def _mount_scene_lab(app, tracker=None, live_audio=None, ghost_sources=None, gam
     stage and ghost catalog read ({"tracker", "replay", "ghost", "community"}, server/scene_ghosts.py); it
     never arms anything. The same tracker's spawns refit the Usamune slots (slotlibrary/refit.py).
     `game_timer` is the poller's newest game clock: the lab's background work pauses while his game runs
-    slow (server/scene_warm.py GamePace)."""
+    slow (server/scene_warm.py GamePace). `app_background` (the live server only): the installed app copies the
+    ROM from the running game and starts the stage warmer once a ROM is known (scene_lab_api._AppBackground).
+    `game_region` is the running cartridge's region (the poller's): the installed app cuts attempt scenes with that
+    region's ROM (scene_lab_api.RegionCutter)."""
     if any(getattr(route, "path", None) == "/api/scene-lab" for route in app.routes):
         return app
     config = os.environ.get("SM64_SCENE_LAB")
-    if config:
+    if _scene_lab_on():
         from sm64_events.server.scene_lab_api import mount_scene_lab
         from sm64_events.server.scene_warm import GamePace
-        lab = mount_scene_lab(app, config, live=tracker is not None, live_audio=live_audio,
+        from_app = {}
+        if not config:                                 # the installed app: its own inputs, no lab.json
+            from functools import partial
+
+            from sm64_events.core.lab_inputs import app_inputs
+            from_app = {"app_inputs": partial(app_inputs, plugin=plugin_dir), "app_background": app_background,
+                        "game_region": game_region}
+        lab = mount_scene_lab(app, config or None, live=tracker is not None, live_audio=live_audio,
                               ghost_sources=ghost_sources,
-                              resim_options={"pace": GamePace(game_timer)} if game_timer is not None else {})
+                              resim_options={"pace": GamePace(game_timer)} if game_timer is not None else {},
+                              **from_app)
         if tracker is not None:
             lab.follow_attempts(tracker)
             lab.follow_spawns(tracker)

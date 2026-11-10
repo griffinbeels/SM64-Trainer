@@ -123,7 +123,7 @@ console.log(JSON.stringify(segmentOptions(defs, taxonomy)));
 
 CONTEXT = """
 const context = {
-  courseIcons: { bob: "bob.webp", rr: "rr.png" },   // hmc/ssl/ddd/sl absent
+  courseIcons: { bob: "0123456789abcdef-v1/bob.png", rr: "standin/rr.svg" },   // hmc/ssl/ddd/sl absent
   starIconsMode: "course",
   iconOverrides: { "segment:7": "bitfs" },
   courseByLevel: { "9": 1, "22": 7, "17": 16 },
@@ -135,7 +135,7 @@ const context = {
 def test_course_icon_prefers_the_portrait():
     src = run_node("optionIcon", CONTEXT
                    + 'console.log(JSON.stringify(optionIcon("course", "1", context)));')
-    assert src == "/ui/assets/course_icons/bob.webp"
+    assert src == "/api/icons/course/0123456789abcdef-v1/bob.png"
 
 
 def test_the_four_painting_less_courses_use_their_hand_picked_icons():
@@ -171,7 +171,7 @@ console.log(JSON.stringify(optionIcon("star", "1:2", classicContext)));
 def test_level_icon_routes_through_its_course():
     src = run_node("optionIcon", CONTEXT
                    + 'console.log(JSON.stringify(optionIcon("level", "9", context)));')
-    assert src == "/ui/assets/course_icons/bob.webp"
+    assert src == "/api/icons/course/0123456789abcdef-v1/bob.png"
 
 
 def test_bowser_levels_use_their_own_art():
@@ -254,9 +254,9 @@ def test_special_stages_use_their_own_art_not_a_plain_star():
 def test_a_special_stage_with_a_real_portrait_prefers_it():
     # PSS is the one special stage the game DOES give a painting.
     src = run_node("optionIcon", "const context = { courseIcons: "
-                   '{ princess_secret: "princess_secret.webp" } };\n'
+                   '{ princess_secret: "0123456789abcdef-v1/princess_secret.png" } };\n'
                    'console.log(JSON.stringify(optionIcon("course", "19", context)));')
-    assert src == "/ui/assets/course_icons/princess_secret.webp"
+    assert src == "/api/icons/course/0123456789abcdef-v1/princess_secret.png"
 
 
 def test_stars_inside_a_special_stage_wear_the_stage_art():
@@ -285,9 +285,9 @@ def test_the_slide_course_still_wears_its_portrait():
     """A course icon names the stage, a star icon names the star — giving
     the stars their own art must not take the painting off the course."""
     src = run_node("optionIcon", "const context = { courseIcons: "
-                   '{ princess_secret: "princess_secret.webp" } };\n'
+                   '{ princess_secret: "0123456789abcdef-v1/princess_secret.png" } };\n'
                    'console.log(JSON.stringify(optionIcon("course", "19", context)));')
-    assert src == "/ui/assets/course_icons/princess_secret.webp"
+    assert src == "/api/icons/course/0123456789abcdef-v1/princess_secret.png"
 
 
 CATALOG_UNION = """

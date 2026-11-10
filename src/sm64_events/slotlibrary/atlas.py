@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Runs in the simulation program (SM64TrainerSim.exe); licenses/README.md lists its GPL-2.0-or-later code.
 """Atlases: for one level and area, where the two Usamune builds keep the same main-pool data.
 
 A slot holds pointers into the main pool: the level's geometry, collision, models and the blocks objects

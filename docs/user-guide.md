@@ -52,6 +52,12 @@ only the first manual download does.)
 - **Windowed**, not exclusive fullscreen, or replay capture can't see the game.
 - Your data lives in `%LOCALAPPDATA%\SM64Trainer\` and survives every update.
 
+**Course pictures come from your own ROM.** The Trainer does not ship any of
+the game's pictures. Once it has found your Usamune ROM, it copies each
+course's painting out of that ROM on your computer and keeps the copies in
+your data folder. Until then, each course shows a plain tile with its short
+name, such as "BoB". Nothing from your ROM is uploaded.
+
 **Setup and Practice Replay.** Each page shows the current action, with
 optional help for getting Project64, setting up your own Usamune ROM, and
 configuring the game/controller. Pages advance after a visible acknowledgment;
@@ -66,6 +72,15 @@ Each difference says how to fix it and links the guide. A different controller
 plugin is fine; it is only noted. If ghosts stop showing and your setup differs,
 the practice card says so and opens this check for you. The setup wizard's
 last page lists any differences too, but never stops you from practicing.
+
+**Your ROM for the Ghost Lab.** The Ghost Lab plays ghosts with your own Usamune
+ROM. You don't have to do anything: while setup watches your game, the trainer
+copies the Usamune ROM you have open in Project64, and it finds the other version
+(US or JP) in Project64's ROM folder if you have it there. The copy stays on your
+computer, in `%LOCALAPPDATA%\SM64Trainer\scene-lab\roms`, and is never uploaded.
+The trainer only reads Project64's files and never changes them. If the trainer
+can't find the US ROM, **Check my setup** and the Ghost Lab show a
+**Choose ROM file** button so you can pick it once.
 
 Already set up? The trainer compares the installed graphics plugin's build with
 this build and checks Project64's selected graphics plugin. A matching installation
@@ -124,9 +139,29 @@ Choosing a strategy also classifies pending attempts and automatically saves
 the fastest eligible success as GOLD. Correcting the latest attempt's strategy
 saves it when it beats that strategy's PB, with the usual rank celebration.
 
+**See your PB history.** The practice log hides resets and deaths from the
+start, so each card shows the runs you finished. To see them again, open the
+log's settings (the gear) and turn off **Hide resets and deaths**. Press
+**PBs only** beside the gear to see every time you beat your own best: each
+card then lists only the runs that set a new personal best, newest first.
+PBs only shows every session, so the Session card switches to Lifetime. When
+you turn PBs only off, the log goes back to the session you were looking at.
+When the Ghost Lab is on, every run with a ghost has a Ghost button that opens
+it there. If the Ghost Lab has no recording of that run, it builds the scene
+from the ghost.
+
 **Segments.** Not just stars: define any repeatable piece of the run (LBLJ,
 a pipe entry, a Bowser fight, a castle movement) and it becomes a first-class
 practice target with the same history, PBs, ranks and replays a star gets.
+
+**Ghost Lab.** Open **Ghost Lab** in the sidebar to watch a ghost from any angle:
+your own runs, and other players' ghosts for the star you pick. It works as soon as
+the setup wizard is done; there is nothing else to set up. Pick a star, then a
+ghost. The Ghost Lab plays the run again inside a copy of the game that runs on
+your computer, so you can move the camera anywhere, step one frame at a time, and
+press 1 to 9 to put that moment into the matching Usamune save state slot. After
+setup, the trainer prepares each course in the background while your computer is
+not busy, so ghosts open quickly later. It pauses whenever your game runs slow.
 
 **Ghost Overlay.** Race recorded Mario poses in the game window, following the
 live camera and terrain through the trainer's GLideN64 renderer. Adjust colour,
@@ -155,7 +190,10 @@ uploads wait: ghosts you finish in the meantime are kept and upload afterwards.
 
 **Free up space from ghosts.** Settings shows how much space ghost files use on
 this computer under **Ghost files**. **Delete ghosts, keep PBs** deletes every
-ghost except your PB ghosts, the ghosts you saved and the ghosts you imported.
+ghost except your PB ghosts, the ghosts you saved and the ghosts you imported. It
+keeps every PB you ever set, not only your newest one, so your whole PB history
+stays. The Ghost Lab also makes a scene ahead of time for each PB ghost, so it opens
+at once. That scene is about 3 MB, counts with its ghost, and stays or goes with it.
 **Delete all ghosts** deletes those too. Each button says how many ghosts and how
 many MB it frees, and asks before it deletes. Neither one touches your times, your
 saved replays and their videos, your scene clips, your save states, or the ghosts

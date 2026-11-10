@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Runs in the simulation program (SM64TrainerSim.exe); licenses/README.md lists its GPL-2.0-or-later code.
 """Boot a Usamune ROM (US v1.93u or JP v1.93j) from its cartridge image inside Unicorn, with no recording (lab only).
 
     uv run --with unicorn==2.1.4 --with capstone python tools/scene_lab/cold_boot.py fetch-maps
@@ -17,7 +19,9 @@ main pool is block for block the one in his recording. Under identical pads the 
 castle grounds (600 frames), BoB and JRB (300); WF's course entry takes one frame longer on US.
 
 Inputs, read only: the ROMs (lab.json "rom" for US; the JP ROM is found beside it by its header) and STROOP's maps
-(lab refs/Mapping<V>.map; `fetch-maps` downloads the pinned commit). Nothing here touches a running game.
+(lab refs/Mapping<V>.map; `fetch-maps` downloads the pinned commit), or, in the installed app, its ROM store and
+bundled maps (core/lab_inputs.py; a caller may name both by region, find_rom and map_for). Nothing here touches a
+running game.
 """
 from __future__ import annotations
 
@@ -38,10 +42,9 @@ import frame_sim as sim  # noqa: E402
 STROOP_COMMIT = "6771197ad0f50718d3d4a13387e01d1e6d9c0d1a"
 STROOP_URL = "https://raw.githubusercontent.com/SM64-TAS-ABC/STROOP/{commit}/STROOP/Mappings/Mapping{v}.map"
 USAMUNE_HEADER = {"us": b"SM64 USAMUNE v1.93u", "jp": b"SM64 USAMUNE v1.93j"}
-USAMUNE_IMAGE = 0x80400000
-# Usamune's own call into its save/load dispatcher sits in try_print_debug_mario_level_info: a jal into its image.
-USAMUNE_IMAGE_END = 0x80424000
-# Its routines and settings, read from each build's code (US 0x8040392C/0x80411CF0, JP 0x80403930/0x80411D84).
+USAMUNE_IMAGE = sim.USAMUNE_IMAGE
+# Usamune's own call into its save/load dispatcher sits in try_print_debug_mario_level_info: a jal into its image
+# (frame_sim.SimBuild.site). Its routines and settings, read from each build's code (US 0x8040392C/0x80411CF0, JP 0x80403930/0x80411D84).
 USAMUNE = {"us": {"save": 0x8040392C, "load": 0x80411CF0, "settings": 0x80417B4C},
            "jp": {"save": 0x80403930, "load": 0x80411D84, "settings": 0x80417C14}}
 SLOT_BASE, SLOT_BYTES, BODY_BYTES = 0x80500000, 0x26460, 0x26320
@@ -74,19 +77,39 @@ def read_entry_dma(data: bytes) -> tuple[int, int]:
 
 
 def find_rom(version: str, config: dict | None = None) -> Rom:
-    config = config or json.loads((sim.lab_root() / "lab.json").read_text(encoding="utf-8"))
-    us = Path(config["rom"])
-    candidates = [us] if version == "us" else sorted(p for p in us.parent.iterdir() if p.suffix.lower() == ".z64")
+    """That build's cartridge. `config` (else core/lab_inputs.py::tool_config: the lab root's lab.json from a source
+    checkout, the installed app's inputs otherwise) names it by region in "roms" (the app's ROM store), or names the
+    US ROM in "rom", the JP one being found beside it by its header (a developer's lab.json)."""
+    from sm64_events.core.lab_inputs import tool_config  # noqa: PLC0415
+    config = config or tool_config()
+    if "roms" in config:
+        named = config["roms"].get(version)
+        if named is None:
+            raise SystemExit((config.get("rom_problems") or {}).get(version)
+                             or f"no Usamune {version.upper()} ROM in the Trainer's ROM store")
+        candidates = [Path(named)]
+        where = f"the ROM store's {version.upper()} ROM {named} is not Usamune's"
+    else:
+        us = Path(config["rom"])
+        candidates = [us] if version == "us" else sorted(p for p in us.parent.iterdir() if p.suffix.lower() == ".z64")
+        where = f"no Usamune {version.upper()} ROM found beside {us}"
     for path in candidates:
         data = path.read_bytes()
         if data[0x20:0x20 + len(USAMUNE_HEADER[version])] == USAMUNE_HEADER[version]:
             image_rom, image_bytes = read_entry_dma(data)
             return Rom(version, path, data, image_rom, image_bytes)
-    raise SystemExit(f"no Usamune {version.upper()} ROM found beside {us}")
+    raise SystemExit(where)
 
 
 def map_path(version: str) -> Path:
     return sim.lab_root() / "refs" / f"Mapping{version.upper()}.map"
+
+
+def map_for(version: str, config: dict | None = None) -> Path:
+    """That build's symbol map: the one `config` names by region in "maps" (the installed app's bundled maps, or the
+    caller's own map), else the lab root's refs/ copy that `fetch-maps` downloads (a developer's lab)."""
+    named = ((config or {}).get("maps") or {}).get(version)
+    return Path(named) if named else map_path(version)
 
 
 def fetch_maps() -> None:
@@ -103,18 +126,13 @@ def fetch_maps() -> None:
         print(f"{target}: {len(data)} bytes from STROOP @ {STROOP_COMMIT[:12]}")
 
 
-def jal_site_after(ram: np.ndarray, function: int, callee: int, limit: int = 0x400) -> int:
-    """The address after the delay slot of the first `jal callee` inside `function`."""
-    jal = 0x0C000000 | (sim.phys(callee) >> 2)
-    words = np.frombuffer(ram[sim.phys(function):sim.phys(function) + limit].tobytes(), ">u4")
-    hits = np.flatnonzero(words == jal)
-    if not hits.size:
-        raise SystemExit(f"no jal {callee:08x} in {function:08x}")
-    return function + int(hits[0]) * 4 + 8
+jal_site_after = sim.jal_site_after
 
 
 class BootCpu(sim.GameCpu):
-    """GameCpu over a cold RDRAM, with the device and thread calls a boot needs."""
+    """GameCpu over a cold RDRAM, with the device and thread calls a boot needs. Its SimBuild is read off the
+    cartridge's own code (IPL3's copy of the main segment), for this CPU alone: frame_sim's module is never
+    changed, so a process can hold both builds at once (the atlas does)."""
 
     def __init__(self, rom: Rom, symbols: sim.Symbols):
         self.version = rom.version
@@ -126,15 +144,7 @@ class BootCpu(sim.GameCpu):
         self.threads: dict[int, dict] = {}
         self.started: list[int] = []
         self.stop_rule = None
-        # frame_sim stops a frame at its module-global RESUME: this build's own, read off its code, before the hooks go in.
-        self.resume = jal_site_after(ram, symbols["display_and_vsync"], symbols["send_display_list"])
-        sim.RESUME = self.resume
-        names_before = sim.STUB_NAMES
-        sim.STUB_NAMES = tuple(dict.fromkeys(names_before + EXTRA_STUBS))
-        try:
-            super().__init__(ram, rom.data, symbols, 0x01000800)
-        finally:
-            sim.STUB_NAMES = names_before
+        super().__init__(ram, rom.data, symbols, 0x01000800, extra_stubs=EXTRA_STUBS)
         uc = self.uc
         uc.mem_map(0x04000000, 0x00900000)     # SP, DP, MI, VI, AI, PI, RI, SI registers: zeros, writes kept
         uc.mem_map(0x1FC00000, 0x1000)         # PIF RAM
@@ -193,13 +203,16 @@ class ColdGame:
     """A booted build: thread 5 one frame per step(); Usamune's save and load at its own call site."""
 
     def __init__(self, version: str, config: dict | None = None):
+        from sm64_events.core.lab_inputs import tool_config  # noqa: PLC0415
+        config = config or tool_config()
         rom = find_rom(version, config)
-        if not map_path(version).exists():
-            raise SystemExit(f"no {map_path(version)}: run `cold_boot.py fetch-maps`")
+        symbols = map_for(version, config)
+        if not symbols.exists():
+            raise SystemExit(f"no {symbols}: run `cold_boot.py fetch-maps`")
         self.version = version
         self.rom = rom
         self.u = USAMUNE[version]
-        cpu = self.cpu = BootCpu(rom, sim.Symbols(map_path(version)))
+        cpu = self.cpu = BootCpu(rom, sim.Symbols(symbols))
         self.resume = cpu.resume
         within = lambda name, address: cpu.symbols[name] <= address < cpu.symbols[name] + 0x400  # noqa: E731
         thread = lambda ident: next(t for t in cpu.threads.values() if t["id"] == ident)  # noqa: E731
@@ -212,6 +225,8 @@ class ColdGame:
         sound = thread(4)
         cpu.run_thread(sound["entry"], sound["sp"], sound["arg"], lambda kind, x: kind == "recv" and within("thread4_sound", x))
         game = thread(5)
+        if cpu.symbols.next_after(cpu.symbols["gThread5Stack"]) != game["sp"]:    # where SimBuild puts its frames
+            raise SystemExit(f"{version}: thread 5's stack does not end where the map's next symbol begins")
         first = jal_site_after(cpu.ram, cpu.symbols["rendering_init"], cpu.symbols["send_display_list"])
         self._first = False
         cpu.uc.hook_add(cpu.unicorn.UC_HOOK_CODE, self._first_frame, begin=sim.sext(first), end=sim.sext(first))
@@ -220,6 +235,7 @@ class ColdGame:
             raise SystemExit(f"{version}: thread 5 never sent its first frame")
         self.begin = first
         cpu.scheduler_model()
+        sim.complete_symbols(cpu.symbols, cpu.ram)        # the engine segment is in RAM now
         self.frames = 0
         self.site = self._find_site()
         self.pending = None
@@ -232,12 +248,9 @@ class ColdGame:
             uc.emu_stop()
 
     def _find_site(self) -> int:
-        start = self.cpu.symbols["try_print_debug_mario_level_info"]
-        words = np.frombuffer(self.cpu.ram[sim.phys(start):sim.phys(start) + 0x200].tobytes(), ">u4")
-        for i, w in enumerate(words.tolist()):
-            if w >> 26 == 3 and USAMUNE_IMAGE <= (0x80000000 | (w & 0x3FFFFFF) << 2) < USAMUNE_IMAGE_END:
-                return start + i * 4
-        raise SystemExit("no call into Usamune in try_print_debug_mario_level_info")
+        if self.cpu.build.site is None:
+            raise SystemExit("no call into Usamune in try_print_debug_mario_level_info")
+        return self.cpu.build.site
 
     def _on_site(self, uc, *_):
         if self.pending is not None:

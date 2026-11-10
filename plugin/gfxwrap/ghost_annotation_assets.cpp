@@ -33,16 +33,21 @@ bool decode(const uint8_t* p,uint32_t span,std::vector<uint8_t>& out) {
 // US's, under a RAM bias 0x6AAE0 larger (its payload copies cartridge
 // 0x761BE0 to RAM 0x80400000, US's 0x7CC6C0). Each load proves its place
 // (LUT pointers, table pointers, the chevron's hash) and refuses otherwise.
+// char_widths: where a US cartridge keeps gDialogCharWidths (JP's font is
+// monospaced: jp_advance).
 struct Cartridge {
     uint8_t country,font;
     uint32_t segment2,font_lut,first_glyph,hud_lut;
     int32_t usamune_shift;uint32_t usamune_bias;
-    uint32_t chevron_bank;
+    uint32_t chevron_bank,char_widths;
 };
 constexpr Cartridge cartridges[]={
-    {'E',font::us,0x108a40,0x77e8,0x02005900,0x7700,0,0x7fc33940,0x31e1d0},
-    {'J',font::jp,0x1076d0,0x8338,0x02007100,0x8250,-0x6aa18,0x7fc9e420,0x31c770},
+    {'E',font::us,0x108a40,0x77e8,0x02005900,0x7700,0,0x7fc33940,0x31e1d0,0xec370},
+    {'J',font::jp,0x1076d0,0x8338,0x02007100,0x8250,-0x6aa18,0x7fc9e420,0x31c770,0},
 };
+void publish_advances(const std::array<uint8_t,256>& widths) {
+    for(unsigned c=0;c<256;++c)us_advances[c].store(widths[c],std::memory_order_relaxed);
+}
 const Cartridge* cartridge(const uint8_t* rom,uint32_t bytes) {
     if(!rom || bytes<0x40)return nullptr;
     for(const auto& c:cartridges)if(rom[0x3e]==c.country)return &c;
@@ -127,6 +132,9 @@ bool Assets::load(const uint8_t* rom,uint32_t bytes,const UsFont* us_font) {
         return data.data()+(pointer&0xffffff);
     };
     if(cart->font==font::us) {
+        if(bytes<cart->char_widths+256)return false;
+        std::memcpy(lent.widths.data(),rom+cart->char_widths,256);
+        publish_advances(lent.widths);
         for(unsigned c=0;c<256;++c)if(const auto* src=lut_glyph(cart->font_lut,c,64)) {
             us_glyph(src,uint8_t(c),rgba.data());
             lent.present[c/8]=uint8_t(lent.present[c/8]|(1u<<(c%8)));
@@ -135,6 +143,7 @@ bool Assets::load(const uint8_t* rom,uint32_t bytes,const UsFont* us_font) {
         lends=true;
     } else if(us_font) {
         // His own US cartridge's font, kept on his machine: US glyphs, US widths.
+        publish_advances(us_font->widths);
         for(unsigned c=0;c<256;++c)
             if(us_font->present[c/8]&(1u<<(c%8)))us_glyph(us_font->tiles.data()+c*64,uint8_t(c),rgba.data());
         borrowed=true;

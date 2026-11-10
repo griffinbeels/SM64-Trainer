@@ -65,6 +65,12 @@ def test_log_preferences_filter_state_loads_and_resets_independently():
             {"id": "hard-reset", "outcome": "hard_reset"},
             {"id": "death", "outcome": "death"},
             {"id": "other-invalid", "outcome": "success", "invalid_reason": "no_reset"}]
+    # The filter reads the server's verdict; stamp it the way _attempt_json
+    # does, with the real predicate, so this cannot restate it.
+    from types import SimpleNamespace
+
+    from sm64_events.tracking.caveats import save_state_run
+    rows = [{**row, "save_state": save_state_run(SimpleNamespace(**row))} for row in rows]
     script = (_extract(source, "attemptMatchesLogFilters") + "\n"
               f"const rows = {json.dumps(rows)};\n"
               "const ids = ui => rows.filter(a => attemptMatchesLogFilters(a, ui)).map(a => a.id);\n"

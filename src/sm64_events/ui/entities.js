@@ -207,8 +207,9 @@ export function segmentCategory(category, originRegion) {
   return category || (originRegion ? UNCATEGORIZED_SEGMENT_CATEGORY : null);
 }
 
-// Four main courses are not entered through a painting, so the game has NO
-// portrait for them. These are hand-picked stand-ins (user, 2026-07-25) — the
+// Four main courses have no portrait: HMC is entered through a pool, and the
+// game's "paintings" for SSL, DDD and SL are a plain wall, a water ripple and
+// a blank wall. These are hand-picked stand-ins (user, 2026-07-25) — the
 // star art that reads as that course — rather than a positional star-1
 // default, which would have given Hazy Maze Cave its first star's icon.
 // This is the final answer for these four; there is no art to wait for.
@@ -222,7 +223,7 @@ export const COURSE_SUBSTITUTE_ICONS = { hmc: "hmc6", ssl: "ssl2",
 // one of them: the Bowser levels and the cap stages have star_icons entries,
 // and PSS has an actual portrait (live check 2026-07-25 — the target picker
 // showed a plain star for VCUtM, BitDW and PSS, which is what caught it).
-// Values are course_icons stems where a portrait exists, star_icons stems
+// Values are course portrait stems where a portrait exists, star_icons stems
 // otherwise; courseArt tries the portrait manifest first either way, so a
 // portrait dropped in later wins with no code change.
 export const SPECIAL_COURSE_ICONS = {
@@ -298,7 +299,8 @@ export function fallbackSlotForEntityKey(entityKey) {
  *
  * entityKey  "star:<course>:<slot>" | "segment:<id>" | "course:<id>"
  *            | "level:<id>"
- * context    { courseIcons     stem -> filename, from GET /api/icons/courses
+ * context    { courseIcons     stem -> URL tail under /api/icons/course/, from
+ *                              GET /api/icons/courses
  *              starIconsMode   "course" | "classic", the user's setting
  *              iconOverrides   view.icon_overrides, per-entity user picks
  *              courseByLevel   vocab.course_by_level
@@ -318,8 +320,8 @@ export function fallbackSlotForEntityKey(entityKey) {
  *   stage keep their real art in classic mode.
  *
  * Four main courses (HMC, SSL, DDD, SL) have no portrait because the game has
- * no painting for them; they resolve to a hand-picked stand-in star icon,
- * which is the final answer, not a placeholder.
+ * no picture painting for them; they resolve to a hand-picked stand-in star
+ * icon, which is the final answer, not a placeholder.
  */
 export function entityIcon(entityKey, context = {}) {
   const { courseIcons = {}, starIconsMode = "course", iconOverrides = {},
@@ -337,9 +339,11 @@ export function entityIcon(entityKey, context = {}) {
     const special = specialFor(course);
     const stem = prefix || special;
     if (!stem) return genericStar();
-    // The portrait manifest wins for either kind, so PSS uses its real
-    // painting and a portrait dropped in later needs no code change.
-    if (courseIcons[stem]) return `/ui/assets/course_icons/${courseIcons[stem]}`;
+    // The portrait listing wins for either kind, so PSS uses its painting.
+    // The Trainer ships no portraits: each is cut from the player's own ROM
+    // (server/course_art_api.py), and the listing names our plain stand-in
+    // tile until a ROM is known -- so a portrait course always has a picture.
+    if (courseIcons[stem]) return `/api/icons/course/${courseIcons[stem]}`;
     if (special) return starIconSrc(special);
     if (COURSE_SUBSTITUTE_ICONS[prefix])
       return starIconSrc(COURSE_SUBSTITUTE_ICONS[prefix]);

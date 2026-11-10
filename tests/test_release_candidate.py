@@ -14,13 +14,16 @@ import release_candidate as candidate
 import release_flow
 from make_manifest import build_zip, make_manifest
 from sm64_events.core.build_channel import BuildChannel, CONFIG_FILENAME
-from sm64_events.core.update_plan import BUNDLED_NATIVES, NATIVE_FOLDER, RETIRED_NATIVE_TEXT, RETIRED_NATIVES
+from sm64_events.core.update_plan import (BUNDLED_NATIVES, LAB_NATIVES, NATIVE_FOLDER, RETIRED_NATIVE_TEXT,
+                                          RETIRED_NATIVES)
 from test_bootstrap_installer import _app_files
 
 
 def prepared(tmp_path, *, private=True, version="1.10.0-beta.1", manifest_version=None, placeholder=None):
     app = tmp_path / "app"
     files = _app_files(b"FROZEN-APP")
+    files.update({f"{candidate.LAB_FOLDER}/{name}": b"LAB NATIVE " + name.encode() for name in LAB_NATIVES})
+    files[candidate.SIM_PROGRAM] = b"MZ SIMULATION PROGRAM"
     if placeholder is not None:
         files.update({f"{NATIVE_FOLDER}/{name}": placeholder for name in RETIRED_NATIVES})
     build = BuildChannel(channel="beta", build_id="qa-1", installation="normal")
@@ -58,9 +61,35 @@ def test_candidate_binds_all_six_artifacts_runtime_version_native_and_public_con
     assert {p.name for p in release.release_assets(directory)} < set(record["artifacts"])
     assert any(name.endswith("-source-ffmpeg.tar") for name in record["artifacts"])
     assert set(record["native_sha256"]) == set(BUNDLED_NATIVES)
+    assert set(record["lab_native_sha256"]) == set(LAB_NATIVES)
     assert record["public_config_sha256"] == candidate.public_fingerprint(build)
     assert record["service"]["catalog_sha256"] == "c" * 64
     assert "friend_invitation" not in (directory / candidate.RECORD).read_text()
+
+
+@pytest.mark.parametrize("fault", ["changed", "unrecorded"])
+def test_candidate_refuses_a_lab_native_other_than_the_one_it_recorded(tmp_path, fault):
+    """The installed app runs the Ghost Lab's natives and never compiles them: their bytes are
+    as much the candidate as the plugin's (core/update_plan.py LAB_NATIVES)."""
+    directory, _, _ = prepared(tmp_path)
+    record = candidate.read_record(directory)
+    if fault == "changed":
+        record["lab_native_sha256"]["viewer_host.exe"] = "0" * 64
+    else:
+        del record["lab_native_sha256"]["scene_cxd4.dll"]
+    (directory / candidate.RECORD).write_text(json.dumps(record))
+    with pytest.raises(ValueError, match="lab native provenance"):
+        candidate.verify_artifacts(directory, expected_assets=[p.name for p in release.candidate_assets(directory)])
+
+def test_candidate_refuses_a_simulation_program_other_than_the_one_it_recorded(tmp_path):
+    """SM64TrainerSim.exe is the only program that runs Unicorn: its bytes are recorded like the natives'."""
+    directory, _, _ = prepared(tmp_path)
+    record = candidate.read_record(directory)
+    assert len(record["sim_program_sha256"]) == 64
+    record["sim_program_sha256"] = "0" * 64
+    (directory / candidate.RECORD).write_text(json.dumps(record))
+    with pytest.raises(ValueError, match="simulation program provenance"):
+        candidate.verify_artifacts(directory, expected_assets=[p.name for p in release.candidate_assets(directory)])
 
 
 def test_candidate_detects_artifact_changed_after_preparation(tmp_path):

@@ -61,7 +61,7 @@ PAGE_SIZE = 10
 SECTIONS = ("yours", "top", "search", "player")
 SORTS = ("fastest", "newest")
 YOU = ("you",)                     # the player key of every ghost that is his
-NO_SCENE = "No saved scene for this strategy yet: play it with the scene lab on."
+NO_SCENE = ("No saved scene for this strategy yet. Play it with scene recording on, and its scene appears here.")
 NO_STRATEGY = "Choose a strategy to see its ghosts."
 NO_YOURS = "You have no ghost recordings for this strategy yet."
 NO_GHOSTS = "No ghosts for this strategy yet."
@@ -74,6 +74,7 @@ UNLISTED = "That ghost is not in the list any more; pick it again."
 NOT_HELD = "That ghost could not be found. Open it from the Library again."
 OTHER_TARGET = "That ghost is for a different star or segment."
 NOT_SAVED = "This run's Mario poses are not saved."
+NO_RUN = "That run is not a star or segment run in your practice journal."
 MAX_CLIP_BYTES = 256 << 20        # far above any real clip (100,000 records): a bound, not a limit
 
 
@@ -781,6 +782,45 @@ class SceneGhosts:
             if refused is not None:
                 return {"item": None, "reason": refused}
             listed = [*listed, ghost]
+        page = _page([ghost], _places(listed), 1, None, tiers=lambda shown: self._tiers(context, shown))
+        return {"item": page["items"][0]}
+
+    def ghost_attempts(self, attempt_ids) -> dict:
+        """{attempt id: attempt} for those of these attempts of his the race could play as a ghost (a committed,
+        perfect recording: run_clip, cached until one of its files changes). The Practice log's Ghost button
+        opens such a run made from its ghost when no recorded take of it exists (his ask, 2026-11-09: "I should
+        be able to see all of my PB ghosts"). An attempt with no committed poses costs a few stats."""
+        from sm64_events.ghost.library_bests import _eligible
+        db = self.db
+        if db is None or self.replay is None:
+            return {}
+        found = {}
+        for attempt_id in attempt_ids:
+            files = self._files(attempt_id)
+            if not self._has_poses(files):
+                continue
+            attempt = db.attempt(attempt_id)
+            if attempt is None or not _eligible(attempt) or (attempt.segment_id is None and attempt.course_id is None):
+                continue
+            if not isinstance(self.run_clip(attempt, files), str):
+                found[attempt_id] = attempt
+        return found
+
+    def attempt_item(self, attempt_id: int) -> dict:
+        """One of his runs by its attempt id, as a row of its own target's list ({"item"}, ranked among its
+        strategy's ghosts), so the page watches it made from its ghost like any listed ghost (the Practice
+        log's Ghost button on a run with no recorded take); or {"item": None, "reason"}."""
+        db = self.db
+        attempt = db.attempt(attempt_id) if db is not None else None
+        if attempt is None or (attempt.segment_id is None and attempt.course_id is None):
+            return {"item": None, "reason": NO_RUN}
+        target = Target.of(attempt)
+        context = self._context(target, attempt.strat_tag)
+        listed, _counts = self.catalog(target, attempt.strat_tag, context)
+        ghost = next((ghost for ghost in listed if ghost.source == ("attempt", attempt.id)), None)
+        if ghost is None:
+            found = self.run_clip(attempt) if self.replay is not None else NO_RECORDINGS
+            return {"item": None, "reason": found if isinstance(found, str) else NO_RUN}
         page = _page([ghost], _places(listed), 1, None, tiers=lambda shown: self._tiers(context, shown))
         return {"item": page["items"][0]}
 

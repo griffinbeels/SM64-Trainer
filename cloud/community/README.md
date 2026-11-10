@@ -339,9 +339,10 @@ Rows published before these checks are not re-read; the trainer's download check
 covers them.
 
 A ghost's start ([protocol](../../docs/community-protocol.md#a-ghosts-start)) is
-optional opaque bytes after the GHC1 bytes in the same PUT body. The grant binds
+optional bytes after the GHC1 bytes in the same PUT body. The grant binds
 its SHA-256 and size (at most `LIMITS.start_bytes`, 64 KiB), and both are checked
-before R2. The one multipart object holds the ghost then the start; its custom
+before R2, then its header (`src/start-header.js`, spans in `src/start-spans.json`):
+anything the trainer does not write is `422 start_invalid`. Its game state is never unpacked. The one multipart object holds the ghost then the start; its custom
 metadata names both hashes, and recovery checks the object's total size against
 both. Asset and start downloads read their range of that object, through the
 AssetCache export with a `range` prop. Objects without a start keep the exact
