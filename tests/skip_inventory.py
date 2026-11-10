@@ -102,6 +102,14 @@ ALLOWED = (
      "The profiling extra is not in the default sync. Lifts with "
      "`uv sync --group profiling`.",
      "tests/test_profile_external.py"),
+    ("explicit local ROM and Win32 model witness",
+     "Evaluates the ghost model against a copyrighted US ROM the tester supplies; no ROM is ever in the "
+     "repository. Lifts with SM64_MODEL_ROM naming a local Usamune v1.93u ROM on Windows.",
+     "tests/test_multiplayer_model.py::test_one_and_three_compact_live_streams_evaluate_actual_rom_model"),
+    ("SM64_TEST_PLUGIN_REPRO",
+     "Builds the whole graphics plugin twice to prove the bytes repeat, which takes minutes and the "
+     "renderer's prebuilt libraries. Opt-in: SM64_TEST_PLUGIN_REPRO=1 after a native build change.",
+     "tests/test_native_identity.py::test_the_plugin_built_twice_is_the_same_bytes"),
 )
 
 
@@ -128,6 +136,24 @@ RUNNER_ONLY = (
      "Griffin's build cache. Here the full lane builds them before the merge "
      "check, so they are always present.",
      "tests/test_bundled_natives.py, tests/test_encoder_stage.py"),
+    ("Pinned detector is not installed",
+     "The secret scanner's pinned detector binary is installed per machine (tools/secret_scan.py "
+     "--install) and never downloaded by a test; a runner has none.",
+     "tests/test_secret_scan.py::test_real_pinned_detector_finds_safe_runtime_synthetic_and_then_clean"),
+    ("the pinned upstream archive is not in the build cache",
+     "Reads the pinned GLideN64 upstream archive from the renderer build cache, which only a machine that "
+     "built the renderer holds; a runner never builds it.",
+     "tests/test_renderer_libs_build.py"),
+    ("ffmpeg.exe is not built in this machine's cache",
+     "Inspects the trimmed ffmpeg.exe tools/build_ffmpeg.py builds into the machine's cache; a runner "
+     "downloads the artifact instead of building it.",
+     "tests/test_build_ffmpeg.py::test_the_built_binary_lists_every_pinned_component"),
+    ("the plugin is not built in this checkout",
+     "Reads the built graphics plugin's exports; a runner's non-native lanes never build the natives.",
+     "tests/test_one_plugin.py::test_the_bundled_plugin_exports_the_interface_and_none_of_the_old_shape"),
+    ("his recorded BoB session and ROM are private to the lab machine",
+     "Replays Griffin's own recorded BoB tap session against his ROM, both private to his machine.",
+     "tests/test_attempt_cutter.py::test_his_bob_star_grab_opens_from_its_anchor_to_the_star_dances_end"),
     ("no live journal reachable",
      "Reads this machine's own practice journal; a runner has none.",
      "tests/test_rekey.py"),

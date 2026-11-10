@@ -42,7 +42,6 @@ TOGGLE = ".attempts-tools button.log-only-pbs"
 UNASSIGNED = '.log-card[data-feed-key="unassigned"]'
 FAILURES = ("reset", "hard_reset", "death")
 # Every page this file opens: a headless test must never lock his real pointer.
-NO_POINTER_LOCK = "Element.prototype.requestPointerLock = function () { return Promise.resolve(); };"
 DAY0 = datetime(2026, 6, 10, 12, 0, 0, tzinfo=timezone.utc)
 # Oldest first: a time in frames is a finished run, "pb" a run saved as the new
 # PB, "reset"/"death" a failure. The fixture's own first run (343) is the first
@@ -156,7 +155,7 @@ def test_pbs_only_shows_the_pb_history_newest_first_and_survives_a_reload():
                 page = browser.new_page(viewport={"width": 1280, "height": 1100})
                 errors = []
                 page.on("pageerror", lambda error: errors.append(str(error)))
-                page.add_init_script(NO_POINTER_LOCK + "localStorage.setItem('sm64.sort', 'oldest');")
+                page.add_init_script("localStorage.setItem('sm64.sort', 'oldest');")
                 page.goto(base)
                 toggle = page.locator(TOGGLE)
                 # Control: the ordinary list, resets and deaths hidden by default, his sort.
@@ -206,7 +205,7 @@ def test_a_card_with_no_pb_says_so_in_a_whole_sentence():
             browser = play.chromium.launch(headless=True, args=["--disable-gpu"])
             try:
                 page = browser.new_page(viewport={"width": 1280, "height": 1000})
-                page.add_init_script(NO_POINTER_LOCK + "localStorage.setItem('sm64.onlyPbs', '1');"
+                page.add_init_script("localStorage.setItem('sm64.onlyPbs', '1');"
                                      "localStorage.setItem('scope', 'lifetime');")
                 page.goto(base)
                 note = page.locator(f"{CARD} .log-no-pbs")
