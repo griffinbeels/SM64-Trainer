@@ -9,7 +9,7 @@ the /api/session payload the page draws (test_ui_pb_filter.py's helpers).
 from playwright.sync_api import sync_playwright
 
 from frontend_runner import run_frontend
-from test_ui_pb_filter import (FAILURES, NO_POINTER_LOCK, ROWS, expected_rows, fixture_star,
+from test_ui_pb_filter import (FAILURES, ROWS, expected_rows, fixture_star,
                                seed_pb_history, wait_for_rows)
 from ui_fixture import serve_ui_live
 
@@ -37,7 +37,6 @@ def test_a_fresh_profile_hides_resets_and_deaths_and_his_choice_to_show_them_sta
             browser = play.chromium.launch(headless=True, args=["--disable-gpu"])
             try:
                 fresh = browser.new_page(viewport={"width": 1280, "height": 1100})
-                fresh.add_init_script(NO_POINTER_LOCK)
                 fresh.goto(base)
                 assert wait_for_rows(fresh, hidden) == hidden
                 assert fresh.locator(FAILED).count() == 0
@@ -54,7 +53,7 @@ def test_a_fresh_profile_hides_resets_and_deaths_and_his_choice_to_show_them_sta
                 fresh.close()
 
                 chosen = browser.new_page(viewport={"width": 1280, "height": 1100})
-                chosen.add_init_script(NO_POINTER_LOCK + "if (!sessionStorage.getItem('seeded')) {"
+                chosen.add_init_script("if (!sessionStorage.getItem('seeded')) {"
                                        " localStorage.setItem('sm64.hideResets', '0');"
                                        " sessionStorage.setItem('seeded', '1'); }")
                 chosen.goto(base)

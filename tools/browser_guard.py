@@ -101,6 +101,45 @@ def install() -> None:
     Browser._pointer_lock_stand_in = True
 
 
+def retire_own_navigation_aborts() -> None:
+    """uilab's page counts every failed request as a problem, and a page's own navigation (its `goto`) cancels the
+    GETs still in flight with net::ERR_ABORTED: the header's GET /api/setup poll (the setup gate, 2026-11-09),
+    /api/pause, /api/replay/status, each the page simply asks again after loading. Those failed three browser
+    lanes of the beta.38 full run. Patched once here, on uilab's PlaywrightPage: a GET in flight when the test
+    navigates and then aborted is retired; every other failed request, a POST cut by a navigation included,
+    still counts. Belongs in uilab itself (its pinned commit, .github/workflows/full.yml); idempotent, and a
+    no-op where uilab is not importable."""
+    try:
+        from uilab.drivers import playwright_driver
+    except ImportError:
+        return
+    page_class = playwright_driver.PlaywrightPage
+    if getattr(page_class, "_retires_own_navigation", False):
+        return
+    init, goto, failed = page_class.__init__, page_class.goto, page_class._on_request_failed
+
+    def init_tracking(self, page, cdp):
+        self._in_flight, self._retiring = set(), set()
+        # Plain functions: Playwright marks each handler it wraps, which a builtin bound method refuses.
+        page.on("request", lambda request: self._in_flight.add(request))
+        page.on("requestfinished", lambda request: self._in_flight.discard(request))
+        init(self, page, cdp)
+
+    def goto_retiring(self, url):
+        self._retiring.update(request for request in self._in_flight if request.method == "GET")
+        return goto(self, url)
+
+    def failed_unless_retired(self, request):
+        self._in_flight.discard(request)
+        if request in self._retiring and request.failure == "net::ERR_ABORTED":
+            self._retiring.discard(request)
+            return
+        failed(self, request)
+
+    page_class.__init__, page_class.goto, page_class._on_request_failed = init_tracking, goto_retiring, failed_unless_retired
+    page_class._retires_own_navigation = True
+
+
 # ---- the operating system's side: is the cursor confined?
 
 _PER_MONITOR_AWARE_V2 = ctypes.c_void_p(-4)

@@ -621,3 +621,28 @@ def test_a_finished_scene_takes_the_recorders_sound_after_ready_and_says_why_whe
                 opened = client.post("/api/scene-lab/open", json={"attempt": 60}).json()
                 assert opened["audio"] == {"available": False, "reason": silent}
                 client.post("/api/scene-lab/close")
+
+
+def test_a_growing_scenes_sidecar_read_never_blocks_its_writer(tmp_path):
+    """While the server reads a growing scene's sidecar, the cutter replaces it (each publication) and deletes it
+    (the take is whole). Python's own open shares no delete on Windows, so either failed with WinError 32 in the
+    full runs of 2026-11-09. scene_session's reader shares the delete; package.replace_while_read waits out a read
+    in flight for the replace, which Windows refuses even then."""
+    import threading
+    import package as scene_package
+    import scene_session
+    sidecar = tmp_path / "take.grow"
+    sidecar.write_bytes(b"published")
+    with scene_session.open_letting_go(sidecar) as reading:      # a read in flight: the take is whole now
+        sidecar.unlink()
+        assert reading.read() == b"published"
+    assert not sidecar.exists()
+    sidecar.write_bytes(b"first")
+    partial = tmp_path / "take.grow.partial"
+    partial.write_bytes(b"second")
+    held = scene_session.open_letting_go(sidecar)                 # a read in flight during the next publication
+    threading.Timer(0.05, held.close).start()
+    scene_package.replace_while_read(partial, sidecar)
+    assert sidecar.read_bytes() == b"second" and scene_session.read_letting_go(sidecar) == b"second"
+    with pytest.raises(FileNotFoundError):
+        scene_session.read_letting_go(tmp_path / "gone.grow")
