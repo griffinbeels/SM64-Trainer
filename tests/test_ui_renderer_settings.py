@@ -2,6 +2,7 @@
 working Install in the shipping wizard (his rule, 2026-10-30: "MAKE SURE THAT
 FRAME BUFFER EMULATION IS DISABLED"). Disposable files and fakes only."""
 from test_ui_setup_modal import (
+    no_setup_check,
     CURRENT, MISSING_ROM, body, click_text, get_driver, serve_ui, wait_page, wait_step,
 )
 
@@ -42,6 +43,7 @@ def test_a_protected_settings_file_opens_setup_on_a_working_install(tmp_path, mo
 
     layer, ini, real_write = protected_settings_layer(tmp_path, monkeypatch)
     monkeypatch.setattr(ui_fixture, "_FixtureCaptureLayer", lambda *a, **kw: layer)
+    no_setup_check(monkeypatch)
     observed = dict(target=dict(state="ready", pid=None), rom=dict(MISSING_ROM), checks={})
     with serve_ui(setup_observer=lambda _: observed) as url, get_driver().launch(viewport=(850, 600)) as page:
         page.goto(url + "/ui/index.html")

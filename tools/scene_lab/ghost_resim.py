@@ -24,7 +24,8 @@ Either cartridge re-simulates (2026-11-09): the lab's own ROM runs every ghost, 
 A start is the ROM's own: a start file or a downloaded start made on the other cartridge (its rom_sha256 names
 another ROM) is refused, so a JP lab rebuilds a US uploader's ghost from its own simulated reset, and the other
 way round. For a player that means: Mario follows the ghost exactly, but moving platforms and enemies may be at a
-different point in their cycle than in the recording.
+different point in their cycle than in the recording. A ghost from the other region also parts at its first text
+box, whose length differs by region (King Whomp's on WF in the corpus, stage_sim's docstring).
 
 Every re-simulated frame's Mario (his object's drawn position and his action) is compared with the
 ghost's recorded pose; the first record where they part is reported (None: they never part). The

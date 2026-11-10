@@ -325,6 +325,9 @@ class CaptureLayer:
         # refresh needs this installer's own install and a newer link time.
         self.auto_refresh = auto_refresh
         self._installer = installer
+        # Setup's PJ64 Fixups (core/fixups.py), hung here by main.py; None in
+        # tests and tools, which then install the graphics plugin alone.
+        self.fixups = None
         # Install, the packaged refresh tick and Remove all copy the same
         # files and rewrite the same overlay; one at a time, or one side's
         # rollback snapshot can undo the other's finished copy.
@@ -732,7 +735,11 @@ class CaptureLayer:
         plugin = self._plugin_dir(pj64_dir)
         if elevated:
             from sm64_events.core.plugin_elevation import elevated_install
-            with elevated_install(pj64_dir, plugin, source) as receipts:
+            # One permission prompt covers the PJ64 Fixups too. Without a kept
+            # download (offline) the plugin installs alone and setup says so.
+            fixups_dll = self._fixups_dll()
+            extra = {"fixups_dll": fixups_dll} if fixups_dll is not None else {}
+            with elevated_install(pj64_dir, plugin, source, **extra) as receipts:
                 yield receipts
             return
         with file_operation("create plugin folder", plugin):
@@ -745,6 +752,15 @@ class CaptureLayer:
             # delete puts back what it removed, then rolls back every file
             # and that selection.
             remove_files(self._leftovers(plugin, keep_selected=True))
+
+    def _fixups_dll(self) -> Path | None:
+        if self.fixups is None:
+            return None
+        from sm64_events.core.fixups import FixupError
+        try:
+            return self.fixups.cached()
+        except FixupError:
+            return None
 
     def _steps(self, state: str, running: bool, stale: bool, layer_alive: bool, automatic: bool) -> list:
         """The ordered steps from this state to a live layer. Every step is

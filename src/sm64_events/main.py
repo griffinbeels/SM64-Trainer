@@ -432,6 +432,11 @@ def _build_capture_layer(poller, replay):
     # A developer's lab (SM64_SCENE_LAB) reads its own ROM files and never fills the store.
     setup_observer = SetupRuntime(WinProcesses(), Pj64Memory, poller, replay,
                                   rom_store=None if dev_lab_roms() is not None else lab_rom_store())
+    from sm64_events.core.fixups import Fixups
+    from sm64_events.core.paths import mode_settings_path
+    from sm64_events.core.setup_profile import load_baseline
+    # Setup's download of the PJ64 Fixups; the setup routes read it off the layer.
+    capture_layer.fixups = Fixups(load_baseline(), mode_settings_path().parent / "downloads")
     if not capture_layer.auto_refresh:
         return capture_layer, setup_observer
     try:
@@ -885,8 +890,9 @@ def run(*, recorder_lock=None) -> None:
         wait_lock_free(instance_lock_path())
     import uvicorn
     app = build(recorder_lock=recorder_lock) if recorder_lock is not None else get_app()
+    from sm64_events.core.logging_setup import server_log_config
     uvicorn.run(app, host="127.0.0.1", port=server_port(),
-                timeout_graceful_shutdown=3)
+                timeout_graceful_shutdown=3, log_config=server_log_config(console=True))
 
 
 if __name__ == "__main__":

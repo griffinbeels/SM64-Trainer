@@ -748,6 +748,8 @@ for its versioned completion record. Routes are mounted only when
 | `POST` | `/api/setup/capture-layer` | `{"consent": true}` | Installs with Project64 closed, marks onboarding started/incomplete, returns setup. Refusal or file-write failure: 409 with an actionable `detail`. |
 | `DELETE` | `/api/setup/capture-layer` | — | Restores the previous graphics selection with Project64 closed and clears completion. Returns setup; refusal or write failure: 409. |
 | `POST` | `/api/setup/complete` | `{"platform": "emu"\|"n64"}` | Rechecks applicable readiness, saves platform and completion, returns setup. Incomplete emulator setup: 409. N64 can finish with `limited: true`, without claiming console tracking. |
+| `POST` | `/api/setup/fixups` | — | Downloads the pinned PJ64 Fixups release, checks its hashes and copies `RSP.dll` into the Plugin folder, with Project64 closed. Returns setup; a running Project64, an unknown folder or a failed download or write: 409 with a `detail` sentence. `POST /api/setup/capture-layer` also does this after a successful install; a fixup failure there never fails the install, and `emu.fixups.error` carries its sentence. |
+| `POST` | `/api/setup/baseline-risk` | `{"items": ["emulator_build", "rsp_plugin"]}` | Records that the user read the warning and continues without these gate items (`onboarding.baseline_risk = {items, accepted_at}`). Ids outside the gate are dropped. Returns setup. |
 | `GET` | `/api/setup/check` | — | Only the setup check (the `setup_check` field below), for the practice card's ghost notice. 404 when the app has no setup check. |
 
 Runtime fields in `emu`:

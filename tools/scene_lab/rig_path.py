@@ -78,13 +78,14 @@ class PathReader:
     """The child that reads Mario's path (serve), and the thread of this process that talks to it."""
 
     def __init__(self):
-        from sm64_events.core.childproc import python_child, quiet_spawn_kwargs
+        from sm64_events.core.childproc import log_child_stderr, python_child, quiet_spawn_kwargs
         argv, env = python_child("rig_path", "--scene-lab-rig-path", ["--serve"], site_packages=True)
         env["PYTHONPATH"] = os.pathsep.join(filter(None, (str(HERE), env.get("PYTHONPATH"))))
         spawn = quiet_spawn_kwargs()
         spawn["creationflags"] = spawn.get("creationflags", 0) | _BELOW_NORMAL
         self.process = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                        stderr=subprocess.DEVNULL, env=env, **spawn)
+                                        stderr=subprocess.PIPE, env=env, **spawn)
+        log_child_stderr(self.process, "rig-path")   # its errors reach the app's log
         self.requests: queue.Queue = queue.Queue()
         self.rom = None                                # the ROM the child holds
         self.thread = threading.Thread(target=self._run, name="scene-lab-rig-path", daemon=True)

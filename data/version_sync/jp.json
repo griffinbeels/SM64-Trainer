@@ -92,6 +92,26 @@
   "status": "verified",
   "value": 2150813220
  },
+ "address.main_pool_end": {
+  "at": "2026-11-10T02:42:41.288121+00:00",
+  "evidence": "two adjacent .bss words hold exactly these bounds (sPoolStart, sPoolEnd) and the active area's scene graph lies inside them",
+  "frames": null,
+  "measured": {
+   "graph_root": 2149130156
+  },
+  "status": "verified",
+  "value": 2149322736
+ },
+ "address.main_pool_start": {
+  "at": "2026-11-10T02:42:46.618642+00:00",
+  "evidence": "two adjacent .bss words hold exactly these bounds (sPoolStart, sPoolEnd) and the active area's scene graph lies inside them",
+  "frames": null,
+  "measured": {
+   "graph_root": 2149130156
+  },
+  "status": "verified",
+  "value": 2147860496
+ },
  "address.mario_object": {
   "at": "2026-10-17T04:06:04.342165+00:00",
   "evidence": "pointer 0x8034a9d8 lands on a pool slot boundary",
@@ -151,6 +171,126 @@
   "status": "verified",
   "value": 2150865952
  },
+ "address.power_meter_hud_end": {
+  "at": "2026-11-10T02:42:38.042428+00:00",
+  "evidence": "the span reads; only a slot built from it and loaded in the game proves it",
+  "frames": null,
+  "measured": {
+   "bytes": 16
+  },
+  "status": "verified",
+  "value": 2150831344
+ },
+ "address.power_meter_hud_start": {
+  "at": "2026-11-10T02:42:37.713643+00:00",
+  "evidence": "the span reads; only a slot built from it and loaded in the game proves it",
+  "frames": null,
+  "measured": {
+   "bytes": 16
+  },
+  "status": "verified",
+  "value": 2150831328
+ },
+ "address.random_seed_end": {
+  "at": "2026-11-10T02:42:38.674095+00:00",
+  "evidence": "the span reads; only a slot built from it and loaded in the game proves it",
+  "frames": null,
+  "measured": {
+   "bytes": 4
+  },
+  "status": "verified",
+  "value": 2151214820
+ },
+ "address.random_seed_start": {
+  "at": "2026-11-10T02:42:38.357984+00:00",
+  "evidence": "the span reads; only a slot built from it and loaded in the game proves it",
+  "frames": null,
+  "measured": {
+   "bytes": 4
+  },
+  "status": "verified",
+  "value": 2151214816
+ },
+ "address.save_buffer_end": {
+  "at": "2026-11-10T02:42:39.315659+00:00",
+  "evidence": "both menu data copies end the span with their signature and checksum, which the game writes at boot; only the offline regeneration of an act-select task proves the coin scores it reads",
+  "frames": null,
+  "measured": {
+   "bytes": 512
+  },
+  "status": "verified",
+  "value": 2149612800
+ },
+ "address.save_buffer_start": {
+  "at": "2026-11-10T02:42:38.998275+00:00",
+  "evidence": "both menu data copies end the span with their signature and checksum, which the game writes at boot; only the offline regeneration of an act-select task proves the coin scores it reads",
+  "frames": null,
+  "measured": {
+   "bytes": 512
+  },
+  "status": "verified",
+  "value": 2149612288
+ },
+ "address.scene_bss_end": {
+  "at": "2026-11-10T02:42:39.950417+00:00",
+  "evidence": "every verified .bss global and the object pool lie inside [0x80339c20, 0x8035ff00); only the offline regeneration proves the span holds everything the renderer reads",
+  "frames": null,
+  "measured": {
+   "bytes": 156384
+  },
+  "status": "verified",
+  "value": 2151022336
+ },
+ "address.scene_bss_start": {
+  "at": "2026-11-10T02:42:39.632965+00:00",
+  "evidence": "every verified .bss global and the object pool lie inside [0x80339c20, 0x8035ff00); only the offline regeneration proves the span holds everything the renderer reads",
+  "frames": null,
+  "measured": {
+   "bytes": 156384
+  },
+  "status": "verified",
+  "value": 2150865952
+ },
+ "address.scene_data_end": {
+  "at": "2026-11-10T02:42:40.628671+00:00",
+  "evidence": "every verified .data global lie inside [0x8032c620, 0x80330390); only the offline regeneration proves the span holds everything the renderer reads",
+  "frames": null,
+  "measured": {
+   "bytes": 15728
+  },
+  "status": "verified",
+  "value": 2150826896
+ },
+ "address.scene_data_start": {
+  "at": "2026-11-10T02:42:40.294549+00:00",
+  "evidence": "every verified .data global lie inside [0x8032c620, 0x80330390); only the offline regeneration proves the span holds everything the renderer reads",
+  "frames": null,
+  "measured": {
+   "bytes": 15728
+  },
+  "status": "verified",
+  "value": 2150811168
+ },
+ "address.scene_engine_bss_end": {
+  "at": "2026-11-10T02:42:41.924344+00:00",
+  "evidence": "the span holds pointers into the main pool (the surface pools); only the offline regeneration proves it holds what shadows read",
+  "frames": null,
+  "measured": {
+   "pool_pointers": 404
+  },
+  "status": "verified",
+  "value": 2151214816
+ },
+ "address.scene_engine_bss_start": {
+  "at": "2026-11-10T02:42:41.615314+00:00",
+  "evidence": "the span holds pointers into the main pool (the surface pools); only the offline regeneration proves it holds what shadows read",
+  "frames": null,
+  "measured": {
+   "pool_pointers": 404
+  },
+  "status": "verified",
+  "value": 2151201952
+ },
  "address.second_camera_focus": {
   "at": "2026-11-08T19:04:49.772111+00:00",
   "evidence": "it holds zero or an object's start; only a boss or cutscene that sets it proves it",
@@ -170,6 +310,26 @@
   },
   "status": "verified",
   "value": 2150867088
+ },
+ "address.slot_tail_end": {
+  "at": "2026-11-10T02:42:37.381038+00:00",
+  "evidence": "the span reads; only a slot built from it and loaded in the game proves it",
+  "frames": null,
+  "measured": {
+   "bytes": 544
+  },
+  "status": "verified",
+  "value": 2151022880
+ },
+ "address.slot_tail_start": {
+  "at": "2026-11-10T02:42:36.954635+00:00",
+  "evidence": "the span reads; only a slot built from it and loaded in the game proves it",
+  "frames": null,
+  "measured": {
+   "bytes": 544
+  },
+  "status": "verified",
+  "value": 2151022336
  },
  "address.sound_code": {
   "at": "2026-10-17T04:06:04.352894+00:00",

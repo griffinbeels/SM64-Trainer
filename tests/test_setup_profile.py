@@ -125,7 +125,9 @@ def test_stock_project64_under_program_files_with_jabo_and_no_rom_entry(tmp_path
     assert items["audio_plugin"]["status"] == items["rsp_plugin"]["status"] == "differs"
     assert check["flagged"] == ["graphics_plugin", "frame_buffer_emulation", "memory_size",
                                 "emulator_build", "rsp_plugin", "audio_plugin", "install_location"]
-    assert check["required_differs"] == 3
+    assert check["required_differs"] == 5
+    # The gate the wizard stops at: the build and the fixups, proven different.
+    assert check["gate_differs"] == ["emulator_build", "rsp_plugin"]
     for item in check["items"]:
         if item["status"] != "match":
             assert item["fix"] and item["link"].startswith("https://")
@@ -189,7 +191,9 @@ def test_the_importance_table_names_exactly_the_known_breakers():
     baseline = load_baseline()
     importance = {item["id"]: item["importance"] for item in baseline["items"]}
     assert {key for key, value in importance.items() if value == "required"} == {
-        "graphics_plugin", "frame_buffer_emulation", "memory_size", "counter_factor"}
+        "graphics_plugin", "frame_buffer_emulation", "memory_size", "counter_factor",
+        "emulator_build", "rsp_plugin"}
+    assert baseline["gate"] == ["emulator_build", "rsp_plugin"]
     assert importance["controller_plugin"] == "noted" and "noted" not in FLAGGED
     assert baseline["recorded"] == "2026-10-30" and baseline["source"]
     for item in baseline["items"]:

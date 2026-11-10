@@ -6,7 +6,11 @@ item's importance, fix sentence and guide link, so an importance can change
 when evidence arrives without touching this code.
 
   required     known to stop the trainer working (our graphics plugin, frame
-               buffer emulation off, 8 MB memory, Counter Factor 1)
+               buffer emulation off, 8 MB memory, Counter Factor 1), and the
+               two "gate" items: Wermi's build v7 and the PJ64 Fixups. A
+               tester on another build cost weeks (2026-11-09: "I want to
+               prevent that FOREVER"), so the wizard stops at a gate
+               difference until the user fixes it or accepts the warning.
   recommended  differs from what we test with; may or may not matter
   noted        recorded only, never a problem (the controller plugin; his
                rule, 2026-10-30: "it's not necessarily a problem to use
@@ -215,6 +219,11 @@ class SetupProfile:
                       "rdb": rdb_source,
                       "folder": self._folder(pj64, plugin, layer),
                       "items": items, "flagged": flagged,
+                      # The gate: the items a user must match or knowingly
+                      # skip (the wizard's warning). Only a proven difference
+                      # counts; "unknown" never accuses anyone.
+                      "gate_differs": [item["id"] for item in items if item["status"] == "differs"
+                                       and item["id"] in self.baseline.get("gate", ())],
                       "required_differs": sum(item["status"] == "differs" and item["importance"] == "required"
                                               for item in items),
                       "unknown": sum(item["status"] == "unknown" for item in items)}
