@@ -235,3 +235,20 @@ def test_the_simulation_program_finds_the_trainers_data_beside_it(tmp_path, monk
         assert paths.bundled_plugin_dll() == app / "_internal" / "sm64_events" / "data" / "plugin" / "sm64_trainer_gfx.dll"
         assert paths.bundled_symbol_map("symbols_us.tsv").read_text(encoding="utf-8") == "s"
         assert paths.bundled_lab_file("viewer_host.exe") is None
+
+
+def test_every_build_checks_both_programs_paths_as_the_release_does(tmp_path):
+    """build_exe.check_built_paths walks the built app, the simulation program's _sim folder included, through the
+    release candidate's own bundle check: the beta.38 candidate refused numpy's hidden .f2py_f2cmap test files in
+    _sim, which no scratch build had looked at."""
+    import pytest
+    import build_exe
+    app = tmp_path / "SM64Trainer"
+    app.mkdir()
+    build_exe.check_built_paths(app)                                    # nothing refused in an empty app
+    hidden = app / "_sim" / "numpy" / "f2py" / "tests" / "src" / "f2cmap" / ".f2py_f2cmap"
+    hidden.parent.mkdir(parents=True)
+    hidden.write_text("dict(real=dict(rk='double'))\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="_sim/numpy/f2py/tests/src/f2cmap/.f2py_f2cmap"):
+        build_exe.check_built_paths(app)
+    assert "numpy" not in build_exe.SIM_COLLECT                        # its whole collection carries that test data
