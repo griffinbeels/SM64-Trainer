@@ -16,6 +16,12 @@ handed, skipping what Windows will not let go of.
 | downloaded community ghosts (packaged builds) | `community/cache.py` `CachedPopulation.cached_holdings` / `drop_cached` | the recording |
 | imported ghosts (`shared-ghosts/`) | `ghost/sharing.py` `GhostSharing.holdings` / `remove` | the import |
 | ghost starts (`starts/` beside the population) | `ghost/start_frame.py` `holdings` / `remove_holdings` | its clip's ghost |
+| made scenes (lab only: a ghost's scene the lab made from its recording, the lab's `resim` folder) | `server/scene_resim.py` `SceneResim.made_holdings` / `remove_made` | its clip's ghost |
+
+A made scene (about 3 MB; the Practice log makes every PB ghost's ahead, so it opens at once) counts in the
+ghost its clip counts in and is kept with it by "keep PBs" (decided 2026-11-09). Unlike a start it is only a
+copy the lab can make again, so it goes whenever its button's rule says, and one whose clip is gone is bytes,
+not a ghost.
 
 A ghost start (the game state a ghost begins from, kept so the lab can re-simulate it) follows its clip: it
 counts in the ghost that clip counts in, is kept and pinned with it, and goes only when every clip of its
@@ -117,10 +123,11 @@ class GhostStorage:
     file deletes): call it off the event loop. One purge runs at a time."""
 
     def __init__(self, *, database, replay=None, population=None, sharing=None, scenes=None,
-                 community=None, in_use=lambda: ()):
+                 community=None, in_use=lambda: (), made=None):
         """Each source a callable (a late database or a lab that is off answers None)."""
         self.database, self.replay, self.population = database, replay, population
         self.sharing, self.scenes, self.community, self.in_use = sharing, scenes, community, in_use
+        self.made = made
         self.lock = _PURGING                    # one purge at a time, whichever request made this
 
     @staticmethod
@@ -159,7 +166,28 @@ class GhostStorage:
             found += self._starts(found)
         except Exception:  # noqa: BLE001 - starts that cannot be listed are neither shown nor deleted
             log.warning("Ghost starts could not be listed.", exc_info=True)
+        try:
+            found += self._made(found)
+        except Exception:  # noqa: BLE001 - made scenes that cannot be listed are neither shown nor deleted
+            log.warning("Made ghost scenes could not be listed.", exc_info=True)
         return found
+
+    def _made(self, found: list[Holding]) -> list[Holding]:
+        """The lab's made scenes, each counted in (and kept with) the ghost of its clip's sha."""
+        made = self._call(self.made)
+        rows = made.made_holdings() if made is not None and hasattr(made, "made_holdings") else []
+        if not rows:
+            return []
+        owners = defaultdict(list)
+        for holding in found:
+            if holding.kind in ("recorded", "population", "community", "import"):
+                for digest in self._clip_shas(holding):
+                    owners[digest[:16]].append(holding)
+        return [Holding("made", row["ref"], mine[0].ghost if mine else ("made", row["ref"]), row["bytes"],
+                        tuple(row["paths"]), attempt=mine[0].attempt if mine else None,
+                        keep=any(h.keep for h in mine), busy=bool(row["in_use"]),
+                        owners=tuple(id(h) for h in mine))
+                for row in rows for mine in [owners.get(row["sha16"], [])]]
 
     def _starts_root(self):
         store = self._local_store()
@@ -337,8 +365,9 @@ class GhostStorage:
                 if not staying[key] and key not in counted:
                     counted.add(key)
                     total += holding.bytes
-        # A start counts in its clip's ghost; one whose clips are all gone already is bytes, not a ghost.
-        return {"ghosts": len({holding.ghost for holding in chosen if holding.kind != "start" or holding.owners}),
+        # A start or made scene counts in its clip's ghost; one whose clips are all gone is bytes, not a ghost.
+        return {"ghosts": len({holding.ghost for holding in chosen
+                               if holding.kind not in ("start", "made") or holding.owners}),
                 "bytes": total}
 
     def usage(self) -> dict:
@@ -372,6 +401,8 @@ class GhostStorage:
                 freed += result["bytes"]
                 gone = set(result["deleted"])
                 for holding in rows:
+                    if holding.kind == "made" and not holding.owners:
+                        continue                    # bytes with no ghost left: never counted as one
                     (deleted if holding.ref in gone else skipped).add(holding.ghost)
                     if holding.ref in gone:
                         gone_ids.add(id(holding))
@@ -408,6 +439,8 @@ class GhostStorage:
                 return cache.drop_cached(refs)
             if kind == "import":
                 return self._call(self.sharing).remove(refs)
+            if kind == "made":
+                return self._call(self.made).remove_made(refs)
             if kind == "start":
                 from sm64_events.ghost import start_frame
                 return start_frame.remove_holdings(self._starts_root(), refs)

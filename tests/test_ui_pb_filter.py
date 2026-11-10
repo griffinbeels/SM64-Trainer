@@ -126,7 +126,8 @@ def test_the_filter_keeps_exactly_the_rows_that_set_a_pb_and_lists_them_newest_f
             {"id": "slow", "outcome": "success", "set_pb": False},
             {"id": "reset", "outcome": "reset", "set_pb": False},
             {"id": "pb-new", "outcome": "success", "set_pb": True},
-            {"id": "pb-loaded", "outcome": "success", "set_pb": True, "state_loads": 1}]
+            {"id": "pb-loaded", "outcome": "success", "set_pb": True, "state_loads": 1,
+             "save_state": True}]     # the server's verdict (views.py), which the filter reads
     script = (f"{filters}\n{sort}\nconst rows = {json.dumps(rows)};\n"
               "const ids = ui => rows.filter(a => attemptMatchesLogFilters(a, ui)).map(a => a.id);\n"
               "console.log(JSON.stringify([ids({onlyPbs: true}), ids({onlyPbs: false}), ids({}),"
@@ -177,6 +178,18 @@ def test_pbs_only_shows_the_pb_history_newest_first_and_survives_a_reload():
                 assert page.evaluate("[localStorage.getItem('sm64.onlyPbs'), localStorage.getItem('scope')]") \
                     == ["0", "session"]                                      # back to the session it left
                 assert page.locator(UNASSIGNED).count() == 1
+                # His ruling (2026-11-09): "if we undo PBs only, it should go back to the user's active
+                # session (if they weren't on lifetime)". Already on Lifetime: off leaves him there.
+                page.evaluate("localStorage.setItem('scope', 'lifetime')")
+                page.reload()
+                lifetime_rows = expected_rows(lifetime, newest_first=False)
+                assert wait_for_rows(page, lifetime_rows) == lifetime_rows
+                page.locator(TOGGLE).click()
+                assert wait_for_rows(page, history) == history
+                page.locator(TOGGLE).click()
+                assert wait_for_rows(page, lifetime_rows) == lifetime_rows
+                assert page.evaluate("[localStorage.getItem('sm64.onlyPbs'), localStorage.getItem('scope')]") \
+                    == ["0", "lifetime"]
                 assert errors == []
             finally:
                 browser.close()

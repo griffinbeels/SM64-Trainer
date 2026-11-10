@@ -2954,7 +2954,9 @@ and each one it beat), [[saved ghost]]s, [[template track]] [[run]]s and
 [[imported ghost]]s; the other deletes
 those too. A [[ghost]] counts once however many files it has: an [[attempt scene]],
 the committed recording and its [[playback copy]], the local population's row,
-a downloaded [[community ghost]], an imported one. Neither button deletes a
+a downloaded [[community ghost]], an imported one, and the scene the [[Ghost Lab]]
+made from its recording (about 3 MB; the [[practice log]] makes each [[PB ghost]]'s
+ahead), which "keep PBs" keeps with its [[ghost]]. Neither button deletes a
 file a pending upload names, a [[run]] still owed its admission, or the recording
 that keeps a [[run]] with no [[strategy]] through the startup prune; the purge
 skips and counts a [[ghost]] in use right now (racing, open in the [[Ghost Lab]]).
@@ -2965,7 +2967,8 @@ broadcasts `ghost_files_changed`, and the [[ghost button]]s and the [[lineup]] r
 - **Lives** — the purges and what each keeps (`src/sm64_events/ghost/storage.py`);
   each kind's holdings and delete in its owner (`tools/scene_lab/attempt_scenes.py`,
   `src/sm64_events/replay/service.py`, `src/sm64_events/ghost/population.py`,
-  `src/sm64_events/community/cache.py`, `src/sm64_events/ghost/sharing.py`); the
+  `src/sm64_events/community/cache.py`, `src/sm64_events/ghost/sharing.py`,
+  `src/sm64_events/server/scene_resim.py`); the
   routes (`src/sm64_events/server/ghost_api.py`); the section
   (`src/sm64_events/ui/components/ghoststorage.js`)
 - **Not** — the [[recorder]]'s rolling pose archive, which a PB save reads and

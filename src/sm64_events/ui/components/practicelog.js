@@ -1405,7 +1405,7 @@ export function PracticeLog({ v, t, ui, freshIds, openCompare, focus, pick,
              counts CARDS -- same words, same neighbours, a different noun
              behind the number -- so the noun goes in the label rather than
              staying implied. */""}
-        <span class="meta">${page.length} entities shown</span>
+        <span class="meta">${page.length} ${page.length === 1 ? "entity" : "entities"} shown</span>
         ${/* The target picker's TRIGGER, re-homed here now that the card it
              used to live on (the Active Target card) is deleted (amendment
              A9). Griffin retired the feature outright, then gave it a home

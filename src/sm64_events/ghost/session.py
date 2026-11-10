@@ -624,13 +624,13 @@ class GhostSession:
         body = await self.refresh(resolve=True)
         return {"attempt_id": attempt_id, "saved": False, "session": body}
 
-    def storage(self, scenes=lambda: None):
+    def storage(self, scenes=lambda: None, made=lambda: None):
         """Settings' ghost files over this session's owners (`ghost/storage.py`); `scenes` the
-        lab's attempt scenes, when the lab runs."""
+        lab's attempt scenes and `made` its made ghost scenes (scene_resim), when the lab runs."""
         from sm64_events.ghost.storage import GhostStorage
         native = self._native
         return GhostStorage(database=self._db, replay=self._replay, population=self._population,
-                            sharing=self._sharing, scenes=scenes, community=self._community,
+                            sharing=self._sharing, scenes=scenes, community=self._community, made=made,
                             in_use=lambda: native.asset_paths() if hasattr(native, "asset_paths") else ())
 
     async def purge_files(self, storage, *, keep_pbs: bool) -> dict:

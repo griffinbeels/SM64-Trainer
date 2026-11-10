@@ -61,10 +61,11 @@ class PurgeBody(BaseModel):
 
 def _mount_ghost_files(router, session, _session) -> None:
     """Settings' Ghost files (`ghost/storage.py`): what ghost files use, and the two purges. The
-    lab's attempt scenes join when the scene lab is mounted (`app.state.scene_lab`)."""
+    lab's attempt scenes and made ghost scenes join when the scene lab is mounted (`app.state.scene_lab`)."""
     def storage(request: Request):
         lab = getattr(request.app.state, "scene_lab", None)
-        return _session().storage(scenes=lambda: getattr(lab, "scenes", None))
+        return _session().storage(scenes=lambda: getattr(lab, "scenes", None),
+                                  made=lambda: getattr(lab, "resim", None))
 
     @router.get("/ghost/storage")
     async def ghost_storage(request: Request):

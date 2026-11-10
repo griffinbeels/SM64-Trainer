@@ -168,7 +168,8 @@ uploads wait: ghosts you finish in the meantime are kept and upload afterwards.
 this computer under **Ghost files**. **Delete ghosts, keep PBs** deletes every
 ghost except your PB ghosts, the ghosts you saved and the ghosts you imported. It
 keeps every PB you ever set, not only your newest one, so your whole PB history
-stays.
+stays. The Ghost Lab also makes a scene ahead of time for each PB ghost, so it opens
+at once. That scene is about 3 MB, counts with its ghost, and stays or goes with it.
 **Delete all ghosts** deletes those too. Each button says how many ghosts and how
 many MB it frees, and asks before it deletes. Neither one touches your times, your
 saved replays and their videos, your scene clips, your save states, or the ghosts

@@ -455,6 +455,51 @@ class SceneResim:
         """Whether a scene of the ghost with this clip hash is in the cache (ghost_resim names it by that hash)."""
         return any(self.cache().glob(f"ghost-{sha256[:16]}-*.json"))
 
+    def made_holdings(self) -> list[dict]:
+        """Every finished ghost scene in the cache, for Settings -> Ghost files (`ghost/storage.py`): {"ref" (its
+        note's name), "sha16" (its clip's hash, as ghost_resim names it), "bytes", "paths", "in_use"}. A scene
+        still growing (its .grow sidecar beside it) is not one yet and is never listed; the scene open in the
+        Ghost Lab is in use. His call, 2026-11-09: a made scene counts in its ghost and goes with it."""
+        root = self.cache()
+        if not root.is_dir():
+            return []
+        open_path = getattr(self.lab, "open_path", None)
+        found = []
+        for note in sorted(root.glob("ghost-*.json")):
+            scene = note.with_suffix(".sm64scene")
+            parts = note.stem.split("-")
+            if len(parts) < 3 or not scene.is_file() or note.with_suffix(".grow").exists():
+                continue
+            try:
+                size = note.stat().st_size + scene.stat().st_size
+            except OSError:
+                continue
+            busy = open_path is not None and Path(open_path).resolve() == scene.resolve()
+            found.append({"ref": note.name, "sha16": parts[1], "bytes": size, "paths": (str(scene), str(note)),
+                          "in_use": busy})
+        return found
+
+    def remove_made(self, refs) -> dict:
+        """Deletes these made scenes (made_holdings' refs): {"deleted": [refs], "bytes", "skipped": [refs]}. One in
+        use, or one Windows will not let go of, is skipped. A scene the warmer made ahead is not made again
+        this server run (its key stays done)."""
+        held = {row["ref"]: row for row in self.made_holdings()}
+        deleted, skipped, freed = [], [], 0
+        for ref in refs:
+            row = held.get(ref)
+            if row is None or row["in_use"]:
+                skipped.append(ref)
+                continue
+            try:
+                for path in row["paths"]:          # the scene first: a note with no scene is never read as made
+                    Path(path).unlink(missing_ok=True)
+            except OSError:
+                skipped.append(ref)
+                continue
+            deleted.append(ref)
+            freed += row["bytes"]
+        return {"deleted": deleted, "bytes": freed, "skipped": skipped}
+
     def _spawn_prebuild(self, payload) -> subprocess.Popen:
         """ghost_resim's `build` of one PB ghost, in the warmer's idle background child; its clip copied beside the
         cache first (the race's file may change under it), removed again once the child ends (_prebuilt)."""
