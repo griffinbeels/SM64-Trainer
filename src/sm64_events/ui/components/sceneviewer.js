@@ -2159,6 +2159,35 @@ function shareWithParts(link, target, t) {
   link.feed = t?.feed;
 }
 
+// Arriving with no Ghost button pressed: the scene still open, else the Practice log's target's stage. The
+// session view may not have come yet (the Ghost Lab opened right after the page did; full runs 42749039740
+// and 42766359821 drew "choose a star" for good): the target is then owed until the view comes, unless a
+// choice was made since. `view` is read as it is when the lab answers, never as the first render had it.
+function useArrival(link, view, { intent, refresh, setTarget, choose, asked }) {
+  const viewNow = useRef(null), owed = useRef(false);
+  viewNow.current = view ?? null;
+  function startOnPractice() {
+    owed.current = viewNow.current == null;
+    const practiced = stageDefault(null, viewNow.current);
+    if (practiced) choose(practiced);
+  }
+  useEffect(() => {
+    if (intent) return;              // the attempt replaces whatever scene was open
+    refresh.current().then((next) => {
+      if (next?.session) {
+        const kept = keptFor(next.session);
+        link.connect(Object.assign(next.session, { watching: kept.watching ?? null, ghost: kept.ghost ?? null }));
+        setTarget(kept.target || stageDefault(next.session, viewNow.current));
+      } else startOnPractice();
+    });
+  }, []);
+  useEffect(() => {
+    if (!owed.current || view == null) return;
+    owed.current = false;
+    if (asked.current === 0 && !link.scene) startOnPractice();
+  }, [view]);
+}
+
 // The Practice log's Ghost button: the attempt's recorded take, else the scene made from its ghost
 // recording (GET /ghost?attempt=: the lab's ghost row for it), watched the way a ghost row is; both play
 // from the first frame. With neither, the lab's reason shows as a refused open's does: the ghost row's
@@ -2210,19 +2239,7 @@ export function SceneViewer({ t }) {
       return next;
     } catch (problem) { link.fail(problem.message); return null; }
   };
-  useEffect(() => {
-    if (intent) return;              // the attempt below replaces whatever scene was open
-    refresh.current().then((next) => {
-      if (next?.session) {
-        const kept = keptFor(next.session);
-        link.connect(Object.assign(next.session, { watching: kept.watching ?? null, ghost: kept.ghost ?? null }));
-        setTarget(kept.target || stageDefault(next.session, t?.view));
-      } else {
-        const practiced = stageDefault(null, t?.view);
-        if (practiced) choose(practiced);
-      }
-    });
-  }, []);
+  useArrival(link, t?.view, { intent, refresh, setTarget, choose, asked });
   useEffect(() => {
     if (!intent) return;
     lab.clearIntent();
