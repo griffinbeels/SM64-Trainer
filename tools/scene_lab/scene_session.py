@@ -347,6 +347,8 @@ def renderer_host(config):
             # The Record child's config (scene_export.py) carries no lab root: the default one.
             settings = replay.settings_folder(plugin, config.resolution, getattr(config, "lab_root", None))
             return OwnedHost(viewer.Host(renderer, settings, header, ghosts=True), renderer_keeps_rdram(settings))
+        except replay.SettingsFolderTooLong as error:
+            raise Refused(str(error)) from None                   # one plain sentence, before any host starts
         except (OSError, RuntimeError) as error:
             raise Refused(f"The renderer could not start: {error}") from None
     return start

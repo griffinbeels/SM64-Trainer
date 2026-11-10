@@ -79,6 +79,66 @@ def default_lab_root() -> Path:
     return scene_lab_root()
 
 
+#: The longest settings folder the renderer takes (renderer_load.h: "a drive-absolute folder of at most 196
+#: characters"; GLideN64 builds its own file paths under it).
+MAX_SETTINGS_CHARS = 196
+TOO_LONG = ("The Ghost Lab cannot draw pictures because the folder it keeps the renderer's settings in has a name "
+            "that is too long. Ask for help on the Trainer's Discord.")
+
+
+class SettingsFolderTooLong(RuntimeError):
+    """No settings folder the renderer takes could be made; the message is TOO_LONG."""
+
+
+def _short_path(path: Path) -> Path:
+    """Windows' 8.3 short name of an existing folder (C:\\Users\\VERYLO~1\\...), or the path itself where the volume
+    keeps no short names."""
+    if os.name != "nt":
+        return path
+    import ctypes
+    size = ctypes.windll.kernel32.GetShortPathNameW(str(path), None, 0)
+    if not size:
+        return path
+    buffer = ctypes.create_unicode_buffer(size)
+    if not ctypes.windll.kernel32.GetShortPathNameW(str(path), buffer, size):
+        return path
+    return Path(buffer.value)
+
+
+def _spare_roots() -> list[Path]:
+    """Short folders this user may write in, for a settings folder when the lab root's is too long: under
+    ProgramData (every user may make a folder there), named by this user so two accounts never share one."""
+    import getpass
+    base = os.environ.get("ProgramData") or os.environ.get("ALLUSERSPROFILE")
+    if not base:
+        return []
+    tag = hashlib.sha256(getpass.getuser().encode("utf-8", "replace")).hexdigest()[:8]
+    return [Path(base) / "SM64Trainer" / "renderer-settings" / tag]
+
+
+def fitting_folder(folder: Path, name: str) -> Path:
+    """The settings folder the renderer will take: `folder` (made here) when its name fits MAX_SETTINGS_CHARS,
+    else its Windows short name, else `name` under a short spare root (_spare_roots). A long Windows account
+    name made a real install's folder too long for the renderer, which then refused it and the page read
+    "Broken pipe" (2026-11-09). SettingsFolderTooLong with TOO_LONG when none fits."""
+    folder.mkdir(parents=True, exist_ok=True)
+    if len(str(folder)) <= MAX_SETTINGS_CHARS:
+        return folder
+    short = _short_path(folder)
+    if len(str(short)) <= MAX_SETTINGS_CHARS:
+        return short
+    for root in _spare_roots():
+        spare = root / name
+        if len(str(spare)) > MAX_SETTINGS_CHARS:
+            continue
+        try:
+            spare.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            continue
+        return spare
+    raise SettingsFolderTooLong(TOO_LONG)
+
+
 def settings_folder(pj64_plugin: Path, resolution: tuple[int, int] | None = None,
                     lab_root: Path | None = None) -> Path:
     """THE RENDERER SETTINGS FOLDER: where a lab host's renderer reads its ini (and would keep its
@@ -91,8 +151,7 @@ def settings_folder(pj64_plugin: Path, resolution: tuple[int, int] | None = None
     start never had a store to load, so the pictures are the ones drawn before, 2026-11-06).
     Rewritten only where Project64's files changed; Project64's Plugin folder is only read."""
     name = "project64" if resolution is None else f"{resolution[0]}x{resolution[1]}"
-    folder = ((lab_root or default_lab_root()) / SETTINGS_FOLDER_NAME / name).resolve()
-    folder.mkdir(parents=True, exist_ok=True)
+    folder = fitting_folder(((lab_root or default_lab_root()) / SETTINGS_FOLDER_NAME / name).resolve(), name)
     for config in CONFIG_FILES:
         text = (pj64_plugin / config).read_text(encoding="utf-8")
         if config == "GLideN64.ini":

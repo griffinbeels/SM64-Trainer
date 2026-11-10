@@ -237,7 +237,8 @@ class Host:
         # (slot, writable view) or None when none is free (picture_encoder.PictureSlots).
         self.slots = None
         self.errors: list[str] = []
-        threading.Thread(target=self._drain_stderr, daemon=True).start()
+        self._stderr_reader = threading.Thread(target=self._drain_stderr, daemon=True)
+        self._stderr_reader.start()
         self.reader = threading.Thread(target=self._read_answers, name="viewer-host-reader", daemon=True)
         self.reader.start()
 
@@ -279,7 +280,8 @@ class Host:
             code = self.process.wait(timeout=5)
         except subprocess.TimeoutExpired:
             code = None
-        self._end(RuntimeError(f"viewer_host exited ({code}): {' | '.join(self.errors)}"))
+        self._stderr_reader.join(timeout=2)
+        self._end(RuntimeError(f"viewer_host exited ({code}): {' | '.join(self.errors) or 'no reason given'}"))
 
     def _end(self, error: Exception) -> None:
         self.answers.put(error)
@@ -300,11 +302,25 @@ class Host:
                 with self.counting:
                     self.waiting += 1
             self.sent.append((time.perf_counter(), call))
-            self.process.stdin.write(head)
-            self.process.stdin.write(data)
-            if tail:
-                self.process.stdin.write(tail)
-            self.process.stdin.flush()
+            try:
+                self.process.stdin.write(head)
+                self.process.stdin.write(data)
+                if tail:
+                    self.process.stdin.write(tail)
+                self.process.stdin.flush()
+            except OSError as error:                  # the host has ended: say why it did, not "Broken pipe"
+                raise self.ended(error) from None
+
+    def ended(self, error: Exception | None = None) -> RuntimeError:
+        """Why the host is gone: its exit code and what it wrote on stderr (its own one-line reason, such as the
+        renderer refusing its settings folder), waiting briefly for both."""
+        try:
+            code = self.process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            code = None
+        self._stderr_reader.join(timeout=2)
+        said = " | ".join(self.errors) or (str(error) if error is not None else "no reason given")
+        return RuntimeError(f"viewer_host exited ({code}): {said}")
 
     def _answer(self) -> Picture:
         answer = self.calls.get()
