@@ -161,7 +161,6 @@ def _served(tmp_path, monkeypatch, *, lab_on: bool, extra=None):
 # when Play turns into Pause, all on the page's own clock.
 TIMELINE = r"""
 (() => {
-  Element.prototype.requestPointerLock = function () { return Promise.resolve(); };   // never his real pointer
   const at = window.__scene = { click: null, sends: [], pictures: [], draws: [], pause: null, opens: [] };
   document.addEventListener("click", (event) => {
     if (event.target.closest?.(".attempt-scene")) at.click = performance.now();
@@ -205,7 +204,6 @@ TIMELINE = r"""
 PLANT = r"""
 (() => {
   localStorage.setItem("sm64.hideResets", "0");
-  Element.prototype.requestPointerLock = function () { return Promise.resolve(); };
   const fetched = window.fetch.bind(window);
   window.fetch = async (url, options) => {
     const response = await fetched(url, options);

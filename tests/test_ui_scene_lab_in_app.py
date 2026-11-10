@@ -22,7 +22,6 @@ from sm64_events.server import lab_roms_api, scene_lab_api  # noqa: E402
 
 REASON = "The Ghost Lab needs the Super Mario 64 Usamune v1.93u ROM. Open it in Project64 once (a test's words)."
 # A page that grabs the pointer confines his real cursor to the test's viewport (2026-11 note): stub it.
-NO_POINTER_LOCK = "Element.prototype.requestPointerLock = function () {}; document.exitPointerLock = function () {};"
 
 
 class EmptyStore:
@@ -65,7 +64,6 @@ def test_the_apps_ghost_lab_opens_and_says_it_needs_the_rom(width, tmp_path, mon
         browser = play.chromium.launch(headless=True, args=["--disable-gpu"])
         try:
             page = browser.new_page(viewport={"width": width, "height": 1000})
-            page.add_init_script(NO_POINTER_LOCK)
             errors = []
             page.on("pageerror", lambda error: errors.append(str(error)))
             page.on("response", lambda response: statuses.append(response.json())

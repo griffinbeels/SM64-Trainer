@@ -269,12 +269,12 @@ def test_only_a_cached_picture_name_can_be_served(tmp_path, painted):
         assert art.file(bad_key, bad_name) is None, (bad_key, bad_name)
 
 
-def test_without_the_rom_store_there_is_no_rom():
-    """Interface I3 lives in node P5's store; a checkout without it answers "no ROM", never crashes."""
-    import importlib.util
-    if importlib.util.find_spec("sm64_events.scenelab") is not None:
-        pytest.skip("the ROM store is present in this checkout")
-    assert ca.default_rom_for("us") is None
+def test_the_pictures_come_from_the_rom_store(monkeypatch, tmp_path):
+    """The default ROM lookup is interface I3 (sm64_events/scenelab/roms.py), asked per region."""
+    from sm64_events.scenelab import roms
+    asked = []
+    monkeypatch.setattr(roms, "rom_for", lambda region: asked.append(region) or (tmp_path if region == "us" else None))
+    assert ca.default_rom_for("us") == tmp_path and ca.default_rom_for("jp") is None and asked == ["us", "jp"]
 
 
 # -- the stand-in --------------------------------------------------------------------------------------------------

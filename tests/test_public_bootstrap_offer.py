@@ -23,6 +23,9 @@ def built_offer(tmp_path, monkeypatch, version, *, legacy=False):
     monkeypatch.setenv("PYTHONHASHSEED", "1")
     monkeypatch.setattr(build_defaults_seed, "main", lambda _: 0)
     monkeypatch.setattr(build_natives, "ensure", lambda **_: None)
+    # Packaging re-scans every native it ships, the Ghost Lab's included (test_defender_scan.py covers that door);
+    # a machine that never built them (the GitHub runners' non-native lanes) has no files for it to scan.
+    monkeypatch.setattr(build_exe, "ready_natives", lambda: None)
     import third_party_notices    # staged after PyInstaller, on its output
     monkeypatch.setattr(third_party_notices, "bundled_import_names", lambda _: set())
     staged = []

@@ -316,13 +316,8 @@ STANDIN = "standin"
 
 
 def default_rom_for(region: str) -> Path | None:
-    """Interface I3 (node P5's ROM store). A checkout without the store has no ROM."""
-    try:
-        from sm64_events.scenelab.roms import rom_for
-    except ModuleNotFoundError as error:
-        if error.name and error.name.startswith("sm64_events.scenelab"):
-            return None
-        raise
+    """Interface I3: the ROM store's copy of that region's ROM (sm64_events/scenelab/roms.py), or None."""
+    from sm64_events.scenelab.roms import rom_for
     return rom_for(region)
 
 

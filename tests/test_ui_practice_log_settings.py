@@ -189,7 +189,6 @@ def test_preferences_drive_every_log_bucket_and_remember_choices():
             browser = playwright.chromium.launch(headless=True)
             try:
                 page = browser.new_page(viewport={"width": 1500, "height": 1000})
-                page.add_init_script("Element.prototype.requestPointerLock = () => Promise.resolve();")
                 errors, failed_api = _watch_failures(page)
                 page.route("**/api/session?*", _decorate_session)
                 page.goto(base)
