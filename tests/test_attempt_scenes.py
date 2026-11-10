@@ -625,11 +625,11 @@ def test_a_finished_scene_takes_the_recorders_sound_after_ready_and_says_why_whe
 
 def test_a_growing_scenes_sidecar_read_never_blocks_its_writer(tmp_path):
     """While the server reads a growing scene's sidecar, the cutter replaces it (each publication) and deletes it
-    (the take is whole). Python's own open shares no delete on Windows, so either failed with WinError 32 in the
-    full runs of 2026-11-09. scene_session's reader shares the delete; package.replace_while_read waits out a read
-    in flight for the replace, which Windows refuses even then."""
-    import threading
-    import package as scene_package
+    (the take is whole). Python's own open shares no delete on Windows, so the delete failed with WinError 32 in
+    the full runs of 2026-11-09; scene_session's reader shares it. A publication that lands on a read in flight is
+    still refused (Windows refuses a replace onto an open file even then): the cutter skips that one and publishes
+    the next (test_attempt_cutter.py, test_a_publication_an_open_scene_is_reading_waits_for_the_next)."""
+    import os
     import scene_session
     sidecar = tmp_path / "take.grow"
     sidecar.write_bytes(b"published")
@@ -640,9 +640,10 @@ def test_a_growing_scenes_sidecar_read_never_blocks_its_writer(tmp_path):
     sidecar.write_bytes(b"first")
     partial = tmp_path / "take.grow.partial"
     partial.write_bytes(b"second")
-    held = scene_session.open_letting_go(sidecar)                 # a read in flight during the next publication
-    threading.Timer(0.05, held.close).start()
-    scene_package.replace_while_read(partial, sidecar)
-    assert sidecar.read_bytes() == b"second" and scene_session.read_letting_go(sidecar) == b"second"
+    with scene_session.open_letting_go(sidecar):                  # a read in flight during the next publication
+        with pytest.raises(PermissionError):
+            os.replace(partial, sidecar)
+    os.replace(partial, sidecar)                                  # the next one lands
+    assert scene_session.read_letting_go(sidecar) == b"second"
     with pytest.raises(FileNotFoundError):
         scene_session.read_letting_go(tmp_path / "gone.grow")
